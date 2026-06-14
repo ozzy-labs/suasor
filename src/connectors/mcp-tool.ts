@@ -7,10 +7,11 @@
  * entry points behave identically (Issue #10 追補 D5).
  *
  * Exposed as a self-contained descriptor (name + Zod input schema + handler).
- * The MCP server (`suasor mcp serve`, wired by #8 — currently a stub) registers
- * this descriptor; keeping it here lets the connector own its tool contract and
- * keeps the service layer shared. Import-clean: only `zod` + contract/registry
- * types at the top level; the store and SDK load lazily via the registry/service.
+ * The MCP server (`src/mcp/server.ts`) registers `connector.sync` over this
+ * `runConnectorSyncTool` handler when a writable store is supplied; keeping the
+ * contract here lets the connector own its tool shape and keeps the service
+ * layer shared with the CLI. Import-clean: only `zod` + contract/registry types
+ * at the top level; the store and SDK load lazily via the registry/service.
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
