@@ -60,11 +60,6 @@ export function upsertSourceVector(sqlite: Database, externalId: string, vector:
     .run(externalId, blob);
 }
 
-/** Remove a source's embedding from the vec0 table (no-op if absent). */
-export function deleteSourceVector(sqlite: Database, externalId: string): void {
-  sqlite.query(`DELETE FROM ${DEFAULT_VEC_TABLE} WHERE external_id = ?`).run(externalId);
-}
-
 /**
  * Embed and store vectors for the given sources (ingest-time population).
  *
