@@ -7,7 +7,11 @@ import type {
 } from "../../src/connectors/contract.ts";
 import { syncConnector } from "../../src/connectors/index.ts";
 import { Store } from "../../src/db/index.ts";
-import { type Embedder, EmbeddingError, recallSearch } from "../../src/retrieval/embedding/index.ts";
+import {
+  type Embedder,
+  EmbeddingError,
+  recallSearch,
+} from "../../src/retrieval/embedding/index.ts";
 
 let store: Store;
 
@@ -43,7 +47,10 @@ const rec = (id: string, body: string, fp?: string): SourceRecord => ({
 });
 
 function fakeEmbedder(table: Record<string, number[]>): Embedder {
-  return { model: "fake-3d", embed: (texts) => Promise.resolve(texts.map((t) => table[t] ?? [0, 0, 1])) };
+  return {
+    model: "fake-3d",
+    embed: (texts) => Promise.resolve(texts.map((t) => table[t] ?? [0, 0, 1])),
+  };
 }
 
 function vecCount(externalId: string): number {
@@ -66,9 +73,13 @@ describe("syncConnector — embedding population (ADR-0005/0006)", () => {
 
   test("with an embedder, observed sources are embedded into vec0 and recall finds them", async () => {
     const embedder = fakeEmbedder({ alpha: [1, 0, 0], beta: [0, 1, 0], "find alpha": [1, 0, 0] });
-    const out = await syncConnector(store, fakeConnector([rec("gh:1", "alpha"), rec("gh:2", "beta")]), {
-      embedder,
-    });
+    const out = await syncConnector(
+      store,
+      fakeConnector([rec("gh:1", "alpha"), rec("gh:2", "beta")]),
+      {
+        embedder,
+      },
+    );
     expect(out.observed).toBe(2);
     expect(out.embedded).toBe(2);
     expect(vecCount("gh:1")).toBe(1);

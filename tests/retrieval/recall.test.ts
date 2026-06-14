@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import {
-  type Embedder,
   EMBEDDING_DISABLED_SIGNAL,
+  type Embedder,
   EmbeddingError,
   embedSources,
   recallSearch,

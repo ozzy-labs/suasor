@@ -5,11 +5,12 @@
  * read half: `search` (FTS5), `recall.search` (semantic vec0 KNN when an
  * embedding backend is enabled, else the `embedding_disabled` signal — #11),
  * `source.list` / `source.get`, and `task.list` / `decision.list` /
- * `inbox.list`. The first write tool, `connector.sync` (read-only ingest into
- * the local store), is registered when a writable `Store` + config are supplied
- * (ADR-0007 / Issue #10 D5); the remaining write tools (`propose.*`,
- * `task.create`) land in later Issues. Write tools carry `readOnlyHint: false`
- * so hosts gate them behind HITL (no auto-apply, ADR-0004).
+ * `inbox.list`. The write tools — `connector.sync` (read-only ingest, ADR-0007 /
+ * #10), `propose.generate` / `propose.apply` (HITL candidate generation +
+ * application, #12), and `task.create` (direct task creation, #12 追補 D2) — are
+ * registered when a writable `Store` + config are supplied. Write tools carry
+ * `readOnlyHint: false` so hosts gate them behind HITL (no auto-apply, ADR-0004 /
+ * FR-PRO-2).
  *
  * Read = no side effects: every read tool only SELECTs (queries.ts) or runs the
  * FTS-first / recall search services (retrieval/), and is annotated
@@ -27,6 +28,16 @@ import {
 } from "../config/schema.ts";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
+import { proposeApply } from "../propose/apply.ts";
+import {
+  CandidateInput as CandidateInputSchema,
+  Candidate as CandidateSchema,
+  MODE_ALLOWED_KINDS,
+  PROPOSE_MODES,
+  ProposeMode as ProposeModeSchema,
+} from "../propose/candidates.ts";
+import { proposeGenerate } from "../propose/generate.ts";
+import { taskCreate } from "../propose/task-create.ts";
 import {
   createEmbedder,
   DEFAULT_RECALL_LIMIT,
@@ -125,11 +136,13 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     { name: "suasor", version: VERSION },
     {
       instructions:
-        "Suasor read surface: local-first work memory (ADR-0004). All tools here " +
-        "are read-only and safe to call autonomously. Default retrieval is `search` " +
+        "Suasor local-first work memory (ADR-0004). Read tools (readOnlyHint: " +
+        "true) are safe to call autonomously. Default retrieval is `search` " +
         "(FTS5); `recall.search` adds semantic search only when an embedding backend " +
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
-        "fall back to `search`. Write/HITL tools are exposed separately.",
+        "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
+        "propose.generate, propose.apply, task.create) are HITL: gate them behind " +
+        "human approval, never auto-apply.",
     },
   );
 
@@ -347,6 +360,92 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           { store: write.store, config: write.config },
         );
         return jsonResult(outcome);
+      },
+    );
+
+    // --- propose.generate: frame host-produced content into HITL candidates. ---
+    // No persistence: it only validates the items against the mode's allowed
+    // candidate kinds and assigns each a stable id. The host LLM does the
+    // reasoning (ADR-0006); approval + apply happen separately (ADR-0004).
+    const modeList = PROPOSE_MODES.join(" / ");
+    server.registerTool(
+      "propose.generate",
+      {
+        title: "Propose (generate candidates)",
+        description:
+          `Frame host-produced reply/task/decision/triage candidates into a HITL ` +
+          `proposal (modes: ${modeList}). Persists nothing — it validates and ` +
+          `id-stamps the candidates so a human can approve a subset, then apply ` +
+          `them via propose.apply. No auto-apply (ADR-0004).`,
+        inputSchema: {
+          mode: ProposeModeSchema.describe(`Generation mode (${modeList}).`),
+          candidates: z
+            .array(CandidateInputSchema)
+            .min(1)
+            .describe(
+              "Host-produced candidate items. Allowed kinds per mode: " +
+                PROPOSE_MODES.map((m) => `${m} → ${MODE_ALLOWED_KINDS[m].join("/")}`).join("; "),
+            ),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ mode, candidates }) => {
+        const result = proposeGenerate({ mode, candidates });
+        return jsonResult(result);
+      },
+    );
+
+    // --- propose.apply: persist approved candidates as events (idempotent). ---
+    // Write tool (HITL): turns approved candidates into domain events. Re-applying
+    // the same candidate is a no-op (content-derived ids), so it is idempotent.
+    server.registerTool(
+      "propose.apply",
+      {
+        title: "Propose (apply candidates)",
+        description:
+          "Persist approved candidates (from propose.generate) as domain events. " +
+          "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+          "Idempotent: candidates whose entity already exists are skipped.",
+        inputSchema: {
+          candidates: z
+            .array(CandidateSchema)
+            .min(1)
+            .describe("Approved, id-stamped candidates to apply."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ candidates }) => {
+        const result = proposeApply(write.store, { candidates });
+        return jsonResult(result);
+      },
+    );
+
+    // --- task.create: direct HITL task creation (Issue #12 追補 D2). ---
+    // The human's own "add task" path (vs. model-suggested propose.*). Appends a
+    // TaskProposed event → tasks projection. HITL, idempotent on content.
+    server.registerTool(
+      "task.create",
+      {
+        title: "Create task",
+        description:
+          "Create a task directly (appends TaskProposed → tasks projection). " +
+          "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+          "Idempotent: re-creating the same task (title + provenance) is a no-op.",
+        inputSchema: {
+          title: z.string().min(1).describe("Task title."),
+          sourceExternalIds: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("Source ids this task derives from (provenance)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ title, sourceExternalIds }) => {
+        const result = taskCreate(write.store, {
+          title,
+          ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
+        });
+        return jsonResult(result);
       },
     );
   }

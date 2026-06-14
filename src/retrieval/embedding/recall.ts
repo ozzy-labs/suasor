@@ -52,11 +52,7 @@ export function toVectorBlob(vector: number[]): Uint8Array {
  * keyed by `external_id`). Idempotent: re-embedding the same source replaces the
  * prior vector rather than duplicating it.
  */
-export function upsertSourceVector(
-  sqlite: Database,
-  externalId: string,
-  vector: number[],
-): void {
+export function upsertSourceVector(sqlite: Database, externalId: string, vector: number[]): void {
   const blob = toVectorBlob(vector);
   sqlite.query(`DELETE FROM ${DEFAULT_VEC_TABLE} WHERE external_id = ?`).run(externalId);
   sqlite
@@ -90,8 +86,7 @@ export async function embedSources(
   } catch (cause) {
     return {
       embedded: 0,
-      error:
-        cause instanceof EmbeddingError ? cause : new EmbeddingError(String(cause), cause),
+      error: cause instanceof EmbeddingError ? cause : new EmbeddingError(String(cause), cause),
     };
   }
   for (let i = 0; i < sources.length; i++) {

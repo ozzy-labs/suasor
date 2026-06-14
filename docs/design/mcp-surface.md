@@ -84,14 +84,14 @@ assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の
 
 ## Write tools（HITL・人の承認なしに適用/送信しない）
 
-write tool は HITL（auto-apply 経路を持たない）。`connector.sync` は実装済み（下記）、残りは後続 Issue。
+write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false` を付け、ホストは人の承認なしに呼ばない。いずれも writable store 供給時のみ登録される（`src/mcp/server.ts`）。
 
 | tool | 役割 | 状態 |
 |---|---|---|
 | `connector.sync` | 取り込み実行 | 実装済み（#10。下記参照） |
-| `propose.generate` | 返信/タスク/決定の候補生成（mode 引数: reply_draft / source_extract / meeting_followup 等） | 後続 Issue |
-| `propose.apply` | 承認された候補のみ適用（idempotent） | 後続 Issue |
-| `task.create` | task 追加（ホスト側で人確認を促す） | 後続 Issue |
+| `propose.generate` | 返信/タスク/決定/仕分けの候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage`） | 実装済み（#12。下記参照） |
+| `propose.apply` | 承認された候補のみ適用（idempotent） | 実装済み（#12。下記参照） |
+| `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
 
 ### `connector.sync`（確定・write / HITL）
 
@@ -118,6 +118,70 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 ```
 
 `[embedding].backend` が有効なとき、新規 / 本文変更 source（`observed` + `updated`）は同一モデルで埋め込まれ vec0 に populate される（`recall.search` 用、[retrieval](retrieval.md)）。embedding は best-effort で、サイドカー失敗時も取り込み自体は成功する（FTS は反映済み・`embedded` が 0 になるだけ）。
+
+### `propose.generate`（確定・write / HITL・[ADR-0006](../adr/0006-ml-delegation.md) ML 委譲）
+
+ホスト LLM が生成した候補（返信下書き / task / decision / 仕分け）を **構造化して候補化**する write tool。実体は `src/propose/generate.ts`。**永続化しない**: mode ごとの許可 kind に対して候補を検証し、各候補に content 由来の安定 id（`candidateId`）を付与して返すだけ。重い推論はホスト側で行い、プロセス内で ML を実行しない（[ADR-0006](../adr/0006-ml-delegation.md)）。承認 + 適用は `propose.apply` で別途行う（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+
+引数（Zod）:
+
+| 引数 | 型 | 説明 |
+|---|---|---|
+| `mode` | `enum`（必須） | `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage` |
+| `candidates` | `Candidate[]`（min 1） | ホストが生成した候補配列 |
+
+候補（`candidates[]`）は `kind` による判別共用体。各 mode が出せる kind は対応するアシスタント skill のフロー（[docs/skills/](../skills/)）に一致する:
+
+| mode | 許可 kind |
+|---|---|
+| `reply_draft` | `reply_draft` |
+| `source_extract` | `task` / `decision` / `reply_draft` |
+| `meeting_followup` | `task` / `decision` |
+| `inbox_triage` | `task` / `decision` / `triage` |
+
+各 kind の形（適用先 event に 1:1 対応）:
+
+| kind | フィールド | 適用先 event |
+|---|---|---|
+| `task` | `title` / `sourceExternalIds[]` | `TaskProposed` |
+| `decision` | `title` / `rationale` / `sourceExternalIds[]` | `DecisionRecorded` |
+| `reply_draft` | `replyToExternalId` / `body` | `ReplyDraftProposed` |
+| `triage` | `inboxId` / `sourceExternalId` / `state`（`snoozed` / `done` / `dismissed`） | `InboxItemTriaged` |
+
+戻り値: `{ "mode": "...", "candidates": [{ "candidateId": "cand_...", "kind": "...", ... }] }`（候補は inert・未適用）。許可されない kind は tool error。
+
+### `propose.apply`（確定・write / HITL・idempotent）
+
+承認済み候補を domain event として永続化する write tool（実体は `src/propose/apply.ts`）。各候補は `Store.record` 経由で対応 event を append（append + projection fold が 1 transaction、[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+
+引数（Zod）: `{ "candidates": Candidate[] }`（`propose.generate` の戻り値の候補。承認分のみ渡す）。
+
+**idempotent**: 各候補の対象 entity id は content 由来（`src/propose/id.ts`）。適用前に projection に同 id が存在すれば **event を append せず** `skipped` を返すため、同じ承認済み集合の再適用は no-op（重複 event / projection drift なし）。`triage` のみ `(inboxId, state)` で判定し、別 state への遷移は適用する。
+
+戻り値:
+
+```jsonc
+{
+  "results": [
+    { "candidateId": "cand_...", "kind": "task", "entityId": "task_...", "status": "applied" }
+  ],
+  "applied": 1,   // append された候補数
+  "skipped": 0    // 既存で no-op だった候補数
+}
+```
+
+### `task.create`（確定・write / HITL・#12 追補 D2）
+
+人が直接 task を追加する write tool（`propose.*` がモデル提案なのに対し、人自身の「これを task に」経路。`next-actions` skill 等が使う）。実体は `src/propose/task-create.ts`。`TaskProposed` event を append → `tasks` projection。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+引数（Zod）:
+
+| 引数 | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `title` | `string`（min 1） | — | task タイトル |
+| `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
+
+戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来で、同一内容の再作成は `existing`（no-op、idempotent）。
 
 ## 規約
 
