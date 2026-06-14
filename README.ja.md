@@ -16,6 +16,27 @@ Suasor はローカルファーストの AI 秘書です。チャット・メー
 
 開発初期。Suasor は仕様駆動で構築中です。配布は npm（`@ozzylabs/suasor`）・単体の単一バイナリ・Ollama 同梱の Docker イメージを予定しています。
 
+## クイックスタート（暫定）
+
+> 開発初期 — command surface は配線済みですが、一部コマンドは stub です（下記参照）。[Bun](https://bun.sh) 1.1+ が必要です。
+
+```bash
+bun install            # 依存インストール
+bun run src/index.ts --version
+
+# 初回セットアップ: ~/.config/suasor/config.toml とローカル SQLite ストアを作成。
+bun run src/index.ts init
+
+# source 本文の全文検索（FTS5。--json / --limit 利用可）。
+bun run src/index.ts search "<query>"
+
+# メンテナンス。
+bun run src/index.ts db migrate            # projection schema 適用（idempotent）
+bun run src/index.ts projections rebuild   # event log を replay して projection 再構築
+```
+
+設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` / `mcp serve` / `skills install` / `skills list` は CLI に配線済みですが、本体は後続リリースで実装します。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md) を参照してください。
+
 ## ライセンス
 
 MIT

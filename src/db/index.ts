@@ -12,6 +12,7 @@ import type { DomainEvent, NewEvent } from "../events/types.ts";
 import { type RebuildResult, rebuildProjections } from "../projections/rebuild.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type OpenOptions, openDatabase, type SuasorDb } from "./connection.ts";
+import { type SearchHit, type SearchOptions, searchSources } from "./search.ts";
 
 export {
   DEFAULT_EMBEDDING_DIM,
@@ -25,6 +26,12 @@ export {
 } from "./connection.ts";
 export { countEventRows, createEventsTable, readAllEventRows } from "./events-table.ts";
 export * as schema from "./schema.ts";
+export {
+  DEFAULT_SEARCH_LIMIT,
+  type SearchHit,
+  type SearchOptions,
+  searchSources,
+} from "./search.ts";
 
 /** Service binding an open database to event append + projection maintenance. */
 export class Store {
@@ -56,6 +63,11 @@ export class Store {
   /** Rebuild all projections by replaying the event log (FR-MNT-1). */
   rebuild(): RebuildResult {
     return rebuildProjections(this.db.sqlite);
+  }
+
+  /** FTS5 keyword search over source bodies (default retrieval path, ADR-0005). */
+  search(query: string, options?: SearchOptions): SearchHit[] {
+    return searchSources(this.db.sqlite, query, options);
   }
 
   close(): void {

@@ -1,0 +1,90 @@
+/**
+ * `suasor init` — first-run setup: config + DB initialization (+ skills).
+ *
+ * Idempotently prepares a local install:
+ * 1. Ensures the config directory exists and seeds a minimal `config.toml`
+ *    when absent (existing config is never overwritten).
+ * 2. Opens the configured database, which creates the event store, projection
+ *    tables, and FTS5 index (ADR-0002 / ADR-0005).
+ *
+ * Assistant-skill installation (`suasor skills install`) is wired by a
+ * downstream Issue (ADR-0008); `init` reports that step as pending for now.
+ *
+ * Heavy dependencies (config loader, DB layer, fs) are lazy-imported inside
+ * `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
+ */
+import { Command, Option } from "clipanion";
+
+const DEFAULT_CONFIG_TOML = `# Suasor configuration (docs/design/config.md).
+# Precedence: init args > env (SUASOR_*) > this file > defaults.
+
+[storage]
+# dbPath = "/absolute/path/to/suasor.db"   # default: <configDir>/suasor.db
+
+[embedding]
+backend = "disabled"   # disabled | ollama | openai | voyage
+
+[llm]
+backend = "disabled"   # disabled | anthropic | openai | ollama
+`;
+
+export class InitCommand extends Command {
+  static override paths = [["init"]];
+
+  static override usage = Command.Usage({
+    category: "Setup",
+    description: "Initialize config and the local database (first-run setup).",
+    details: `
+      Creates the config directory and a default config.toml (if missing), then
+      initializes the local SQLite store (event log + projections + FTS index).
+      Safe to re-run: existing config is preserved and schema DDL is idempotent.
+
+      Skill installation is performed by \`suasor skills install\` (wired by a
+      later Issue) and is reported as pending here.
+    `,
+    examples: [["Initialize a fresh install", "suasor init"]],
+  });
+
+  force = Option.Boolean("--force", false, {
+    description: "Overwrite an existing config.toml with the default template.",
+  });
+
+  override async execute(): Promise<number> {
+    const [{ loadConfig, resolveConfigDir }, { openDatabase }, { mkdir }, { join }] =
+      await Promise.all([
+        import("../../config/index.ts"),
+        import("../../db/index.ts"),
+        import("node:fs/promises"),
+        import("node:path"),
+      ]);
+
+    const configDir = resolveConfigDir(process.env);
+    await mkdir(configDir, { recursive: true });
+
+    const configPath = join(configDir, "config.toml");
+    const configFile = Bun.file(configPath);
+    const configExists = await configFile.exists();
+    if (!configExists || this.force) {
+      await Bun.write(configPath, DEFAULT_CONFIG_TOML);
+      this.context.stdout.write(
+        `${configExists ? "Overwrote" : "Wrote"} default config: ${configPath}\n`,
+      );
+    } else {
+      this.context.stdout.write(`Config already exists: ${configPath}\n`);
+    }
+
+    // Validate the resolved config and initialize the database.
+    const config = await loadConfig();
+    const dbPath = config.storage.dbPath;
+    if (dbPath === null) {
+      this.context.stderr.write("error: storage.dbPath is not configured\n");
+      return 1;
+    }
+    const db = openDatabase({ path: dbPath });
+    db.close();
+    this.context.stdout.write(`Initialized database: ${dbPath}\n`);
+
+    this.context.stdout.write("Skills install: pending (run `suasor skills install`).\n");
+    return 0;
+  }
+}
