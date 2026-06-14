@@ -22,6 +22,8 @@
  */
 import type { Database } from "bun:sqlite";
 import type { Store } from "../db/index.ts";
+import type { Embedder } from "../retrieval/embedding/index.ts";
+import { embedSources } from "../retrieval/embedding/index.ts";
 import type { Connector, SourceRecord, SyncContext } from "./contract.ts";
 import { makeSecretResolver, type SecretStoreOptions } from "./secrets.ts";
 
@@ -37,6 +39,11 @@ export interface SyncOutcome {
   unchanged: number;
   /** Resume cursor persisted for the next run (`null` for fingerprint-based). */
   cursor: string | null;
+  /**
+   * Number of sources whose embedding was (re)populated into vec0 this run.
+   * `0` when no embedder is configured (FTS-only), or when nothing changed.
+   */
+  embedded: number;
 }
 
 export interface SyncOptions {
@@ -48,6 +55,16 @@ export interface SyncOptions {
   onProgress?: (record: SourceRecord) => void;
   /** Clock injection for deterministic event timestamps in tests. */
   now?: () => Date;
+  /**
+   * Optional embedder (ADR-0005/0006). When supplied, new/changed source bodies
+   * are embedded into the vec0 table for `recall.search`; document and query
+   * embeddings therefore share one model. `null`/omitted keeps ingest FTS-only.
+   * Embedding is best-effort: a sidecar failure is reported via `onEmbedError`
+   * and does NOT fail the ingest (FTS still works — graceful degradation).
+   */
+  embedder?: Embedder | null;
+  /** Called when embedding fails (best-effort populate; ingest still succeeds). */
+  onEmbedError?: (error: Error) => void;
 }
 
 /** Hex SHA-256 of a string (default fingerprint when a connector omits one). */
@@ -114,6 +131,9 @@ export async function syncConnector(
   let observed = 0;
   let updated = 0;
   let unchanged = 0;
+  // Bodies whose vector needs (re)populating — new or changed sources only.
+  // Unchanged sources keep their existing vector (fingerprint equality).
+  const toEmbed: { externalId: string; body: string }[] = [];
 
   for await (const record of connector.sync(ctx)) {
     const fingerprint = record.fingerprint ?? (await sha256Hex(record.body));
@@ -133,6 +153,7 @@ export async function syncConnector(
         now(),
       );
       observed += 1;
+      toEmbed.push({ externalId: record.externalId, body: record.body });
     } else if (prior === fingerprint) {
       unchanged += 1;
     } else {
@@ -148,9 +169,20 @@ export async function syncConnector(
         now(),
       );
       updated += 1;
+      toEmbed.push({ externalId: record.externalId, body: record.body });
     }
 
     options.onProgress?.(record);
+  }
+
+  // Embedding population (ADR-0005/0006). Best-effort: a sidecar failure is
+  // reported but does not fail the ingest — FTS search still reflects the data,
+  // and `recall.search` degrades gracefully until the vectors are present.
+  let embedded = 0;
+  if (options.embedder && toEmbed.length > 0) {
+    const result = await embedSources(sqlite, options.embedder, toEmbed);
+    embedded = result.embedded;
+    if (result.error) options.onEmbedError?.(result.error);
   }
 
   const finalResult = connector.finalize ? await connector.finalize() : { cursor };
@@ -166,5 +198,5 @@ export async function syncConnector(
     now(),
   );
 
-  return { connector: connector.name, observed, updated, unchanged, cursor: nextCursor };
+  return { connector: connector.name, observed, updated, unchanged, cursor: nextCursor, embedded };
 }

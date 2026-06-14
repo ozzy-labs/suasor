@@ -2,7 +2,8 @@
  * MCP server surface — the agent boundary (ADR-0004, docs/design/mcp-surface.md).
  *
  * Exposes Suasor's read tools over MCP using the official TypeScript SDK. The
- * read half: `search`, `recall.search` (graceful-degraded stub until #11),
+ * read half: `search` (FTS5), `recall.search` (semantic vec0 KNN when an
+ * embedding backend is enabled, else the `embedding_disabled` signal — #11),
  * `source.list` / `source.get`, and `task.list` / `decision.list` /
  * `inbox.list`. The first write tool, `connector.sync` (read-only ingest into
  * the local store), is registered when a writable `Store` + config are supplied
@@ -11,14 +12,29 @@
  * so hosts gate them behind HITL (no auto-apply, ADR-0004).
  *
  * Read = no side effects: every read tool only SELECTs (queries.ts) or runs the
- * FTS-first search service (retrieval/), and is annotated `readOnlyHint: true`
- * so MCP hosts may auto-approve them. The split is structural, not advisory.
+ * FTS-first / recall search services (retrieval/), and is annotated
+ * `readOnlyHint: true` so MCP hosts may auto-approve them. recall embeds the
+ * query via a sidecar/API client (ADR-0006) but performs no store mutation. The
+ * split is structural, not advisory.
  */
 import type { Database } from "bun:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  DEFAULT_OLLAMA_BASE_URL,
+  DEFAULT_OLLAMA_MODEL,
+  type EmbeddingConfig,
+} from "../config/schema.ts";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
+import {
+  createEmbedder,
+  DEFAULT_RECALL_LIMIT,
+  EMBEDDING_DISABLED_SIGNAL,
+  type Embedder,
+  EmbeddingError,
+  recallSearch,
+} from "../retrieval/embedding/index.ts";
 import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import { VERSION } from "../version.ts";
 import {
@@ -30,8 +46,7 @@ import {
   listTasks,
 } from "./queries.ts";
 
-/** Signal returned by `recall.search` when no embedding backend is enabled. */
-export const EMBEDDING_DISABLED_SIGNAL = "embedding_disabled";
+export { EMBEDDING_DISABLED_SIGNAL };
 
 /** Bounds for the `limit` argument shared across list tools. */
 const MAX_LIMIT = 500;
@@ -47,11 +62,20 @@ export interface McpServerDeps {
   /** Open projection/FTS database handle (read tools use this directly). */
   sqlite: Database;
   /**
-   * Embedding backend from config. `recall.search` returns the
-   * `embedding_disabled` signal (empty results) unless this is enabled
-   * (full semantic search lands in #11). ADR-0005 graceful degradation.
+   * Effective `[embedding]` config. When `backend !== "disabled"` (and the
+   * backend is implemented), `recall.search` runs real vec0 semantic search
+   * with the configured model; otherwise it returns the `embedding_disabled`
+   * signal so the host falls back to FTS `search` (ADR-0005 graceful degrade).
+   *
+   * Accepts either the full config (preferred) or a bare backend string for
+   * back-compat; a bare string with no model uses the schema defaults.
    */
-  embeddingBackend: string;
+  embedding: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> | EmbeddingConfig["backend"];
+  /**
+   * Pre-built embedder override (tests inject a fake to avoid a live sidecar).
+   * When provided it takes precedence over building one from `embedding`.
+   */
+  embedder?: Embedder | null;
   /**
    * Writable store + connector config for the `connector.sync` write tool
    * (ADR-0007 / Issue #10). When omitted, the server exposes read tools only
@@ -60,9 +84,26 @@ export interface McpServerDeps {
   write?: {
     /** Store the (HITL-approved) ingest writes through. */
     store: Store;
-    /** Effective config, providing each `[connectors.<name>]` slice. */
-    config: { connectors: Record<string, Record<string, unknown>> };
+    /**
+     * Effective config, providing each `[connectors.<name>]` slice plus the
+     * `[embedding]` section so ingest can (re)populate vec0 (ADR-0005/0006).
+     */
+    config: {
+      connectors: Record<string, Record<string, unknown>>;
+      embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
+    };
   };
+}
+
+/** Normalize the `embedding` dep (bare backend string or full config) → config. */
+function resolveEmbeddingConfig(
+  embedding: McpServerDeps["embedding"],
+): Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> {
+  if (typeof embedding === "string") {
+    // Back-compat: a bare backend string uses the schema model/baseUrl defaults.
+    return { backend: embedding, baseUrl: DEFAULT_OLLAMA_BASE_URL, model: DEFAULT_OLLAMA_MODEL };
+  }
+  return embedding;
 }
 
 /** Wrap a JSON-serializable value as an MCP text content result. */
@@ -75,7 +116,11 @@ function jsonResult(value: unknown) {
  * responsible for connecting a transport (`server.connect(transport)`).
  */
 export function buildMcpServer(deps: McpServerDeps): McpServer {
-  const { sqlite, embeddingBackend, write } = deps;
+  const { sqlite, write } = deps;
+  const embeddingConfig = resolveEmbeddingConfig(deps.embedding);
+  // An injected embedder (tests) wins; otherwise build one from config. `null`
+  // means no backend (or an unimplemented one) → recall degrades to FTS.
+  const embedder = deps.embedder !== undefined ? deps.embedder : createEmbedder(embeddingConfig);
   const server = new McpServer(
     { name: "suasor", version: VERSION },
     {
@@ -109,35 +154,48 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // --- recall.search: semantic search; graceful-degraded until #11. ---
+  // --- recall.search: semantic (embedding) search, graceful-degraded. ---
   server.registerTool(
     "recall.search",
     {
       title: "Recall (semantic search)",
       description:
-        "Semantic (embedding) search. When no embedding backend is enabled it " +
-        "returns empty results with an `embedding_disabled` signal so the host can " +
-        "fall back to `search` (ADR-0005). Full semantic ranking lands in a later Issue.",
+        "Semantic (embedding) search over ingested sources (vec0 KNN). Crosses the " +
+        "wall FTS cannot (JA↔EN, vocabulary mismatch). When no embedding backend is " +
+        "enabled — or the sidecar is unreachable — it returns empty results with an " +
+        "`embedding_disabled` signal so the host can fall back to `search` (ADR-0005).",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
-        limit: limitShape.describe(`Max hits (default ${DEFAULT_SEARCH_LIMIT}).`),
+        limit: limitShape.describe(`Max hits (default ${DEFAULT_RECALL_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => {
-      // Semantic search is not implemented yet (#11). Regardless of the
-      // configured `embeddingBackend`, recall degrades to the
-      // `embedding_disabled` signal rather than erroring, so hosts keep working
-      // via `search` (ADR-0005). #11 will run real vector search here when
-      // `embeddingBackend !== "disabled"`.
-      const enabled = embeddingBackend !== "disabled";
-      return jsonResult({
-        hits: [],
-        signal: EMBEDDING_DISABLED_SIGNAL,
-        // Surface why recall is empty so the host can distinguish "no backend"
-        // from "backend present but recall pending implementation".
-        reason: enabled ? "recall_unimplemented" : "backend_disabled",
-      });
+    async ({ query, limit }) => {
+      // No embedder (backend disabled or unimplemented) → embedding_disabled.
+      if (embedder === null) {
+        return jsonResult({
+          hits: [],
+          signal: EMBEDDING_DISABLED_SIGNAL,
+          reason: "backend_disabled",
+        });
+      }
+      try {
+        const result = await recallSearch(sqlite, embedder, query, {
+          limit: limit ?? DEFAULT_RECALL_LIMIT,
+        });
+        return jsonResult(result);
+      } catch (error) {
+        // A sidecar failure (Ollama down, etc.) must NOT hard-error: degrade to
+        // the same signal so the host keeps working via FTS `search` (ADR-0005).
+        if (error instanceof EmbeddingError) {
+          return jsonResult({
+            hits: [],
+            signal: EMBEDDING_DISABLED_SIGNAL,
+            reason: "backend_unreachable",
+          });
+        }
+        throw error;
+      }
     },
   );
 

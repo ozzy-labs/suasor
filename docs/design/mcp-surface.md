@@ -9,7 +9,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | tool | 役割 | 状態 |
 |---|---|---|
 | `search` | FTS5 全文検索（[retrieval](retrieval.md)） | #8 実装済 |
-| `recall.search` | 意味検索（embedding 有効時。無効時は空 + シグナルで FTS フォールバック） | #8 で stub（degrade）／本実装 [#11] |
+| `recall.search` | 意味検索（embedding 有効時の vec0 KNN。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]） |
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `brief` | 期間サマリ（LLM 要約。委譲先で生成） | 後続 Issue |
@@ -48,9 +48,16 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 - ランキング・短クエリ fallback・クエリエスケープの詳細は [retrieval](retrieval.md) を参照
 - 意味検索が要るケースは `recall.search`（embedding 有効時）へ
 
-### `recall.search`（graceful degradation・ADR-0005）
+### `recall.search`（意味検索・graceful degradation・ADR-0005）
 
-引数は `search` と同じ（`query` / `limit`）。`[embedding].backend = "disabled"`（既定）のとき、**hard error にせず** `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_disabled" }` を返す。host はこのシグナルを見て `search`(FTS) に寄れる。embedding backend が有効でも、本実装が入る [#11] までは同じく degrade する（`reason: "recall_unimplemented"`）。`signal` は常に `embedding_disabled`、`reason` は診断用の補助。
+引数は `search` と同じ（`query` / `limit`）。embedding backend が有効なときは query を埋め込み、`vec0` の KNN で最近傍 source を引いて `search` と同形の hits を返す（`strategy` は無く、`score` は L2 distance ＝ 小さいほど近い・best-first）。詳細は [retrieval](retrieval.md)。
+
+graceful degradation（host は常に `signal === "embedding_disabled"` だけで FTS フォールバックを判断できる）:
+
+- `[embedding].backend = "disabled"`（既定）/ 未実装 backend（openai・voyage）→ `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_disabled" }`
+- backend 有効だがサイドカー到達不能（Ollama down 等）→ `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_unreachable" }`
+
+`reason` は診断用の補助（host は `signal` を見る）。ingest 時の文書 embedding と query embedding は同一モデルで、`[embedding].model` が両者を駆動する（[config](config.md) / [retrieval](retrieval.md)）。
 
 ### `source.list` / `source.get`
 
@@ -105,9 +112,12 @@ connector の read 専用取り込みを起動する write tool（[connector-con
   "observed": 12,    // 新規取り込み
   "updated": 3,      // 本文変更（fingerprint 差分）
   "unchanged": 5,    // 未変更で skip
-  "cursor": "2026-06-12T00:00:00Z"  // 次回 resume cursor（fingerprint 系は null）
+  "cursor": "2026-06-12T00:00:00Z", // 次回 resume cursor（fingerprint 系は null）
+  "embedded": 15     // vec0 に (再)populate した source 数（embedding 無効時は 0）
 }
 ```
+
+`[embedding].backend` が有効なとき、新規 / 本文変更 source（`observed` + `updated`）は同一モデルで埋め込まれ vec0 に populate される（`recall.search` 用、[retrieval](retrieval.md)）。embedding は best-effort で、サイドカー失敗時も取り込み自体は成功する（FTS は反映済み・`embedded` が 0 になるだけ）。
 
 ## 規約
 

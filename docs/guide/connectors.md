@@ -66,7 +66,7 @@ github sync: 12 observed, 3 updated, 5 unchanged.
 suasor search rocket
 ```
 
-MCP 経由では `search` read tool で同じ検索ができる（[retrieval](../design/retrieval.md)）。
+MCP 経由では `search` read tool で同じ検索ができる（[retrieval](../design/retrieval.md)）。embedding backend を有効にすると、取り込み時に本文が埋め込まれ `recall.search` の意味検索（言語跨ぎ・語彙ミスマッチ向け）も使える（[embedding setup](embedding.md)）。
 
 ## 新しい connector の追加
 
