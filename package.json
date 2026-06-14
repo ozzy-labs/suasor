@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "suasor": "./dist/index.js"
+    "suasor": "dist/index.js"
   },
   "files": [
     "dist/index.js",
