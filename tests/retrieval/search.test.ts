@@ -141,7 +141,8 @@ describe("searchSources — short-query fallback", () => {
 
   test("a query is FTS as long as its longest token is long enough", () => {
     seed("a", "go home now", "2026-06-14T00:00:00.000Z");
-    // "go" is short but "home" qualifies -> FTS path (ANDs both as phrases).
+    // "go" is short but "home" qualifies -> FTS path. (Trigram drops the short
+    // "go" phrase, so the match is effectively on "home".)
     const result = searchSources(store.connection.sqlite, "go home");
     expect(result.strategy).toBe("fts");
     expect(ids(result)).toEqual(["a"]);

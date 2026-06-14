@@ -161,8 +161,14 @@ function searchLikeFallback(sqlite: Database, query: string, limit: number): Sea
  *
  * Returns ranked hits best-first. An empty or whitespace-only query yields no
  * hits (and reports the `fts` strategy). The retrieval path is chosen by the
- * shortest token length: if every token is too short for the trigram index the
- * LIKE fallback runs instead, otherwise FTS5 MATCH runs.
+ * *longest* token length: if even the longest token is too short for the
+ * trigram index (< {@link TRIGRAM_LENGTH}) the LIKE fallback runs over the
+ * whole query, otherwise FTS5 MATCH runs.
+ *
+ * Note: within an FTS query, tokens shorter than the trigram length are dropped
+ * by the tokenizer rather than required (e.g. `go home` effectively matches on
+ * `home`); this is inherent to trigram FTS and is acceptable since ranking
+ * still surfaces the closest matches first.
  */
 export function searchSources(
   sqlite: Database,
