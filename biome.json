@@ -1,0 +1,37 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.9/schema.json",
+  "files": {
+    "includes": [
+      "src/**",
+      "tests/**",
+      ".vscode/**",
+      ".github/**",
+      "*.json",
+      "*.jsonc",
+      "!**/node_modules",
+      "!**/dist"
+    ],
+    "ignoreUnknown": true
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      }
+    }
+  },
+  "json": {
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": true
+    }
+  }
+}
