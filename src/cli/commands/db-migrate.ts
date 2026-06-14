@@ -41,7 +41,11 @@ export class DbMigrateCommand extends Command {
       return 1;
     }
 
-    const db = openDatabase({ path: dbPath, enableVec: this.vec });
+    const db = openDatabase({
+      path: dbPath,
+      enableVec: this.vec,
+      embeddingDim: config.embedding.dim,
+    });
     try {
       this.context.stdout.write(`Applied projection schema to ${dbPath}.\n`);
       return 0;

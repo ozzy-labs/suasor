@@ -16,13 +16,14 @@ from an agent host.
 ```bash
 # one-off (no install) — ideal for an MCP host command
 bunx @ozzylabs/suasor mcp serve
-# or
-npx @ozzylabs/suasor mcp serve
 
 # or install the CLI globally
-bun add -g @ozzylabs/suasor    # or: npm i -g @ozzylabs/suasor
+bun add -g @ozzylabs/suasor
 suasor --version
 ```
+
+> Suasor runs on **Bun** (`engines.bun >= 1.1`): it uses `bun:sqlite` and other
+> `Bun.*` APIs, so it cannot run under Node — use `bunx`, not `npx`.
 
 Published with [npm Trusted Publishers (OIDC)](../adr/0010-distribution.md) — no
 long-lived `NPM_TOKEN` — with build provenance attestation (public repo).
@@ -45,15 +46,23 @@ chmod +x suasor-bun-linux-x64
 ./suasor-bun-linux-x64 --version
 ```
 
-> **Caveat (binary + a few native bits).** The binary bundles the Suasor core
-> plus the small native pieces it needs (`sqlite-vec`, `@napi-rs/keyring`). The
-> heavier connector SDKs (Slack / Microsoft Graph / Google / Box / Web —
-> `@slack/web-api`, `@azure/msal-node`, `@microsoft/microsoft-graph-client`,
-> `googleapis`, `box-typescript-sdk-gen`, `playwright-core`) are kept **external**
-> to keep the binary light, so those connectors are not available in the
-> standalone binary. Use the **npm** package or the **Docker** image if you need
-> the full connector set. The GitHub connector and all retrieval/MCP/skills
-> features work in the binary.
+> **Caveat (binary scope).** The binary bundles the Suasor core plus the one
+> native piece it needs (`sqlite-vec`). Kept **external** (not in the binary) to
+> keep it light:
+>
+> - The OS-keychain secret store (`@napi-rs/keyring`) — so in the binary connector
+>   secrets must come from environment variables
+>   (`SUASOR_CONNECTOR_<NAME>_<SECRET>`), not the OS keychain.
+> - The heavier connector SDKs (Slack / Microsoft Graph / Google / Box / Web —
+>   `@slack/web-api`, `@azure/msal-node`, `@microsoft/microsoft-graph-client`,
+>   `googleapis`, `box-typescript-sdk-gen`, `playwright-core`) — so those
+>   connectors are not available in the standalone binary.
+> - The bundled `docs/skills` directory — so `skills install` / `skills list` are
+>   not available in the standalone binary.
+>
+> The GitHub connector and all retrieval/MCP features work in the binary. Use the
+> **npm** package or the **Docker** image for the full connector set, keychain
+> secrets, and the assistant skills.
 
 ## 3. Docker — batteries-included (+ Ollama)
 
@@ -81,7 +90,7 @@ docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
 Suasor is described by [`server.json`](../../server.json) for discovery via the
 [MCP registry](https://github.com/modelcontextprotocol/registry). Agent hosts that
 browse the registry can find and install it; under the hood it runs the npm
-package over stdio (`npx @ozzylabs/suasor mcp serve`).
+package over stdio (`bunx @ozzylabs/suasor mcp serve`).
 
 ## Releasing (maintainers)
 

@@ -28,11 +28,13 @@ dbPath = "/path/to/suasor.db"
 backend = "disabled"   # disabled（既定）| ollama | openai | voyage（local=in-process は不採用）
 baseUrl = "http://localhost:11434"  # ollama サイドカー。/api/embed は client が付与
 model = "bge-m3"                     # 埋め込みモデル。ingest と query で同一（ベクトル空間整合）
+dim = 1024                           # 埋め込み次元。model の出力次元と一致必須（bge-m3=1024）
 ```
 
 - `backend` 既定 `disabled`（base install を軽く保つ）。`recall.search` は無効時に空 + `embedding_disabled` シグナルで FTS に degrade（[retrieval](retrieval.md) / [ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 - 現状 `ollama` のみ実装。`openai` / `voyage` は config 上受理するが未実装（embedder は `null` ＝ degrade）
 - `baseUrl` / `model` は ollama backend に適用。`model` は **ingest（文書）と query（クエリ）で必ず同一**（混在すると recall が静かに劣化するため、単一値が両方を駆動）。既定 `bge-m3`（多言語・1024 次元）
+- `dim` は埋め込みベクトルの次元で、`model` の出力次元と一致必須（`bge-m3`=1024、例: `nomic-embed-text`=768）。DB 作成時に vec0 テーブルのサイズを決めるため、既存ストアで変えるには新規 DB（または delete + rebuild + 再 sync）が必要。不一致だと全ベクトル挿入が失敗し recall が静かに空へ degrade するため、非 1024 次元 model を使うときは必ず設定する
 - 未知キーは保持（`passthrough`）し、backend 固有項目を後続が確定する
 - env override 例: `SUASOR_EMBEDDING__BACKEND=ollama` / `SUASOR_EMBEDDING__MODEL=bge-large` / `SUASOR_EMBEDDING__BASEURL=http://sidecar:11434`
 

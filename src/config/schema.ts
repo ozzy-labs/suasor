@@ -34,6 +34,11 @@ export type LlmBackend = z.infer<typeof LlmBackend>;
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 /** Default multilingual embedding model (JA↔EN, 1024-dim) for Ollama. */
 export const DEFAULT_OLLAMA_MODEL = "bge-m3";
+/**
+ * Default embedding vector dimension (bge-m3 = 1024). Sizes the vec0 table; must
+ * agree with the runtime fallback `DEFAULT_EMBEDDING_DIM` in src/db/connection.ts.
+ */
+const DEFAULT_EMBEDDING_DIM = 1024;
 
 /**
  * `[embedding]` — optional sidecar (ADR-0005/0006). Default disabled so the
@@ -54,6 +59,15 @@ export const EmbeddingConfig = z
     baseUrl: z.string().url().default(DEFAULT_OLLAMA_BASE_URL),
     /** Embedding model name. Must be identical for ingest and query (one space). */
     model: z.string().min(1).default(DEFAULT_OLLAMA_MODEL),
+    /**
+     * Embedding vector dimension — must match what `model` produces (bge-m3 =
+     * 1024; e.g. nomic-embed-text = 768). It sizes the vec0 table when the DB is
+     * first created, so changing it on an existing store needs a fresh DB (or a
+     * delete + rebuild + re-sync). A value that disagrees with the model makes
+     * every vector insert fail, silently degrading recall to empty — set this
+     * whenever `model` is not a 1024-dim model.
+     */
+    dim: z.number().int().positive().default(DEFAULT_EMBEDDING_DIM),
   })
   .passthrough();
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfig>;

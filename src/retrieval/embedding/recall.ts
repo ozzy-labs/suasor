@@ -89,12 +89,16 @@ export async function embedSources(
       error: cause instanceof EmbeddingError ? cause : new EmbeddingError(String(cause), cause),
     };
   }
+  let embedded = 0;
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i];
     const vector = vectors[i];
-    if (source && vector) upsertSourceVector(sqlite, source.externalId, vector);
+    if (source && vector) {
+      upsertSourceVector(sqlite, source.externalId, vector);
+      embedded++;
+    }
   }
-  return { embedded: sources.length };
+  return { embedded };
 }
 
 interface VecRow {

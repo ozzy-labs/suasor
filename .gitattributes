@@ -2,7 +2,7 @@
 * text=auto eol=lf
 
 # Lock files
-pnpm-lock.yaml linguist-generated=true
+bun.lock linguist-generated=true
 
 # Binary files
 *.png binary

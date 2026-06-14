@@ -60,7 +60,7 @@ class ConnectorSyncCommand extends Command {
     // never fail the ingest — FTS still reflects the data.
     const embedder = createEmbedder(config.embedding);
 
-    const store = Store.open({ path: dbPath });
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const outcome = await syncConnector(store, connector, {
         ...(this.full ? { cursor: null } : {}),
