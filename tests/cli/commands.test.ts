@@ -98,54 +98,8 @@ describe("suasor db migrate", () => {
   });
 });
 
-describe("suasor search", () => {
-  /** Seed the db the CLI will open with one source body. */
-  async function seed(externalId: string, body: string): Promise<void> {
-    const { Store } = await import("../../src/db/index.ts");
-    const store = Store.open({ path: join(dir, "suasor.db") });
-    store.record({
-      type: "SourceObserved",
-      externalId,
-      sourceType: "github_issue",
-      body,
-      observedAt: "2026-06-14T00:00:00.000Z",
-      fingerprint: "fp1",
-      meta: {},
-    });
-    store.close();
-  }
-
-  test("prints matching sources", async () => {
-    await seed("gh:1", "the release pipeline runbook");
-    const { code, out } = await run(["search", "release"]);
-    expect(code).toBe(0);
-    expect(out).toContain("gh:1");
-    expect(out).toContain("github_issue");
-  });
-
-  test("reports no matches cleanly", async () => {
-    await seed("gh:1", "nothing relevant here");
-    const { code, out } = await run(["search", "release"]);
-    expect(code).toBe(0);
-    expect(out).toContain("No matches.");
-  });
-
-  test("--json emits a JSON array", async () => {
-    await seed("gh:1", "the release pipeline runbook");
-    const { code, out } = await run(["search", "--json", "release"]);
-    expect(code).toBe(0);
-    const parsed = JSON.parse(out);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed[0].externalId).toBe("gh:1");
-  });
-
-  test("rejects an invalid --limit", async () => {
-    await seed("gh:1", "the release pipeline runbook");
-    const { code, err } = await run(["search", "--limit", "0", "release"]);
-    expect(code).toBe(1);
-    expect(err).toContain("--limit must be a positive integer");
-  });
-});
+// `suasor search` is covered by tests/cli/search.test.ts (the search command and
+// its FTS-first service live in #20's src/retrieval/; not duplicated here).
 
 describe("downstream stubs", () => {
   test("mcp serve exits 0 with a pending notice", async () => {

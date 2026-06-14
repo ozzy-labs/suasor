@@ -2,15 +2,17 @@
  * CLI entry (clipanion). Commands are registered eagerly but their heavy work
  * is lazy-imported inside `execute` to keep cold start light (NFR-PRF-1).
  *
- * This Issue wires the full command surface (docs/design/cli.md):
+ * Wired command surface (docs/design/cli.md):
  *   init · db migrate · projections rebuild · search · mcp serve ·
  *   skills install · skills list
- * `mcp serve` and `skills *` are downstream stubs (the MCP surface and the
- * assistant-skill catalog are implemented by later Issues); the rest are live.
+ * `init` / `db migrate` / `projections rebuild` / `search` are live; `mcp serve`
+ * and `skills *` are downstream stubs (the MCP surface — ADR-0004 — and the
+ * assistant-skill catalog — ADR-0008 — are implemented by later Issues).
  *
  * Registration is the only eager step. Command modules must keep their imports
  * to clipanion + the standard library so the registry stays cheap to build —
- * the DB layer, config loader, and connectors are imported inside `execute`.
+ * the DB layer, config loader, retrieval service, and connectors are imported
+ * inside `execute`.
  */
 import { Builtins, Cli } from "clipanion";
 import { VERSION } from "../version.ts";

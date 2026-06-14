@@ -1,13 +1,10 @@
 /**
- * `suasor search <query>` — FTS5 keyword search over source bodies.
+ * `suasor search <query>` — FTS-first full-text search over ingested sources.
  *
- * The default retrieval path (ADR-0005 / docs/design/retrieval.md): a trigram
- * FTS5 `MATCH` over the `sources` projection, ranked by bm25. Semantic search
- * (recall.search, ADR-0006) is an optional sidecar layered on later; with the
- * embedding backend disabled the system stays usable via this command.
- *
- * Heavy dependencies (DB layer, config loader) are lazy-imported inside
- * `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
+ * The default retrieval path (ADR-0005 / FR-RET-1, docs/design/retrieval.md).
+ * Heavy dependencies (DB layer, config loader, search service) are imported
+ * lazily inside `execute` so the CLI cold start stays light (NFR-PRF-1,
+ * docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
 
@@ -16,39 +13,39 @@ export class SearchCommand extends Command {
 
   static override usage = Command.Usage({
     category: "Retrieval",
-    description: "Full-text search over ingested sources (FTS5).",
+    description: "Full-text search over ingested sources (FTS5, FTS-first).",
     details: `
-      Runs an FTS5 keyword search over local source bodies, ranked best-match
-      first. Japanese/English substrings are captured by the trigram tokenizer
-      (queries need at least 3 characters to match a substring). Use --json for
-      machine-readable output, or --limit to cap results (default 20).
+      Searches source bodies via the SQLite FTS5 (trigram) index and prints
+      ranked hits (ADR-0005 / FR-RET-1). Japanese and English are handled
+      uniformly; queries too short for the trigram index fall back to a
+      substring scan. Use --json for machine-readable output.
     `,
     examples: [
-      ["Search for a keyword", "suasor search release"],
-      ["Top 5 hits as JSON", "suasor search --json --limit 5 deploy"],
+      ["Search for a keyword", "suasor search rocket"],
+      ["Search a Japanese phrase", "suasor search ロケット"],
+      ["Limit and emit JSON", "suasor search --limit 5 --json deploy"],
     ],
   });
 
-  query = Option.String({ required: true, name: "query" });
+  query = Option.String();
 
-  limit = Option.String("--limit", {
-    description: "Maximum number of hits to return (default 20).",
-  });
+  limit = Option.String("--limit", { description: "Maximum number of hits (default 20)." });
 
   json = Option.Boolean("--json", false, {
     description: "Emit results as JSON instead of a human-readable list.",
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { Store }] = await Promise.all([
+    const [{ loadConfig }, { Store }, { searchSources, DEFAULT_SEARCH_LIMIT }] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
+      import("../../retrieval/index.ts"),
     ]);
 
-    let limit: number | undefined;
+    let limit = DEFAULT_SEARCH_LIMIT;
     if (this.limit !== undefined) {
       const parsed = Number(this.limit);
-      if (!Number.isInteger(parsed) || parsed < 1) {
+      if (!Number.isInteger(parsed) || parsed <= 0) {
         this.context.stderr.write("error: --limit must be a positive integer\n");
         return 1;
       }
@@ -64,21 +61,22 @@ export class SearchCommand extends Command {
 
     const store = Store.open({ path: dbPath });
     try {
-      const hits = store.search(this.query, limit === undefined ? undefined : { limit });
+      const result = searchSources(store.connection.sqlite, this.query, { limit });
 
       if (this.json) {
-        this.context.stdout.write(`${JSON.stringify(hits)}\n`);
+        this.context.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return 0;
       }
 
-      if (hits.length === 0) {
-        this.context.stdout.write("No matches.\n");
+      if (result.hits.length === 0) {
+        this.context.stdout.write("No results.\n");
         return 0;
       }
 
-      for (const hit of hits) {
-        const snippet = hit.body.replace(/\s+/g, " ").slice(0, 100);
-        this.context.stdout.write(`${hit.externalId}\t[${hit.sourceType}]\t${snippet}\n`);
+      this.context.stdout.write(`${result.hits.length} result(s) [${result.strategy}]:\n`);
+      for (const hit of result.hits) {
+        const snippet = hit.body.replaceAll(/\s+/g, " ").slice(0, 120);
+        this.context.stdout.write(`  ${hit.externalId} (${hit.sourceType})\n    ${snippet}\n`);
       }
       return 0;
     } finally {

@@ -26,11 +26,11 @@ suasor --version                       # バージョン出力
 |---|---|---|---|
 | `init` | `--force` | false | 既存 `config.toml` を default テンプレートで上書きする |
 | `db migrate` | `--vec` / `--no-vec` | true | sqlite-vec の vec0 substrate を作る／作らない |
-| `search` | `--limit N` | 20 | 返す hit の最大数（1–100 にクランプ） |
-| `search` | `--json` | false | 人間可読リストの代わりに JSON 配列で出力 |
+| `search` | `--limit N` | 20 | 返す hit の最大数（正の整数。非正値は error） |
+| `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy）を JSON で出力 |
 | `skills install` | `--scope S` | all | 展開先 `claude` \| `agents` \| `all` |
 
-- `search <query>` は trigram FTS5 のため、部分一致クエリは 3 文字以上必要（日本語含む）。空クエリは hit なし
+- `search <query>` は FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。trigram FTS5 を既定経路とし、3-gram に満たない短クエリ（日本語の 1–2 文字等）は LIKE substring fallback に切り替わる（[retrieval](retrieval.md)）。サービス本体は `src/retrieval/`
 - 長時間コマンド（sync / rebuild）の TTY 進捗表示（`--progress` / env 上書き）は connector 実装 Issue で確定
 
 ## 規約
