@@ -30,3 +30,23 @@
 | [`meeting-followup`](meeting-followup/SKILL.md) | 「会議後のaction items」「議事録からタスク」 | source.list(calendar) → propose.generate(meeting_followup) → propose.apply |
 
 エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）。
+
+## インストール
+
+SSOT（本ディレクトリ）はパッケージに同梱され、`suasor skills install` でエージェントの skill ディレクトリに展開する（[ADR-0008](../adr/0008-assistant-skills.md)・[docs/design/cli.md](../design/cli.md)）。
+
+```bash
+suasor skills install                 # カレントプロジェクトの .claude/skills/ + .agents/skills/ へ展開
+suasor skills install --scope claude  # Claude Code（.claude/skills/）のみ
+suasor skills install --scope agents  # Codex / Copilot / Gemini（.agents/skills/）のみ
+suasor skills install --host /path/to/project   # 展開先プロジェクトを指定
+suasor skills install --dry-run       # 書き込まず差分だけ確認
+suasor skills list                    # 各 skill の状態（installed / missing / modified）
+suasor skills list --json             # 機械可読（SkillStatus[]）
+```
+
+展開は冪等で、内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated` に上書きする。`suasor init` は本コマンドを案内するのみで自動展開はしない。
+
+### in-repo dogfood
+
+本リポジトリは展開結果（`.claude/skills/` / `.agents/skills/`）を commit して dogfood する。SSOT を編集したら `suasor skills install` を再実行して mirror を更新し、両方を commit する。pre-commit の `skills-drift` フック（`scripts/skills-drift.sh`）が SSOT ↔ mirror の同期を検査し、ずれていれば commit を止める。

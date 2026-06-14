@@ -6,10 +6,10 @@
  *   init · db migrate · projections rebuild · search · <connector> sync ·
  *   mcp serve · skills install · skills list
  * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` /
- * `mcp serve` (MCP read surface, ADR-0004) are live; `skills *` are downstream
- * stubs (the assistant-skill catalog — ADR-0008 — is implemented by a later
- * Issue). `<connector> sync` commands are derived from the connector registry
- * (one per connector, e.g. `github sync`; ADR-0007).
+ * `mcp serve` (MCP read surface, ADR-0004) and `skills install` / `skills list`
+ * (assistant-skill catalog, ADR-0008) are live. `<connector> sync` commands are
+ * derived from the connector registry (one per connector, e.g. `github sync`;
+ * ADR-0007).
  *
  * Registration is the only eager step. Command modules must keep their imports
  * to clipanion + the standard library so the registry stays cheap to build —

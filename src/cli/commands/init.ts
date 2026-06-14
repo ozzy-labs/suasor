@@ -7,8 +7,9 @@
  * 2. Opens the configured database, which creates the event store, projection
  *    tables, and FTS5 index (ADR-0002 / ADR-0005).
  *
- * Assistant-skill installation (`suasor skills install`) is wired by a
- * downstream Issue (ADR-0008); `init` reports that step as pending for now.
+ * Assistant-skill installation is a separate, explicit step
+ * (`suasor skills install`, ADR-0008); `init` points at it rather than running
+ * it implicitly.
  *
  * Heavy dependencies (config loader, DB layer, fs) are lazy-imported inside
  * `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
@@ -39,8 +40,8 @@ export class InitCommand extends Command {
       initializes the local SQLite store (event log + projections + FTS index).
       Safe to re-run: existing config is preserved and schema DDL is idempotent.
 
-      Skill installation is performed by \`suasor skills install\` (wired by a
-      later Issue) and is reported as pending here.
+      Assistant skills are installed separately with \`suasor skills install\`
+      (ADR-0008); this command points at that step rather than running it.
     `,
     examples: [["Initialize a fresh install", "suasor init"]],
   });
@@ -84,7 +85,7 @@ export class InitCommand extends Command {
     db.close();
     this.context.stdout.write(`Initialized database: ${dbPath}\n`);
 
-    this.context.stdout.write("Skills install: pending (run `suasor skills install`).\n");
+    this.context.stdout.write("Next: install assistant skills with `suasor skills install`.\n");
     return 0;
   }
 }
