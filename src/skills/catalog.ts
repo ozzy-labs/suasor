@@ -49,7 +49,9 @@ export interface BundledSkill {
  * installed (`dist/` → package root holds `docs/skills`, per package.json
  * `files`). Returns `null` when no candidate exists.
  */
-export function resolveSkillsSource(startDir: string = dirname(fileURLToPath(import.meta.url))): string | null {
+export function resolveSkillsSource(
+  startDir: string = dirname(fileURLToPath(import.meta.url)),
+): string | null {
   let dir = startDir;
   // Walk up to the filesystem root looking for a `docs/skills` directory.
   for (;;) {
@@ -67,7 +69,9 @@ export function resolveSkillsSource(startDir: string = dirname(fileURLToPath(imp
  * A directory counts as a skill iff it contains a `SKILL.md`. Results are
  * sorted by name for deterministic output. Throws when no source can be found.
  */
-export function listBundledSkills(sourceDir: string | null = resolveSkillsSource()): BundledSkill[] {
+export function listBundledSkills(
+  sourceDir: string | null = resolveSkillsSource(),
+): BundledSkill[] {
   if (sourceDir === null) {
     throw new Error(
       "could not locate bundled skills (docs/skills/); reinstall the package or run from the repo",

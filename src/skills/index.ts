@@ -4,12 +4,12 @@
  */
 export {
   type BundledSkill,
-  type Host,
   HOSTS,
+  type Host,
   listBundledSkills,
   resolveSkillsSource,
-  type Scope,
   SCOPES,
+  type Scope,
   SKILL_FILE,
   scopeHosts,
 } from "./catalog.ts";
