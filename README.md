@@ -14,7 +14,18 @@ Suasor is a local-first AI secretary. It gathers your scattered work context - c
 
 ## Status
 
-Early development. Suasor is being built spec-first. It will be distributed via npm (`@ozzylabs/suasor`), a standalone single binary, and a batteries-included Docker image.
+Early development. Suasor is being built spec-first.
+
+## Install
+
+Distributed via four channels (released manually — see [docs/guide/install.md](docs/guide/install.md)):
+
+- **npm** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Canonical; OIDC-published with provenance.
+- **Standalone binary** — download per OS/arch from [Releases](https://github.com/ozzy-labs/suasor/releases). Core + a few native bits; the heavier connector SDKs are external (use npm/Docker for the full connector set).
+- **Docker (batteries-included + Ollama)** — `docker run ghcr.io/ozzy-labs/suasor`. Local embedding with no external egress.
+- **MCP registry** — discoverable via [`server.json`](server.json).
+
+> Until the first release is published, run from source with the Quickstart below.
 
 ## Quickstart (provisional)
 

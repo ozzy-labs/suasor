@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.json",
+  "name": "io.github.ozzy-labs/suasor",
+  "description": "Local-first AI secretary: gathers scattered work context into private local memory that you and your AI agents query over MCP, and proposes replies/tasks/decisions via HITL write tools (nothing sent or saved without approval).",
+  "repository": {
+    "url": "https://github.com/ozzy-labs/suasor",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@ozzylabs/suasor",
+      "version": "0.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "valueHint": "subcommand",
+          "isRequired": true
+        },
+        {
+          "type": "positional",
+          "value": "serve",
+          "valueHint": "subcommand",
+          "isRequired": true
+        }
+      ]
+    }
+  ]
+}

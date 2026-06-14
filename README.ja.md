@@ -14,7 +14,18 @@ Suasor はローカルファーストの AI 秘書です。チャット・メー
 
 ## ステータス
 
-開発初期。Suasor は仕様駆動で構築中です。配布は npm（`@ozzylabs/suasor`）・単体の単一バイナリ・Ollama 同梱の Docker イメージを予定しています。
+開発初期。Suasor は仕様駆動で構築中です。
+
+## インストール
+
+4 つのチャネルで配布します（リリースは手動 — [docs/guide/install.md](docs/guide/install.md) 参照）:
+
+- **npm** — `bunx @ozzylabs/suasor mcp serve`（または `bun add -g @ozzylabs/suasor`）。canonical・OIDC publish（provenance 付き）。
+- **単一バイナリ** — OS/arch 別に [Releases](https://github.com/ozzy-labs/suasor/releases) からダウンロード。core + 少数 native のみで、重い connector SDK は external（全 connector は npm/Docker を利用）。
+- **Docker（Ollama 同梱）** — `docker run ghcr.io/ozzy-labs/suasor`。egress なしのローカル embedding。
+- **MCP registry** — [`server.json`](server.json) で discovery 可能。
+
+> 初回リリース公開までは、下記クイックスタートでソースから実行してください。
 
 ## クイックスタート（暫定）
 
