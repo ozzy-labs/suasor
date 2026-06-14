@@ -35,8 +35,8 @@ export class Store {
     return new Store(openDatabase(options));
   }
 
-  /** Underlying handle (raw SQL / Drizzle access). */
-  get db_(): SuasorDb {
+  /** Underlying connection (raw SQL / Drizzle access). */
+  get connection(): SuasorDb {
     return this.db;
   }
 

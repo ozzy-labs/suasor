@@ -14,7 +14,7 @@ afterEach(() => {
 
 /** Snapshot every projection table (incl. FTS) as comparable value rows. */
 function snapshotProjections(store: Store): Record<string, unknown[]> {
-  const sqlite = store.db_.sqlite;
+  const sqlite = store.connection.sqlite;
   return {
     sources: sqlite.query("SELECT * FROM sources ORDER BY external_id").all(),
     tasks: sqlite.query("SELECT * FROM tasks ORDER BY id").all(),
@@ -140,12 +140,12 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
       store.record(event, new Date(at));
     }
     store.rebuild();
-    const hits = store.db_.sqlite
+    const hits = store.connection.sqlite
       .query("SELECT external_id FROM sources_fts WHERE sources_fts MATCH ?")
       .all('"updated"');
     expect(hits).toHaveLength(1);
     // stale body removed during replay
-    const stale = store.db_.sqlite
+    const stale = store.connection.sqlite
       .query("SELECT external_id FROM sources_fts WHERE sources_fts MATCH ?")
       .all('"initial"');
     expect(stale).toHaveLength(0);

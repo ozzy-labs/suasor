@@ -65,9 +65,11 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       return;
     }
     case "SourceBodyUpdated": {
-      // Update body/fingerprint/observed_at; leaves source_type/meta untouched
-      // when the source already exists (no-op if it does not).
-      sqlite
+      // Update body/fingerprint/observed_at/meta; leaves source_type untouched.
+      // A SourceBodyUpdated without a prior SourceObserved is a no-op: we must
+      // NOT create an orphan FTS row with no backing `sources` row, so the FTS
+      // sync is gated on the update having actually matched a source.
+      const changes = sqlite
         .query(
           `UPDATE sources SET body = $body, fingerprint = $fp, observed_at = $obs, meta = $meta
            WHERE external_id = $id`,
@@ -79,7 +81,9 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           $obs: event.observedAt,
           $meta: JSON.stringify(event.meta),
         });
-      syncSourceFts(sqlite, event.externalId, event.body);
+      if (changes.changes > 0) {
+        syncSourceFts(sqlite, event.externalId, event.body);
+      }
       return;
     }
     case "ConnectorSyncCompleted": {

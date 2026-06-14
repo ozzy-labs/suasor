@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function rows(store: Store, table: string): unknown[] {
-  return store.db_.sqlite.query(`SELECT * FROM ${table} ORDER BY 1`).all();
+  return store.connection.sqlite.query(`SELECT * FROM ${table} ORDER BY 1`).all();
 }
 
 describe("SourceObserved / SourceBodyUpdated", () => {
@@ -34,7 +34,7 @@ describe("SourceObserved / SourceBodyUpdated", () => {
     expect(src).toHaveLength(1);
     expect(src[0]?.body).toBe("deploy the rocket");
 
-    const hits = store.db_.sqlite
+    const hits = store.connection.sqlite
       .query("SELECT external_id FROM sources_fts WHERE sources_fts MATCH ?")
       .all('"deploy"');
     expect(hits).toHaveLength(1);
@@ -70,10 +70,28 @@ describe("SourceObserved / SourceBodyUpdated", () => {
     expect(src[0]?.source_type).toBe("github_issue");
     expect(src[0]?.body).toBe("bravo charlie");
 
-    const stale = store.db_.sqlite
+    const stale = store.connection.sqlite
       .query("SELECT external_id FROM sources_fts WHERE sources_fts MATCH ?")
       .all('"alpha"');
     expect(stale).toHaveLength(0);
+  });
+
+  test("SourceBodyUpdated without a prior source is a no-op (no orphan FTS row)", () => {
+    store.record(
+      {
+        type: "SourceBodyUpdated",
+        externalId: "ghost:1",
+        body: "orphan body text",
+        observedAt: "2026-06-15T00:00:00.000Z",
+        fingerprint: "fpX",
+        meta: {},
+      },
+      new Date("2026-06-15T00:00:00.000Z"),
+    );
+
+    expect(rows(store, "sources")).toHaveLength(0);
+    const ftsRows = store.connection.sqlite.query("SELECT external_id FROM sources_fts").all();
+    expect(ftsRows).toHaveLength(0);
   });
 });
 
