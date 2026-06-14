@@ -30,12 +30,16 @@ bun run src/index.ts init
 # source 本文の全文検索（FTS5。--json / --limit 利用可）。
 bun run src/index.ts search "<query>"
 
+# 同梱のアシスタント skill をエージェントホストへ展開。
+bun run src/index.ts skills install        # .claude/skills/ + .agents/skills/
+bun run src/index.ts skills list           # installed / missing / modified
+
 # メンテナンス。
 bun run src/index.ts db migrate            # projection schema 適用（idempotent）
 bun run src/index.ts projections rebuild   # event log を replay して projection 再構築
 ```
 
-設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` / `skills install` / `skills list` は CLI に配線済みですが、本体は後続リリースで実装します。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md) を参照してください。
+設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は CLI に配線済みですが、本体は後続リリースで実装します。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
 
 ## エージェントホストと接続する（MCP）
 

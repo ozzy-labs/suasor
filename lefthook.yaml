@@ -9,3 +9,9 @@ pre-commit:
       glob: "**/*.{ts,tsx,js,jsx,json,jsonc}"
       run: mise exec -- biome check --write {staged_files}
       stage_fixed: true
+    # Assistant-skill dogfood drift check (ADR-0008): the committed mirrors under
+    # .claude/skills/ and .agents/skills/ must stay byte-identical to the SSOT
+    # docs/skills/. Fails when a `suasor skills install` is needed.
+    skills-drift:
+      glob: "{docs/skills/**/SKILL.md,.claude/skills/**/SKILL.md,.agents/skills/**/SKILL.md}"
+      run: bash scripts/skills-drift.sh
