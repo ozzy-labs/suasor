@@ -15,8 +15,10 @@
     "bun": ">=1.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.14",
     "@types/bun": "^1.1.0",
     "drizzle-kit": "^0.31.10",
+    "markdownlint-cli2": "0.21.0",
     "typescript": "^5.6.0"
   },
   "scripts": {
@@ -26,6 +28,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",
+    "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "format": "biome format --write .",
     "db:generate": "drizzle-kit generate"
   },
