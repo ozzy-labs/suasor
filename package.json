@@ -1,0 +1,35 @@
+{
+  "name": "@ozzylabs/suasor",
+  "version": "0.0.0",
+  "description": "A local-first AI secretary that gathers your scattered work context into private memory you and your AI agents can query over MCP. It advises you, and proposes replies, tasks, and decisions, with nothing sent or saved without your approval.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "suasor": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs/skills"
+  ],
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.6.0"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --target=bun --outdir=dist",
+    "compile": "bun build ./src/index.ts --compile --outfile=dist/suasor",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ozzy-labs/suasor.git"
+  },
+  "homepage": "https://github.com/ozzy-labs/suasor"
+}

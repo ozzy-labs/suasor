@@ -1,0 +1,33 @@
+[tools]
+# Runtime & package managers
+node = "24"            # retained for npm-distributed dev tools (commitlint, markdownlint, bats)
+bun = "1"              # Suasor runtime + package manager + bundler (ADR-0001)
+"npm:pnpm" = "10" # aqua backend fails: registry expects v11 .tar.gz format (see ozzy-labs/commons#100)
+uv = "0.11.10"
+
+# Linters & formatters
+biome = "2"
+shellcheck = "0.11"
+shfmt = "3"
+taplo = "0.10"
+"npm:markdownlint-cli2" = "0.21"
+"pipx:yamllint" = "1"
+yamlfmt = "0.21"
+actionlint = "1"
+gitleaks = "8"
+trivy = "0.69"
+"pipx:mdformat" = "0.7"
+
+# Testing
+"npm:bats" = "1"
+
+# CLI utilities for AI-assisted development
+ast-grep = "0.42"
+yq = "4"
+just = "1"
+zoxide = "0.9"
+
+# Git hooks & commit conventions
+lefthook = "2"
+"npm:@commitlint/cli" = "20"
+"npm:@commitlint/config-conventional" = "20"

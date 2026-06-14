@@ -1,0 +1,20 @@
+# Updated by /sync-consumers (push mode). 'commit' / 'skills_commit'
+# log the last applied SHA; updates are pushed from ozzy-labs/commons
+# (and ozzy-labs/skills) via the /sync-consumers skill, see
+# ozzy-labs/skills#80. 'pinned' is user-editable — add or remove paths
+# freely. 'commit' / 'skills_commit' / 'synced_at' should not be hand-
+# edited; they are rewritten by sync.sh / sync-skills.sh on each push.
+commit: 95d1610796ae9f685f4c7918ddbe120be188b5dd
+synced_at: 2026-06-14T13:23:08Z
+
+# Skills sync (opt-in). Add adapter ids to skills_adapters; skills_commit
+# is bumped by /sync-consumers --source=skills. The skills repo's main
+# HEAD SHA can be obtained via:
+#   gh api repos/ozzy-labs/skills/commits/main --jq .sha
+skills_commit: ""
+skills_adapters: []
+
+# Suasor-specific: .mise.toml carries the Bun runtime addition (ADR-0001).
+# Pinned so commons sync does not overwrite it.
+pinned:
+  - .mise.toml
