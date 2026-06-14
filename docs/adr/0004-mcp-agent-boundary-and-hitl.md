@@ -20,12 +20,15 @@ tool 入力スキーマは Zod で定義する。CLI からも同じサービス
 ## Consequences
 
 ### Positive
+
 - エージェントは安全に read を自律実行でき、危険な write は人がゲートする
 - 「提案 → 承認 → 適用」が一貫した HITL ループになる（[ADR-0008](0008-assistant-skills.md) の skill 群もこの境界に乗る）
 
 ### Negative / Trade-offs
+
 - 完全自律の「実行まで」体験は提供しない（意図的な制約）
 
 ## Alternatives Considered
+
 - エージェントに write を自律させる（auto-apply） → 却下。local-first/privacy/信頼の姿勢（[ADR-0003](0003-local-first-and-content-minimization.md)）に反する
 - 独自 RPC / REST 境界 → 却下。消費者は MCP エージェントなので MCP が自然

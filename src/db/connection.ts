@@ -1,0 +1,147 @@
+/**
+ * Database connection + schema initialization.
+ *
+ * Opens a `bun:sqlite` database, loads the `sqlite-vec` extension, and creates
+ * the storage substrate:
+ * - `events` append-only table (raw SQL, ADR-0002) — see ./events-table.ts
+ * - Drizzle-managed projection tables (./schema.ts)
+ * - `sources_fts` FTS5 virtual table (trigram tokenizer for JA/EN substring,
+ *   ADR-0005 / docs/design/retrieval.md)
+ * - `embeddings_vec_default` vec0 virtual table (sqlite-vec; populated only when
+ *   an embedding backend is enabled — kept as a cheap substrate, ADR-0005)
+ *
+ * `init` is idempotent: every DDL uses `IF NOT EXISTS`, so re-running it on an
+ * existing database is safe (drop+rebuild of projections is handled separately
+ * by the rebuild path).
+ */
+import { Database } from "bun:sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { getLoadablePath } from "sqlite-vec";
+import { createEventsTable } from "./events-table.ts";
+import * as schema from "./schema.ts";
+
+/** Default vec0 table name and embedding dimension (bge-m3 = 1024). */
+export const DEFAULT_VEC_TABLE = "embeddings_vec_default";
+export const DEFAULT_EMBEDDING_DIM = 1024;
+
+export interface SuasorDb {
+  /** Raw bun:sqlite handle (used by the raw-SQL event append path). */
+  readonly sqlite: Database;
+  /** Drizzle client over the projection schema. */
+  readonly orm: ReturnType<typeof drizzle<typeof schema>>;
+  /** Close the underlying handle. */
+  close(): void;
+}
+
+export interface OpenOptions {
+  /** `":memory:"` for tests, or a filesystem path. */
+  path: string;
+  /** Embedding vector dimension for the default vec0 table. */
+  embeddingDim?: number;
+  /** When false, skip loading sqlite-vec / creating the vec0 table. */
+  enableVec?: boolean;
+}
+
+/** Load the sqlite-vec extension into a handle (vec0 virtual table support). */
+export function loadVecExtension(sqlite: Database): void {
+  sqlite.loadExtension(getLoadablePath());
+}
+
+/**
+ * Create projection tables, FTS5, and (optionally) the vec0 table.
+ * Idempotent; safe to call on an already-initialized database.
+ */
+export function initSchema(sqlite: Database): void {
+  // Event store (append-only, raw SQL — ADR-0002).
+  createEventsTable(sqlite);
+
+  // Projection tables (mirror of src/db/schema.ts; created via raw DDL so init
+  // needs no drizzle-kit step at runtime — drop+rebuild semantics, ADR-0002).
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS sources (
+      external_id TEXT PRIMARY KEY,
+      source_type TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      meta        TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE IF NOT EXISTS tasks (
+      id         TEXT PRIMARY KEY,
+      title      TEXT NOT NULL,
+      state      TEXT NOT NULL DEFAULT 'proposed',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS decisions (
+      id          TEXT PRIMARY KEY,
+      title       TEXT NOT NULL,
+      rationale   TEXT NOT NULL DEFAULT '',
+      recorded_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS inbox (
+      id                 TEXT PRIMARY KEY,
+      source_external_id TEXT NOT NULL,
+      state              TEXT NOT NULL DEFAULT 'open',
+      updated_at         TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS links (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_kind TEXT NOT NULL,
+      from_id   TEXT NOT NULL,
+      to_kind   TEXT NOT NULL,
+      to_id     TEXT NOT NULL,
+      relation  TEXT NOT NULL
+    );
+  `);
+
+  // FTS5 over source bodies. Trigram tokenizer captures Japanese/English
+  // substrings without a CJK word segmenter (ADR-0005, docs/design/retrieval.md).
+  // `content=''` makes it a contentless (external-content-free) index we
+  // populate explicitly from the reducer.
+  sqlite.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS sources_fts USING fts5(
+      external_id UNINDEXED,
+      body,
+      tokenize = 'trigram'
+    );
+  `);
+}
+
+/** Create the default vec0 table. Requires the sqlite-vec extension loaded. */
+export function initVecTable(sqlite: Database, dim: number = DEFAULT_EMBEDDING_DIM): void {
+  // vec0 is a cheap substrate kept regardless of backend; populate is gated on
+  // the embedding backend being enabled (ADR-0005).
+  sqlite.exec(
+    `CREATE VIRTUAL TABLE IF NOT EXISTS ${DEFAULT_VEC_TABLE} USING vec0(
+      external_id TEXT PRIMARY KEY,
+      embedding float[${dim}]
+    );`,
+  );
+}
+
+/**
+ * Open a database, apply pragmas, load extensions, and initialize the schema.
+ */
+export function openDatabase(options: OpenOptions): SuasorDb {
+  const sqlite = new Database(options.path, { create: true });
+  sqlite.exec("PRAGMA journal_mode = WAL;");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
+
+  const enableVec = options.enableVec ?? true;
+  if (enableVec) {
+    loadVecExtension(sqlite);
+  }
+
+  initSchema(sqlite);
+  if (enableVec) {
+    initVecTable(sqlite, options.embeddingDim ?? DEFAULT_EMBEDDING_DIM);
+  }
+
+  const orm = drizzle(sqlite, { schema });
+  return {
+    sqlite,
+    orm,
+    close: () => sqlite.close(),
+  };
+}

@@ -24,11 +24,14 @@ connector は共通の **contract（TypeScript interface）** を実装する:
 ## Consequences
 
 ### Positive
+
 - 新 connector を contract 実装だけで追加できる
 - 取り込みの一貫性（identity / 差分 / 本文保持）が保たれる
 
 ### Negative / Trade-offs
+
 - delta のないソースは fingerprint 比較のコスト（取得後の検知）
 
 ## Alternatives Considered
+
 - connector ごとにアドホック実装 → 却下。identity / 差分 / import-clean の一貫性が崩れる

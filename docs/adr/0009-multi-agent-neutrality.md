@@ -20,11 +20,14 @@ Suasor の利用者は特定の 1 エージェントホストに限らない。C
 ## Consequences
 
 ### Positive
+
 - 特定ホストに lock-in されない
 - MCP 境界に揃えることで surface の重複実装を避けられる
 
 ### Negative / Trade-offs
+
 - 4 ホスト分のアダプタファイルを維持する手間（commons が大半を肩代わり）
 
 ## Alternatives Considered
+
 - 単一ホスト（Claude Code）専用 → 却下。利用者の選択肢を狭め、エコシステム中立性を失う

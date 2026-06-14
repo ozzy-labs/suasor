@@ -1,2 +1,11 @@
 extends:
   - lefthook-base.yaml
+
+# Repo-specific hooks (TS/Bun). The base config covers shell / markdown / yaml /
+# toml / secrets; Biome (lint + format) is added here per NFR-QLT-1.
+pre-commit:
+  commands:
+    biome:
+      glob: "**/*.{ts,tsx,js,jsx,json,jsonc}"
+      run: mise exec -- biome check --write {staged_files}
+      stage_fixed: true
