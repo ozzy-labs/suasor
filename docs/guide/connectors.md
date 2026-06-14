@@ -68,6 +68,91 @@ suasor search rocket
 
 MCP 経由では `search` read tool で同じ検索ができる（[retrieval](../design/retrieval.md)）。embedding backend を有効にすると、取り込み時に本文が埋め込まれ `recall.search` の意味検索（言語跨ぎ・語彙ミスマッチ向け）も使える（[embedding setup](embedding.md)）。
 
+すべての connector で取り込み・検索・delta 検知・secret 経路（env override > keychain）の挙動は同一。以下は各 connector 固有の token / config slice のみ記す。token は **config.toml には書かない**（env override か keychain）。
+
+## Slack
+
+channel メッセージを取り込む（`@slack/web-api`）。
+
+- **token**: Bot Token（`channels:history` / `groups:history` の read scope）。env override `SUASOR_CONNECTOR_SLACK_TOKEN`、keychain account `connector:slack:token`
+- **config**:
+
+```toml
+[connectors.slack]
+team = "T0123ABCD"            # id prefix（rename しても安定）
+channels = ["C0123ABCD"]      # 取り込み対象 channel id（空なら何もしない）
+```
+
+- **identity**: `slack:<team>:<channel>:<ts>` / **source_type**: `slack_message`
+- **差分検知**: `conversations.history` の `oldest` cursor（最新 `ts` を次回 resume に使う）
+
+## Microsoft Graph（`ms-graph`）
+
+Microsoft 365（Outlook mail / Calendar / OneDrive / Teams）を取り込む（`@microsoft/microsoft-graph-client` + `@azure/msal-node`、app-only client-credential フロー）。
+
+- **token**: App registration の client secret。env override `SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET`、keychain account `connector:ms-graph:clientSecret`
+- **config**:
+
+```toml
+[connectors.ms-graph]
+tenantId = "<directory-id>"
+clientId = "<app-client-id>"
+user = "user@contoso.com"               # 対象メールボックス / ドライブ
+resources = ["mail", "calendar"]        # mail | calendar | files | teams
+```
+
+- **identity**: `msgraph:<resource>:<id>` / **source_type**: `ms365_mail` / `ms365_calendar` / `ms365_file` / `ms365_teams_message`
+- **差分検知**: コレクションを `@odata.nextLink` でページングし、本文 fingerprint で未変更を skip
+
+## Google
+
+Google Workspace（Drive / Gmail / Calendar）を取り込む（`googleapis`、OAuth2 refresh token）。
+
+- **token**: OAuth refresh token（対象 API の read scope）。env override `SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN`、keychain account `connector:google:refreshToken`
+- **config**:
+
+```toml
+[connectors.google]
+clientId = "<oauth-client-id>"
+calendarId = "primary"                   # calendar event の対象
+resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
+```
+
+- **identity**: `google:<resource>:<id>` / **source_type**: `google_drive` / `gmail_message` / `google_calendar`
+- **差分検知**: `nextPageToken` でページングし、本文 fingerprint で未変更を skip
+
+## Box
+
+folder 配下のファイルを取り込む（`box-typescript-sdk-gen`）。
+
+- **token**: Developer / OAuth access token（対象 folder の read scope）。env override `SUASOR_CONNECTOR_BOX_TOKEN`、keychain account `connector:box:token`
+- **config**:
+
+```toml
+[connectors.box]
+folders = ["0"]                          # 取り込み対象 folder id（root は "0"）
+```
+
+- **identity**: `box:file:<id>` / **source_type**: `box_file`
+- **差分検知**: Box の content sha1 を fingerprint に使う（メタデータ listing だけで本文変更を検知）
+
+## Web（`web`）
+
+設定した URL（operator / carrier の登録ページ等）を headless browser で snapshot し、差分を検知する（`playwright-core`）。
+
+- **token**: 不要（公開ページのみ。認証経路は持たない）
+- **config**:
+
+```toml
+[connectors.web]
+urls = ["https://operator.example.com/signup"]
+browser = "chromium"                     # chromium | firefox | webkit
+```
+
+- **identity**: `web:<sha1(url)>`（URL ごとに安定）/ **source_type**: `web_page`
+- **差分検知**: snapshot の抽出テキスト fingerprint。ページ内容が変わると更新として検知される（fingerprint 差分）
+- **注**: `playwright-core` はブラウザバイナリを同梱しない。実行ホストで `npx playwright install` 等によりエンジンを用意する
+
 ## 新しい connector の追加
 
 1. `src/connectors/<name>.ts` に `Connector` 実装と factory を書く（SDK は `sync` 内で lazy import）

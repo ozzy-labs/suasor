@@ -57,6 +57,17 @@ run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。ap
 - **import-clean** — connector の登録 import で重い SDK を pull しない。SDK は `sync` 内で lazy import（CLI の lazy-import 規律と同じ。NFR-PRF-1）
 - **secrets** — トークンは `ctx.secret(name)` で取得（keychain + env override、[config](config.md)）。config.toml には書かない
 
-## 初期 connector
+## 実装済み connector
 
-GitHub(octokit、**実装済み**) / Slack(@slack/web-api) / Microsoft Graph(@microsoft/microsoft-graph-client + @azure/msal-node) / Google(googleapis or fetch) / Box / Web(Playwright)。GitHub の利用手順は [connectors guide](../guide/connectors.md)。
+全初期 connector が稼働（read 専用・import-clean）。SDK は各 connector の `sync` 内で lazy import し、build/compile では `--external` で除外する（dist は薄く、SDK は実行時に node_modules から解決）:
+
+| name | source_type | SDK | 差分検知 | secret |
+|---|---|---|---|---|
+| `github` | `github_issue` / `github_pull_request` | octokit | `since` cursor | `token` |
+| `slack` | `slack_message` | @slack/web-api | `oldest` ts cursor | `token` |
+| `ms-graph` | `ms365_mail` / `ms365_calendar` / `ms365_file` / `ms365_teams_message` | @microsoft/microsoft-graph-client + @azure/msal-node | fingerprint | `clientSecret` |
+| `google` | `google_drive` / `gmail_message` / `google_calendar` | googleapis | fingerprint | `refreshToken` |
+| `box` | `box_file` | box-typescript-sdk-gen | content sha1 fingerprint | `token` |
+| `web` | `web_page` | playwright-core | snapshot fingerprint diff | （不要） |
+
+各 connector の setup（token / config slice）は [connectors guide](../guide/connectors.md)。

@@ -22,7 +22,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const connectorsDir = join(here, "../../src/connectors");
 
 /** Heavy specifiers that must only ever be lazy-imported (inside functions). */
-const HEAVY = ["octokit", "@napi-rs/keyring", "bun:sqlite", "drizzle-orm"];
+const HEAVY = [
+  "octokit",
+  "@slack/web-api",
+  "@microsoft/microsoft-graph-client",
+  "@azure/msal-node",
+  "googleapis",
+  "box-typescript-sdk-gen",
+  "playwright-core",
+  "@napi-rs/keyring",
+  "bun:sqlite",
+  "drizzle-orm",
+];
 
 function connectorSources(): string[] {
   return readdirSync(connectorsDir)
@@ -58,7 +69,7 @@ describe("connector import-clean discipline", () => {
 connectorNames();
 const reg = globalThis.Loader?.registry;
 const keys = reg ? (reg instanceof Map ? [...reg.keys()] : Object.keys(reg)) : null;
-const heavy = ["octokit", "keyring"];
+const heavy = ["octokit", "slack", "microsoft-graph", "msal", "googleapis", "box-typescript", "playwright", "keyring"];
 const hit = keys === null ? null : heavy.filter((h) => keys.some((k) => k.includes(h)));
 console.log(JSON.stringify(hit));
 `,
