@@ -15,3 +15,9 @@ pre-commit:
     skills-drift:
       glob: "{docs/skills/**/SKILL.md,.claude/skills/**/SKILL.md,.agents/skills/**/SKILL.md}"
       run: bash scripts/skills-drift.sh
+    # GitHub Actions workflow lint (actionlint is pinned in .mise.toml but was
+    # otherwise never invoked). The base config lints YAML generically; this
+    # adds Actions-specific checks (expressions, shell, deprecated runners).
+    actionlint:
+      glob: ".github/workflows/*.{yaml,yml}"
+      run: mise exec -- actionlint {staged_files}

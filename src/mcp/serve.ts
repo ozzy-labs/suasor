@@ -30,7 +30,7 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
     throw new Error("storage.dbPath is not configured");
   }
 
-  const store = Store.open({ path: dbPath });
+  const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
   const server = buildMcpServer({
     sqlite: store.connection.sqlite,
     // Full [embedding] config drives recall.search (real vec0 search when a

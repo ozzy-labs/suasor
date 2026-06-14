@@ -29,7 +29,7 @@ Suasor はローカルファーストの AI 秘書です。チャット・メー
 
 ## クイックスタート（暫定）
 
-> 開発初期 — command surface は配線済みですが、一部コマンドは stub です（下記参照）。[Bun](https://bun.sh) 1.1+ が必要です。
+> 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。未提供は `brief` / `graph.related` の MCP tool のみ（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。[Bun](https://bun.sh) 1.1+ が必要です。
 
 ```bash
 bun install            # 依存インストール
@@ -37,6 +37,9 @@ bun run src/index.ts --version
 
 # 初回セットアップ: ~/.config/suasor/config.toml とローカル SQLite ストアを作成。
 bun run src/index.ts init
+
+# コネクタから read 専用で取り込み（github / slack / ms-graph / google / box / web）。
+bun run src/index.ts github sync
 
 # source 本文の全文検索（FTS5。--json / --limit 利用可）。
 bun run src/index.ts search "<query>"
@@ -50,11 +53,11 @@ bun run src/index.ts db migrate            # projection schema 適用（idempote
 bun run src/index.ts projections rebuild   # event log を replay して projection 再構築
 ```
 
-設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は CLI に配線済みですが、本体は後続リリースで実装します。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
+設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は github / slack / ms-graph / google / box / web から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
 
 ## エージェントホストと接続する（MCP）
 
-Suasor は記憶を AI エージェントへ [Model Context Protocol](https://modelcontextprotocol.io)（stdio transport）で公開します。この server がエージェント境界です。現在は **read** tool を提供します — `search` / `recall.search` / `source.list`・`source.get` / `task.list`・`decision.list`・`inbox.list` — いずれも副作用なしで read-only annotation 付き（host が auto-approve 可）。write tool は HITL（人の承認）の後ろに置かれます（ADR-0004）。承認なく適用・送信はしません。
+Suasor は記憶を AI エージェントへ [Model Context Protocol](https://modelcontextprotocol.io)（stdio transport）で公開します。この server がエージェント境界です。**read** tool — `search` / `recall.search` / `source.list`・`source.get` / `task.list`・`decision.list`・`inbox.list` — はいずれも副作用なしで read-only annotation 付き（host が auto-approve 可）。**write** tool — `connector.sync` / `propose.generate` / `propose.apply` / `task.create` — も現在提供していますが、HITL（人の承認）の後ろに置かれます（ADR-0004）。承認なく適用・送信はしません。
 
 ```bash
 bun run src/index.ts mcp serve   # MCP server を stdio で起動

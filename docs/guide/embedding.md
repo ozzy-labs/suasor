@@ -32,6 +32,7 @@ curl http://localhost:11434/api/tags
 backend = "ollama"                  # disabled（既定）| ollama | openai | voyage
 baseUrl = "http://localhost:11434"  # /api/embed は client が付与
 model = "bge-m3"                     # ingest と query で必ず同一（ベクトル空間整合）
+dim = 1024                           # model の出力次元と一致必須（bge-m3=1024、nomic-embed-text=768 等）
 ```
 
 env override も可能（headless / Docker 用、[config](../design/config.md)）:
@@ -43,6 +44,8 @@ export SUASOR_EMBEDDING__MODEL=bge-m3
 ```
 
 > **同一モデル必須**: 文書（ingest 時）とクエリ（query 時）の embedding は同じ `model` で生成する必要がある（ベクトル空間整合）。`model` を変えたら下記 4. で既存ベクトルを再生成する。現状 `ollama` のみ実装。`openai` / `voyage` は設定上受理されるが未実装で、`recall.search` は `embedding_disabled` に degrade する。
+>
+> **次元一致必須**: `dim` は `model` の出力次元と一致させる（`bge-m3`=1024、`nomic-embed-text`=768 等）。`dim` は DB 作成時に vec0 テーブルのサイズを固定するため、後から変える場合は新規 DB か delete + rebuild + 再 sync が必要。不一致のままだとベクトル挿入が失敗し、recall は静かに空へ degrade する。
 
 ### 3. 取り込み（ベクトルの populate）
 

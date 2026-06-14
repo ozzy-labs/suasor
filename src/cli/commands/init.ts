@@ -26,6 +26,7 @@ const DEFAULT_CONFIG_TOML = `# Suasor configuration (docs/design/config.md).
 backend = "disabled"   # disabled | ollama | openai | voyage
 # baseUrl = "http://localhost:11434"   # ollama sidecar (/api/embed is appended)
 # model = "bge-m3"                      # embedding model; identical for ingest & query
+# dim = 1024                            # embedding dim; must match the model (bge-m3=1024)
 
 [llm]
 backend = "disabled"   # disabled | anthropic | openai | ollama
@@ -83,7 +84,7 @@ export class InitCommand extends Command {
       this.context.stderr.write("error: storage.dbPath is not configured\n");
       return 1;
     }
-    const db = openDatabase({ path: dbPath });
+    const db = openDatabase({ path: dbPath, embeddingDim: config.embedding.dim });
     db.close();
     this.context.stdout.write(`Initialized database: ${dbPath}\n`);
 

@@ -20,6 +20,8 @@
 | [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / recall.search（text-only・persist なし） |
 | [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | recall.search / decision.list / brief（text-only・persist なし） |
 
+> **MCP tool 注記:** 上表の `brief` / `graph.related` は計画中で未提供（[mcp-surface.md](../design/mcp-surface.md) の「後続 Issue」）。該当 skill は当面、提供済みの read tool（`recall.search` / `search` / `*.list`）を組み合わせて動作する。
+
 ## HITL write 系（人の承認で適用・4）
 
 | skill | 発火例 | 主な MCP tool |

@@ -32,7 +32,7 @@ export class ProjectionsRebuildCommand extends Command {
       return 1;
     }
 
-    const store = Store.open({ path: dbPath });
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const result = store.rebuild();
       this.context.stdout.write(`Rebuilt projections from ${result.events} event(s).\n`);

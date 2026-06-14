@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Store } from "../../src/db/index.ts";
+import { DEFAULT_EMBEDDING_DIM, DEFAULT_VEC_TABLE, Store } from "../../src/db/index.ts";
 import type { NewEvent } from "../../src/events/types.ts";
+import { upsertSourceVector } from "../../src/retrieval/embedding/recall.ts";
 
 let store: Store;
 
@@ -133,6 +134,39 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
     for (const table of Object.values(snap)) {
       expect(table).toHaveLength(0);
     }
+  });
+
+  test("rebuild clears the vec0 substrate (vectors are re-synced, not replayed)", () => {
+    const sqlite = store.connection.sqlite;
+    store.record(
+      {
+        type: "SourceObserved",
+        externalId: "gh:vec",
+        sourceType: "github_issue",
+        body: "embed me",
+        observedAt: "2026-06-14T00:00:00.000Z",
+        fingerprint: "fp",
+        meta: {},
+      },
+      new Date("2026-06-14T00:00:01.000Z"),
+    );
+    // Vectors come from the delegated embedder (ADR-0006), not the event payload.
+    upsertSourceVector(sqlite, "gh:vec", new Array(DEFAULT_EMBEDDING_DIM).fill(0.1));
+    const vecBefore = sqlite.query(`SELECT count(*) AS n FROM ${DEFAULT_VEC_TABLE}`).get() as {
+      n: number;
+    };
+    expect(vecBefore.n).toBe(1);
+
+    store.rebuild();
+
+    // The source projection is replayed back, but the vector is cleared (no stale
+    // rows survive) and is regenerated on the next `<connector> sync`.
+    const vecAfter = sqlite.query(`SELECT count(*) AS n FROM ${DEFAULT_VEC_TABLE}`).get() as {
+      n: number;
+    };
+    expect(vecAfter.n).toBe(0);
+    const sources = sqlite.query("SELECT count(*) AS n FROM sources").get() as { n: number };
+    expect(sources.n).toBe(1);
   });
 
   test("FTS index is rebuilt and searchable after replay", () => {

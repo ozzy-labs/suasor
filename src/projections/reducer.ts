@@ -112,14 +112,12 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       return;
     }
     case "TaskApplied": {
+      // Apply only advances an already-proposed task's lifecycle state. Like
+      // SourceBodyUpdated, it must NOT fabricate a row (a titleless task) when no
+      // prior TaskProposed exists — so a TaskApplied with no matching task is a
+      // no-op under replay rather than inserting an empty-title placeholder.
       sqlite
-        .query(
-          `INSERT INTO tasks (id, title, state, created_at, updated_at)
-           VALUES ($id, '', $state, $ts, $ts)
-           ON CONFLICT(id) DO UPDATE SET
-             state = excluded.state,
-             updated_at = excluded.updated_at`,
-        )
+        .query("UPDATE tasks SET state = $state, updated_at = $ts WHERE id = $id")
         .run({ $id: event.taskId, $state: event.state, $ts: event.recordedAt });
       return;
     }

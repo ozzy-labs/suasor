@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   Config,
@@ -140,6 +142,39 @@ describe("Config schema", () => {
     const cfg = Config.parse({});
     expect(cfg.embedding.baseUrl).toBe(DEFAULT_OLLAMA_BASE_URL);
     expect(cfg.embedding.model).toBe(DEFAULT_OLLAMA_MODEL);
+    // dim defaults to the bge-m3 dimension that sizes the vec0 table.
+    expect(cfg.embedding.dim).toBe(1024);
+  });
+});
+
+describe("loadConfig reads config.toml from disk (no injected fileLayer)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "suasor-cfg-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("parses a real config.toml off disk", async () => {
+    writeFileSync(
+      join(dir, "config.toml"),
+      '[embedding]\nbackend = "ollama"\nmodel = "bge-large"\n',
+    );
+    const cfg = await loadConfig({ env: {}, configDir: dir });
+    expect(cfg.embedding.backend).toBe("ollama");
+    expect(cfg.embedding.model).toBe("bge-large");
+  });
+
+  test("missing config.toml falls back to defaults", async () => {
+    const cfg = await loadConfig({ env: {}, configDir: dir });
+    expect(cfg.embedding.backend).toBe("disabled");
+    expect(cfg.storage.dbPath).toBe(join(dir, "suasor.db"));
+  });
+
+  test("malformed TOML rejects with ConfigError", async () => {
+    writeFileSync(join(dir, "config.toml"), "this is not = = valid toml [");
+    await expect(loadConfig({ env: {}, configDir: dir })).rejects.toBeInstanceOf(ConfigError);
   });
 });
 

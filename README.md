@@ -29,7 +29,7 @@ Distributed via four channels (released manually — see [docs/guide/install.md]
 
 ## Quickstart (provisional)
 
-> Early development — the command surface is wired but several commands are stubs (see notes). Requires [Bun](https://bun.sh) 1.1+.
+> Early development, but every CLI command below is implemented (ingest, retrieval, MCP server, and skills all work). The only not-yet-shipped pieces are the `brief` / `graph.related` MCP tools — see [docs/design/mcp-surface.md](docs/design/mcp-surface.md). Requires [Bun](https://bun.sh) 1.1+.
 
 ```bash
 bun install            # install dependencies
@@ -37,6 +37,9 @@ bun run src/index.ts --version
 
 # First-run setup: writes ~/.config/suasor/config.toml and the local SQLite store.
 bun run src/index.ts init
+
+# Ingest read-only from a connector (github / slack / ms-graph / google / box / web).
+bun run src/index.ts github sync
 
 # Full-text search over ingested sources (FTS5; --json / --limit available).
 bun run src/index.ts search "<query>"
@@ -50,11 +53,11 @@ bun run src/index.ts db migrate            # apply the projection schema (idempo
 bun run src/index.ts projections rebuild   # replay the event log into projections
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` is wired into the CLI but implemented by later releases. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ## Connect an agent host (MCP)
 
-Suasor exposes its memory to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io) (stdio transport). The server is the agent boundary: it ships **read** tools today — `search`, `recall.search`, `source.list` / `source.get`, and `task.list` / `decision.list` / `inbox.list` — all side-effect-free and annotated read-only so hosts may auto-approve them. Write tools stay behind human-in-the-loop approval (ADR-0004); nothing is applied or sent without your say.
+Suasor exposes its memory to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io) (stdio transport). The server is the agent boundary. **Read** tools — `search`, `recall.search`, `source.list` / `source.get`, and `task.list` / `decision.list` / `inbox.list` — are side-effect-free and annotated read-only so hosts may auto-approve them. **Write** tools — `connector.sync`, `propose.generate`, `propose.apply`, `task.create` — ship today but stay behind human-in-the-loop approval (ADR-0004); nothing is applied or sent without your say.
 
 ```bash
 bun run src/index.ts mcp serve   # start the MCP server over stdio
