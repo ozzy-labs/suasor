@@ -161,9 +161,9 @@ const defaultMsGraphClientFactory: MsGraphClientFactory = async ({
   });
   return {
     async getPage(path) {
-      // Absolute nextLinks are passed through; relative paths use `.api`.
-      const req = path.startsWith("http") ? client.api(path) : client.api(path);
-      return (await req.get()) as GraphPage;
+      // `client.api` accepts both a relative resource path and an absolute
+      // `@odata.nextLink`, so the same call covers first page and pagination.
+      return (await client.api(path).get()) as GraphPage;
     },
   };
 };

@@ -42,7 +42,6 @@ interface SlackMessageItem {
   ts: string;
   text?: string;
   user?: string;
-  subtype?: string;
   thread_ts?: string;
 }
 
