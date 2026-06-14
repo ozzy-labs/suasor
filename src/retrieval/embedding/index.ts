@@ -17,7 +17,6 @@ export {
 } from "./embedder.ts";
 export {
   DEFAULT_RECALL_LIMIT,
-  deleteSourceVector,
   EMBEDDING_DISABLED_SIGNAL,
   embedSources,
   type RecallOptions,

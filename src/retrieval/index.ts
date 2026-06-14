@@ -6,7 +6,6 @@
 export {
   createEmbedder,
   DEFAULT_RECALL_LIMIT,
-  deleteSourceVector,
   EMBEDDING_DISABLED_SIGNAL,
   type Embedder,
   EmbeddingError,
