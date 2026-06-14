@@ -196,3 +196,54 @@ describe("MCP read surface", () => {
     expect(res.content[0]?.text).toContain("validation");
   });
 });
+
+describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
+  /** Connect a client to a server built WITH the write tool enabled. */
+  async function connectWrite(connectors: Record<string, Record<string, unknown>> = {}) {
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embeddingBackend: "disabled",
+      write: { store, config: { connectors } },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    return client;
+  }
+
+  test("connector.sync is registered as a write tool (readOnlyHint: false)", async () => {
+    const client = await connectWrite();
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "connector.sync");
+    expect(tool).toBeDefined();
+    expect(tool?.annotations?.readOnlyHint).toBe(false);
+  });
+
+  test("connector.sync is absent when no writable store is supplied", async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain("connector.sync");
+  });
+
+  test("connector.sync runs the shared service and returns the outcome", async () => {
+    // repos:[] → no records (no network), but the write path runs end-to-end.
+    const client = await connectWrite({ github: { repos: [] } });
+    const res = await client.callTool({
+      name: "connector.sync",
+      arguments: { connector: "github" },
+    });
+    const parsed = parseResult(res as never) as { connector: string; observed: number };
+    expect(parsed.connector).toBe("github");
+    expect(parsed.observed).toBe(0);
+  });
+
+  test("connector.sync surfaces an unknown connector as a tool error", async () => {
+    const client = await connectWrite();
+    const res = (await client.callTool({
+      name: "connector.sync",
+      arguments: { connector: "nope" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("unknown connector");
+  });
+});

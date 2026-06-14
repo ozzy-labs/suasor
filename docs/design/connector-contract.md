@@ -1,32 +1,62 @@
 # Connector Contract
 
-[ADR-0007](../adr/0007-connector-contract.md)。connector は共通 interface を実装する（read 専用）。
+[ADR-0007](../adr/0007-connector-contract.md)。connector は共通 interface を実装する（read 専用）。実装は `src/connectors/`（contract / sync service / registry / connector 実装）。
 
-## Interface（暫定）
+## Interface（確定）
+
+`src/connectors/contract.ts`（**import-clean**: 型のみ。connector SDK を pull しない）。
 
 ```ts
 interface Connector {
-  readonly name: string;                 // "github" | "slack" | ...
-  readonly sourceType: string;           // projection の source_type
+  readonly name: string;       // "github" | "slack" | ...（CLI verb / config key）
+  readonly sourceType: string; // projection の source_type ファミリ（例 "github"）
   sync(ctx: SyncContext): AsyncIterable<SourceRecord>;  // read 専用取り込み
+  finalize?(): Promise<SyncResult> | SyncResult;        // resume cursor を返す（任意）
+}
+
+interface SyncContext {
+  readonly cursor: string | null;            // 前回の resume cursor（delta API 用 / 初回は null）
+  secret(name: string): Promise<string | null>; // keychain + env override（NFR-PRV-4）
+  readonly onProgress?: (r: SourceRecord) => void;
 }
 
 interface SourceRecord {
-  externalId: string;     // ソース横断で一意（必要なら workspace/team prefix）
-  body: string;           // 抽出本文（ローカル保持）
-  observedAt: string;     // ISO 8601
-  meta: Record<string, unknown>;
-  fingerprint?: string;   // delta なしソースの変更検知（SHA-256 等）
+  readonly externalId: string;  // ソース横断で一意（必要なら workspace/team prefix）
+  readonly sourceType: string;  // projection の source_type（例 "github_issue"）
+  readonly body: string;        // 抽出本文（ローカル保持）
+  readonly observedAt: string;  // ISO 8601
+  readonly meta: Record<string, unknown>;
+  readonly fingerprint?: string; // 省略時は sync service が body の SHA-256 を計算
+}
+
+interface SyncResult {
+  readonly cursor: string | null; // 次回 run の resume cursor（fingerprint 系は null）
 }
 ```
 
+## sync service（共通取り込みコア）
+
+`src/connectors/sync.ts` の `syncConnector(store, connector, options)` が全 connector 共通の取り込みコア。CLI `suasor <connector> sync` と MCP write tool `connector.sync` は**この同一関数**を呼ぶ（[mcp-surface](mcp-surface.md) / [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+
+各 record について fingerprint（connector 付与、無ければ body の SHA-256）を `sources` projection と比較し、差分検知する（FR-ING-3）:
+
+- 既存行なし → `SourceObserved` を append（新規）
+- 既存行あり・fingerprint 一致 → skip（unchanged）
+- 既存行あり・fingerprint 不一致 → `SourceBodyUpdated` を append（変更）
+
+run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。append は `Store.record`（event append + projection 畳み込みを 1 トランザクション）経由なので、検索は取り込み直後に反映される（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+
+## registry
+
+`src/connectors/registry.ts` が name → **lazy factory loader** を保持する。connector の登録・一覧は SDK を読み込まない（import-clean）。connector 追加 = `() => import("./<name>.ts")` の 1 エントリ追加。
+
 ## 規約
 
-- **read 専用** — ソースに書き戻さない
-- **差分** — delta API があれば cursor を `SyncContext` で授受、なければ `fingerprint` 比較
-- **import-clean** — connector の登録 import で重い SDK を pull しない（lazy import）
-- **secrets** — トークンは keychain 経由（[config](config.md)）
+- **read 専用** — ソースに書き戻さない（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）
+- **差分** — delta API があれば cursor を `SyncContext`/`SyncResult` で授受、なければ `fingerprint` 比較（sync service が body の SHA-256 を自動付与）
+- **import-clean** — connector の登録 import で重い SDK を pull しない。SDK は `sync` 内で lazy import（CLI の lazy-import 規律と同じ。NFR-PRF-1）
+- **secrets** — トークンは `ctx.secret(name)` で取得（keychain + env override、[config](config.md)）。config.toml には書かない
 
 ## 初期 connector
 
-GitHub(octokit) / Slack(@slack/web-api) / Microsoft Graph(@microsoft/microsoft-graph-client + @azure/msal-node) / Google(googleapis or fetch) / Box / Web(Playwright)
+GitHub(octokit、**実装済み**) / Slack(@slack/web-api) / Microsoft Graph(@microsoft/microsoft-graph-client + @azure/msal-node) / Google(googleapis or fetch) / Box / Web(Playwright)。GitHub の利用手順は [connectors guide](../guide/connectors.md)。

@@ -1,19 +1,24 @@
 /**
  * MCP server surface — the agent boundary (ADR-0004, docs/design/mcp-surface.md).
  *
- * Exposes Suasor's read tools over MCP using the official TypeScript SDK. This
- * Issue (#8) ships the read half: `search`, `recall.search` (graceful-degraded
- * stub until #11), `source.list` / `source.get`, and `task.list` /
- * `decision.list` / `inbox.list`. Write tools (`propose.*`, `task.create`,
- * `connector.sync`) are added by later Issues and gated by HITL.
+ * Exposes Suasor's read tools over MCP using the official TypeScript SDK. The
+ * read half: `search`, `recall.search` (graceful-degraded stub until #11),
+ * `source.list` / `source.get`, and `task.list` / `decision.list` /
+ * `inbox.list`. The first write tool, `connector.sync` (read-only ingest into
+ * the local store), is registered when a writable `Store` + config are supplied
+ * (ADR-0007 / Issue #10 D5); the remaining write tools (`propose.*`,
+ * `task.create`) land in later Issues. Write tools carry `readOnlyHint: false`
+ * so hosts gate them behind HITL (no auto-apply, ADR-0004).
  *
- * Read = no side effects: every tool here only SELECTs (queries.ts) or runs the
+ * Read = no side effects: every read tool only SELECTs (queries.ts) or runs the
  * FTS-first search service (retrieval/), and is annotated `readOnlyHint: true`
  * so MCP hosts may auto-approve them. The split is structural, not advisory.
  */
 import type { Database } from "bun:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
+import type { Store } from "../db/index.ts";
 import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import { VERSION } from "../version.ts";
 import {
@@ -37,9 +42,9 @@ const isoDateTime = z.iso.datetime({ offset: true });
 /** Reusable `limit` shape: positive integer, capped. */
 const limitShape = z.number().int().positive().max(MAX_LIMIT).optional();
 
-/** Inputs needed to build the read-tool surface. */
+/** Inputs needed to build the tool surface. */
 export interface McpServerDeps {
-  /** Open projection/FTS database handle (read-only use here). */
+  /** Open projection/FTS database handle (read tools use this directly). */
   sqlite: Database;
   /**
    * Embedding backend from config. `recall.search` returns the
@@ -47,6 +52,17 @@ export interface McpServerDeps {
    * (full semantic search lands in #11). ADR-0005 graceful degradation.
    */
   embeddingBackend: string;
+  /**
+   * Writable store + connector config for the `connector.sync` write tool
+   * (ADR-0007 / Issue #10). When omitted, the server exposes read tools only
+   * (e.g. a read-only deployment); the write tool is simply not registered.
+   */
+  write?: {
+    /** Store the (HITL-approved) ingest writes through. */
+    store: Store;
+    /** Effective config, providing each `[connectors.<name>]` slice. */
+    config: { connectors: Record<string, Record<string, unknown>> };
+  };
 }
 
 /** Wrap a JSON-serializable value as an MCP text content result. */
@@ -59,7 +75,7 @@ function jsonResult(value: unknown) {
  * responsible for connecting a transport (`server.connect(transport)`).
  */
 export function buildMcpServer(deps: McpServerDeps): McpServer {
-  const { sqlite, embeddingBackend } = deps;
+  const { sqlite, embeddingBackend, write } = deps;
   const server = new McpServer(
     { name: "suasor", version: VERSION },
     {
@@ -242,6 +258,40 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       return jsonResult({ items });
     },
   );
+
+  // --- connector.sync: read-only ingest into the local store (WRITE / HITL). ---
+  // Registered only when a writable store is supplied. `readOnlyHint: false`
+  // marks it as a write tool so hosts gate it behind human approval (ADR-0004);
+  // it calls the same `syncConnector` service as the `suasor <connector> sync`
+  // CLI (Issue #10 D5).
+  if (write) {
+    server.registerTool(
+      "connector.sync",
+      {
+        title: "Connector sync (ingest)",
+        description:
+          "Run a read-only connector ingest pass into the local store (e.g. " +
+          "github). Write tool: requires human approval — no auto-apply. Incremental " +
+          "via fingerprint/cursor delta; pass cursor=null to force a full re-scan.",
+        inputSchema: {
+          connector: z.string().min(1).describe('Connector to run (e.g. "github").'),
+          cursor: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("Resume cursor; omit to resume, null to re-scan fully."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: true },
+      },
+      async ({ connector, cursor }) => {
+        const outcome = await runConnectorSyncTool(
+          { connector, ...(cursor !== undefined ? { cursor } : {}) },
+          { store: write.store, config: write.config },
+        );
+        return jsonResult(outcome);
+      },
+    );
+  }
 
   return server;
 }

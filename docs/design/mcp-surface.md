@@ -77,14 +77,37 @@ assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の
 
 ## Write tools（HITL・人の承認なしに適用/送信しない）
 
-本 Issue（#8）では read tool のみ実装する。write tool は後続 Issue で追加し、いずれも HITL（auto-apply 経路を持たない）。
+write tool は HITL（auto-apply 経路を持たない）。`connector.sync` は実装済み（下記）、残りは後続 Issue。
 
-| tool | 役割 |
-|---|---|
-| `propose.generate` | 返信/タスク/決定の候補生成（mode 引数: reply_draft / source_extract / meeting_followup 等） |
-| `propose.apply` | 承認された候補のみ適用（idempotent） |
-| `task.create` | task 追加（ホスト側で人確認を促す） |
-| `connector.sync` | 取り込み実行 |
+| tool | 役割 | 状態 |
+|---|---|---|
+| `connector.sync` | 取り込み実行 | 実装済み（#10。下記参照） |
+| `propose.generate` | 返信/タスク/決定の候補生成（mode 引数: reply_draft / source_extract / meeting_followup 等） | 後続 Issue |
+| `propose.apply` | 承認された候補のみ適用（idempotent） | 後続 Issue |
+| `task.create` | task 追加（ホスト側で人確認を促す） | 後続 Issue |
+
+### `connector.sync`（確定・write / HITL）
+
+connector の read 専用取り込みを起動する write tool（[connector-contract](connector-contract.md) / [ADR-0007](../adr/0007-connector-contract.md)）。store を変更するため write 扱いで、`readOnlyHint: false` を付け、ホストは人の承認なしに呼ばない（auto-apply 経路なし）。CLI `suasor <connector> sync` と**同一の sync service**（`src/connectors/sync.ts` の `syncConnector`）を叩くため、どちらの経路でも取り込み挙動は同一。tool descriptor は `src/connectors/mcp-tool.ts`、server 登録は `src/mcp/server.ts`（writable store 供給時のみ登録）。
+
+引数（Zod）:
+
+| 引数 | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `connector` | `string`（必須） | — | 起動する connector 名（例 `github`） |
+| `cursor` | `string \| null`（任意） | 省略=前回 cursor から resume | `null` で全件再スキャン |
+
+戻り値:
+
+```jsonc
+{
+  "connector": "github",
+  "observed": 12,    // 新規取り込み
+  "updated": 3,      // 本文変更（fingerprint 差分）
+  "unchanged": 5,    // 未変更で skip
+  "cursor": "2026-06-12T00:00:00Z"  // 次回 resume cursor（fingerprint 系は null）
+}
+```
 
 ## 規約
 

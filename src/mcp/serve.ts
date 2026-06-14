@@ -1,9 +1,10 @@
 /**
  * Start the Suasor MCP server over stdio (ADR-0004).
  *
- * Opens the local store, builds the read-tool surface (server.ts), and connects
- * a `StdioServerTransport`. stdout carries only JSON-RPC frames — diagnostics go
- * to stderr — so the protocol framing stays intact for the host process.
+ * Opens the local store, builds the tool surface (server.ts: read tools plus
+ * the `connector.sync` write tool, HITL), and connects a `StdioServerTransport`.
+ * stdout carries only JSON-RPC frames — diagnostics go to stderr — so the
+ * protocol framing stays intact for the host process.
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "../config/index.ts";
@@ -33,6 +34,9 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
   const server = buildMcpServer({
     sqlite: store.connection.sqlite,
     embeddingBackend: config.embedding.backend,
+    // Enable the `connector.sync` write tool (HITL) over the same store
+    // (ADR-0007 / Issue #10 D5). Hosts gate it via `readOnlyHint: false`.
+    write: { store, config },
   });
 
   const transport = new StdioServerTransport();
@@ -50,7 +54,7 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
     };
 
     server.connect(transport).then(
-      () => log("suasor mcp serve: listening on stdio (read tools; ADR-0004)."),
+      () => log("suasor mcp serve: listening on stdio (read tools + connector.sync; ADR-0004)."),
       (error) => {
         if (!closed) {
           closed = true;
