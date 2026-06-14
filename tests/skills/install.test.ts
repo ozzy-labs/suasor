@@ -92,7 +92,9 @@ describe("installSkills", () => {
   test("scope=claude writes only .claude/skills", () => {
     installSkills({ baseDir, scope: "claude", skills: bundled() });
     expect(existsSync(join(baseDir, ".claude", "skills", "personal-brief", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(baseDir, ".agents", "skills", "personal-brief", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(baseDir, ".agents", "skills", "personal-brief", "SKILL.md"))).toBe(
+      false,
+    );
   });
 
   test("does not write ecosystem / non-skill dirs", () => {
