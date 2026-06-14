@@ -24,6 +24,8 @@ const DEFAULT_CONFIG_TOML = `# Suasor configuration (docs/design/config.md).
 
 [embedding]
 backend = "disabled"   # disabled | ollama | openai | voyage
+# baseUrl = "http://localhost:11434"   # ollama sidecar (/api/embed is appended)
+# model = "bge-m3"                      # embedding model; identical for ingest & query
 
 [llm]
 backend = "disabled"   # disabled | anthropic | openai | ollama
