@@ -67,9 +67,8 @@ function entityExists(store: Store, candidate: Candidate, id: string): boolean {
       // Triage is idempotent on (inboxId, state): re-applying the same target
       // state is a no-op, but moving to a different state must still apply.
       return (
-        sqlite
-          .query("SELECT 1 FROM inbox WHERE id = ? AND state = ?")
-          .get(id, candidate.state) !== null
+        sqlite.query("SELECT 1 FROM inbox WHERE id = ? AND state = ?").get(id, candidate.state) !==
+        null
       );
   }
 }
@@ -125,11 +124,21 @@ export function proposeApply(
   for (const candidate of candidates) {
     const id = entityId(candidate);
     if (entityExists(store, candidate, id)) {
-      results.push({ candidateId: candidate.candidateId, kind: candidate.kind, entityId: id, status: "skipped" });
+      results.push({
+        candidateId: candidate.candidateId,
+        kind: candidate.kind,
+        entityId: id,
+        status: "skipped",
+      });
       continue;
     }
     store.record(candidateToEvent(candidate, id), now);
-    results.push({ candidateId: candidate.candidateId, kind: candidate.kind, entityId: id, status: "applied" });
+    results.push({
+      candidateId: candidate.candidateId,
+      kind: candidate.kind,
+      entityId: id,
+      status: "applied",
+    });
   }
 
   const applied = results.filter((r) => r.status === "applied").length;

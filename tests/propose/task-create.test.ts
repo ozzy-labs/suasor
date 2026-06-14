@@ -13,9 +13,11 @@ afterEach(() => {
 });
 
 function tasks() {
-  return store.connection.sqlite
-    .query("SELECT id, title, state FROM tasks")
-    .all() as Array<{ id: string; title: string; state: string }>;
+  return store.connection.sqlite.query("SELECT id, title, state FROM tasks").all() as Array<{
+    id: string;
+    title: string;
+    state: string;
+  }>;
 }
 
 describe("task.create (direct HITL task creation, #12 追補 D2)", () => {

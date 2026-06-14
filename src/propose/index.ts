@@ -12,13 +12,13 @@
  */
 export {
   type AppliedCandidate,
-  proposeApply,
   ProposeApplyInput,
   type ProposeApplyOutput,
+  proposeApply,
 } from "./apply.ts";
 export {
-  Candidate,
   CANDIDATE_KINDS,
+  Candidate,
   CandidateInput,
   type CandidateKind,
   MODE_ALLOWED_KINDS,
@@ -28,13 +28,13 @@ export {
   type TriageState,
 } from "./candidates.ts";
 export {
-  proposeGenerate,
   ProposeGenerateInput,
   type ProposeGenerateOutput,
+  proposeGenerate,
 } from "./generate.ts";
 export { candidateId, entityId } from "./id.ts";
 export {
-  taskCreate,
   TaskCreateInput,
   type TaskCreateOutput,
+  taskCreate,
 } from "./task-create.ts";

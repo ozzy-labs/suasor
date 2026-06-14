@@ -18,12 +18,7 @@
  * subset and the host calls `propose.apply` (no auto-apply path, ADR-0004).
  */
 import { z } from "zod";
-import {
-  type Candidate,
-  CandidateInput,
-  MODE_ALLOWED_KINDS,
-  ProposeMode,
-} from "./candidates.ts";
+import { type Candidate, CandidateInput, MODE_ALLOWED_KINDS, ProposeMode } from "./candidates.ts";
 import { candidateId } from "./id.ts";
 
 /** Input to `propose.generate`: a mode plus the host-produced candidate items. */
