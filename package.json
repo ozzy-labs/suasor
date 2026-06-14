@@ -8,7 +8,7 @@
     "suasor": "./dist/index.js"
   },
   "files": [
-    "dist",
+    "dist/index.js",
     "docs/skills"
   ],
   "engines": {
