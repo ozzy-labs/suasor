@@ -18,3 +18,4 @@ skills_adapters: []
 # Pinned so commons sync does not overwrite it.
 pinned:
   - .mise.toml
+  - .gitignore
