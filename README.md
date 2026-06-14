@@ -30,12 +30,16 @@ bun run src/index.ts init
 # Full-text search over ingested sources (FTS5; --json / --limit available).
 bun run src/index.ts search "<query>"
 
+# Install the bundled assistant skills into your agent host(s).
+bun run src/index.ts skills install        # .claude/skills/ + .agents/skills/
+bun run src/index.ts skills list           # installed / missing / modified
+
 # Maintenance.
 bun run src/index.ts db migrate            # apply the projection schema (idempotent)
 bun run src/index.ts projections rebuild   # replay the event log into projections
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` and `skills install` / `skills list` are wired into the CLI but implemented by later releases. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` is wired into the CLI but implemented by later releases. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ## Connect an agent host (MCP)
 

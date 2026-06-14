@@ -105,22 +105,53 @@ describe("suasor db migrate", () => {
 // transport), so it is exercised in-process via the SDK client in
 // tests/mcp/server.test.ts rather than through the blocking CLI path here.
 
-describe("downstream stubs", () => {
-  test("skills install accepts --scope and reports pending", async () => {
-    const { code, err } = await run(["skills", "install", "--scope", "claude"]);
-    expect(code).toBe(0);
-    expect(err).toContain("scope=claude");
+describe("suasor skills install / list", () => {
+  test("install --host writes assistant skills, list reports them installed", async () => {
+    const install = await run(["skills", "install", "--scope", "claude", "--host", dir]);
+    expect(install.code).toBe(0);
+    expect(install.out).toContain("created");
+    expect(existsSync(join(dir, ".claude", "skills", "personal-brief", "SKILL.md"))).toBe(true);
+    // Only the requested host dir is written for scope=claude.
+    expect(existsSync(join(dir, ".agents", "skills"))).toBe(false);
+
+    const list = await run(["skills", "list", "--scope", "claude", "--host", dir]);
+    expect(list.code).toBe(0);
+    expect(list.out).toContain("personal-brief");
+    // Every skill row reports installed; the summary confirms 0 missing.
+    expect(list.out).toContain("0 missing");
+    expect(list.out).not.toMatch(/^missing\s/m);
   });
 
-  test("skills install rejects an invalid --scope", async () => {
-    const { code, err } = await run(["skills", "install", "--scope", "bogus"]);
+  test("install --dry-run writes nothing", async () => {
+    const dry = await run(["skills", "install", "--host", dir, "--dry-run"]);
+    expect(dry.code).toBe(0);
+    expect(dry.out).toContain("Dry run");
+    expect(existsSync(join(dir, ".claude", "skills"))).toBe(false);
+    expect(existsSync(join(dir, ".agents", "skills"))).toBe(false);
+  });
+
+  test("list --json emits machine-readable status", async () => {
+    const { code, out } = await run([
+      "skills",
+      "list",
+      "--scope",
+      "agents",
+      "--host",
+      dir,
+      "--json",
+    ]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out) as { name: string; host: string; state: string }[];
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+    expect(parsed.every((s) => s.host === "agents")).toBe(true);
+    // Nothing installed in a fresh dir → all missing.
+    expect(parsed.every((s) => s.state === "missing")).toBe(true);
+  });
+
+  test("install rejects an invalid --scope", async () => {
+    const { code, err } = await run(["skills", "install", "--scope", "bogus", "--host", dir]);
     expect(code).toBe(1);
     expect(err).toContain("invalid --scope");
-  });
-
-  test("skills list exits 0 with a pending notice", async () => {
-    const { code, err } = await run(["skills", "list"]);
-    expect(code).toBe(0);
-    expect(err).toContain("not yet implemented");
   });
 });
