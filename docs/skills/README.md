@@ -12,7 +12,7 @@
 | `next-actions` | 「次に何やる」「優先度高いのは」 | task.list / recall.search |
 | `catchup` | 「前回以降の差分」「久しぶりに確認」 | (seen-marker ベースの差分要約) |
 | `find-document` | 「あの資料」「<語>含むファイル」 | search (FTS) |
-| `research` | 「<X>について調べて」「網羅的に」 | recall.search + search + graph.related + brief |
+| `research` | 「`<X>`について調べて」「網羅的に」 | recall.search + search + graph.related + brief |
 | `meeting-prep` | 「次の会議準備」「明日のMTG前確認」 | source.list(calendar) / recall.search / graph.related |
 | `decision-rationale` | 「あの決定はなぜ」「Xを選んだ理由」 | decision.list / graph.related / recall.search |
 | `external-brief` | 「上司向け週次」「クライアント向け進捗」 | task.list(completed) / decision.list / brief |

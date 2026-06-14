@@ -2,15 +2,15 @@
 /**
  * Suasor entry point.
  *
- * Scaffold only. The CLI (clipanion) and MCP server (TS SDK) are wired during
- * implementation per the spec-driven plan — see docs/design/cli.md and
- * docs/design/mcp-surface.md. Architecture invariants live in docs/adr/.
+ * Dispatches to the clipanion CLI (src/cli). Heavy dependencies are lazy-loaded
+ * inside each command to keep cold start light (NFR-PRF-1). Architecture
+ * invariants live in docs/adr/; surfaces are specified in docs/design/.
  */
-export const VERSION = "0.0.0";
+export { VERSION } from "./version.ts";
 
 async function main(): Promise<void> {
-  // TODO(impl): wire CLI (src/cli) + MCP server (src/mcp). See docs/design/.
-  console.log("suasor: scaffold. See docs/ for the spec-driven plan.");
+  const { runCli } = await import("./cli/index.ts");
+  process.exitCode = await runCli();
 }
 
 if (import.meta.main) {

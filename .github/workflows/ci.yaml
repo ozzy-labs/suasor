@@ -31,3 +31,22 @@ jobs:
 
       - name: Test
         run: bun test
+
+  lint:
+    name: lint (biome + markdown)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Biome
+        run: bun run lint
+
+      - name: Markdownlint
+        run: bunx markdownlint-cli2 "**/*.md"

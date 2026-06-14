@@ -3,6 +3,7 @@
 [ADR-0007](../adr/0007-connector-contract.md)。connector は共通 interface を実装する（read 専用）。
 
 ## Interface（暫定）
+
 ```ts
 interface Connector {
   readonly name: string;                 // "github" | "slack" | ...
@@ -20,10 +21,12 @@ interface SourceRecord {
 ```
 
 ## 規約
+
 - **read 専用** — ソースに書き戻さない
 - **差分** — delta API があれば cursor を `SyncContext` で授受、なければ `fingerprint` 比較
 - **import-clean** — connector の登録 import で重い SDK を pull しない（lazy import）
 - **secrets** — トークンは keychain 経由（[config](config.md)）
 
 ## 初期 connector
+
 GitHub(octokit) / Slack(@slack/web-api) / Microsoft Graph(@microsoft/microsoft-graph-client + @azure/msal-node) / Google(googleapis or fetch) / Box / Web(Playwright)
