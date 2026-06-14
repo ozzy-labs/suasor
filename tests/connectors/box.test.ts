@@ -46,13 +46,11 @@ describe("BoxConnectorConfig", () => {
 });
 
 describe("Box connector — record mapping (ADR-0007 identity)", () => {
-  test("maps files to box_file with file-prefixed ids and sha1 fingerprint", async () => {
+  test("maps files to box_file with file-prefixed ids; body is filename-only, no fingerprint override", async () => {
     const { client } = fakeBox({
       "0": [
         {
-          files: [
-            { id: "11", name: "report.pdf", modifiedAt: "2026-06-10T00:00:00Z", sha1: "abc123" },
-          ],
+          files: [{ id: "11", name: "report.pdf", modifiedAt: "2026-06-10T00:00:00Z" }],
         },
       ],
     });
@@ -62,7 +60,10 @@ describe("Box connector — record mapping (ADR-0007 identity)", () => {
     expect(records[0]?.externalId).toBe("box:file:11");
     expect(records[0]?.sourceType).toBe("box_file");
     expect(records[0]?.body).toBe("report.pdf");
-    expect(records[0]?.fingerprint).toBe("abc123");
+    // No connector-supplied fingerprint: delta detection keys off the body
+    // SHA-256 (sync service default) so body + fingerprint track the same
+    // content — the filename (issue #36).
+    expect(records[0]?.fingerprint).toBeUndefined();
     expect(records[0]?.observedAt).toBe("2026-06-10T00:00:00Z");
   });
 });

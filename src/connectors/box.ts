@@ -2,12 +2,18 @@
  * Box connector (ADR-0007). Read-only ingest of files under the configured Box
  * folders into `SourceRecord`s.
  *
+ * - **filename-only ingest** — the record `body` is the file **name** (Box file
+ *   content is not downloaded). Box ingest therefore makes a file discoverable by
+ *   name; it does not index file contents (text extraction is future work).
  * - **read-only** — only Box `GET` folder-item listings are called; nothing is
  *   written back (ADR-0003).
  * - **delta** — folder items are paged via a marker/offset. The connector walks
- *   every page each run and relies on the body fingerprint (sync service SHA-256,
- *   here seeded from the file's content hash when available) for change detection
- *   (FR-ING-3); `finalize` returns `cursor: null`.
+ *   every page each run and relies on the body fingerprint for change detection
+ *   (FR-ING-3). The connector supplies no fingerprint, so the sync service's
+ *   default SHA-256-over-body drives delta detection — body and fingerprint track
+ *   the **same** content (the filename), so a file's content changing without a
+ *   rename produces no redundant `SourceBodyUpdated`. `finalize` returns
+ *   `cursor: null`.
  * - **identity** — `box:file:<id>` (cross-source-unique, ADR-0007).
  *   `source_type` is `box_file`.
  * - **import-clean** — `box-typescript-sdk-gen` is **lazy-imported inside `sync`**,
@@ -41,8 +47,6 @@ export interface BoxFileItem {
   /** Extracted description / representation text held locally. */
   description?: string;
   modifiedAt?: string;
-  /** Box content SHA-1; used as the change-detection fingerprint when present. */
-  sha1?: string;
 }
 
 /** One page of a Box folder listing. */
@@ -52,7 +56,14 @@ export interface BoxPage {
   nextMarker?: string;
 }
 
-/** Build a `SourceRecord` for one Box file. */
+/**
+ * Build a `SourceRecord` for one Box file.
+ *
+ * No `fingerprint` is supplied: the sync service computes a SHA-256 over the
+ * body (the filename), so delta detection keys off the same content the body
+ * carries. Keeping these aligned means a content-only change with an unchanged
+ * filename does NOT emit a redundant `SourceBodyUpdated` (issue #36).
+ */
 function toRecord(item: BoxFileItem): SourceRecord {
   const body = item.name && item.description ? `${item.name}\n\n${item.description}` : item.name;
   return {
@@ -61,9 +72,6 @@ function toRecord(item: BoxFileItem): SourceRecord {
     body,
     observedAt: item.modifiedAt ?? new Date(0).toISOString(),
     meta: { id: item.id, name: item.name },
-    // Prefer Box's content hash so a metadata-only listing still detects body
-    // changes; the sync service falls back to a body SHA-256 when omitted.
-    ...(item.sha1 ? { fingerprint: item.sha1 } : {}),
   };
 }
 
@@ -93,7 +101,7 @@ const defaultBoxClientFactory: BoxClientFactory = async (token) => {
       const res = await client.folders.getFolderItems(folderId, {
         queryParams: {
           usemarker: true,
-          fields: ["id", "name", "modified_at", "sha1", "type"],
+          fields: ["id", "name", "modified_at", "type"],
           ...(marker ? { marker } : {}),
         },
       });
@@ -102,7 +110,6 @@ const defaultBoxClientFactory: BoxClientFactory = async (token) => {
         id?: string;
         name?: string;
         modified_at?: string;
-        sha1?: string;
       }>;
       const files: BoxFileItem[] = entries
         .filter((e) => e.type === "file")
@@ -110,7 +117,6 @@ const defaultBoxClientFactory: BoxClientFactory = async (token) => {
           id: e.id ?? "",
           name: e.name ?? "",
           modifiedAt: e.modified_at,
-          sha1: e.sha1,
         }));
       return { files, nextMarker: res.nextMarker ?? undefined };
     },

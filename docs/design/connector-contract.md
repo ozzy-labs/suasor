@@ -67,7 +67,7 @@ run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。ap
 | `slack` | `slack_message` | @slack/web-api | `oldest` ts cursor | `token` |
 | `ms-graph` | `ms365_mail` / `ms365_calendar` / `ms365_file` / `ms365_teams_message` | @microsoft/microsoft-graph-client + @azure/msal-node | fingerprint | `clientSecret` |
 | `google` | `google_drive` / `gmail_message` / `google_calendar` | googleapis | fingerprint | `refreshToken` |
-| `box` | `box_file` | box-typescript-sdk-gen | content sha1 fingerprint | `token` |
+| `box` | `box_file` | box-typescript-sdk-gen | fingerprint（body = ファイル名のみ） | `token` |
 | `web` | `web_page` | playwright-core | snapshot fingerprint diff | （不要） |
 
 各 connector の setup（token / config slice）は [connectors guide](../guide/connectors.md)。
