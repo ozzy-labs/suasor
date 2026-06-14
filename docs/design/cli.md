@@ -5,7 +5,7 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
 ## コマンド
 
 ```bash
-suasor init [--force]                  # 設定 + DB 初期化（+ skills install は後続）
+suasor init [--force]                  # 設定 + DB 初期化（skills install は別コマンド）
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild             # event replay で projection 再構築
 suasor <connector> sync [--full] [--json]  # 取り込み（github 稼働 / slack 等は後続 Issue）
