@@ -18,6 +18,26 @@ const REGISTRY: Record<string, FactoryLoader> = {
     const { createGithubConnector } = await import("./github.ts");
     return (config: ConnectorConfig) => createGithubConnector(config);
   },
+  slack: async () => {
+    const { createSlackConnector } = await import("./slack.ts");
+    return (config: ConnectorConfig) => createSlackConnector(config);
+  },
+  "ms-graph": async () => {
+    const { createMsGraphConnector } = await import("./ms-graph.ts");
+    return (config: ConnectorConfig) => createMsGraphConnector(config);
+  },
+  google: async () => {
+    const { createGoogleConnector } = await import("./google.ts");
+    return (config: ConnectorConfig) => createGoogleConnector(config);
+  },
+  box: async () => {
+    const { createBoxConnector } = await import("./box.ts");
+    return (config: ConnectorConfig) => createBoxConnector(config);
+  },
+  web: async () => {
+    const { createWebConnector } = await import("./web.ts");
+    return (config: ConnectorConfig) => createWebConnector(config);
+  },
 };
 
 /** Names of all registered connectors (cheap; loads no SDK). */

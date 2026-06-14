@@ -8,7 +8,7 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
 suasor init [--force]                  # 設定 + DB 初期化（skills install は別コマンド）
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild             # event replay で projection 再構築
-suasor <connector> sync [--full] [--json]  # 取り込み（github 稼働 / slack 等は後続 Issue）
+suasor <connector> sync [--full] [--json]  # 取り込み（github / slack / ms-graph / google / box / web）
 suasor search [--limit N] [--json] <query>  # FTS 検索
 suasor mcp serve                       # MCP server（stdio）起動（read tools）
 suasor skills install [--scope S] [--host DIR] [--dry-run]  # アシスタント skill 展開
@@ -16,9 +16,9 @@ suasor skills list [--scope S] [--host DIR] [--json]        # アシスタント
 suasor --version                       # バージョン出力
 ```
 
-実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `github sync` / `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
+実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` / `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
 `<connector> sync` は connector registry から 1 connector = 1 command で派生する（[ADR-0007](../adr/0007-connector-contract.md)）。
-GitHub 以外の connector（slack / Microsoft Graph / Google / Box / Web）は後続 Issue（#7–#12）。
+稼働 connector: `github` / `slack` / `ms-graph`（Outlook / Calendar / OneDrive / Teams）/ `google`（Drive / Gmail / Calendar）/ `box` / `web`（Playwright snapshot）。setup は [connectors guide](../guide/connectors.md)。
 
 ## フラグ（確定）
 
