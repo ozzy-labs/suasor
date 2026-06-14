@@ -20,3 +20,14 @@ build/
 
 # Logs
 *.log
+
+# Suasor: local data — never commit the private memory store (ADR-0003)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.suasor/
+
+# Coverage
+coverage/
