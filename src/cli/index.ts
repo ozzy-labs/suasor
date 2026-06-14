@@ -5,9 +5,9 @@
  * Wired command surface (docs/design/cli.md):
  *   init · db migrate · projections rebuild · search · mcp serve ·
  *   skills install · skills list
- * `init` / `db migrate` / `projections rebuild` / `search` are live; `mcp serve`
- * and `skills *` are downstream stubs (the MCP surface — ADR-0004 — and the
- * assistant-skill catalog — ADR-0008 — are implemented by later Issues).
+ * `init` / `db migrate` / `projections rebuild` / `search` / `mcp serve` are
+ * live; `skills *` are downstream stubs (the assistant-skill catalog — ADR-0008
+ * — is implemented by a later Issue). The MCP read surface (ADR-0004) ships here.
  *
  * Registration is the only eager step. Command modules must keep their imports
  * to clipanion + the standard library so the registry stays cheap to build —

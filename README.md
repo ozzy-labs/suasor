@@ -35,7 +35,30 @@ bun run src/index.ts db migrate            # apply the projection schema (idempo
 bun run src/index.ts projections rebuild   # replay the event log into projections
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync`, `mcp serve`, and `skills install` / `skills list` are wired into the CLI but implemented by later releases. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` and `skills install` / `skills list` are wired into the CLI but implemented by later releases. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference.
+
+## Connect an agent host (MCP)
+
+Suasor exposes its memory to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io) (stdio transport). The server is the agent boundary: it ships **read** tools today — `search`, `recall.search`, `source.list` / `source.get`, and `task.list` / `decision.list` / `inbox.list` — all side-effect-free and annotated read-only so hosts may auto-approve them. Write tools stay behind human-in-the-loop approval (ADR-0004); nothing is applied or sent without your say.
+
+```bash
+bun run src/index.ts mcp serve   # start the MCP server over stdio
+```
+
+Register it with an MCP host (Claude Code, Claude Desktop, Codex CLI, …). For Claude Desktop, add to `claude_desktop_config.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "suasor": {
+      "command": "suasor",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Semantic search (`recall.search`) returns an `embedding_disabled` signal until you enable an embedding backend, so hosts gracefully fall back to FTS `search` (ADR-0005). See [docs/design/mcp-surface.md](docs/design/mcp-surface.md) for the tool schemas.
 
 ## License
 

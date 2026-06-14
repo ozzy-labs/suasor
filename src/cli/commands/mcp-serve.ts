@@ -1,10 +1,15 @@
 /**
  * `suasor mcp serve` — start the MCP server over stdio (ADR-0004).
  *
- * Stub: the MCP surface (read/write tools, HITL boundary) is implemented by a
- * downstream Issue (docs/design/mcp-surface.md). This command is wired into the
- * CLI now so the command surface is stable; it prints a pending notice and
- * exits without starting a server.
+ * Exposes Suasor's read tools (search / recall.search / source.* / task.list /
+ * decision.list / inbox.list) over the MCP stdio transport, the agent boundary
+ * (docs/design/mcp-surface.md). Read tools have no side effects; write/HITL
+ * tools are added by later Issues.
+ *
+ * Heavy dependencies (MCP SDK, DB layer, config loader) are imported lazily
+ * inside `execute` so the CLI cold start stays light (NFR-PRF-1).
+ *
+ * stdout is reserved for the JSON-RPC stream — diagnostics go to stderr.
  */
 import { Command } from "clipanion";
 
@@ -13,19 +18,27 @@ export class McpServeCommand extends Command {
 
   static override usage = Command.Usage({
     category: "MCP",
-    description: "Start the MCP server over stdio (not yet implemented).",
+    description: "Start the MCP server over stdio.",
     details: `
-      Will expose Suasor's read/write tools over MCP (stdio transport), with the
-      HITL boundary enforced on write tools (ADR-0004, docs/design/mcp-surface.md).
-      Wired by a downstream Issue; currently a stub.
+      Exposes Suasor's read tools over MCP (stdio transport): search,
+      recall.search (returns the embedding_disabled signal until a backend is
+      enabled), source.list / source.get, and task.list / decision.list /
+      inbox.list. Read tools are side-effect-free; write tools (HITL) are added
+      by later Issues (ADR-0004, docs/design/mcp-surface.md).
+
+      Configure an MCP host to launch this command over stdio.
     `,
     examples: [["Start the MCP server", "suasor mcp serve"]],
   });
 
   override async execute(): Promise<number> {
-    this.context.stderr.write(
-      "suasor mcp serve: not yet implemented (wired by a later Issue; see docs/design/mcp-surface.md).\n",
-    );
-    return 0;
+    const { serveMcp } = await import("../../mcp/index.ts");
+    try {
+      await serveMcp({ log: (m) => this.context.stderr.write(`${m}\n`) });
+      return 0;
+    } catch (error) {
+      this.context.stderr.write(`suasor mcp serve: ${(error as Error).message}\n`);
+      return 1;
+    }
   }
 }

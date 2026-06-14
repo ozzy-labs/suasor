@@ -35,7 +35,30 @@ bun run src/index.ts db migrate            # projection schema 適用（idempote
 bun run src/index.ts projections rebuild   # event log を replay して projection 再構築
 ```
 
-設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` / `mcp serve` / `skills install` / `skills list` は CLI に配線済みですが、本体は後続リリースで実装します。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md) を参照してください。
+設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` / `skills install` / `skills list` は CLI に配線済みですが、本体は後続リリースで実装します。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md) を参照してください。
+
+## エージェントホストと接続する（MCP）
+
+Suasor は記憶を AI エージェントへ [Model Context Protocol](https://modelcontextprotocol.io)（stdio transport）で公開します。この server がエージェント境界です。現在は **read** tool を提供します — `search` / `recall.search` / `source.list`・`source.get` / `task.list`・`decision.list`・`inbox.list` — いずれも副作用なしで read-only annotation 付き（host が auto-approve 可）。write tool は HITL（人の承認）の後ろに置かれます（ADR-0004）。承認なく適用・送信はしません。
+
+```bash
+bun run src/index.ts mcp serve   # MCP server を stdio で起動
+```
+
+MCP host（Claude Code / Claude Desktop / Codex CLI 等）に登録します。Claude Desktop の場合は `claude_desktop_config.json` に以下を追加します:
+
+```jsonc
+{
+  "mcpServers": {
+    "suasor": {
+      "command": "suasor",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+意味検索（`recall.search`）は embedding backend を有効にするまで `embedding_disabled` シグナルを返すため、host は FTS の `search` へ graceful にフォールバックできます（ADR-0005）。tool スキーマは [docs/design/mcp-surface.md](docs/design/mcp-surface.md) を参照してください。
 
 ## ライセンス
 
