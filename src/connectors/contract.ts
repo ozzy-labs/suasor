@@ -1,0 +1,96 @@
+/**
+ * Connector contract (ADR-0007 / docs/design/connector-contract.md).
+ *
+ * Every ingest source implements this read-only contract. The shape of ingest
+ * — read-only, cross-source identity, delta detection, local body retention —
+ * is uniform across sources even though each upstream API differs.
+ *
+ * This module is **import-clean**: it declares types/interfaces only and pulls
+ * no connector SDK. Concrete connectors (e.g. `./github.ts`) lazy-import their
+ * heavy SDK inside `sync` so registering a connector never loads octokit/etc.
+ * (ADR-0007 "import-clean"; mirrors the CLI lazy-import discipline, NFR-PRF-1).
+ */
+
+/** Where a connector resumes from, and how it reports progress. */
+export interface SyncContext {
+  /**
+   * Opaque resume cursor from the previous run for delta APIs, or `null` on the
+   * first run / for fingerprint-based connectors. The connector interprets it;
+   * the sync service treats it as opaque and persists whatever the connector
+   * returns in {@link SyncResult.cursor} for the next run
+   * (ADR-0007 "差分", FR-ING-3).
+   */
+  readonly cursor: string | null;
+  /**
+   * Resolve a named secret (e.g. an API token) for this connector. Backed by
+   * the OS keychain with an env override (NFR-PRV-4); see `./secrets.ts`.
+   * Returns `null` when the secret is not configured.
+   */
+  secret(name: string): Promise<string | null>;
+  /**
+   * Optional progress signal for long-running syncs (TTY progress, observability).
+   * No-op by default; the CLI / MCP layer may supply a real sink.
+   */
+  readonly onProgress?: (record: SourceRecord) => void;
+}
+
+/** A single observed source body produced by a connector (read-only). */
+export interface SourceRecord {
+  /** Cross-source-unique id assigned by the connector (workspace/team-prefixed as needed). */
+  readonly externalId: string;
+  /** Projection `source_type` (e.g. "github_issue"). */
+  readonly sourceType: string;
+  /** Extracted body text held locally (ADR-0003). */
+  readonly body: string;
+  /** When the source was observed at its origin (ISO 8601). */
+  readonly observedAt: string;
+  /** Connector-supplied metadata (JSON-serializable). */
+  readonly meta: Record<string, unknown>;
+  /**
+   * Content fingerprint for delta detection (FR-ING-3). Optional: when omitted,
+   * the sync service computes a SHA-256 over the body so every connector gets
+   * change detection for free even without a delta API.
+   */
+  readonly fingerprint?: string;
+}
+
+/** Outcome of one connector `sync` pass, returned to the sync service. */
+export interface SyncResult {
+  /**
+   * Resume cursor to persist for the next run (delta APIs). `null` for
+   * fingerprint-based connectors. Stored on `ConnectorSyncCompleted.cursor`.
+   */
+  readonly cursor: string | null;
+}
+
+/**
+ * A read-only ingest source. `sync` streams observed source records; the sync
+ * service (`./sync.ts`) diffs them against the `sources` projection and appends
+ * events. Connectors never write back to the source (ADR-0003).
+ */
+export interface Connector {
+  /** Stable connector name (CLI verb / config key), e.g. "github". */
+  readonly name: string;
+  /** Projection `source_type` family this connector produces (e.g. "github"). */
+  readonly sourceType: string;
+  /**
+   * Stream observed source records (read-only). Heavy SDKs must be lazy-imported
+   * inside this method to keep registration import-clean (ADR-0007).
+   */
+  sync(ctx: SyncContext): AsyncIterable<SourceRecord>;
+  /**
+   * Optional hook called once the stream is exhausted, returning the resume
+   * cursor for the next run. Fingerprint-based connectors omit it (cursor `null`).
+   */
+  finalize?(): Promise<SyncResult> | SyncResult;
+}
+
+/**
+ * Connector-specific config read from `[connectors.<name>]` (docs/design/config.md).
+ * Left as an open record at the contract layer; each connector validates its
+ * own slice with Zod.
+ */
+export type ConnectorConfig = Record<string, unknown>;
+
+/** A factory that builds a connector from its config slice (lazy SDK inside). */
+export type ConnectorFactory = (config: ConnectorConfig) => Connector;
