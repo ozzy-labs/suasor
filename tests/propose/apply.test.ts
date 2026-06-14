@@ -94,6 +94,20 @@ describe("propose.apply — candidate → event mapping", () => {
 });
 
 describe("propose.apply — idempotence (acceptance criterion)", () => {
+  test("dedupes duplicate candidates within a single apply call", () => {
+    // Two identical task candidates in one call: the second sees the first's
+    // committed row (Store.record folds synchronously) and is skipped.
+    const gen = proposeGenerate({
+      mode: "source_extract",
+      candidates: [{ kind: "task", title: "same", sourceExternalIds: ["gh:1"] }],
+    });
+    const dup = [gen.candidates[0], gen.candidates[0]].filter((c) => c !== undefined);
+    const out = proposeApply(store, { candidates: dup });
+    expect(out.applied).toBe(1);
+    expect(out.skipped).toBe(1);
+    expect(rows("tasks")).toHaveLength(1);
+  });
+
   test("re-applying the same candidate appends NO second event (skipped)", () => {
     const generated = proposeGenerate({
       mode: "source_extract",
