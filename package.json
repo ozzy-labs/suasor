@@ -38,6 +38,7 @@
   },
   "homepage": "https://github.com/ozzy-labs/suasor",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "clipanion": "4.0.0-rc.4",
     "drizzle-orm": "^0.45.2",
     "sqlite-vec": "^0.1.9",
