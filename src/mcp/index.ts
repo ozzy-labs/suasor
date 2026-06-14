@@ -16,5 +16,10 @@ export {
   type TaskRecord,
   type TimeRange,
 } from "./queries.ts";
-export { type ServeOptions, serveMcp } from "./serve.ts";
+export {
+  type ServeOptions,
+  type ServeServer,
+  type ServeStore,
+  serveMcp,
+} from "./serve.ts";
 export { buildMcpServer, EMBEDDING_DISABLED_SIGNAL, type McpServerDeps } from "./server.ts";
