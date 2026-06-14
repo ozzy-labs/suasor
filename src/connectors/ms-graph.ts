@@ -70,26 +70,27 @@ interface GraphPage {
  * Map a Graph resource family to its (`source_type`, list path) pair. The path
  * is relative to the Graph base; `{user}` is substituted from config.
  */
-const RESOURCE_SPEC: Record<MsGraphResource, { sourceType: string; path: (user: string) => string }> =
-  {
-    mail: {
-      sourceType: "ms365_mail",
-      path: (u) => `/users/${u}/messages?$top=50&$select=id,subject,bodyPreview,receivedDateTime`,
-    },
-    calendar: {
-      sourceType: "ms365_calendar",
-      path: (u) => `/users/${u}/events?$top=50&$select=id,subject,bodyPreview,start`,
-    },
-    files: {
-      sourceType: "ms365_file",
-      path: (u) =>
-        `/users/${u}/drive/root/children?$top=50&$select=id,name,lastModifiedDateTime`,
-    },
-    teams: {
-      sourceType: "ms365_teams_message",
-      path: (u) => `/users/${u}/chats/getAllMessages?$top=50`,
-    },
-  };
+const RESOURCE_SPEC: Record<
+  MsGraphResource,
+  { sourceType: string; path: (user: string) => string }
+> = {
+  mail: {
+    sourceType: "ms365_mail",
+    path: (u) => `/users/${u}/messages?$top=50&$select=id,subject,bodyPreview,receivedDateTime`,
+  },
+  calendar: {
+    sourceType: "ms365_calendar",
+    path: (u) => `/users/${u}/events?$top=50&$select=id,subject,bodyPreview,start`,
+  },
+  files: {
+    sourceType: "ms365_file",
+    path: (u) => `/users/${u}/drive/root/children?$top=50&$select=id,name,lastModifiedDateTime`,
+  },
+  teams: {
+    sourceType: "ms365_teams_message",
+    path: (u) => `/users/${u}/chats/getAllMessages?$top=50`,
+  },
+};
 
 /** Build a `SourceRecord` for one Graph item of a resource family. */
 function toRecord(resource: MsGraphResource, item: GraphItem): SourceRecord {

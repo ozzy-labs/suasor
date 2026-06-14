@@ -53,21 +53,43 @@ describe("Google connector — record mapping (ADR-0007 identity)", () => {
     const { client } = fakeGoogle({
       drive: [
         {
-          items: [{ id: "d1", title: "spec.pdf", detail: "design doc", observedAt: "2026-06-10T00:00:00Z" }],
+          items: [
+            {
+              id: "d1",
+              title: "spec.pdf",
+              detail: "design doc",
+              observedAt: "2026-06-10T00:00:00Z",
+            },
+          ],
         },
       ],
       gmail: [
-        { items: [{ id: "g1", title: "Re: launch", detail: "snippet", observedAt: "2026-06-11T00:00:00Z" }] },
+        {
+          items: [
+            {
+              id: "g1",
+              title: "Re: launch",
+              detail: "snippet",
+              observedAt: "2026-06-11T00:00:00Z",
+            },
+          ],
+        },
       ],
       calendar: [
-        { items: [{ id: "c1", title: "Sync", detail: "weekly", observedAt: "2026-06-12T00:00:00Z" }] },
+        {
+          items: [
+            { id: "c1", title: "Sync", detail: "weekly", observedAt: "2026-06-12T00:00:00Z" },
+          ],
+        },
       ],
     });
     const connector = createGoogleConnector({}, { clientFactory: () => client });
     const records = await collect(connector.sync(ctx()));
     expect(records).toHaveLength(3);
 
-    expect(records.find((r) => r.sourceType === "google_drive")?.externalId).toBe("google:drive:d1");
+    expect(records.find((r) => r.sourceType === "google_drive")?.externalId).toBe(
+      "google:drive:d1",
+    );
     const mail = records.find((r) => r.sourceType === "gmail_message");
     expect(mail?.externalId).toBe("google:gmail:g1");
     expect(mail?.body).toBe("Re: launch\n\nsnippet");
@@ -81,7 +103,10 @@ describe("Google connector — pagination + fingerprint cursor", () => {
   test("follows nextPageToken and returns null cursor", async () => {
     const { client, calls } = fakeGoogle({
       drive: [
-        { items: [{ id: "d1", title: "a", detail: "", observedAt: "2026-06-10T00:00:00Z" }], nextPageToken: "p2" },
+        {
+          items: [{ id: "d1", title: "a", detail: "", observedAt: "2026-06-10T00:00:00Z" }],
+          nextPageToken: "p2",
+        },
         { items: [{ id: "d2", title: "b", detail: "", observedAt: "2026-06-10T00:00:00Z" }] },
       ],
     });

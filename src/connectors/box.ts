@@ -54,8 +54,7 @@ export interface BoxPage {
 
 /** Build a `SourceRecord` for one Box file. */
 function toRecord(item: BoxFileItem): SourceRecord {
-  const body =
-    item.name && item.description ? `${item.name}\n\n${item.description}` : item.name;
+  const body = item.name && item.description ? `${item.name}\n\n${item.description}` : item.name;
   return {
     externalId: `box:file:${item.id}`,
     sourceType: "box_file",

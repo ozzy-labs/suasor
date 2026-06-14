@@ -8,10 +8,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createBoxConnector } from "../../src/connectors/box.ts";
 import { createGoogleConnector } from "../../src/connectors/google.ts";
+import { syncConnector } from "../../src/connectors/index.ts";
 import { createMsGraphConnector } from "../../src/connectors/ms-graph.ts";
 import { createSlackConnector } from "../../src/connectors/slack.ts";
 import { createWebConnector } from "../../src/connectors/web.ts";
-import { syncConnector } from "../../src/connectors/index.ts";
 import { Store } from "../../src/db/index.ts";
 import { searchSources } from "../../src/retrieval/index.ts";
 
@@ -96,7 +96,12 @@ describe("Google: sync → projection → FTS", () => {
         clientFactory: () => ({
           listPage: async () => ({
             items: [
-              { id: "g1", title: "Re: telescope", detail: "deploy the telescope", observedAt: "2026-06-10T00:00:00Z" },
+              {
+                id: "g1",
+                title: "Re: telescope",
+                detail: "deploy the telescope",
+                observedAt: "2026-06-10T00:00:00Z",
+              },
             ],
           }),
         }),
@@ -158,7 +163,12 @@ describe("Web: sync → projection → FTS (fingerprint diff)", () => {
         { urls: [url] },
         {
           snapshotterFactory: () => ({
-            snapshot: async () => ({ url, title: "Signup", text, observedAt: "2026-06-14T00:00:00Z" }),
+            snapshot: async () => ({
+              url,
+              title: "Signup",
+              text,
+              observedAt: "2026-06-14T00:00:00Z",
+            }),
             close: async () => {},
           }),
         },

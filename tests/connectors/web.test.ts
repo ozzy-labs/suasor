@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { SourceRecord, SyncContext } from "../../src/connectors/contract.ts";
 import {
   createWebConnector,
+  WebConnectorConfig,
   type WebSnapshot,
   type WebSnapshotterLike,
-  WebConnectorConfig,
 } from "../../src/connectors/web.ts";
 
 function fakeSnapshotter(byUrl: Record<string, { title: string; text: string }>): {
@@ -71,7 +71,10 @@ describe("Web connector — fingerprint diff (FR-ING-3)", () => {
     );
     const after = createWebConnector(
       { urls: [url] },
-      { snapshotterFactory: fakeSnapshotter({ [url]: { title: "Terms", text: "v2 updated" } }).factory },
+      {
+        snapshotterFactory: fakeSnapshotter({ [url]: { title: "Terms", text: "v2 updated" } })
+          .factory,
+      },
     );
     const [b] = await collect(before.sync(ctx));
     const [a] = await collect(after.sync(ctx));

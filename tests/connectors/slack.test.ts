@@ -56,7 +56,12 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
     const { client } = fakeSlack([
       {
         messages: [
-          { ts: "1700000000.000100", text: "hello team", user: "U1", thread_ts: "1700000000.000100" },
+          {
+            ts: "1700000000.000100",
+            text: "hello team",
+            user: "U1",
+            thread_ts: "1700000000.000100",
+          },
         ],
       },
     ]);
@@ -108,10 +113,7 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
 describe("Slack connector — guards", () => {
   test("throws when no token is configured", async () => {
     const { client } = fakeSlack([]);
-    const connector = createSlackConnector(
-      { channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
       /no token configured/,
     );

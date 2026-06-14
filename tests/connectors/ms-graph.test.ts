@@ -61,13 +61,25 @@ describe("MS Graph connector — record mapping (ADR-0007 identity)", () => {
       "/users/me/messages?$top=50&$select=id,subject,bodyPreview,receivedDateTime": [
         {
           value: [
-            { id: "m1", subject: "Hi", bodyPreview: "preview", receivedDateTime: "2026-06-10T00:00:00Z" },
+            {
+              id: "m1",
+              subject: "Hi",
+              bodyPreview: "preview",
+              receivedDateTime: "2026-06-10T00:00:00Z",
+            },
           ],
         },
       ],
       "/users/me/events?$top=50&$select=id,subject,bodyPreview,start": [
         {
-          value: [{ id: "e1", subject: "Standup", bodyPreview: "agenda", start: { dateTime: "2026-06-11T09:00:00Z" } }],
+          value: [
+            {
+              id: "e1",
+              subject: "Standup",
+              bodyPreview: "agenda",
+              start: { dateTime: "2026-06-11T09:00:00Z" },
+            },
+          ],
         },
       ],
     });
@@ -91,7 +103,11 @@ describe("MS Graph connector — record mapping (ADR-0007 identity)", () => {
         { value: [{ id: "f1", name: "doc.docx", lastModifiedDateTime: "2026-06-12T00:00:00Z" }] },
       ],
       "/users/me/chats/getAllMessages?$top=50": [
-        { value: [{ id: "t1", body: { content: "team msg" }, createdDateTime: "2026-06-13T00:00:00Z" }] },
+        {
+          value: [
+            { id: "t1", body: { content: "team msg" }, createdDateTime: "2026-06-13T00:00:00Z" },
+          ],
+        },
       ],
     });
     const connector = createMsGraphConnector(
