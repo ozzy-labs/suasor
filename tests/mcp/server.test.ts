@@ -219,6 +219,38 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     expect(tool?.annotations?.readOnlyHint).toBe(false);
   });
 
+  test("a writable server exposes the full read + write tool surface", async () => {
+    const client = await connectWrite();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      [
+        // read
+        "decision.list",
+        "inbox.list",
+        "recall.search",
+        "search",
+        "source.get",
+        "source.list",
+        "task.list",
+        // write (HITL)
+        "connector.sync",
+        "propose.generate",
+        "propose.apply",
+        "task.create",
+      ].sort(),
+    );
+  });
+
+  test("every write tool carries readOnlyHint: false (HITL-gated)", async () => {
+    const client = await connectWrite();
+    const { tools } = await client.listTools();
+    const writeTools = ["connector.sync", "propose.generate", "propose.apply", "task.create"];
+    for (const name of writeTools) {
+      const tool = tools.find((t) => t.name === name);
+      expect(tool?.annotations?.readOnlyHint).toBe(false);
+    }
+  });
+
   test("connector.sync is absent when no writable store is supplied", async () => {
     const client = await connect();
     const { tools } = await client.listTools();
