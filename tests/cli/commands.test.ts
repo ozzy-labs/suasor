@@ -101,13 +101,11 @@ describe("suasor db migrate", () => {
 // `suasor search` is covered by tests/cli/search.test.ts (the search command and
 // its FTS-first service live in #20's src/retrieval/; not duplicated here).
 
-describe("downstream stubs", () => {
-  test("mcp serve exits 0 with a pending notice", async () => {
-    const { code, err } = await run(["mcp", "serve"]);
-    expect(code).toBe(0);
-    expect(err).toContain("not yet implemented");
-  });
+// `suasor mcp serve` starts a live stdio MCP server (it blocks on the
+// transport), so it is exercised in-process via the SDK client in
+// tests/mcp/server.test.ts rather than through the blocking CLI path here.
 
+describe("downstream stubs", () => {
   test("skills install accepts --scope and reports pending", async () => {
     const { code, err } = await run(["skills", "install", "--scope", "claude"]);
     expect(code).toBe(0);

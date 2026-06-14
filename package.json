@@ -38,6 +38,7 @@
   },
   "homepage": "https://github.com/ozzy-labs/suasor",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@napi-rs/keyring": "1.3.0",
     "clipanion": "4.0.0-rc.4",
     "drizzle-orm": "^0.45.2",

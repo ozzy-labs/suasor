@@ -5,11 +5,11 @@
  * Wired command surface (docs/design/cli.md):
  *   init · db migrate · projections rebuild · search · <connector> sync ·
  *   mcp serve · skills install · skills list
- * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync`
- * are live; `mcp serve` and `skills *` are downstream stubs (the MCP surface —
- * ADR-0004 — and the assistant-skill catalog — ADR-0008 — are implemented by
- * later Issues). `<connector> sync` commands are derived from the connector
- * registry (one per connector, e.g. `github sync`; ADR-0007).
+ * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` /
+ * `mcp serve` (MCP read surface, ADR-0004) are live; `skills *` are downstream
+ * stubs (the assistant-skill catalog — ADR-0008 — is implemented by a later
+ * Issue). `<connector> sync` commands are derived from the connector registry
+ * (one per connector, e.g. `github sync`; ADR-0007).
  *
  * Registration is the only eager step. Command modules must keep their imports
  * to clipanion + the standard library so the registry stays cheap to build —
