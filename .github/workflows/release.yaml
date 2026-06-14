@@ -1,0 +1,121 @@
+name: Release
+
+# Distribution channels (ADR-0010): npm (OIDC Trusted Publisher), single
+# binaries (bun --compile) attached to the GitHub Release, and a
+# batteries-included Docker image on GHCR.
+#
+# IMPORTANT: nothing publishes on push/merge. This workflow runs only when a
+# human publishes a GitHub Release or manually dispatches it — actual publish
+# is a deliberate manual step.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write # upload release assets
+  id-token: write # npm OIDC Trusted Publisher (no NPM_TOKEN)
+  packages: write # GHCR push
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    name: npm publish (OIDC + provenance)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build
+        run: bun run build
+      # Node provides an npm CLI new enough for OIDC Trusted Publishers
+      # (npm >= 11.5.1, Node >= 22.14); bun builds, npm publishes.
+      - name: Setup Node for npm OIDC
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Publish to npm
+        # No NPM_TOKEN: authenticated via the Trusted Publisher configured on
+        # npmjs.com (Settings -> Publishing). Provenance is attached because the
+        # repo is public.
+        run: npm publish --provenance --access public
+
+  binaries:
+    name: single binary (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - bun-linux-x64
+          - bun-linux-arm64
+          - bun-darwin-x64
+          - bun-darwin-arm64
+          - bun-windows-x64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Compile
+        # Connector SDKs that pull heavy/native deps are kept external (matches
+        # package.json `compile`); the standalone binary ships core + a few
+        # native bits (sqlite-vec / keyring). See docs/guide/install.md caveat.
+        run: |
+          asset="suasor-${{ matrix.target }}"
+          if [ "${{ matrix.target }}" = "bun-windows-x64" ]; then
+            asset="${asset}.exe"
+          fi
+          bun build ./src/index.ts --compile --target=${{ matrix.target }} --outfile="${asset}" \
+            --external @slack/web-api \
+            --external @microsoft/microsoft-graph-client \
+            --external @azure/msal-node \
+            --external googleapis \
+            --external box-typescript-sdk-gen \
+            --external playwright-core \
+            --external @napi-rs/keyring
+          echo "ASSET=${asset}" >> "${GITHUB_ENV}"
+      - name: Attach to release
+        if: github.event_name == 'release'
+        run: gh release upload "${{ github.event.release.tag_name }}" "${ASSET}" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload as workflow artifact (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+
+  docker:
+    name: docker image (GHCR, batteries-included +Ollama)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

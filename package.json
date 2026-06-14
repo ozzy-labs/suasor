@@ -37,6 +37,12 @@
     "url": "git+https://github.com/ozzy-labs/suasor.git"
   },
   "homepage": "https://github.com/ozzy-labs/suasor",
+  "mcpName": "io.github.ozzy-labs/suasor",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "@azure/msal-node": "5.2.4",
     "@microsoft/microsoft-graph-client": "3.0.7",
