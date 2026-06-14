@@ -103,10 +103,12 @@ export async function syncConnector(
   const now = options.now ?? (() => new Date());
   const cursor = options.cursor !== undefined ? options.cursor : lastCursor(sqlite, connector.name);
 
+  // The service is the single owner of per-record progress: it sees every
+  // record, so it calls `options.onProgress` once per record below. We do NOT
+  // also forward it via `ctx.onProgress`, which would double-fire the sink.
   const ctx: SyncContext = {
     cursor,
     secret: makeSecretResolver(connector.name, options.secrets),
-    onProgress: options.onProgress,
   };
 
   let observed = 0;

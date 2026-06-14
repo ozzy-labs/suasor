@@ -28,8 +28,10 @@ export interface SyncContext {
    */
   secret(name: string): Promise<string | null>;
   /**
-   * Optional progress signal for long-running syncs (TTY progress, observability).
-   * No-op by default; the CLI / MCP layer may supply a real sink.
+   * Optional progress signal a connector may emit for *intermediate* work that
+   * the sync service can't observe (e.g. per-page fetch). The service already
+   * emits one progress event per yielded record on its own, so connectors that
+   * only stream records need not call this — doing so would double-count.
    */
   readonly onProgress?: (record: SourceRecord) => void;
 }
