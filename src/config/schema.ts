@@ -30,13 +30,30 @@ export type EmbeddingBackend = z.infer<typeof EmbeddingBackend>;
 export const LlmBackend = z.enum(["disabled", "anthropic", "openai", "ollama"]);
 export type LlmBackend = z.infer<typeof LlmBackend>;
 
+/** Default Ollama sidecar base URL (`/api/embed` is appended by the client). */
+export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+/** Default multilingual embedding model (JA↔EN, 1024-dim) for Ollama. */
+export const DEFAULT_OLLAMA_MODEL = "bge-m3";
+
 /**
  * `[embedding]` — optional sidecar (ADR-0005/0006). Default disabled so the
- * base install stays light. Later Issues extend backend-specific fields.
+ * base install stays light; ML is always delegated to a sidecar/API (no
+ * in-process torch). `model` pins the embedding model so that document
+ * embeddings (ingest) and query embeddings (recall) share one vector space —
+ * mixing models silently degrades recall, so the same `model` value drives both.
+ *
+ * Unknown keys are preserved (`passthrough`) for backend-specific options not
+ * yet modeled. `baseUrl` / `model` apply to the Ollama backend (the only
+ * sidecar implemented here; openai/voyage remain config-accepted placeholders
+ * that recall treats as `embedding_disabled` until implemented).
  */
 export const EmbeddingConfig = z
   .object({
     backend: EmbeddingBackend.default("disabled"),
+    /** Sidecar base URL (Ollama). `/api/embed` is appended by the client. */
+    baseUrl: z.string().url().default(DEFAULT_OLLAMA_BASE_URL),
+    /** Embedding model name. Must be identical for ingest and query (one space). */
+    model: z.string().min(1).default(DEFAULT_OLLAMA_MODEL),
   })
   .passthrough();
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfig>;

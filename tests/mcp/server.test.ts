@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../../src/db/index.ts";
 import { buildMcpServer, EMBEDDING_DISABLED_SIGNAL } from "../../src/mcp/server.ts";
+import { type Embedder, EmbeddingError } from "../../src/retrieval/embedding/index.ts";
 
 let store: Store;
 
@@ -28,8 +29,15 @@ function seedSource(externalId = "gh:1", body = "deploy the rocket to mars") {
 }
 
 /** Connect an in-process MCP client to a freshly built server. */
-async function connect(embeddingBackend = "disabled"): Promise<Client> {
-  const server = buildMcpServer({ sqlite: store.connection.sqlite, embeddingBackend });
+async function connect(
+  embedding: "disabled" | "ollama" = "disabled",
+  embedder?: Embedder | null,
+): Promise<Client> {
+  const server = buildMcpServer({
+    sqlite: store.connection.sqlite,
+    embedding,
+    ...(embedder !== undefined ? { embedder } : {}),
+  });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -90,14 +98,85 @@ describe("MCP read surface", () => {
     expect(parsed.reason).toBe("backend_disabled");
   });
 
-  test("recall.search still degrades (signal) when a backend is configured but unimplemented", async () => {
-    const client = await connect("ollama");
+  test("recall.search degrades (signal) when the sidecar is unreachable", async () => {
+    seedSource();
+    // Backend enabled, but the injected embedder throws (sidecar down).
+    const failing: Embedder = {
+      model: "bge-m3",
+      embed: () => Promise.reject(new EmbeddingError("ollama down")),
+    };
+    const client = await connect("ollama", failing);
     const res = await client.callTool({ name: "recall.search", arguments: { query: "rocket" } });
     const parsed = parseResult(res as never) as { hits: unknown[]; signal: string; reason: string };
     expect(parsed.hits).toEqual([]);
     // Signal stays embedding_disabled so hosts keep falling back to `search`.
     expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
-    expect(parsed.reason).toBe("recall_unimplemented");
+    expect(parsed.reason).toBe("backend_unreachable");
+  });
+
+  test("recall.search returns vec0 KNN hits when an embedder is enabled", async () => {
+    // A dedicated 3-dim store so the fixed test vectors fit the vec0 column.
+    const knnStore = Store.open({ path: ":memory:", embeddingDim: 3 });
+    try {
+      knnStore.record({
+        type: "SourceObserved",
+        externalId: "gh:1",
+        sourceType: "github_issue",
+        body: "kubernetes deployment rollout",
+        observedAt: "2026-06-14T00:00:00.000Z",
+        fingerprint: "gh:1",
+        meta: {},
+      });
+      knnStore.record({
+        type: "SourceObserved",
+        externalId: "gh:2",
+        sourceType: "github_issue",
+        body: "lunch menu for friday",
+        observedAt: "2026-06-14T00:00:00.000Z",
+        fingerprint: "gh:2",
+        meta: {},
+      });
+      // Deterministic fake embedder: known bodies/queries → fixed 3-vectors so
+      // KNN ranking is predictable without a live sidecar.
+      const vectors: Record<string, number[]> = {
+        "kubernetes deployment rollout": [1, 0, 0],
+        "lunch menu for friday": [0, 1, 0],
+        "deploy to the cluster": [0.9, 0.1, 0], // semantically near gh:1
+      };
+      const fake: Embedder = {
+        model: "fake-3d",
+        embed: (texts) => Promise.resolve(texts.map((t) => vectors[t] ?? [0, 0, 1])),
+      };
+      const { embedSources } = await import("../../src/retrieval/embedding/index.ts");
+      await embedSources(knnStore.connection.sqlite, fake, [
+        { externalId: "gh:1", body: "kubernetes deployment rollout" },
+        { externalId: "gh:2", body: "lunch menu for friday" },
+      ]);
+
+      const server = buildMcpServer({
+        sqlite: knnStore.connection.sqlite,
+        embedding: "ollama",
+        embedder: fake,
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test", version: "0.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+      const res = await client.callTool({
+        name: "recall.search",
+        arguments: { query: "deploy to the cluster" },
+      });
+      const parsed = parseResult(res as never) as {
+        hits: { externalId: string }[];
+        reason: string;
+        signal?: string;
+      };
+      expect(parsed.signal).toBeUndefined();
+      expect(parsed.reason).toBe("ok");
+      expect(parsed.hits[0]?.externalId).toBe("gh:1"); // nearest neighbour
+    } finally {
+      knnStore.close();
+    }
   });
 
   test("source.list returns ingested sources; source.get fetches a body", async () => {
@@ -202,7 +281,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
   async function connectWrite(connectors: Record<string, Record<string, unknown>> = {}) {
     const server = buildMcpServer({
       sqlite: store.connection.sqlite,
-      embeddingBackend: "disabled",
+      embedding: "disabled",
       write: { store, config: { connectors } },
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

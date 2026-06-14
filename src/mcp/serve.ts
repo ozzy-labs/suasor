@@ -33,9 +33,12 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
   const store = Store.open({ path: dbPath });
   const server = buildMcpServer({
     sqlite: store.connection.sqlite,
-    embeddingBackend: config.embedding.backend,
+    // Full [embedding] config drives recall.search (real vec0 search when a
+    // backend is enabled, else graceful degrade to FTS — ADR-0005/0006).
+    embedding: config.embedding,
     // Enable the `connector.sync` write tool (HITL) over the same store
-    // (ADR-0007 / Issue #10 D5). Hosts gate it via `readOnlyHint: false`.
+    // (ADR-0007 / Issue #10 D5). The `[embedding]` config in `config` also lets
+    // ingest (re)populate vec0. Hosts gate the write via `readOnlyHint: false`.
     write: { store, config },
   });
 

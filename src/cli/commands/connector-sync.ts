@@ -28,11 +28,13 @@ class ConnectorSyncCommand extends Command {
 
   override async execute(): Promise<number> {
     const name = (this.constructor as typeof ConnectorSyncCommand).connectorName;
-    const [{ loadConfig }, { Store }, { loadConnector, syncConnector }] = await Promise.all([
-      import("../../config/index.ts"),
-      import("../../db/index.ts"),
-      import("../../connectors/index.ts"),
-    ]);
+    const [{ loadConfig }, { Store }, { loadConnector, syncConnector }, { createEmbedder }] =
+      await Promise.all([
+        import("../../config/index.ts"),
+        import("../../db/index.ts"),
+        import("../../connectors/index.ts"),
+        import("../../retrieval/embedding/index.ts"),
+      ]);
 
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
@@ -52,18 +54,30 @@ class ConnectorSyncCommand extends Command {
       return 1;
     }
 
+    // Embedder from the [embedding] config (null when disabled). When enabled,
+    // ingest (re)populates vec0 with the same model recall queries with
+    // (ADR-0005/0006); embedding failures are surfaced as a warning (stderr) and
+    // never fail the ingest — FTS still reflects the data.
+    const embedder = createEmbedder(config.embedding);
+
     const store = Store.open({ path: dbPath });
     try {
-      const outcome = await syncConnector(store, connector, this.full ? { cursor: null } : {});
+      const outcome = await syncConnector(store, connector, {
+        ...(this.full ? { cursor: null } : {}),
+        embedder,
+        onEmbedError: (error) =>
+          this.context.stderr.write(`warning: ${name} embedding skipped: ${error.message}\n`),
+      });
 
       if (this.json) {
         this.context.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
         return 0;
       }
 
+      const embedNote = embedder ? `, ${outcome.embedded} embedded` : "";
       this.context.stdout.write(
         `${name} sync: ${outcome.observed} observed, ${outcome.updated} updated, ` +
-          `${outcome.unchanged} unchanged.\n`,
+          `${outcome.unchanged} unchanged${embedNote}.\n`,
       );
       return 0;
     } catch (cause) {

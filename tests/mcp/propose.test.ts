@@ -18,7 +18,7 @@ afterEach(() => {
 async function connectWrite(): Promise<Client> {
   const server = buildMcpServer({
     sqlite: store.connection.sqlite,
-    embeddingBackend: "disabled",
+    embedding: "disabled",
     write: { store, config: { connectors: {} } },
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -29,7 +29,7 @@ async function connectWrite(): Promise<Client> {
 
 /** Connect a READ-ONLY server (no write deps). */
 async function connectRead(): Promise<Client> {
-  const server = buildMcpServer({ sqlite: store.connection.sqlite, embeddingBackend: "disabled" });
+  const server = buildMcpServer({ sqlite: store.connection.sqlite, embedding: "disabled" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

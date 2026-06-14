@@ -3,6 +3,8 @@ import { join } from "node:path";
 import {
   Config,
   ConfigError,
+  DEFAULT_OLLAMA_BASE_URL,
+  DEFAULT_OLLAMA_MODEL,
   envToLayer,
   loadConfig,
   resolveConfigDir,
@@ -132,5 +134,47 @@ describe("Config schema", () => {
     const cfg = Config.parse({});
     expect(cfg.storage.dbPath).toBeNull();
     expect(cfg.embedding.backend).toBe("disabled");
+  });
+
+  test("[embedding] defaults the Ollama baseUrl and model (one vector space)", () => {
+    const cfg = Config.parse({});
+    expect(cfg.embedding.baseUrl).toBe(DEFAULT_OLLAMA_BASE_URL);
+    expect(cfg.embedding.model).toBe(DEFAULT_OLLAMA_MODEL);
+  });
+});
+
+describe("[embedding] backend-specific config", () => {
+  test("file can pin backend + baseUrl + model", async () => {
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: {
+        embedding: { backend: "ollama", baseUrl: "http://sidecar:11434", model: "nomic-embed" },
+      },
+    });
+    expect(cfg.embedding.backend).toBe("ollama");
+    expect(cfg.embedding.baseUrl).toBe("http://sidecar:11434");
+    expect(cfg.embedding.model).toBe("nomic-embed");
+  });
+
+  test("env overrides the model (SUASOR_EMBEDDING__MODEL)", async () => {
+    const cfg = await loadConfig({
+      env: { SUASOR_EMBEDDING__BACKEND: "ollama", SUASOR_EMBEDDING__MODEL: "bge-large" },
+      configDir: "/cfg",
+      fileLayer: {},
+    });
+    expect(cfg.embedding.model).toBe("bge-large");
+    // Untouched sibling keeps its default.
+    expect(cfg.embedding.baseUrl).toBe(DEFAULT_OLLAMA_BASE_URL);
+  });
+
+  test("rejects a non-URL baseUrl with ConfigError (fail-fast)", async () => {
+    await expect(
+      loadConfig({
+        env: {},
+        configDir: "/cfg",
+        fileLayer: { embedding: { baseUrl: "not a url" } },
+      }),
+    ).rejects.toBeInstanceOf(ConfigError);
   });
 });

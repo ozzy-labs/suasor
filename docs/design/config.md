@@ -21,13 +21,24 @@ dbPath = "/path/to/suasor.db"
 - `dbPath` 既定は `null` → loader が `<configDir>/suasor.db` に解決（`SUASOR_CONFIG_DIR` に追従）
 - encryption 等の追加項目は将来 Issue で拡張
 
-### 他セクション（後続 Issue が拡張）
+### `[embedding]`（確定）
 
 ```toml
 [embedding]
-backend = "disabled"   # disabled | ollama | openai | voyage（local=in-process は不採用）
-# ollama: base_url = "http://localhost:11434", model = "bge-m3"
+backend = "disabled"   # disabled（既定）| ollama | openai | voyage（local=in-process は不採用）
+baseUrl = "http://localhost:11434"  # ollama サイドカー。/api/embed は client が付与
+model = "bge-m3"                     # 埋め込みモデル。ingest と query で同一（ベクトル空間整合）
+```
 
+- `backend` 既定 `disabled`（base install を軽く保つ）。`recall.search` は無効時に空 + `embedding_disabled` シグナルで FTS に degrade（[retrieval](retrieval.md) / [ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
+- 現状 `ollama` のみ実装。`openai` / `voyage` は config 上受理するが未実装（embedder は `null` ＝ degrade）
+- `baseUrl` / `model` は ollama backend に適用。`model` は **ingest（文書）と query（クエリ）で必ず同一**（混在すると recall が静かに劣化するため、単一値が両方を駆動）。既定 `bge-m3`（多言語・1024 次元）
+- 未知キーは保持（`passthrough`）し、backend 固有項目を後続が確定する
+- env override 例: `SUASOR_EMBEDDING__BACKEND=ollama` / `SUASOR_EMBEDDING__MODEL=bge-large` / `SUASOR_EMBEDDING__BASEURL=http://sidecar:11434`
+
+### 他セクション（後続 Issue が拡張）
+
+```toml
 [llm]
 backend = "disabled"   # disabled | anthropic | openai | ollama
 
@@ -40,7 +51,7 @@ state = "all"                             # open | closed | all（既定 all）
 # baseUrl = "https://github.example.com/api/v3"  # GitHub Enterprise
 ```
 
-- `[embedding]` / `[llm]` は未知キーを保持（`passthrough`）し、backend 固有項目を後続 Issue が確定する
+- `[embedding]` は確定（上記）。`[llm]` は未知キーを保持（`passthrough`）し、backend 固有項目を後続 Issue が確定する
 - `[connectors.<name>]` は open record（foundation では値を緩く保持）。各 connector が自身の slice を Zod 検証する（例: `[connectors.github]`）
 
 ## env

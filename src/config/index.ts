@@ -8,6 +8,8 @@ export {
 } from "./loader.ts";
 export {
   Config,
+  DEFAULT_OLLAMA_BASE_URL,
+  DEFAULT_OLLAMA_MODEL,
   EmbeddingBackend,
   EmbeddingConfig,
   LlmBackend,

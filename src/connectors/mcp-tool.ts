@@ -14,7 +14,9 @@
  * at the top level; the store and SDK load lazily via the registry/service.
  */
 import { z } from "zod";
+import type { EmbeddingConfig } from "../config/schema.ts";
 import type { Store } from "../db/index.ts";
+import { createEmbedder } from "../retrieval/embedding/index.ts";
 import { type SecretStoreOptions, syncConnector } from "./index.ts";
 import { loadConnector } from "./registry.ts";
 
@@ -40,6 +42,8 @@ export const ConnectorSyncOutput = z.object({
   updated: z.number().int().nonnegative(),
   unchanged: z.number().int().nonnegative(),
   cursor: z.string().nullable(),
+  /** Sources (re)embedded into vec0 this run; 0 when embedding is disabled. */
+  embedded: z.number().int().nonnegative(),
 });
 export type ConnectorSyncOutput = z.infer<typeof ConnectorSyncOutput>;
 
@@ -54,8 +58,15 @@ function connectorConfigSlice(
 export interface ConnectorSyncDeps {
   /** Open store the sync writes to (host supplies the configured DB). */
   store: Store;
-  /** Effective config (provides the `[connectors.<name>]` slice). */
-  config: { connectors: Record<string, Record<string, unknown>> };
+  /**
+   * Effective config: the `[connectors.<name>]` slices plus the optional
+   * `[embedding]` section. When `embedding.backend` is enabled, ingest also
+   * (re)populates vec0 so `recall.search` works (ADR-0005/0006).
+   */
+  config: {
+    connectors: Record<string, Record<string, unknown>>;
+    embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
+  };
   /** Secret backend override (tests inject; defaults to env + keychain). */
   secrets?: SecretStoreOptions;
 }
@@ -70,9 +81,14 @@ export async function runConnectorSyncTool(
 ): Promise<ConnectorSyncOutput> {
   const { connector: name, cursor } = ConnectorSyncInput.parse(input);
   const connector = await loadConnector(name, connectorConfigSlice(deps.config, name));
+  // Build an embedder from the [embedding] config (null when disabled) so ingest
+  // populates vec0 with the same model recall queries with. Embedding is
+  // best-effort inside the sync service (a sidecar failure won't fail ingest).
+  const embedder = deps.config.embedding ? createEmbedder(deps.config.embedding) : null;
   const outcome = await syncConnector(deps.store, connector, {
     ...(cursor !== undefined ? { cursor } : {}),
     ...(deps.secrets ? { secrets: deps.secrets } : {}),
+    embedder,
   });
   return ConnectorSyncOutput.parse(outcome);
 }
