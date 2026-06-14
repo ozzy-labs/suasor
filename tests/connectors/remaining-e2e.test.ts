@@ -117,41 +117,56 @@ describe("Google: sync → projection → FTS", () => {
   });
 });
 
-describe("Box: sync → projection → FTS (sha1 fingerprint)", () => {
-  test("ingested file is searchable and sha1 drives delta detection", async () => {
-    const connector = createBoxConnector(
+describe("Box: sync → projection → FTS (body = filename, body-derived fingerprint)", () => {
+  const mkBox = (name: string) =>
+    createBoxConnector(
       { folders: ["0"] },
       {
         clientFactory: () => ({
-          listFolder: async () => ({
-            files: [{ id: "11", name: "satellite-plan.pdf", sha1: "deadbeef" }],
-          }),
+          listFolder: async () => ({ files: [{ id: "11", name }] }),
         }),
       },
     );
-    const out = await syncConnector(store, connector, {
+  const sync = (name: string) =>
+    syncConnector(store, mkBox(name), {
       secrets: { env: { SUASOR_CONNECTOR_BOX_TOKEN: "tok" } },
     });
+
+  test("ingested file is searchable by name and the body fingerprint drives delta detection", async () => {
+    const out = await sync("satellite-plan.pdf");
     expect(out.observed).toBe(1);
     const hit = searchSources(store.connection.sqlite, "satellite").hits[0];
     expect(hit?.externalId).toBe("box:file:11");
     expect(hit?.sourceType).toBe("box_file");
 
-    // Same sha1 → unchanged on re-sync (fingerprint comes from Box, not the body).
-    const c2 = createBoxConnector(
-      { folders: ["0"] },
-      {
-        clientFactory: () => ({
-          listFolder: async () => ({
-            files: [{ id: "11", name: "satellite-plan.pdf", sha1: "deadbeef" }],
-          }),
-        }),
-      },
-    );
-    const out2 = await syncConnector(store, c2, {
-      secrets: { env: { SUASOR_CONNECTOR_BOX_TOKEN: "tok" } },
-    });
+    // Same filename → unchanged on re-sync (fingerprint = body SHA-256).
+    const out2 = await sync("satellite-plan.pdf");
     expect(out2.unchanged).toBe(1);
+    expect(out2.updated).toBe(0);
+  });
+
+  test("content-only change (filename unchanged) emits NO redundant SourceBodyUpdated (issue #36)", async () => {
+    // Box's content sha1 is no longer plumbed into the record, so even if the
+    // file's bytes change, an unchanged filename means an unchanged body — and
+    // the body-derived fingerprint matches, so no SourceBodyUpdated is appended.
+    const out = await sync("satellite-plan.pdf");
+    expect(out.observed).toBe(1);
+
+    const out2 = await sync("satellite-plan.pdf");
+    expect(out2.unchanged).toBe(1);
+    expect(out2.updated).toBe(0);
+
+    const updates = store.connection.sqlite
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE type = 'SourceBodyUpdated'")
+      .get();
+    expect(updates?.n).toBe(0);
+  });
+
+  test("rename (filename change) is detected as a body update", async () => {
+    await sync("satellite-plan.pdf");
+    const out2 = await sync("satellite-plan-v2.pdf");
+    expect(out2.updated).toBe(1);
+    expect(out2.unchanged).toBe(0);
   });
 });
 
