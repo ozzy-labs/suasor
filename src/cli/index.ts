@@ -2,13 +2,14 @@
  * CLI entry (clipanion). Commands are registered eagerly but their heavy work
  * is lazy-imported inside `execute` to keep cold start light (NFR-PRF-1).
  *
- * This foundation Issue wires only `projections rebuild`; later Issues add
- * `init` / `db migrate` / `<connector> sync` / `search` / `mcp serve` /
- * `skills *` (docs/design/cli.md).
+ * Wired so far: `projections rebuild` (#6) and `search` (#7). Later Issues add
+ * `init` / `db migrate` / `<connector> sync` / `mcp serve` / `skills *`
+ * (docs/design/cli.md).
  */
 import { Builtins, Cli } from "clipanion";
 import { VERSION } from "../version.ts";
 import { ProjectionsRebuildCommand } from "./commands/projections-rebuild.ts";
+import { SearchCommand } from "./commands/search.ts";
 
 /** Build the configured CLI instance. */
 export function buildCli(): Cli {
@@ -20,6 +21,7 @@ export function buildCli(): Cli {
   cli.register(Builtins.HelpCommand);
   cli.register(Builtins.VersionCommand);
   cli.register(ProjectionsRebuildCommand);
+  cli.register(SearchCommand);
   return cli;
 }
 
