@@ -129,7 +129,12 @@ describe("listDecisions", () => {
 describe("listInbox", () => {
   test("filters by triage state", () => {
     source("s1", "2026-06-10T00:00:00.000Z");
-    store.record({ type: "InboxItemTriaged", inboxId: "i1", sourceExternalId: "s1", state: "open" });
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "i1",
+      sourceExternalId: "s1",
+      state: "open",
+    });
     store.record({
       type: "InboxItemTriaged",
       inboxId: "i2",

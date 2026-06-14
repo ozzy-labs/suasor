@@ -84,9 +84,20 @@ describe("MCP read surface", () => {
     seedSource();
     const client = await connect("disabled");
     const res = await client.callTool({ name: "recall.search", arguments: { query: "rocket" } });
-    const parsed = parseResult(res as never) as { hits: unknown[]; signal: string };
+    const parsed = parseResult(res as never) as { hits: unknown[]; signal: string; reason: string };
     expect(parsed.hits).toEqual([]);
     expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
+    expect(parsed.reason).toBe("backend_disabled");
+  });
+
+  test("recall.search still degrades (signal) when a backend is configured but unimplemented", async () => {
+    const client = await connect("ollama");
+    const res = await client.callTool({ name: "recall.search", arguments: { query: "rocket" } });
+    const parsed = parseResult(res as never) as { hits: unknown[]; signal: string; reason: string };
+    expect(parsed.hits).toEqual([]);
+    // Signal stays embedding_disabled so hosts keep falling back to `search`.
+    expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
+    expect(parsed.reason).toBe("recall_unimplemented");
   });
 
   test("source.list returns ingested sources; source.get fetches a body", async () => {
@@ -125,7 +136,9 @@ describe("MCP read surface", () => {
     });
     const client = await connect();
 
-    const tasks = parseResult((await client.callTool({ name: "task.list", arguments: {} })) as never) as {
+    const tasks = parseResult(
+      (await client.callTool({ name: "task.list", arguments: {} })) as never,
+    ) as {
       tasks: { id: string }[];
     };
     expect(tasks.tasks.map((t) => t.id)).toEqual(["t1"]);

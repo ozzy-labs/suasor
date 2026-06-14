@@ -36,20 +36,28 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
   });
 
   const transport = new StdioServerTransport();
-  // Close the store when the transport tears down (host disconnect / SIGINT).
-  transport.onclose = () => {
-    store.close();
-  };
 
-  await server.connect(transport);
-  log("suasor mcp serve: listening on stdio (read tools; ADR-0004).");
-
-  // Keep the process alive until the transport closes.
-  await new Promise<void>((resolve) => {
-    const finish = () => resolve();
+  // Resolve when the transport tears down (host disconnect / stdin EOF). The
+  // handler is wired *before* connect so a fast close can't be missed, and the
+  // store is closed exactly once.
+  await new Promise<void>((resolve, reject) => {
+    let closed = false;
     transport.onclose = () => {
+      if (closed) return;
+      closed = true;
       store.close();
-      finish();
+      resolve();
     };
+
+    server.connect(transport).then(
+      () => log("suasor mcp serve: listening on stdio (read tools; ADR-0004)."),
+      (error) => {
+        if (!closed) {
+          closed = true;
+          store.close();
+        }
+        reject(error);
+      },
+    );
   });
 }

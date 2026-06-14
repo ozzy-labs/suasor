@@ -50,7 +50,7 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 
 ### `recall.search`（graceful degradation・ADR-0005）
 
-引数は `search` と同じ（`query` / `limit`）。`[embedding].backend = "disabled"`（既定）のとき、**hard error にせず** `{ "hits": [], "signal": "embedding_disabled" }` を返す。host はこのシグナルを見て `search`(FTS) に寄れる。embedding backend が有効でも、本実装が入る [#11] までは同じく degrade する（host が常に FTS で動けるようにするため）。
+引数は `search` と同じ（`query` / `limit`）。`[embedding].backend = "disabled"`（既定）のとき、**hard error にせず** `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_disabled" }` を返す。host はこのシグナルを見て `search`(FTS) に寄れる。embedding backend が有効でも、本実装が入る [#11] までは同じく degrade する（`reason: "recall_unimplemented"`）。`signal` は常に `embedding_disabled`、`reason` は診断用の補助。
 
 ### `source.list` / `source.get`
 

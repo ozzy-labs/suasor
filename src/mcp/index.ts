@@ -1,7 +1,7 @@
 /** MCP module: the agent boundary read surface (ADR-0004, docs/design/mcp-surface.md). */
 export {
-  type DecisionRecord,
   DEFAULT_LIST_LIMIT,
+  type DecisionRecord,
   getSource,
   type InboxRecord,
   type ListDecisionsOptions,
@@ -16,5 +16,5 @@ export {
   type TaskRecord,
   type TimeRange,
 } from "./queries.ts";
+export { type ServeOptions, serveMcp } from "./serve.ts";
 export { buildMcpServer, EMBEDDING_DISABLED_SIGNAL, type McpServerDeps } from "./server.ts";
-export { serveMcp, type ServeOptions } from "./serve.ts";

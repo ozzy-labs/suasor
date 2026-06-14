@@ -109,12 +109,19 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () => {
-      if (embeddingBackend === "disabled") {
-        return jsonResult({ hits: [], signal: EMBEDDING_DISABLED_SIGNAL });
-      }
-      // Backend enabled but recall is not yet implemented (#11): degrade the
-      // same way rather than erroring, so hosts keep working via `search`.
-      return jsonResult({ hits: [], signal: EMBEDDING_DISABLED_SIGNAL });
+      // Semantic search is not implemented yet (#11). Regardless of the
+      // configured `embeddingBackend`, recall degrades to the
+      // `embedding_disabled` signal rather than erroring, so hosts keep working
+      // via `search` (ADR-0005). #11 will run real vector search here when
+      // `embeddingBackend !== "disabled"`.
+      const enabled = embeddingBackend !== "disabled";
+      return jsonResult({
+        hits: [],
+        signal: EMBEDDING_DISABLED_SIGNAL,
+        // Surface why recall is empty so the host can distinguish "no backend"
+        // from "backend present but recall pending implementation".
+        reason: enabled ? "recall_unimplemented" : "backend_disabled",
+      });
     },
   );
 
