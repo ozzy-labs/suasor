@@ -82,13 +82,25 @@ docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
 For people who **already use [Bun](https://bun.sh)**. Best for running the MCP
 server from an agent host.
 
+**Prerequisite — install Bun** (the runtime; `npx` / Node cannot run Suasor):
+
+```bash
+curl -fsSL https://bun.sh/install | bash   # official installer
+# or:  mise use -g bun@1   |   brew install oven-sh/bun/bun
+bun --version
+```
+
+Then run it. Any package manager (bun / pnpm / npm) can **fetch** the package,
+but it always **runs on Bun**:
+
 ```bash
 # one-off (no install) — ideal for an MCP host command
 bunx @ozzylabs/suasor mcp serve
+pnpm dlx @ozzylabs/suasor mcp serve          # pnpm equivalent (Bun still required)
 
 # or install the CLI globally
-bun add -g @ozzylabs/suasor
-suasor --version
+bun add -g @ozzylabs/suasor                  # or: pnpm add -g @ozzylabs/suasor
+suasor --version                             #     (npm i -g also works; Bun runs it)
 ```
 
 > Requires **Bun ≥ 1.1** (`engines.bun`): Suasor uses `bun:sqlite` and other

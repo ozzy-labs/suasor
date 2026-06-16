@@ -22,7 +22,7 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 
 - **Standalone binary** *(no runtime needed)* — download per OS/arch from [Releases](https://github.com/ozzy-labs/suasor/releases). Bun is compiled in. Core + a few native bits; the heavier connector SDKs are external (use npm/Docker for the full connector set).
 - **Docker (batteries-included + Ollama)** *(no runtime needed)* — `docker run ghcr.io/ozzy-labs/suasor`. Local embedding with no external egress.
-- **npm — for Bun users** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Requires **Bun ≥ 1.1** (uses `bun:sqlite`; `npx`/Node won't run it). OIDC-published with provenance.
+- **npm — for Bun users** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Requires **Bun ≥ 1.1** ([install Bun](https://bun.sh)) — uses `bun:sqlite`, so `npx`/Node won't run it; pnpm/npm can fetch it but Bun runs it. OIDC-published with provenance.
 - **MCP registry** — discoverable via [`server.json`](server.json).
 
 > v0.1.0 is published. Contributors can also run from source with the Quickstart below.
