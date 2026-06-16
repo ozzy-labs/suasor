@@ -14,18 +14,18 @@ Suasor is a local-first AI secretary. It gathers your scattered work context - c
 
 ## Status
 
-Early development. Suasor is being built spec-first.
+Early development — **v0.1.0 is published** (npm / standalone binaries / Docker). Built spec-first.
 
 ## Install
 
-Distributed via four channels (released manually — see [docs/guide/install.md](docs/guide/install.md)):
+Suasor is an MCP server — an *application*, not a library — so it runs on its own runtime, **Bun**. Pick a channel by whether you already use Bun; the binary and Docker image need **no runtime at all** (Bun is bundled). Details: [docs/guide/install.md](docs/guide/install.md).
 
-- **npm** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Canonical; OIDC-published with provenance.
-- **Standalone binary** — download per OS/arch from [Releases](https://github.com/ozzy-labs/suasor/releases). Core + a few native bits; the heavier connector SDKs are external (use npm/Docker for the full connector set).
-- **Docker (batteries-included + Ollama)** — `docker run ghcr.io/ozzy-labs/suasor`. Local embedding with no external egress.
+- **Standalone binary** *(no runtime needed)* — download per OS/arch from [Releases](https://github.com/ozzy-labs/suasor/releases). Bun is compiled in. Core + a few native bits; the heavier connector SDKs are external (use npm/Docker for the full connector set).
+- **Docker (batteries-included + Ollama)** *(no runtime needed)* — `docker run ghcr.io/ozzy-labs/suasor`. Local embedding with no external egress.
+- **npm — for Bun users** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Requires **Bun ≥ 1.1** (uses `bun:sqlite`; `npx`/Node won't run it). OIDC-published with provenance.
 - **MCP registry** — discoverable via [`server.json`](server.json).
 
-> Until the first release is published, run from source with the Quickstart below.
+> v0.1.0 is published. Contributors can also run from source with the Quickstart below.
 
 ## Quickstart (provisional)
 
@@ -63,7 +63,7 @@ Suasor exposes its memory to AI agents over the [Model Context Protocol](https:/
 bun run src/index.ts mcp serve   # start the MCP server over stdio
 ```
 
-Register it with an MCP host (Claude Code, Claude Desktop, Codex CLI, …). For Claude Desktop, add to `claude_desktop_config.json`:
+Register it with an MCP host (Claude Code, Claude Desktop, Codex CLI, …). For Claude Desktop, add to `claude_desktop_config.json`. With a global install (`bun add -g @ozzylabs/suasor`, so `suasor` is on `PATH` and resolves to Bun):
 
 ```jsonc
 {
@@ -71,6 +71,19 @@ Register it with an MCP host (Claude Code, Claude Desktop, Codex CLI, …). For 
     "suasor": {
       "command": "suasor",
       "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+No Bun on the host? Point it at the Docker image instead (no runtime needed):
+
+```jsonc
+{
+  "mcpServers": {
+    "suasor": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-v", "suasor-data:/data", "ghcr.io/ozzy-labs/suasor:0.1.0"]
     }
   }
 }

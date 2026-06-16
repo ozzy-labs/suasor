@@ -14,18 +14,18 @@ Suasor はローカルファーストの AI 秘書です。チャット・メー
 
 ## ステータス
 
-開発初期。Suasor は仕様駆動で構築中です。
+開発初期 — **v0.1.0 公開済み**（npm / 単一バイナリ / Docker）。仕様駆動で構築中です。
 
 ## インストール
 
-4 つのチャネルで配布します（リリースは手動 — [docs/guide/install.md](docs/guide/install.md) 参照）:
+Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、専用ランタイム **Bun** で動きます。Bun を使うかどうかでチャネルを選んでください。単一バイナリと Docker は **ランタイム不要**（Bun を内蔵）なので、Bun を使っていないなら最も簡単です。詳細: [docs/guide/install.md](docs/guide/install.md)。
 
-- **npm** — `bunx @ozzylabs/suasor mcp serve`（または `bun add -g @ozzylabs/suasor`）。canonical・OIDC publish（provenance 付き）。
-- **単一バイナリ** — OS/arch 別に [Releases](https://github.com/ozzy-labs/suasor/releases) からダウンロード。core + 少数 native のみで、重い connector SDK は external（全 connector は npm/Docker を利用）。
-- **Docker（Ollama 同梱）** — `docker run ghcr.io/ozzy-labs/suasor`。egress なしのローカル embedding。
+- **単一バイナリ**（ランタイム不要） — OS/arch 別に [Releases](https://github.com/ozzy-labs/suasor/releases) からダウンロード。Bun を内蔵コンパイル済み。core + 少数 native のみで、重い connector SDK は external（全 connector は npm/Docker を利用）。
+- **Docker（Ollama 同梱）**（ランタイム不要） — `docker run ghcr.io/ozzy-labs/suasor`。egress なしのローカル embedding。
+- **npm（Bun ユーザー向け）** — `bunx @ozzylabs/suasor mcp serve`（または `bun add -g @ozzylabs/suasor`）。**Bun ≥ 1.1 が必要**（`bun:sqlite` を使用。`npx`/Node では動きません）。OIDC publish（provenance 付き）。
 - **MCP registry** — [`server.json`](server.json) で discovery 可能。
 
-> 初回リリース公開までは、下記クイックスタートでソースから実行してください。
+> v0.1.0 公開済み。コントリビュータは下記クイックスタートでソースからも実行できます。
 
 ## クイックスタート（暫定）
 
@@ -63,7 +63,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 bun run src/index.ts mcp serve   # MCP server を stdio で起動
 ```
 
-MCP host（Claude Code / Claude Desktop / Codex CLI 等）に登録します。Claude Desktop の場合は `claude_desktop_config.json` に以下を追加します:
+MCP host（Claude Code / Claude Desktop / Codex CLI 等）に登録します。Claude Desktop の場合は `claude_desktop_config.json` に以下を追加します（グローバル導入 `bun add -g @ozzylabs/suasor` で `suasor` が PATH 上にあり Bun で解決される前提）:
 
 ```jsonc
 {
@@ -71,6 +71,19 @@ MCP host（Claude Code / Claude Desktop / Codex CLI 等）に登録します。C
     "suasor": {
       "command": "suasor",
       "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+host に Bun が無い場合は、代わりに Docker イメージを指定します（ランタイム不要）:
+
+```jsonc
+{
+  "mcpServers": {
+    "suasor": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-v", "suasor-data:/data", "ghcr.io/ozzy-labs/suasor:0.1.0"]
     }
   }
 }
