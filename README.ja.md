@@ -22,7 +22,7 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 
 - **単一バイナリ**（ランタイム不要） — OS/arch 別に [Releases](https://github.com/ozzy-labs/suasor/releases) からダウンロード。Bun を内蔵コンパイル済み。core + 少数 native のみで、重い connector SDK は external（全 connector は npm/Docker を利用）。
 - **Docker（Ollama 同梱）**（ランタイム不要） — `docker run ghcr.io/ozzy-labs/suasor`。egress なしのローカル embedding。
-- **npm（Bun ユーザー向け）** — `bunx @ozzylabs/suasor mcp serve`（または `bun add -g @ozzylabs/suasor`）。**Bun ≥ 1.1 が必要**（`bun:sqlite` を使用。`npx`/Node では動きません）。OIDC publish（provenance 付き）。
+- **npm（Bun ユーザー向け）** — `bunx @ozzylabs/suasor mcp serve`（または `bun add -g @ozzylabs/suasor`）。**Bun ≥ 1.1 が必要**（[Bun 導入](https://bun.sh)。`bun:sqlite` を使うため `npx`/Node 不可。pnpm/npm でも取得可だが実行は Bun）。OIDC publish（provenance 付き）。
 - **MCP registry** — [`server.json`](server.json) で discovery 可能。
 
 > v0.1.0 公開済み。コントリビュータは下記クイックスタートでソースからも実行できます。
