@@ -1,34 +1,26 @@
 # Install
 
-Suasor ships through four channels ([ADR-0010](../adr/0010-distribution.md)). Pick
-the one that matches how you run it.
+Suasor ships through four channels ([ADR-0010](../adr/0010-distribution.md)).
+**v0.1.0 is published** — npm, the standalone binaries, and the Docker image are
+all live.
 
-> Status: the release pipeline (`.github/workflows/release.yaml`) is in place, but
-> **publishing is a deliberate manual step** — artifacts appear only after a
-> maintainer cuts a release (see [Releasing](#releasing-maintainers)). Until the
-> first release, run from source via the [Quickstart](../../README.md#quickstart-provisional).
+Suasor is an *application* (an MCP server), not a library, so it picks its own
+runtime: it runs on **Bun**. Pick a channel by whether you already use Bun — the
+binary and Docker image need **no runtime at all** (Bun is bundled), so they are
+the simplest option if you don't already run Bun:
 
-## 1. npm — `@ozzylabs/suasor` (canonical)
+| You... | Use | Runtime on the host |
+| --- | --- | --- |
+| just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) |
+| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) |
+| already use Bun | **npm** (`bunx`) | Bun ≥ 1.1 |
 
-For anyone who already has a JavaScript runtime. Best for running the MCP server
-from an agent host.
+> Publishing is a deliberate manual step: `release.yaml` runs only on a published
+> GitHub Release or `workflow_dispatch`, never on push/merge (see
+> [Releasing](#releasing-maintainers)). Contributors can run from source via the
+> [Quickstart](../../README.md#quickstart-provisional).
 
-```bash
-# one-off (no install) — ideal for an MCP host command
-bunx @ozzylabs/suasor mcp serve
-
-# or install the CLI globally
-bun add -g @ozzylabs/suasor
-suasor --version
-```
-
-> Suasor runs on **Bun** (`engines.bun >= 1.1`): it uses `bun:sqlite` and other
-> `Bun.*` APIs, so it cannot run under Node — use `bunx`, not `npx`.
-
-Published with [npm Trusted Publishers (OIDC)](../adr/0010-distribution.md) — no
-long-lived `NPM_TOKEN` — with build provenance attestation (public repo).
-
-## 2. Standalone single binary
+## 1. Standalone single binary
 
 For machines without a JS runtime. Download the asset for your OS/arch from the
 [GitHub Releases](https://github.com/ozzy-labs/suasor/releases) page:
@@ -64,7 +56,7 @@ chmod +x suasor-bun-linux-x64
 > **npm** package or the **Docker** image for the full connector set, keychain
 > secrets, and the assistant skills.
 
-## 3. Docker — batteries-included (+ Ollama)
+## 2. Docker — batteries-included (+ Ollama)
 
 For local embedding/LLM with zero external egress ([ADR-0006](../adr/0006-ml-delegation.md)):
 the image bundles Suasor **and** an Ollama sidecar.
@@ -84,6 +76,27 @@ docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
   container or a mounted Ollama volume.
 - Larger than the other channels (Ollama runtime included). Stay on npm/binary if
   you only need FTS or already run Ollama.
+
+## 3. npm — `@ozzylabs/suasor` (for Bun users)
+
+For people who **already use [Bun](https://bun.sh)**. Best for running the MCP
+server from an agent host.
+
+```bash
+# one-off (no install) — ideal for an MCP host command
+bunx @ozzylabs/suasor mcp serve
+
+# or install the CLI globally
+bun add -g @ozzylabs/suasor
+suasor --version
+```
+
+> Requires **Bun ≥ 1.1** (`engines.bun`): Suasor uses `bun:sqlite` and other
+> `Bun.*` APIs, so it cannot run under Node — use `bunx`, **not** `npx`. If you
+> don't run Bun, use the standalone binary or the Docker image above.
+
+Published with [npm Trusted Publishers (OIDC)](../adr/0010-distribution.md) — no
+long-lived `NPM_TOKEN` — with build provenance attestation (public repo).
 
 ## 4. MCP registry
 
