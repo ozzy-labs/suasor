@@ -81,14 +81,18 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     expect(out).toContain("(none");
   });
 
-  test("status prints the per-workspace / channel cursor", async () => {
+  test("status prints the per-workspace / channel cursor with a humanized ts (#84)", async () => {
     await run(["init"]);
     await seedCursor(JSON.stringify({ default: { C1: "111.000000", C2: "222.000000" } }));
     const { code, out } = await run(["slack", "status"]);
     expect(code).toBe(0);
     expect(out).toContain("[default]");
-    expect(out).toContain("C1  111.000000");
-    expect(out).toContain("C2  222.000000");
+    // The raw epoch ts is rendered as a local "YYYY-MM-DD HH:MM (… ago)" column;
+    // the channel id is kept and the date prefix is deterministic (1970-01-01).
+    expect(out).toContain("C1  1970-01-01");
+    expect(out).toContain("C2  1970-01-01");
+    expect(out).toContain("ago)"); // relative phrasing present
+    expect(out).not.toContain("C1  111.000000"); // raw ts no longer shown in the table
   });
 
   test("status --json emits the cursor map", async () => {

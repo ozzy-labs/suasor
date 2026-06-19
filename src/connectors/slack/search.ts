@@ -44,6 +44,12 @@ interface SearchMatch {
 export interface SearchLastSelfPostOptions {
   /** Transport override (tests inject a fake; default lazy-`fetch`). */
   readonly transport?: SlackSearchTransport;
+  /**
+   * Called once per fetched search page so a CLI can render an indeterminate
+   * progress counter while the (up to 20-page) sweep runs (#84). Best-effort:
+   * any throw is ignored so progress reporting never fails the search.
+   */
+  readonly onProgress?: () => void;
 }
 
 /**
@@ -67,6 +73,10 @@ export async function searchLastSelfPost(
       page: String(page),
       sort: "timestamp",
     });
+    // Best-effort progress tick: a throw in the reporter must not fail the search.
+    try {
+      options.onProgress?.();
+    } catch {}
     if (body.ok !== true) {
       const error = typeof body.error === "string" ? body.error : "unknown";
       throw new Error(`slack search.messages failed: ${error}`);
