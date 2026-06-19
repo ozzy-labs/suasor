@@ -57,3 +57,5 @@ NNNN-kebab-case-title.md
 | 0014 | Slack multi-workspace (`[connectors.slack.workspaces.<alias>]`) |
 | 0015 | Slack thread replies ingestion (`conversations.replies`) |
 | 0016 | Slack sync date floor + cursor reset/backfill recovery verbs |
+| 0017 | `brief` MCP tool — period bundle for host summarization |
+| 0018 | Knowledge graph traversal — `graph.related` / `graph.expand` |
