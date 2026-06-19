@@ -1,16 +1,28 @@
 /**
  * GitHub connector (ADR-0007). Read-only ingest of issues + pull requests for
- * the configured repositories into `SourceRecord`s.
+ * the configured repositories, plus the per-token **notification stream**
+ * (mentions / review requests / etc.), into `SourceRecord`s.
  *
  * - **read-only** — only `GET` list endpoints are called; nothing is written
- *   back to GitHub (ADR-0003).
- * - **delta** — uses the issues `since` cursor (a delta API): records the most
- *   recent `updated_at` seen and returns it as the next cursor so subsequent
- *   syncs fetch only changed items (FR-ING-3). Body content also carries a
- *   fingerprint, so the sync service still skips unchanged bodies.
- * - **identity** — `gh:<owner>/<repo>:issue:<number>` (cross-source-unique,
- *   repo-prefixed, ADR-0007). PRs are issues in the REST API; `source_type`
- *   distinguishes them (`github_issue` / `github_pull_request`).
+ *   back to GitHub (ADR-0003). The notification stream is read via
+ *   `GET /notifications` — the thread list is fetched but never marked read.
+ * - **delta** — two independent delta axes share one opaque cursor:
+ *   - **issues/PRs** use the issues `since` cursor (records the most recent
+ *     `updated_at` seen across repos).
+ *   - **notifications** are a per-token personal stream (not repo-scoped), so
+ *     they carry their **own** `since` cursor (most recent thread `updated_at`),
+ *     decoupled from the repo allowlist (FR-ING-3). A single shared cursor would
+ *     be a latent data-loss bug: a quiet axis would be raised to the busier
+ *     axis's timestamp and silently skip its own newer items (mirrors the Slack
+ *     per-channel cursor fix, ADR-0011).
+ *   The cursor is serialized as a JSON `{ issues, notifications }` map. A bare
+ *   string cursor from before notifications were added is read as the legacy
+ *   `issues` floor (backward compatible).
+ * - **identity** — `gh:<owner>/<repo>:issue:<number>` / `:pull_request:<number>`
+ *   for repo items; `gh:notification:<thread-id>` for notifications
+ *   (cross-source-unique; notifications are token-scoped, not repo-scoped, so
+ *   they are *not* repo-prefixed — ADR-0007). `source_type` distinguishes the
+ *   kinds (`github_issue` / `github_pull_request` / `github_notification`).
  * - **import-clean** — `octokit` is **lazy-imported inside `sync`**, so building
  *   the connector / registry never pulls the SDK (ADR-0007, NFR-PRF-1). This
  *   module's top-level imports are limited to `zod` + the contract types.
@@ -32,6 +44,14 @@ export const GithubConnectorConfig = z.object({
   repos: z.array(z.string().regex(/^[^/]+\/[^/]+$/, "expected 'owner/repo'")).default([]),
   /** Issue/PR states to ingest. */
   state: z.enum(["open", "closed", "all"]).default("all"),
+  /**
+   * Ingest the per-token notification stream (`GET /notifications`) as a demand
+   * signal (mentions / review requests / etc.). This is a personal, per-token
+   * stream independent of `repos` — when `all`, every notified repo is ingested;
+   * when `repos`, the stream is filtered to the configured allowlist (Issue #93).
+   * Defaults off so existing installs keep their issues/PR-only behaviour.
+   */
+  notifications: z.enum(["off", "all", "repos"]).default("off"),
   /** GitHub API base URL (override for GitHub Enterprise). */
   baseUrl: z.string().url().optional(),
 });
@@ -49,6 +69,49 @@ interface GithubIssueItem {
   updated_at: string;
   pull_request?: unknown;
   user?: { login?: string } | null;
+}
+
+/** Shape of the notification thread items we read (subset of the REST response). */
+interface GithubNotificationItem {
+  id: string;
+  reason: string;
+  updated_at: string;
+  unread?: boolean;
+  subject?: { title?: string; type?: string; url?: string | null } | null;
+  repository?: { full_name?: string } | null;
+}
+
+/**
+ * The github cursor carries two independent delta axes — repo issues/PRs and
+ * the per-token notification stream — so neither raises the other's floor.
+ */
+interface GithubCursor {
+  /** Most recent issue/PR `updated_at` seen (repo axis). */
+  issues: string | null;
+  /** Most recent notification thread `updated_at` seen (token axis). */
+  notifications: string | null;
+}
+
+/**
+ * Parse the opaque resume cursor. A JSON `{ issues, notifications }` object is
+ * read as-is; a bare string (pre-notifications cursor) is read as the legacy
+ * `issues` floor with no notifications floor.
+ */
+function parseCursor(raw: string | null): GithubCursor {
+  if (!raw) return { issues: null, notifications: null };
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      return {
+        issues: typeof obj.issues === "string" ? obj.issues : null,
+        notifications: typeof obj.notifications === "string" ? obj.notifications : null,
+      };
+    }
+  } catch {
+    // Not JSON → legacy bare-string `issues` floor.
+  }
+  return { issues: raw, notifications: null };
 }
 
 /** Build the `SourceRecord` for one issue/PR of a repo. */
@@ -72,6 +135,27 @@ function toRecord(repo: string, item: GithubIssueItem): SourceRecord {
   };
 }
 
+/** Build the `SourceRecord` for one notification thread (token-scoped). */
+function toNotificationRecord(item: GithubNotificationItem): SourceRecord {
+  const title = item.subject?.title ?? "(notification)";
+  const repo = item.repository?.full_name ?? null;
+  // Body is the subject title; repo + reason go to meta. The subject `url` is an
+  // API url (not the html url) so it is kept in meta for provenance, not body.
+  return {
+    externalId: `gh:notification:${item.id}`,
+    sourceType: "github_notification",
+    body: title,
+    observedAt: item.updated_at,
+    meta: {
+      repo,
+      reason: item.reason,
+      subjectType: item.subject?.type ?? null,
+      subjectUrl: item.subject?.url ?? null,
+      unread: item.unread ?? null,
+    },
+  };
+}
+
 /**
  * The GitHub `Octokit` client surface we depend on. Declared structurally so
  * tests can inject a fake without importing the SDK, and so the real client is
@@ -83,7 +167,8 @@ export interface OctokitLike {
       route: string,
       params: Record<string, unknown>,
     ) => AsyncIterable<{
-      data: GithubIssueItem[];
+      // Routes return heterogeneous item shapes; each caller narrows its page.
+      data: unknown[];
     }>;
   };
 }
@@ -110,8 +195,10 @@ class GithubConnector implements Connector {
   readonly name = GITHUB_CONNECTOR_NAME;
   readonly sourceType = "github";
 
-  /** Highest `updated_at` observed this run → next-run `since` cursor. */
-  private maxUpdatedAt: string | null = null;
+  /** Highest issue/PR `updated_at` observed this run → next-run repo cursor. */
+  private maxIssueUpdatedAt: string | null = null;
+  /** Highest notification `updated_at` observed this run → next-run token cursor. */
+  private maxNotificationUpdatedAt: string | null = null;
 
   constructor(
     private readonly config: GithubConnectorConfig,
@@ -119,7 +206,9 @@ class GithubConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    if (this.config.repos.length === 0) return;
+    const wantsNotifications = this.config.notifications !== "off";
+    // Nothing to do when there are no repos to scan and notifications are off.
+    if (this.config.repos.length === 0 && !wantsNotifications) return;
 
     const token = await ctx.secret("token");
     if (!token) {
@@ -134,8 +223,21 @@ class GithubConnector implements Connector {
       ...(this.config.baseUrl ? { baseUrl: this.config.baseUrl } : {}),
     });
 
-    this.maxUpdatedAt = ctx.cursor;
+    const cursor = parseCursor(ctx.cursor);
+    this.maxIssueUpdatedAt = cursor.issues;
+    this.maxNotificationUpdatedAt = cursor.notifications;
 
+    yield* this.syncRepos(octokit, cursor.issues);
+    if (wantsNotifications) {
+      yield* this.syncNotifications(octokit, cursor.notifications);
+    }
+  }
+
+  /** Stream issues/PRs for every configured repo (repo delta axis). */
+  private async *syncRepos(
+    octokit: OctokitLike,
+    since: string | null,
+  ): AsyncIterable<SourceRecord> {
     for (const repo of this.config.repos) {
       const [owner, name] = repo.split("/");
       const params: Record<string, unknown> = {
@@ -147,15 +249,15 @@ class GithubConnector implements Connector {
         direction: "asc",
       };
       // `since` is the issues delta cursor: only items updated at/after it.
-      if (ctx.cursor) params.since = ctx.cursor;
+      if (since) params.since = since;
 
       for await (const page of octokit.paginate.iterator(
         "GET /repos/{owner}/{repo}/issues",
         params,
       )) {
-        for (const item of page.data) {
-          if (this.maxUpdatedAt === null || item.updated_at > this.maxUpdatedAt) {
-            this.maxUpdatedAt = item.updated_at;
+        for (const item of page.data as GithubIssueItem[]) {
+          if (this.maxIssueUpdatedAt === null || item.updated_at > this.maxIssueUpdatedAt) {
+            this.maxIssueUpdatedAt = item.updated_at;
           }
           yield toRecord(repo, item);
         }
@@ -163,8 +265,57 @@ class GithubConnector implements Connector {
     }
   }
 
+  /**
+   * Stream the per-token notification thread list (token delta axis). When the
+   * mode is `repos`, the stream is filtered to the configured allowlist; `all`
+   * ingests every notified repo. The repo allowlist set is matched against each
+   * thread's `repository.full_name` (case-insensitive).
+   */
+  private async *syncNotifications(
+    octokit: OctokitLike,
+    since: string | null,
+  ): AsyncIterable<SourceRecord> {
+    const allow =
+      this.config.notifications === "repos"
+        ? new Set(this.config.repos.map((r) => r.toLowerCase()))
+        : null;
+
+    const params: Record<string, unknown> = {
+      all: true,
+      per_page: 100,
+    };
+    // `since` is the notifications delta cursor (its own axis, not the repo one).
+    if (since) params.since = since;
+
+    for await (const page of octokit.paginate.iterator("GET /notifications", params)) {
+      for (const item of page.data as GithubNotificationItem[]) {
+        // Advance the cursor over every thread the API returned (even filtered
+        // ones) so a filtered-out repo never re-floods the stream next run.
+        if (
+          this.maxNotificationUpdatedAt === null ||
+          item.updated_at > this.maxNotificationUpdatedAt
+        ) {
+          this.maxNotificationUpdatedAt = item.updated_at;
+        }
+        if (allow) {
+          const full = item.repository?.full_name?.toLowerCase();
+          if (!full || !allow.has(full)) continue;
+        }
+        yield toNotificationRecord(item);
+      }
+    }
+  }
+
   finalize(): SyncResult {
-    return { cursor: this.maxUpdatedAt };
+    const cursor: GithubCursor = {
+      issues: this.maxIssueUpdatedAt,
+      notifications: this.maxNotificationUpdatedAt,
+    };
+    // Persist nothing when both axes are empty (first run, no items).
+    if (cursor.issues === null && cursor.notifications === null) {
+      return { cursor: null };
+    }
+    return { cursor: JSON.stringify(cursor) };
   }
 }
 

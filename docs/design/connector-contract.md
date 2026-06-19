@@ -63,7 +63,7 @@ run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。ap
 
 | name | source_type | SDK | 差分検知 | secret |
 |---|---|---|---|---|
-| `github` | `github_issue` / `github_pull_request` | octokit | `since` cursor | `token` |
+| `github` | `github_issue` / `github_pull_request` / `github_notification` | octokit | `{ issues, notifications }` `since` cursor | `token` |
 | `slack` | `slack_message` | @slack/web-api | `oldest` ts cursor | `token` |
 | `ms-graph` | `ms365_mail` / `ms365_calendar` / `ms365_file` / `ms365_teams_message` | @microsoft/microsoft-graph-client + @azure/msal-node | fingerprint | `clientSecret` |
 | `google` | `google_drive` / `gmail_message` / `google_calendar` | googleapis | fingerprint | `refreshToken` |
