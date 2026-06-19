@@ -253,6 +253,181 @@ export class SlackConversationsCommand extends Command {
   }
 }
 
+/** `slack status` — show the saved resume cursor (per workspace / channel). */
+export class SlackStatusCommand extends Command {
+  static override paths = [[SLACK, "status"]];
+
+  static override usage = Command.Usage({
+    category: "Slack",
+    description: "Show the saved Slack resume cursor (per workspace / channel).",
+    details: `
+      Prints the high-water-mark ts each channel resumes from (ADR-0016). Useful
+      to confirm a 'since' floor took effect or to see what 'slack cursor reset'
+      would clear. Read-only.
+    `,
+    examples: [["Show cursors", "suasor slack status"]],
+  });
+
+  json = Option.Boolean("--json", false, { description: "Emit the cursor map as JSON." });
+
+  override async execute(): Promise<number> {
+    const map = await readSlackCursor(this);
+    if (map === null) return 1;
+
+    if (this.json) {
+      this.context.stdout.write(`${JSON.stringify(map, null, 2)}\n`);
+      return 0;
+    }
+    const aliases = Object.keys(map);
+    if (aliases.length === 0) {
+      this.context.stdout.write("slack cursors: (none — never synced, or reset)\n");
+      return 0;
+    }
+    this.context.stdout.write("slack cursors:\n");
+    for (const alias of aliases) {
+      this.context.stdout.write(`  [${alias}]\n`);
+      for (const [channel, ts] of Object.entries(map[alias] ?? {})) {
+        this.context.stdout.write(`    ${channel}  ${ts}\n`);
+      }
+    }
+    return 0;
+  }
+}
+
+/** `slack cursor reset` — clear saved cursors so channels re-fetch from the floor. */
+export class SlackCursorResetCommand extends Command {
+  static override paths = [[SLACK, "cursor", "reset"]];
+
+  static override usage = Command.Usage({
+    category: "Slack",
+    description: "Clear saved cursors so the next sync re-fetches from the 'since' floor.",
+    details: `
+      Recovery verb (ADR-0016): appends a new cursor with the targeted channels
+      removed, so the next 'slack sync' re-fetches them from the configured
+      'since' floor (or from the start when no floor is set). Pass --channel
+      C1,C2 (optionally --workspace) or --all. Requires --yes to apply; without
+      it the targets are previewed only.
+    `,
+    examples: [
+      ["Preview a reset", "suasor slack cursor reset --channel C0123"],
+      ["Reset two channels", "suasor slack cursor reset --channel C0123,C0456 --yes"],
+      ["Reset a whole workspace", "suasor slack cursor reset --workspace acme --all --yes"],
+      ["Reset everything", "suasor slack cursor reset --all --yes"],
+    ],
+  });
+
+  channel = Option.String("--channel", { description: "Channel id(s) to reset, comma-separated." });
+  all = Option.Boolean("--all", false, {
+    description: "Reset every channel (of the workspace, or all).",
+  });
+  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  yes = Option.Boolean("--yes", false, {
+    description: "Apply the reset (without it, preview only).",
+  });
+
+  override async execute(): Promise<number> {
+    const channels = this.channel
+      ? this.channel
+          .split(",")
+          .map((c) => c.trim())
+          .filter((c) => c.length > 0)
+      : [];
+    if (!this.all && channels.length === 0) {
+      this.context.stderr.write("error: pass --channel <ids> or --all\n");
+      return 1;
+    }
+
+    const current = await readSlackCursor(this);
+    if (current === null) return 1;
+
+    const [{ serializeCursor }, { loadConfig }, { Store }] = await Promise.all([
+      import("../../connectors/slack.ts"),
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+    ]);
+
+    const alias = this.workspace ?? "default";
+    const next: Record<string, Record<string, string>> = structuredClone(current);
+    const targets: string[] = [];
+    if (this.all && !this.workspace) {
+      for (const a of Object.keys(next)) targets.push(`[${a}] (all)`);
+      for (const a of Object.keys(next)) delete next[a];
+    } else if (this.all) {
+      if (next[alias]) targets.push(`[${alias}] (all)`);
+      delete next[alias];
+    } else {
+      const aliasMap = next[alias] ?? {};
+      for (const ch of channels) {
+        if (aliasMap[ch] !== undefined) {
+          targets.push(`[${alias}] ${ch}`);
+          delete aliasMap[ch];
+        }
+      }
+      next[alias] = aliasMap;
+    }
+
+    if (targets.length === 0) {
+      this.context.stdout.write("nothing to reset (no matching saved cursor).\n");
+      return 0;
+    }
+
+    if (!this.yes) {
+      this.context.stdout.write(`would reset: ${targets.join(", ")}\n`);
+      this.context.stdout.write("(preview — re-run with --yes to apply)\n");
+      return 0;
+    }
+
+    const config = await loadConfig();
+    const dbPath = config.storage.dbPath;
+    if (dbPath === null) {
+      this.context.stderr.write("error: storage.dbPath is not configured\n");
+      return 1;
+    }
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    try {
+      store.record({
+        type: "ConnectorSyncCompleted",
+        connector: SLACK,
+        cursor: serializeCursor(next),
+        count: 0,
+      });
+    } finally {
+      store.close();
+    }
+    this.context.stdout.write(`reset: ${targets.join(", ")}\n`);
+    this.context.stdout.write("next: run `suasor slack sync` to re-fetch from the floor.\n");
+    return 0;
+  }
+}
+
+/**
+ * Load the saved Slack cursor as an alias → channel → ts map, or `null` on a
+ * config error (after writing the error to stderr). Shared by `slack status`
+ * and `slack cursor reset`.
+ */
+async function readSlackCursor(
+  cmd: Command,
+): Promise<Record<string, Record<string, string>> | null> {
+  const [{ loadConfig }, { Store }, { lastCursor }, { cursorToAliasMap }] = await Promise.all([
+    import("../../config/index.ts"),
+    import("../../db/index.ts"),
+    import("../../connectors/sync.ts"),
+    import("../../connectors/slack.ts"),
+  ]);
+  const config = await loadConfig();
+  const dbPath = config.storage.dbPath;
+  if (dbPath === null) {
+    cmd.context.stderr.write("error: storage.dbPath is not configured\n");
+    return null;
+  }
+  const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+  try {
+    return cursorToAliasMap(lastCursor(store.connection.sqlite, SLACK));
+  } finally {
+    store.close();
+  }
+}
+
 /** Read all of stdin to a string (used when `--token` is omitted). */
 async function readStdin(stdin: AsyncIterable<Buffer | string>): Promise<string> {
   const chunks: Buffer[] = [];

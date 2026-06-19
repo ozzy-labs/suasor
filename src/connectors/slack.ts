@@ -35,6 +35,13 @@ export const SlackWorkspaceConfig = z.object({
   team: z.string().min(1).default("default"),
   /** Channel ids to ingest (e.g. "C0123ABCD"). */
   channels: z.array(z.string().min(1)).default([]),
+  /**
+   * Cold-start date floor (ADR-0016): messages older than this are never
+   * fetched, capping the first sync. Relative (`30d` / `4w` / `12h`) or an ISO
+   * date (`2026-01-01`). Applies only to channels with no saved cursor — a
+   * channel already past the floor keeps resuming from its cursor.
+   */
+  since: z.string().min(1).optional(),
 });
 export type SlackWorkspaceConfig = z.infer<typeof SlackWorkspaceConfig>;
 
@@ -52,6 +59,8 @@ export type SlackWorkspaceConfig = z.infer<typeof SlackWorkspaceConfig>;
 export const SlackConnectorConfig = z.object({
   team: z.string().min(1).default("default"),
   channels: z.array(z.string().min(1)).default([]),
+  /** Cold-start date floor for the flat/default workspace (ADR-0016). */
+  since: z.string().min(1).optional(),
   workspaces: z.record(z.string(), SlackWorkspaceConfig).optional(),
 });
 export type SlackConnectorConfig = z.infer<typeof SlackConnectorConfig>;
@@ -78,6 +87,7 @@ interface ResolvedWorkspace {
   team: string;
   channels: string[];
   secretName: string;
+  since?: string;
 }
 
 /** Expand the config into the concrete list of workspaces to sync. */
@@ -89,6 +99,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       team: w.team,
       channels: w.channels,
       secretName: workspaceSecretName(alias),
+      ...(w.since ? { since: w.since } : {}),
     }));
   }
   return [
@@ -97,8 +108,39 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       team: config.team,
       channels: config.channels,
       secretName: workspaceSecretName(),
+      ...(config.since ? { since: config.since } : {}),
     },
   ];
+}
+
+/** `<n><unit>` relative-duration syntax for {@link parseSinceToTs} (d/w/h). */
+const RELATIVE_SINCE = /^(\d+)([dwh])$/;
+const UNIT_SECONDS: Record<string, number> = { h: 3600, d: 86400, w: 604800 };
+
+/**
+ * Convert a `since` floor (ADR-0016) to a Slack `oldest` ts (`<seconds>.000000`),
+ * or `null` when it cannot be parsed. Accepts a relative `30d` / `4w` / `12h`
+ * (relative to `nowMs`) or an ISO date / datetime (`2026-01-01`). Exported for
+ * direct unit testing of the conversion.
+ */
+export function parseSinceToTs(since: string, nowMs: number): string | null {
+  const rel = RELATIVE_SINCE.exec(since.trim());
+  if (rel) {
+    const amount = Number(rel[1]);
+    const unit = UNIT_SECONDS[rel[2] as string] as number;
+    const seconds = Math.floor(nowMs / 1000) - amount * unit;
+    return `${Math.max(0, seconds)}.000000`;
+  }
+  const parsed = Date.parse(since.trim());
+  if (Number.isNaN(parsed)) return null;
+  return `${Math.floor(parsed / 1000)}.000000`;
+}
+
+/** The more recent (numerically larger) of two optional ts floors. */
+function higherTs(a: string | undefined, b: string | undefined): string | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return Number.parseFloat(a) >= Number.parseFloat(b) ? a : b;
 }
 
 /** Shape of the message items we read (subset of the Slack response). */
@@ -157,6 +199,8 @@ const defaultSlackClientFactory: SlackClientFactory = async (token) => {
 export interface SlackConnectorOptions {
   /** Slack client factory override (tests inject a fake; default lazy-imports the SDK). */
   clientFactory?: SlackClientFactory;
+  /** Clock (ms) for resolving the relative `since` floor; injectable for tests. */
+  now?: () => number;
 }
 
 /**
@@ -198,6 +242,24 @@ function parseCursor(raw: string | null): {
   }
 }
 
+/**
+ * The stored cursor as an alias → channel → ts map (ADR-0016 `slack status` /
+ * `slack cursor reset` read this). A bare-ts legacy cursor has no per-channel
+ * structure and yields `{}`.
+ */
+export function cursorToAliasMap(raw: string | null): Record<string, Record<string, string>> {
+  return parseCursor(raw).byAlias;
+}
+
+/** Serialize an alias → channel → ts map back to a cursor string (empty → `null`). */
+export function serializeCursor(map: Record<string, Record<string, string>>): string | null {
+  const out: Record<string, Record<string, string>> = {};
+  for (const [alias, channels] of Object.entries(map)) {
+    if (Object.keys(channels).length > 0) out[alias] = channels;
+  }
+  return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
+}
+
 /** Slack connector implementing the read-only contract (ADR-0007 / ADR-0014). */
 class SlackConnector implements Connector {
   readonly name = SLACK_CONNECTOR_NAME;
@@ -209,6 +271,7 @@ class SlackConnector implements Connector {
   constructor(
     private readonly config: SlackConnectorConfig,
     private readonly clientFactory: SlackClientFactory,
+    private readonly now: () => number = () => Date.now(),
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
@@ -240,12 +303,17 @@ class SlackConnector implements Connector {
       const prevChannels = previous[ws.alias] ?? {};
       const aliasCursors: Record<string, string> = {};
 
+      // Cold-start floor (ADR-0016): the `since` config converted to an `oldest`
+      // ts, combined with the default workspace's legacy floor. Applied only to
+      // channels with no saved cursor (a resumed channel keeps its cursor).
+      const sinceFloor = ws.since ? (parseSinceToTs(ws.since, this.now()) ?? undefined) : undefined;
+      const legacy = ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined;
+      const floor = higherTs(sinceFloor, legacy);
+
       for (const channel of ws.channels) {
-        // Each channel resumes from its OWN high-water mark (or, only for the
-        // default workspace, the legacy floor) — never another channel's.
-        const oldest =
-          prevChannels[channel] ??
-          (ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined);
+        // Each channel resumes from its OWN high-water mark; a never-synced
+        // channel starts at the floor so cold-start stays bounded.
+        const oldest = prevChannels[channel] ?? floor;
         let cursor: string | undefined;
         do {
           const page = await client.conversations.history({
@@ -282,11 +350,7 @@ class SlackConnector implements Connector {
   }
 
   finalize(): SyncResult {
-    const out: Record<string, Record<string, string>> = {};
-    for (const [alias, map] of Object.entries(this.cursors)) {
-      if (Object.keys(map).length > 0) out[alias] = map;
-    }
-    return { cursor: Object.keys(out).length > 0 ? JSON.stringify(out) : null };
+    return { cursor: serializeCursor(this.cursors) };
   }
 }
 
@@ -299,5 +363,9 @@ export function createSlackConnector(
   options: SlackConnectorOptions = {},
 ): Connector {
   const parsed = SlackConnectorConfig.parse(config ?? {});
-  return new SlackConnector(parsed, options.clientFactory ?? defaultSlackClientFactory);
+  return new SlackConnector(
+    parsed,
+    options.clientFactory ?? defaultSlackClientFactory,
+    options.now,
+  );
 }
