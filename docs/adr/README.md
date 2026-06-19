@@ -59,3 +59,4 @@ NNNN-kebab-case-title.md
 | 0016 | Slack sync date floor + cursor reset/backfill recovery verbs |
 | 0017 | `brief` MCP tool — period bundle for host summarization |
 | 0018 | Knowledge graph traversal — `graph.related` / `graph.expand` |
+| 0019 | Slack fetch-path rate-limit retry (Retry-After-honoured) |
