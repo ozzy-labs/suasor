@@ -30,6 +30,7 @@ import {
   SlackAuthSetCommand,
   SlackAuthTestCommand,
   SlackConversationsCommand,
+  SlackCursorBackfillCommand,
   SlackCursorResetCommand,
   SlackStatusCommand,
 } from "./commands/slack.ts";
@@ -56,6 +57,7 @@ export function buildCli(): Cli {
   cli.register(SlackConversationsCommand);
   cli.register(SlackStatusCommand);
   cli.register(SlackCursorResetCommand);
+  cli.register(SlackCursorBackfillCommand);
   cli.register(SkillsInstallCommand);
   cli.register(SkillsListCommand);
   return cli;
