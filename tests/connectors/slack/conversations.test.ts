@@ -185,3 +185,40 @@ describe("conversations — renderConfigBlock", () => {
     expect(block).toContain("channels = []");
   });
 });
+
+describe("conversations — onProgress (#84)", () => {
+  test("ticks per fetched page and per resolved DM counterpart", async () => {
+    const { transport, usersTransport } = fakeConvos(
+      {
+        public_channel: [{ id: "C1", name: "general" }],
+        im: [
+          { id: "D1", user: "U1" },
+          { id: "D2", user: "U2" },
+        ],
+      },
+      {},
+      { U1: { profile: { display_name: "Alice" } }, U2: { profile: { display_name: "Bob" } } },
+    );
+    let ticks = 0;
+    await listConversations("xoxb", {
+      types: ["public", "im"],
+      transport,
+      usersTransport,
+      onProgress: () => (ticks += 1),
+    });
+    // 2 page fetches (public + im) + 2 DM resolutions.
+    expect(ticks).toBe(4);
+  });
+
+  test("a throwing reporter never fails the sweep (best-effort)", async () => {
+    const { transport } = fakeConvos({ public_channel: [{ id: "C1", name: "general" }] });
+    const result = await listConversations("xoxb", {
+      types: ["public"],
+      transport,
+      onProgress: () => {
+        throw new Error("boom");
+      },
+    });
+    expect(result.conversations.map((c) => c.id)).toEqual(["C1"]);
+  });
+});

@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildCli } from "../../src/cli/index.ts";
 import { AUTH_SPECS, authConnectorNames } from "../../src/connectors/auth-specs.ts";
+import { connectorSecretNames } from "../../src/connectors/registry.ts";
 
 /** Connector secret env vars cleared so resolution can't pick up host state. */
 const SECRET_ENVS = [
@@ -101,6 +102,20 @@ describe("AUTH_SPECS table (SSOT)", () => {
     expect(AUTH_SPECS["ms-graph"]?.secretName).toBe("clientSecret");
     expect(AUTH_SPECS.google?.secretName).toBe("refreshToken");
     expect(AUTH_SPECS.box?.secretName).toBe("token");
+  });
+
+  test("each spec's secretName matches the registry SECRET_NAMES SSOT (no drift)", () => {
+    // The registry (src/connectors/registry.ts) owns the connector→secret-name
+    // mapping for `connectors list`; `auth set` must store under the same name
+    // the connector reads at sync time, so guard the two against drift.
+    const pairs = authConnectorNames().map((name) => ({
+      specSecret: AUTH_SPECS[name]?.secretName,
+      // The connector's *primary* secret is the first the registry lists.
+      registryPrimary: connectorSecretNames(name)[0],
+    }));
+    for (const { specSecret, registryPrimary } of pairs) {
+      expect(specSecret).toBe(registryPrimary);
+    }
   });
 });
 
