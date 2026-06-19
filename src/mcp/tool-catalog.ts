@@ -72,6 +72,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: true,
     summary: "List proposal candidates by state (pending/applied/rejected).",
   },
+  {
+    name: "person.list",
+    readOnlyHint: true,
+    summary: "List resolved persons with their connector author identities (ADR-0022).",
+  },
 ];
 
 /**
@@ -124,6 +129,16 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     name: "link.remove",
     readOnlyHint: false,
     summary: "Remove a manual link by id (LinkRemoved).",
+  },
+  {
+    name: "person.merge",
+    readOnlyHint: false,
+    summary: "Merge two persons into one (PersonsMerged); reversible via person.split.",
+  },
+  {
+    name: "person.split",
+    readOnlyHint: false,
+    summary: "Split one identity off a person into another (PersonSplit).",
   },
 ];
 

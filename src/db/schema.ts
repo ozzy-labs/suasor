@@ -95,3 +95,37 @@ export const links = sqliteTable("links", {
   /** Stable id for a manual link (NULL for reducer-derived edges). */
   linkId: text("link_id"),
 });
+
+/**
+ * Person projection (ADR-0022). One row per resolved person; a person is the
+ * unit connector author handles collapse into. Created on first observation of
+ * any of its identities (1 handle = 1 person initially) and surviving merges.
+ * `identityCount` mirrors how many `personIdentities` rows point here, so an
+ * emptied (fully-merged-away) person can be elided from `person.list`.
+ */
+export const persons = sqliteTable("persons", {
+  id: text("id").primaryKey(),
+  /** Best-known display name (latest non-empty observed/merged); may be empty. */
+  displayName: text("display_name").notNull().default(""),
+  /** Number of identities currently bound to this person. */
+  identityCount: integer("identity_count").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * Person identity projection (ADR-0022): the `(connector, handle)` author keys
+ * bound to a person. Keyed by `identityKey` = `<connector>:<handle>` so a handle
+ * resolves to exactly one person at a time. `personId` is reassigned by
+ * `PersonsMerged` / `PersonSplit` (HITL); the handle itself never changes.
+ */
+export const personIdentities = sqliteTable("person_identities", {
+  /** Stable key `<connector>:<handle>` (one identity = one row). */
+  identityKey: text("identity_key").primaryKey(),
+  /** Person this identity currently resolves to. */
+  personId: text("person_id").notNull(),
+  connector: text("connector").notNull(),
+  handle: text("handle").notNull(),
+  displayName: text("display_name").notNull().default(""),
+  observedAt: text("observed_at").notNull(),
+});

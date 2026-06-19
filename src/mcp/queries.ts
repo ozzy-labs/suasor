@@ -2,10 +2,10 @@
  * Projection read queries backing the MCP read tools (ADR-0004, #8).
  *
  * Pure, side-effect-free SELECTs over the projection tables (`sources` /
- * `tasks` / `decisions` / `inbox` / `proposals`) that the MCP `source.list` /
- * `source.get` / `task.list` / `decision.list` / `inbox.list` / `propose.list`
- * read tools wrap. Read tools must have no side effects (ADR-0004
- * `read = destructive:false`), so every function here only reads.
+ * `tasks` / `decisions` / `inbox` / `proposals` / `persons`) that the MCP
+ * `source.list` / `source.get` / `task.list` / `decision.list` / `inbox.list` /
+ * `propose.list` / `person.list` read tools wrap. Read tools must have no side
+ * effects (ADR-0004 `read = destructive:false`), so every function here only reads.
  *
  * Time filters target each projection's natural timestamp column (the same
  * physical column the assistant skills filter on, docs/skills/README.md):
@@ -433,6 +433,103 @@ export function listSlackDemand(
     const channel = typeof record.meta.channel === "string" ? record.meta.channel : "";
     return { ...record, kind: channel.startsWith("D") ? "dm" : "mention" };
   });
+}
+
+/** One connector identity bound to a person (ADR-0022). */
+export interface PersonIdentityRecord {
+  connector: string;
+  handle: string;
+  displayName: string;
+  observedAt: string;
+}
+
+/** A resolved person with its connector identities (ADR-0022). */
+export interface PersonRecord {
+  id: string;
+  displayName: string;
+  identityCount: number;
+  createdAt: string;
+  updatedAt: string;
+  /** The `(connector, handle)` identities currently resolving to this person. */
+  identities: PersonIdentityRecord[];
+}
+
+interface PersonRow {
+  id: string;
+  display_name: string;
+  identity_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PersonIdentityRow {
+  person_id: string;
+  connector: string;
+  handle: string;
+  display_name: string;
+  observed_at: string;
+}
+
+export interface ListPersonsOptions {
+  /**
+   * Include persons with no identities (emptied by a merge). Default `false` —
+   * `person.list` surfaces resolvable people, not merge tombstones.
+   */
+  includeEmpty?: boolean;
+  /** Max rows (default {@link DEFAULT_LIST_LIMIT}). */
+  limit?: number;
+}
+
+/**
+ * List resolved persons most-recently-updated first, each with its connector
+ * identities attached (ADR-0022). Emptied persons (a merge moved all their
+ * identities away) are hidden unless `includeEmpty` is set.
+ */
+export function listPersons(sqlite: Database, options: ListPersonsOptions = {}): PersonRecord[] {
+  const where = options.includeEmpty ? "" : "WHERE identity_count > 0";
+  const limit = options.limit ?? DEFAULT_LIST_LIMIT;
+  const persons = sqlite
+    .query<PersonRow, [number]>(
+      `SELECT id, display_name, identity_count, created_at, updated_at
+         FROM persons
+         ${where}
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+    )
+    .all(limit);
+  if (persons.length === 0) return [];
+
+  // Fetch identities for the returned persons in one pass, then group by person.
+  const ids = persons.map((p) => p.id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const identityRows = sqlite
+    .query<PersonIdentityRow, string[]>(
+      `SELECT person_id, connector, handle, display_name, observed_at
+         FROM person_identities
+        WHERE person_id IN (${placeholders})
+        ORDER BY connector ASC, handle ASC`,
+    )
+    .all(...ids);
+  const byPerson = new Map<string, PersonIdentityRecord[]>();
+  for (const r of identityRows) {
+    const list = byPerson.get(r.person_id) ?? [];
+    list.push({
+      connector: r.connector,
+      handle: r.handle,
+      displayName: r.display_name,
+      observedAt: r.observed_at,
+    });
+    byPerson.set(r.person_id, list);
+  }
+
+  return persons.map((p) => ({
+    id: p.id,
+    displayName: p.display_name,
+    identityCount: p.identity_count,
+    createdAt: p.created_at,
+    updatedAt: p.updated_at,
+    identities: byPerson.get(p.id) ?? [],
+  }));
 }
 
 /** A period bundle for host summarization (ADR-0017). */

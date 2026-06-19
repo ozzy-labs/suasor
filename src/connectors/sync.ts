@@ -22,8 +22,10 @@
  */
 import type { Database } from "bun:sqlite";
 import type { Store } from "../db/index.ts";
+import { personIdFor } from "../projections/person.ts";
 import type { Embedder } from "../retrieval/embedding/index.ts";
 import { embedSources } from "../retrieval/embedding/index.ts";
+import { authorFromMeta } from "./author.ts";
 import type { Connector, SourceRecord, SyncContext } from "./contract.ts";
 import { makeSecretResolver, type SecretStoreOptions } from "./secrets.ts";
 
@@ -141,6 +143,25 @@ export async function syncConnector(
   for await (const record of connector.sync(ctx)) {
     const fingerprint = record.fingerprint ?? (await sha256Hex(record.body));
     const prior = existingFingerprint(sqlite, record.externalId);
+
+    // Resolve the author handle → person identity (ADR-0022). Best-effort: a
+    // record with no author concept yields null and records no identity. The
+    // reducer is idempotent on (connector, handle), so emitting on every
+    // observed/updated record never duplicates or re-points an existing identity.
+    if (prior === null || prior !== fingerprint) {
+      const author = authorFromMeta(connector.name, record.meta);
+      if (author !== null) {
+        store.record(
+          {
+            type: "PersonIdentityObserved",
+            personId: personIdFor(author.connector, author.handle),
+            connector: author.connector,
+            handle: author.handle,
+          },
+          now(),
+        );
+      }
+    }
 
     if (prior === null) {
       store.record(

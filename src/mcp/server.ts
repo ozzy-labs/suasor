@@ -5,14 +5,16 @@
  * read half: `search` (FTS5), `recall.search` (semantic vec0 KNN when an
  * embedding backend is enabled, else the `embedding_disabled` signal — #11),
  * `source.list` / `source.get`, `task.list` / `decision.list` / `inbox.list`,
- * and `propose.list` (the proposal ledger by state, #89). The write tools —
- * `connector.sync` (read-only ingest, ADR-0007 / #10), `propose.generate` /
- * `propose.apply` / `propose.reject` (HITL candidate generation + application +
+ * `propose.list` (the proposal ledger by state, #89), and `person.list`
+ * (resolved persons + their connector identities, ADR-0022 / #92). The write
+ * tools — `connector.sync` (read-only ingest, ADR-0007 / #10), `propose.generate`
+ * / `propose.apply` / `propose.reject` (HITL candidate generation + application +
  * rejection, #12 / #89), `task.create` (direct task creation, #12 追補 D2), the
  * direct daily-loop writes `decision.record` / `inbox.add` / `inbox.triage`
- * (Issue #88), and the manual knowledge-graph link CRUD `link.add` /
- * `link.remove` (Issue #90) — are registered when a writable `Store` + config
- * are supplied.
+ * (Issue #88), the manual knowledge-graph link CRUD `link.add` / `link.remove`
+ * (Issue #90), and the person identity resolution `person.merge` / `person.split`
+ * (HITL, ADR-0022 / #92) — are registered when a writable `Store` + config are
+ * supplied.
  * Write tools carry `readOnlyHint: false` so hosts gate them behind HITL (no
  * auto-apply, ADR-0004 / FR-PRO-2).
  *
@@ -46,6 +48,8 @@ import { inboxAdd } from "../propose/inbox-add.ts";
 import { inboxTriage, TRIAGE_ACTIONS, TriageError } from "../propose/inbox-triage.ts";
 import { linkAdd } from "../propose/link-add.ts";
 import { linkRemove } from "../propose/link-remove.ts";
+import { personMerge } from "../propose/person-merge.ts";
+import { personSplit } from "../propose/person-split.ts";
 import { proposeReject } from "../propose/reject.ts";
 import { taskCreate } from "../propose/task-create.ts";
 import {
@@ -66,6 +70,7 @@ import {
   listDecisions,
   listInbox,
   listLinks,
+  listPersons,
   listProposals,
   listSlackDemand,
   listSources,
@@ -163,9 +168,10 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
         "propose.generate, propose.apply, propose.reject, task.create, decision.record, " +
-        "inbox.add, inbox.triage, link.add, link.remove) are HITL: gate them behind human " +
-        "approval, never auto-apply. propose.list (read) shows the candidate ledger by " +
-        "state for the approve/reject loop.",
+        "inbox.add, inbox.triage, link.add, link.remove, person.merge, person.split) are " +
+        "HITL: gate them behind human approval, never auto-apply. propose.list (read) shows " +
+        "the candidate ledger by state for the approve/reject loop; person.list (read) shows " +
+        "resolved persons and their connector identities (ADR-0022).",
     },
   );
 
@@ -516,6 +522,38 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
+  // --- person.list: resolved persons + their connector identities (ADR-0022). ---
+  // Read tool (readOnlyHint: true): the read half of person identity resolution.
+  // Lists persons that connector author handles collapse into, each with its
+  // `(connector, handle)` identities. Emptied persons (merged away) are hidden
+  // unless `includeEmpty` is set. Merge/split are separate write tools.
+  server.registerTool(
+    "person.list",
+    {
+      title: "List persons",
+      description:
+        "List resolved persons most-recently-updated first, each with the connector " +
+        "author identities (github login / slack Uxxxx / …) bound to it (ADR-0022). " +
+        "Initial resolution is 1 handle = 1 person; operators collapse duplicates via " +
+        "the person.merge / person.split write tools. Read-only.",
+      inputSchema: {
+        includeEmpty: z
+          .boolean()
+          .optional()
+          .describe("Include persons left with no identities by a merge (default: false)."),
+        limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ includeEmpty, limit }) => {
+      const persons = listPersons(sqlite, {
+        ...(includeEmpty !== undefined ? { includeEmpty } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult({ persons });
+    },
+  );
+
   // --- connector.sync: read-only ingest into the local store (WRITE / HITL). ---
   // Registered only when a writable store is supplied. `readOnlyHint: false`
   // marks it as a write tool so hosts gate it behind human approval (ADR-0004);
@@ -838,6 +876,87 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         } catch (error) {
           // Removing an absent link surfaces as a tool error (not a crash) so the
           // host can show the rejection and the user can correct it.
+          if (error instanceof Error) {
+            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+          }
+          throw error;
+        }
+      },
+    );
+
+    // --- person.merge: collapse two persons into one (ADR-0022, Issue #92). ---
+    // Write half of identity resolution: the operator's explicit "same human"
+    // action (no fuzzy auto-merge). Appends PersonsMerged → the source person's
+    // identities reassign to the target. HITL; reversible via person.split.
+    server.registerTool(
+      "person.merge",
+      {
+        title: "Merge persons",
+        description:
+          "Merge two resolved persons into one: reassign every identity of the source " +
+          "person to the target (ADR-0022). Operator-driven — there is no automatic " +
+          "fuzzy de-duplication. Write tool: requires human approval — no auto-apply " +
+          "(ADR-0004). Reversible via person.split. A self-merge or unknown source " +
+          "person is a tool error.",
+        inputSchema: {
+          targetPersonId: z
+            .string()
+            .min(1)
+            .describe("Person that survives and absorbs the other's identities."),
+          sourcePersonId: z
+            .string()
+            .min(1)
+            .describe("Person whose identities move to the target (emptied)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ targetPersonId, sourcePersonId }) => {
+        try {
+          const result = personMerge(write.store, { targetPersonId, sourcePersonId });
+          return jsonResult(result);
+        } catch (error) {
+          if (error instanceof Error) {
+            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+          }
+          throw error;
+        }
+      },
+    );
+
+    // --- person.split: move one identity off a person (ADR-0022, Issue #92). ---
+    // Inverse of merge: detach a single (connector, handle) identity and bind it
+    // to another person (default: its own content-derived person — "undo a wrong
+    // merge"). Appends PersonSplit. HITL; reversible via person.merge.
+    server.registerTool(
+      "person.split",
+      {
+        title: "Split person identity",
+        description:
+          "Split one (connector, handle) identity off its current person into another " +
+          "person (ADR-0022) — the inverse of person.merge, to correct an over-merge. " +
+          "Omit newPersonId to send the identity to its own content-derived person. " +
+          "Write tool: requires human approval — no auto-apply (ADR-0004). An unknown " +
+          "identity is a tool error.",
+        inputSchema: {
+          connector: z.string().min(1).describe("Connector of the identity to move out."),
+          handle: z.string().min(1).describe("Handle of the identity to move out."),
+          newPersonId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Target person id (default: the identity's own content-derived person)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ connector, handle, newPersonId }) => {
+        try {
+          const result = personSplit(write.store, {
+            connector,
+            handle,
+            ...(newPersonId !== undefined ? { newPersonId } : {}),
+          });
+          return jsonResult(result);
+        } catch (error) {
           if (error instanceof Error) {
             return { isError: true, content: [{ type: "text" as const, text: error.message }] };
           }
