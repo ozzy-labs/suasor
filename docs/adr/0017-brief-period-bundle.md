@@ -1,6 +1,6 @@
 # 0017. `brief` MCP tool — period bundle for host summarization
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP read 境界）, [ADR-0006](0006-ml-delegation.md)（ML 委譲：in-process で重い ML を持たない）, [ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md)（FTS-first）

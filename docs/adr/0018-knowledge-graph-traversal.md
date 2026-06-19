@@ -1,6 +1,6 @@
 # 0018. Knowledge graph traversal — `graph.related` / `graph.expand`
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（event-sourced / projection）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP read 境界）, [ADR-0007](0007-connector-contract.md)（source identity）
