@@ -13,7 +13,10 @@
 import { Command, Option } from "clipanion";
 
 const SLACK = "slack";
-const TOKEN = "token";
+
+/** Shared `--workspace <alias>` description (ADR-0014). */
+const WORKSPACE_DESC =
+  "Workspace alias for a multi-workspace setup (omit for the default workspace).";
 
 /** `slack auth set` — store the Slack token in the OS keychain. */
 export class SlackAuthSetCommand extends Command {
@@ -25,15 +28,18 @@ export class SlackAuthSetCommand extends Command {
     details: `
       Persists the token so 'slack auth test', 'slack conversations', and
       'slack sync' resolve it without it ever touching config.toml (NFR-PRV-4).
-      Pass --token, or omit it to read the token from stdin (e.g. a pipe).
+      Pass --token, or omit it to read the token from stdin (e.g. a pipe). Use
+      --workspace <alias> to store a per-workspace token (ADR-0014).
     `,
     examples: [
       ["Store a token from stdin", "echo xoxb-… | suasor slack auth set"],
       ["Store a token inline", "suasor slack auth set --token xoxb-…"],
+      ["Store a workspace token", "suasor slack auth set --workspace acme --token xoxb-…"],
     ],
   });
 
   token = Option.String("--token", { description: "Token value (omit to read from stdin)." });
+  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
 
   override async execute(): Promise<number> {
     let token = this.token?.trim();
@@ -45,10 +51,17 @@ export class SlackAuthSetCommand extends Command {
       return 1;
     }
 
-    const { storeSecret } = await import("../../connectors/secrets.ts");
-    await storeSecret(SLACK, TOKEN, token);
-    this.context.stdout.write("Stored Slack token in the OS keychain (service 'suasor').\n");
-    this.context.stdout.write("next: verify it with `suasor slack auth test`.\n");
+    const [{ storeSecret }, { workspaceSecretName }] = await Promise.all([
+      import("../../connectors/secrets.ts"),
+      import("../../connectors/slack.ts"),
+    ]);
+    await storeSecret(SLACK, workspaceSecretName(this.workspace), token);
+    const where = this.workspace ? ` for workspace '${this.workspace}'` : "";
+    this.context.stdout.write(
+      `Stored Slack token${where} in the OS keychain (service 'suasor').\n`,
+    );
+    const verify = this.workspace ? ` --workspace ${this.workspace}` : "";
+    this.context.stdout.write(`next: verify it with \`suasor slack auth test${verify}\`.\n`);
     return 0;
   }
 }
@@ -66,17 +79,25 @@ export class SlackAuthTestCommand extends Command {
       READY / READY (degraded) / MISSING <scope> / N/A (ADR-0011). Readiness is a
       scope verdict only — it does not guarantee channel membership.
     `,
-    examples: [["Test the stored token", "suasor slack auth test"]],
+    examples: [
+      ["Test the stored token", "suasor slack auth test"],
+      ["Test a workspace's token", "suasor slack auth test --workspace acme"],
+    ],
   });
 
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
+  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
 
   override async execute(): Promise<number> {
-    const { resolveSecret } = await import("../../connectors/secrets.ts");
-    const token = await resolveSecret(SLACK, TOKEN);
+    const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
+      import("../../connectors/secrets.ts"),
+      import("../../connectors/slack.ts"),
+    ]);
+    const token = await resolveSecret(SLACK, workspaceSecretName(this.workspace));
     if (!token) {
+      const hint = this.workspace ? ` --workspace ${this.workspace}` : "";
       this.context.stderr.write(
-        "error: no Slack token configured (run `suasor slack auth set` or set SUASOR_CONNECTOR_SLACK_TOKEN)\n",
+        `error: no Slack token configured (run \`suasor slack auth set${hint}\` or set the env override)\n`,
       );
       return 1;
     }
@@ -141,6 +162,7 @@ export class SlackConversationsCommand extends Command {
   });
   limit = Option.String("--limit", { description: "Maximum number of conversations to list." });
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
+  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
 
   override async execute(): Promise<number> {
     // Validate args before any keychain / network work so bad input fails fast.
@@ -172,11 +194,15 @@ export class SlackConversationsCommand extends Command {
       limit = n;
     }
 
-    const { resolveSecret } = await import("../../connectors/secrets.ts");
-    const token = await resolveSecret(SLACK, TOKEN);
+    const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
+      import("../../connectors/secrets.ts"),
+      import("../../connectors/slack.ts"),
+    ]);
+    const token = await resolveSecret(SLACK, workspaceSecretName(this.workspace));
     if (!token) {
+      const hint = this.workspace ? ` --workspace ${this.workspace}` : "";
       this.context.stderr.write(
-        "error: no Slack token configured (run `suasor slack auth set` or set SUASOR_CONNECTOR_SLACK_TOKEN)\n",
+        `error: no Slack token configured (run \`suasor slack auth set${hint}\` or set the env override)\n`,
       );
       return 1;
     }

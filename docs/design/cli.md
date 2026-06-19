@@ -34,6 +34,7 @@ suasor --version                       # バージョン出力
 | `<connector> sync` | `--full` | false | 保存済み cursor を無視して全件再スキャン |
 | `<connector> sync` | `--json` | false | 件数 + cursor（`SyncOutcome`）を JSON で出力 |
 | `slack auth set` | `--token T` | stdin | 保存する token 値（省略時は stdin から読む） |
+| `slack auth set` / `auth test` / `conversations` | `--workspace A` | default | 対象 workspace alias（マルチ workspace 用、[ADR-0014](../adr/0014-slack-multi-workspace.md)）。secret account `connector:slack:<alias>:token` |
 | `slack auth test` | `--json` | false | principal / team / scopes / features を JSON で出力 |
 | `slack conversations` | `--types T` | all | 列挙する型のカンマ列 `public,private,im,mpim` |
 | `slack conversations` | `--include-archived` | false | アーカイブ済み channel も含める |

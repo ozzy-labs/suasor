@@ -65,6 +65,7 @@ class ConnectorSyncCommand extends Command {
       const outcome = await syncConnector(store, connector, {
         ...(this.full ? { cursor: null } : {}),
         embedder,
+        onWarn: (message) => this.context.stderr.write(`warning: ${name}: ${message}\n`),
         onEmbedError: (error) =>
           this.context.stderr.write(`warning: ${name} embedding skipped: ${error.message}\n`),
       });

@@ -64,4 +64,10 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     expect(code).toBe(1);
     expect(err).toContain("no Slack token configured");
   });
+
+  test("--workspace flows into the no-token guidance (ADR-0014)", async () => {
+    const { code, err } = await run(["slack", "auth", "test", "--workspace", "acme"]);
+    expect(code).toBe(1);
+    expect(err).toContain("auth set --workspace acme");
+  });
 });
