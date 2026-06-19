@@ -36,6 +36,7 @@ suasor --version                       # バージョン出力
 | `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy）を JSON で出力 |
 | `<connector> sync` | `--full` | false | 保存済み cursor を無視して全件再スキャン |
 | `<connector> sync` | `--json` | false | 件数 + cursor（`SyncOutcome`）を JSON で出力 |
+| `<connector> sync` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
 | `slack auth set` | `--token T` | stdin | 保存する token 値（省略時は stdin から読む） |
 | `slack auth set` / `auth test` / `conversations` | `--workspace A` | default | 対象 workspace alias（マルチ workspace 用、[ADR-0014](../adr/0014-slack-multi-workspace.md)）。secret account `connector:slack:<alias>:token` |
 | `slack auth test` | `--json` | false | principal / team / scopes / features を JSON で出力 |
@@ -59,6 +60,7 @@ suasor --version                       # バージョン出力
 
 - `search <query>` は FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。trigram FTS5 を既定経路とし、3-gram に満たない短クエリ（日本語の 1–2 文字等）は LIKE substring fallback に切り替わる（[retrieval](retrieval.md)）。サービス本体は `src/retrieval/`
 - `<connector> sync` は `[embedding].backend` 有効時、新規 / 本文変更 source を埋め込んで vec0 に populate する（`SyncOutcome.embedded`、人間可読出力では `… , N embedded`）。embedding は best-effort でサイドカー失敗は warning（stderr）に留め取り込みは成功する（[embedding setup](../guide/embedding.md) / [retrieval](retrieval.md)）
+- `<connector> sync` 実行中は **stderr に進捗（処理件数）を表示**する（`src/cli/progress.ts`）。stdout / `--json` を汚さないよう stderr、かつ **TTY 限定**（CI / パイプ / リダイレクトでは自動的に無音）。`--no-progress` で明示無効化（opshub ADR-0026 相当）
 - `slack auth set` / `slack auth test` / `slack conversations` は Slack 固有の運用 verb（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）。汎用 connector 契約（`sync` のみ）は太らせず、token 保存（keychain）・scope 検証・会話 id 発見を担う。いずれも Slack SDK を読まず `fetch` のみ（import-clean）。`auth test` は `auth.test` 1 回で granted scopes（`x-oauth-scopes`）と feature readiness（`READY` / `READY (degraded)` / `MISSING <scope>` / `N/A`）を出す。readiness は scope 層のみで channel membership は保証しない。`conversations` は型ごとに `missing_scope` を自己申告し、`config.toml` に貼れる `[connectors.slack]` ブロックを出力する。サービス本体は `src/connectors/slack/`
 - `skills install` は SSOT `docs/skills/<name>/SKILL.md`（パッケージ同梱）を `<host>/.claude/skills/<name>/SKILL.md` / `<host>/.agents/skills/<name>/SKILL.md` に展開する（[ADR-0008](../adr/0008-assistant-skills.md)）。冪等で、内容一致は `unchanged`・欠落は `created`・差分は SSOT で `updated`。エコシステム共通 dev skill（`@ozzylabs/skills`）は名前空間 disjoint で touch しない。サービス本体は `src/skills/`
 - `skills list` は host dir ごとに各 skill を `installed`（SSOT と一致）/ `missing`（未展開）/ `modified`（展開済みだが SSOT と差分）で報告する。in-repo dogfood の mirror（`.claude/skills/` / `.agents/skills/`）と SSOT の同期は lefthook の `skills-drift` フック（`scripts/skills-drift.sh`）が pre-commit で検査する

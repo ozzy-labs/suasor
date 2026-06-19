@@ -61,12 +61,20 @@ export interface ListConversationsOptions {
   readonly limit?: number;
   /** Transport override (tests inject a fake; default lazy-`fetch`). */
   readonly transport?: SlackConversationsTransport;
+  /** `users.info` transport override for DM name resolution (tests inject a fake). */
+  readonly usersTransport?: SlackUsersTransport;
 }
 
 /** One `users.conversations` page fetch, decoupled from `fetch` for tests. */
 export type SlackConversationsTransport = (
   token: string,
   params: Record<string, string>,
+) => Promise<Record<string, unknown>>;
+
+/** One `users.info` fetch (DM name resolution), decoupled from `fetch` for tests. */
+export type SlackUsersTransport = (
+  token: string,
+  userId: string,
 ) => Promise<Record<string, unknown>>;
 
 /** Default transport: a `fetch` GET to `users.conversations` with query params. */
@@ -77,6 +85,58 @@ const defaultTransport: SlackConversationsTransport = async (token, params) => {
   });
   return (await res.json()) as Record<string, unknown>;
 };
+
+/** Default `users.info` transport: a `fetch` GET resolving a user id → profile. */
+const defaultUsersTransport: SlackUsersTransport = async (token, userId) => {
+  const res = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return (await res.json()) as Record<string, unknown>;
+};
+
+/**
+ * Resolve a Slack user id to a human display name (ADR-0011; opshub parity).
+ * Best-effort: profile display name → profile/user real name → handle. Returns
+ * `null` on any failure (missing `users:read`, rate limit) so the caller keeps
+ * the `dm:<id>` fallback rather than erroring. Cached per call.
+ */
+async function resolveUserName(
+  token: string,
+  userId: string,
+  transport: SlackUsersTransport,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  const cached = cache.get(userId);
+  if (cached !== undefined) return cached;
+  let name: string | null = null;
+  try {
+    const body = await transport(token, userId);
+    if (body.ok === true) {
+      const user = body.user as
+        | {
+            name?: string;
+            real_name?: string;
+            profile?: { display_name?: string; real_name?: string };
+          }
+        | undefined;
+      name =
+        firstNonEmpty(user?.profile?.display_name) ??
+        firstNonEmpty(user?.profile?.real_name) ??
+        firstNonEmpty(user?.real_name) ??
+        firstNonEmpty(user?.name) ??
+        null;
+    }
+  } catch {
+    name = null; // resolution is best-effort; keep the id fallback
+  }
+  cache.set(userId, name);
+  return name;
+}
+
+/** Return the value when it is a non-empty string, else `undefined`. */
+function firstNonEmpty(value: string | undefined): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
 
 /** Per-page ceiling (the SDK default and Slack's recommended sweet spot). */
 const PAGE_LIMIT = 200;
@@ -114,12 +174,16 @@ export async function listConversations(
 ): Promise<ConversationsResult> {
   const types = options.types ?? TYPE_ORDER;
   const transport = options.transport ?? defaultTransport;
+  const usersTransport = options.usersTransport ?? defaultUsersTransport;
+  const nameCache = new Map<string, string | null>();
   const conversations: SlackConversation[] = [];
   const missingScopes: Partial<Record<ConversationType, string>> = {};
 
   for (const type of types) {
+    // Collect the whole type first so it can be sorted a-z before output
+    // (opshub default `sort=name` parity); the limit caps the OUTPUT, not the fetch.
+    const typeRows: SlackConversation[] = [];
     let cursor: string | undefined;
-    let stop = false;
     do {
       const params: Record<string, string> = {
         types: API_TYPE[type],
@@ -143,18 +207,30 @@ export async function listConversations(
       }
 
       for (const raw of (body.channels as RawChannel[]) ?? []) {
-        const conv = toConversation(type, raw);
-        if (conv) conversations.push(conv);
-        if (options.limit !== undefined && conversations.length >= options.limit) {
-          stop = true;
-          break;
+        let conv = toConversation(type, raw);
+        if (!conv) continue;
+        // DM rows have no name — resolve the counterpart's display name so the
+        // listing shows a person, not a `dm:U123` id (opshub parity).
+        if (type === "im" && typeof raw.user === "string") {
+          const resolved = await resolveUserName(token, raw.user, usersTransport, nameCache);
+          if (resolved) conv = { ...conv, displayName: `dm:${resolved}` };
         }
+        typeRows.push(conv);
       }
       const meta = body.response_metadata as { next_cursor?: string } | undefined;
-      cursor = !stop && meta?.next_cursor ? meta.next_cursor : undefined;
+      cursor = meta?.next_cursor || undefined;
     } while (cursor);
 
-    if (stop) break;
+    // Sort a-z within the type by display name (case-insensitive), then output.
+    typeRows.sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
+    );
+    for (const conv of typeRows) {
+      conversations.push(conv);
+      if (options.limit !== undefined && conversations.length >= options.limit) {
+        return { conversations, missingScopes };
+      }
+    }
   }
 
   return { conversations, missingScopes };
