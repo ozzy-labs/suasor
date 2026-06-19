@@ -62,6 +62,7 @@ describe("MCP read surface", () => {
         "graph.expand",
         "graph.related",
         "inbox.list",
+        "person.list",
         "propose.list",
         "recall.search",
         "search",
@@ -416,6 +417,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "graph.expand",
         "graph.related",
         "inbox.list",
+        "person.list",
         "propose.list",
         "recall.search",
         "search",
@@ -434,6 +436,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "inbox.triage",
         "link.add",
         "link.remove",
+        "person.merge",
+        "person.split",
       ].sort(),
     );
   });
@@ -452,6 +456,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "inbox.triage",
       "link.add",
       "link.remove",
+      "person.merge",
+      "person.split",
     ];
     for (const name of writeTools) {
       const tool = tools.find((t) => t.name === name);

@@ -11,6 +11,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { DomainEvent } from "../events/types.ts";
+import { identityKey } from "./person.ts";
 
 /** Replace the FTS row for a source (delete-then-insert keeps it consistent). */
 function syncSourceFts(sqlite: Database, externalId: string, body: string): void {
@@ -60,6 +61,36 @@ function markProposalApplied(sqlite: Database, entityId: string, ts: string): vo
       "UPDATE proposals SET state = 'applied', updated_at = ? WHERE entity_id = ? AND state = 'pending'",
     )
     .run(ts, entityId);
+}
+
+/**
+ * Ensure a `persons` row exists (ADR-0022). Inserts with a zero identity count
+ * (the caller adjusts it as identities attach), preserving an existing row's
+ * created_at and only advancing updated_at / a non-empty display name.
+ */
+function ensurePerson(sqlite: Database, personId: string, displayName: string, ts: string): void {
+  sqlite
+    .query(
+      `INSERT INTO persons (id, display_name, identity_count, created_at, updated_at)
+       VALUES ($id, $name, 0, $ts, $ts)
+       ON CONFLICT(id) DO UPDATE SET
+         display_name = CASE WHEN excluded.display_name <> '' THEN excluded.display_name
+                             ELSE persons.display_name END,
+         updated_at   = excluded.updated_at`,
+    )
+    .run({ $id: personId, $name: displayName, $ts: ts });
+}
+
+/** Recompute a person's identity_count from the identities table (replay-safe). */
+function refreshIdentityCount(sqlite: Database, personId: string, ts: string): void {
+  sqlite
+    .query(
+      `UPDATE persons SET
+         identity_count = (SELECT COUNT(*) FROM person_identities WHERE person_id = $id),
+         updated_at = $ts
+       WHERE id = $id`,
+    )
+    .run({ $id: personId, $ts: ts });
 }
 
 /** Apply a single event to the projections. Idempotent under replay. */
@@ -278,6 +309,83 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       // no-op under replay (idempotent) — the write tool guards against removing
       // a non-existent link at the boundary so the host can surface the error.
       sqlite.query("DELETE FROM links WHERE link_id = ?").run(event.linkId);
+      return;
+    }
+    case "PersonIdentityObserved": {
+      // First observation of a (connector, handle) pair binds it to its
+      // content-derived person (1 handle = 1 person, ADR-0022). Idempotent:
+      // re-observing an existing identity does NOT overwrite its person_id, so a
+      // prior merge/split that moved the identity is preserved across replay/sync.
+      const key = identityKey(event.connector, event.handle);
+      const name = event.displayName ?? "";
+      const existing = sqlite
+        .query<{ person_id: string }, [string]>(
+          "SELECT person_id FROM person_identities WHERE identity_key = ?",
+        )
+        .get(key);
+      if (existing === null) {
+        ensurePerson(sqlite, event.personId, name, event.recordedAt);
+        sqlite
+          .query(
+            `INSERT INTO person_identities
+               (identity_key, person_id, connector, handle, display_name, observed_at)
+             VALUES ($key, $pid, $conn, $handle, $name, $ts)`,
+          )
+          .run({
+            $key: key,
+            $pid: event.personId,
+            $conn: event.connector,
+            $handle: event.handle,
+            $name: name,
+            $ts: event.recordedAt,
+          });
+        refreshIdentityCount(sqlite, event.personId, event.recordedAt);
+      } else if (name !== "") {
+        // Keep the latest known display name on both the identity and its
+        // (current) person without re-pointing the identity.
+        sqlite
+          .query("UPDATE person_identities SET display_name = $name WHERE identity_key = $key")
+          .run({ $name: name, $key: key });
+        sqlite
+          .query(
+            `UPDATE persons SET display_name = $name, updated_at = $ts
+             WHERE id = $pid`,
+          )
+          .run({ $name: name, $ts: event.recordedAt, $pid: existing.person_id });
+      }
+      return;
+    }
+    case "PersonsMerged": {
+      // Reassign every identity of the source person to the target, then refresh
+      // both counts. Replay-safe: a re-applied merge finds no source identities
+      // and is a no-op. The emptied source person row is kept (audit) but elided
+      // from person.list by its zero identity_count.
+      if (event.sourcePersonId === event.targetPersonId) return;
+      ensurePerson(sqlite, event.targetPersonId, "", event.recordedAt);
+      sqlite
+        .query("UPDATE person_identities SET person_id = $tgt WHERE person_id = $src")
+        .run({ $tgt: event.targetPersonId, $src: event.sourcePersonId });
+      refreshIdentityCount(sqlite, event.sourcePersonId, event.recordedAt);
+      refreshIdentityCount(sqlite, event.targetPersonId, event.recordedAt);
+      return;
+    }
+    case "PersonSplit": {
+      // Move a single identity to another person (inverse of merge). No-op when
+      // the identity does not exist or already resolves to the new person.
+      const key = identityKey(event.connector, event.handle);
+      const row = sqlite
+        .query<{ person_id: string }, [string]>(
+          "SELECT person_id FROM person_identities WHERE identity_key = ?",
+        )
+        .get(key);
+      if (row === null || row.person_id === event.newPersonId) return;
+      const previousPersonId = row.person_id;
+      ensurePerson(sqlite, event.newPersonId, "", event.recordedAt);
+      sqlite
+        .query("UPDATE person_identities SET person_id = $pid WHERE identity_key = $key")
+        .run({ $pid: event.newPersonId, $key: key });
+      refreshIdentityCount(sqlite, previousPersonId, event.recordedAt);
+      refreshIdentityCount(sqlite, event.newPersonId, event.recordedAt);
       return;
     }
     default: {

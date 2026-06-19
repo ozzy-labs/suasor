@@ -14,6 +14,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
 | `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
+| `person.list` | 解決済み person 一覧 + 各 person の connector identity（`includeEmpty?`、[ADR-0022](../adr/0022-person-identity-resolution.md)） | 実装済み（#92。下記参照） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
 | `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)）。`graph.expand` の `direction` で後方トレース（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)、下記参照） | 実装済み（#71・#90 / #97） |
 
@@ -97,6 +98,16 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 `direction`（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）は各 hop で辿る辺の向きを絞る。既定 `both` は従来挙動（後方互換）。`in` は **incoming のみ**を遡る後方 provenance トレース（opshub `graph trace` 相当 = 「この成果物は何に由来するか」）、`out` は下流の consumer 展開。cycle guard（visited-set）と edge dedup（seenEdges）は direction 適用後も維持する。新ツールは増やさず `graph.expand` の 1 パラメータ追加で表現する（ADR-0020 §決定 3）。
 
+### `person.list`（[ADR-0022](../adr/0022-person-identity-resolution.md)）
+
+解決済み person を新しい更新順（`updated_at` DESC）に列挙し、各 person に紐づく `(connector, handle)` identity を添えて返す read tool（実体は `src/mcp/queries.ts` の `listPersons`、`readOnlyHint: true`）。connector author handle が初期は **1 handle = 1 person** で投影され（自動 fuzzy 同定なし）、operator が `person.merge` / `person.split` で重複を統合する。
+
+| 追加引数 | 戻り値キー |
+|---|---|
+| `includeEmpty?: boolean`（merge で identity が 0 になった person を含めるか。既定 `false`） | `{ "persons": [{ "id", "displayName", "identityCount", "createdAt", "updatedAt", "identities": [{ "connector", "handle", "displayName", "observedAt" }] }] }` |
+
+merge で空になった person は既定で除外（`identity_count > 0`）。`includeEmpty: true` で tombstone も列挙できる。
+
 ### `catchup` skill のバックエンド方針（レビュー D1 確定）
 
 assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の 15 skill 中、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
@@ -121,6 +132,8 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
 | `link.add` | 2 エンティティ間に手動 link を作成（relation `manual_link`） | 実装済み（#90。下記参照） |
 | `link.remove` | 手動 link を id 指定で削除（event・監査可能） | 実装済み（#90。下記参照） |
+| `person.merge` | 2 person を 1 つに統合（identity を target へ付け替え・可逆） | 実装済み（#92。下記参照） |
+| `person.split` | 1 identity を別 person へ分離（merge の逆操作） | 実装済み（#92。下記参照） |
 
 ### `connector.sync`（確定・write / HITL）
 
@@ -330,6 +343,22 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 引数（Zod）: `{ "linkId": string（min 1） }`（`link.add` が返した `linkId`）。
 
 戻り値: `{ "linkId": "link_...", "status": "removed" }`。**存在しない link の remove は tool error で拒否**する（host が誤りを表示できるよう silent no-op しない）。
+
+### `person.merge`（確定・write / HITL・[Issue #92](https://github.com/ozzy-labs/suasor/issues/92)）
+
+2 person を 1 つに統合する write tool（[ADR-0022](../adr/0022-person-identity-resolution.md)）。operator が明示的に「この 2 つは同一人物」と判断する経路で、**自動 fuzzy 同定はしない**（ADR-0022 で却下）。実体は `src/propose/person-merge.ts`。`PersonsMerged` event を append → source person の identity を target に付け替え（source は `identity_count = 0` で空に）。HITL（`readOnlyHint: false`、auto-apply なし）。event log で監査可能・`person.split` で可逆。
+
+引数（Zod）: `{ "targetPersonId": string, "sourcePersonId": string }`（いずれも min 1）。
+
+戻り値: `{ "targetPersonId", "sourcePersonId", "movedIdentities": number, "status": "merged"|"noop" }`。**self-merge（同一 id）/ 未知の source person は tool error**。source が既に空（再 merge）は `noop`（idempotent）。
+
+### `person.split`（確定・write / HITL・[Issue #92](https://github.com/ozzy-labs/suasor/issues/92)）
+
+1 つの `(connector, handle)` identity を現在の person から別 person に分離する write tool（`person.merge` の逆操作、過剰 merge の訂正）。実体は `src/propose/person-split.ts`。`PersonSplit` event を append → identity の `person_id` を付け替え。`newPersonId` 省略時は identity 本来の content 由来 person（`personIdFor(connector, handle)`、= merge を巻き戻す既定の戻り先）に送る。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+引数（Zod）: `{ "connector": string, "handle": string, "newPersonId"?: string }`（`connector` / `handle` は min 1）。
+
+戻り値: `{ "connector", "handle", "newPersonId", "status": "split"|"noop" }`。**未知の identity は tool error**。既に target person に解決済みなら `noop`。
 
 ## Tool introspection（`suasor mcp tools`）
 

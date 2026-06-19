@@ -115,6 +115,24 @@ export function initSchema(sqlite: Database): void {
     CREATE INDEX IF NOT EXISTS idx_links_to   ON links(to_kind, to_id);
     -- Manual links are addressed by their stable link_id (link.remove); index it.
     CREATE INDEX IF NOT EXISTS idx_links_link_id ON links(link_id);
+    -- Person identity resolution (ADR-0022): persons + their connector identities.
+    CREATE TABLE IF NOT EXISTS persons (
+      id             TEXT PRIMARY KEY,
+      display_name   TEXT NOT NULL DEFAULT '',
+      identity_count INTEGER NOT NULL DEFAULT 0,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS person_identities (
+      identity_key TEXT PRIMARY KEY,
+      person_id    TEXT NOT NULL,
+      connector    TEXT NOT NULL,
+      handle       TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      observed_at  TEXT NOT NULL
+    );
+    -- person.list groups identities by person; index the FK for the grouping.
+    CREATE INDEX IF NOT EXISTS idx_person_identities_person ON person_identities(person_id);
   `);
 
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English

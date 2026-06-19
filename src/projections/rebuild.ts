@@ -29,6 +29,8 @@ const PROJECTION_TABLES = [
   "inbox",
   "proposals",
   "links",
+  "persons",
+  "person_identities",
   "sources_fts",
 ];
 

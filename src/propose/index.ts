@@ -9,7 +9,8 @@
  *   - `task.create` is the direct human "add task" path,
  *   - `decision.record` is the direct human "log decision" path,
  *   - `inbox.add` / `inbox.triage` are the daily inbox capture + resolution loop,
- *   - `link.add` / `link.remove` are the manual knowledge-graph link CRUD (#90).
+ *   - `link.add` / `link.remove` are the manual knowledge-graph link CRUD (#90),
+ *   - `person.merge` / `person.split` resolve connector author identities (#92).
  *
  * All are HITL: there is no auto-apply path (ADR-0004 / FR-PRO-2).
  */
@@ -65,6 +66,16 @@ export {
   type LinkRemoveOutput,
   linkRemove,
 } from "./link-remove.ts";
+export {
+  PersonMergeInput,
+  type PersonMergeOutput,
+  personMerge,
+} from "./person-merge.ts";
+export {
+  PersonSplitInput,
+  type PersonSplitOutput,
+  personSplit,
+} from "./person-split.ts";
 export {
   ProposeRejectInput,
   type ProposeRejectOutput,

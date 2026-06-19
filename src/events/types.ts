@@ -184,6 +184,62 @@ export const LinkRemoved = z.object({
   linkId: z.string().min(1),
 });
 
+/**
+ * A connector author handle was observed and bound to a person (ADR-0022).
+ *
+ * Emitted by the sync service the first time it sees a `(connector, handle)`
+ * pair on an ingested source. Initial policy is **1 handle = 1 person** (no
+ * automatic fuzzy de-duplication): `personId` is content-derived from the
+ * `(connector, handle)` pair, so re-observing the same handle is idempotent and
+ * never resurrects a person an operator has since merged away. Operators
+ * collapse duplicates explicitly via `PersonsMerged` / `PersonSplit` (HITL).
+ */
+export const PersonIdentityObserved = z.object({
+  type: z.literal("PersonIdentityObserved"),
+  ...Envelope,
+  /** Person this identity initially binds to (content-derived from the handle). */
+  personId: z.string().min(1),
+  /** Connector that surfaced the handle (e.g. "github", "slack"). */
+  connector: z.string().min(1),
+  /** Author handle as the connector reports it (login / `Uxxxx` / address). */
+  handle: z.string().min(1),
+  /** Optional human-readable display name for the handle, when known. */
+  displayName: z.string().optional(),
+});
+
+/**
+ * Two persons were merged into one by an operator (ADR-0022, HITL — ADR-0004).
+ *
+ * Every identity of `sourcePersonId` is reassigned to `targetPersonId`; the
+ * source person is left with no identities. Recorded as an event so the merge
+ * is auditable and reversible — a later `PersonSplit` moves an identity back
+ * out (no fuzzy auto-merge ever happens; only explicit operator actions).
+ */
+export const PersonsMerged = z.object({
+  type: z.literal("PersonsMerged"),
+  ...Envelope,
+  /** Person that absorbs the other's identities (survives). */
+  targetPersonId: z.string().min(1),
+  /** Person whose identities move to the target (emptied). */
+  sourcePersonId: z.string().min(1),
+});
+
+/**
+ * One identity was split off an existing person into another person (ADR-0022,
+ * HITL — ADR-0004). The inverse of a merge: corrects an over-merge by moving a
+ * single `(connector, handle)` identity to `newPersonId` (created on demand).
+ */
+export const PersonSplit = z.object({
+  type: z.literal("PersonSplit"),
+  ...Envelope,
+  /** Connector of the identity being moved out. */
+  connector: z.string().min(1),
+  /** Handle of the identity being moved out. */
+  handle: z.string().min(1),
+  /** Person the identity is moved to (created if it does not yet exist). */
+  newPersonId: z.string().min(1),
+});
+
 /** Discriminated union of all domain events (ADR-0002). */
 export const DomainEvent = z.discriminatedUnion("type", [
   SourceObserved,
@@ -198,6 +254,9 @@ export const DomainEvent = z.discriminatedUnion("type", [
   ProposalRejected,
   LinkAdded,
   LinkRemoved,
+  PersonIdentityObserved,
+  PersonsMerged,
+  PersonSplit,
 ]);
 export type DomainEvent = z.infer<typeof DomainEvent>;
 
@@ -215,6 +274,9 @@ export const EVENT_TYPES = [
   "ProposalRejected",
   "LinkAdded",
   "LinkRemoved",
+  "PersonIdentityObserved",
+  "PersonsMerged",
+  "PersonSplit",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -234,4 +296,7 @@ export type NewEvent =
   | Omit<z.input<typeof ProposalGenerated>, "id" | "recordedAt">
   | Omit<z.input<typeof ProposalRejected>, "id" | "recordedAt">
   | Omit<z.input<typeof LinkAdded>, "id" | "recordedAt">
-  | Omit<z.input<typeof LinkRemoved>, "id" | "recordedAt">;
+  | Omit<z.input<typeof LinkRemoved>, "id" | "recordedAt">
+  | Omit<z.input<typeof PersonIdentityObserved>, "id" | "recordedAt">
+  | Omit<z.input<typeof PersonsMerged>, "id" | "recordedAt">
+  | Omit<z.input<typeof PersonSplit>, "id" | "recordedAt">;
