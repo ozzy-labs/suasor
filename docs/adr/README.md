@@ -52,3 +52,8 @@ NNNN-kebab-case-title.md
 | 0009 | Multi-agent neutrality |
 | 0010 | Distribution |
 | 0011 | Slack operational verbs (auth test / conversations) and readiness |
+| 0012 | Slack demand digest (mention/DM signal) + `slack.demand.list` |
+| 0013 | Slack engagement axis (search.messages / last_self_post, User Token) |
+| 0014 | Slack multi-workspace (`[connectors.slack.workspaces.<alias>]`) |
+| 0015 | Slack thread replies ingestion (`conversations.replies`) |
+| 0016 | Slack sync date floor + cursor reset/backfill recovery verbs |
