@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/ozzy-labs/suasor/compare/v0.1.4...v0.1.5) (2026-06-19)
+
+
+### Features
+
+* **slack:** rate-limit retry for fetch paths (Retry-After, ADR-0019) ([#81](https://github.com/ozzy-labs/suasor/issues/81)) ([5b8e3e4](https://github.com/ozzy-labs/suasor/commit/5b8e3e40e7f8fadc2ea99bfc552e24a2329ca624))
+
 ## [0.1.4](https://github.com/ozzy-labs/suasor/compare/v0.1.3...v0.1.4) (2026-06-19)
 
 
