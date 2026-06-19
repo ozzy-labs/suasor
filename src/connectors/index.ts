@@ -17,6 +17,7 @@ export type {
 } from "./contract.ts";
 export {
   connectorNames,
+  connectorSecretNames,
   hasConnector,
   loadConnector,
 } from "./registry.ts";

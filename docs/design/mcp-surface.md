@@ -194,6 +194,12 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 
 戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来で、同一内容の再作成は `existing`（no-op、idempotent）。
 
+## Tool introspection（`suasor mcp tools`）
+
+`suasor mcp tools [--json]` は上記 tool surface を **server を起動せず**列挙する（name / read·write 区分 = `readOnlyHint` / 1 行概要）。ドキュメント生成や surface のスモークチェック用途で、Store も開かず副作用もない（[cli](cli.md)）。
+
+カタログのデータ SSOT は `src/mcp/tool-catalog.ts`（read tool 群 + writable store 供給時のみ登録される write/HITL tool 群）。入力 schema・ハンドラの正本は引き続き `src/mcp/server.ts` の Zod 登録コード。両者の drift は `tests/mcp/tool-catalog.test.ts` が実際に登録される server の tool（name / `readOnlyHint`）と突き合わせて防ぐ（full / read-only deployment の両 surface を検証）。
+
 ## 規約
 
 - read = `readOnlyHint: true`（副作用なし）。write = HITL（auto-apply 経路を持たない）

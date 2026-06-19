@@ -198,6 +198,7 @@ browser = "chromium"                     # chromium | firefox | webkit
 
 1. `src/connectors/<name>.ts` に `Connector` 実装と factory を書く（SDK は `sync` 内で lazy import）
 2. `src/connectors/registry.ts` に `<name>: () => import("./<name>.ts")` を 1 行追加する
-3. `[connectors.<name>]` の config slice を connector 側で Zod 検証する
+3. `src/connectors/registry.ts` の `SECRET_NAMES` に connector が `ctx.secret(...)` で読む secret 名を登録する（auth 不要なら `[]`）。`suasor connectors list` の token 設定有無 introspection がこれを参照する
+4. `[connectors.<name>]` の config slice を connector 側で Zod 検証する
 
-CLI `suasor <name> sync` と MCP `connector.sync` は registry から自動的に利用可能になる。
+CLI `suasor <name> sync` と MCP `connector.sync` は registry から自動的に利用可能になり、`suasor connectors list` にも自動で並ぶ。
