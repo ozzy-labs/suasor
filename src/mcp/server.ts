@@ -5,14 +5,16 @@
  * read half: `search` (FTS5), `recall.search` (semantic vec0 KNN when an
  * embedding backend is enabled, else the `embedding_disabled` signal — #11),
  * `source.list` / `source.get`, `task.list` / `decision.list` / `inbox.list`,
- * and `propose.list` (the proposal ledger by state, #89). The write tools —
+ * `propose.list` (the proposal ledger by state, #89), and `commitment.list` (the
+ * commitment ledger by state, ADR-0021). The write tools —
  * `connector.sync` (read-only ingest, ADR-0007 / #10), `propose.generate` /
  * `propose.apply` / `propose.reject` (HITL candidate generation + application +
  * rejection, #12 / #89), `task.create` (direct task creation, #12 追補 D2), the
  * direct daily-loop writes `decision.record` / `inbox.add` / `inbox.triage`
- * (Issue #88), and the manual knowledge-graph link CRUD `link.add` /
- * `link.remove` (Issue #90) — are registered when a writable `Store` + config
- * are supplied.
+ * (Issue #88), the manual knowledge-graph link CRUD `link.add` / `link.remove`
+ * (Issue #90), and the commitment ledger lifecycle `commitment.resolve` /
+ * `.dismiss` / `.reopen` (ADR-0021) — are registered when a writable `Store` +
+ * config are supplied.
  * Write tools carry `readOnlyHint: false` so hosts gate them behind HITL (no
  * auto-apply, ADR-0004 / FR-PRO-2).
  *
@@ -40,6 +42,7 @@ import {
   PROPOSE_MODES,
   ProposeMode as ProposeModeSchema,
 } from "../propose/candidates.ts";
+import { commitmentDismiss, commitmentReopen, commitmentResolve } from "../propose/commitment.ts";
 import { decisionRecord } from "../propose/decision-record.ts";
 import { persistProposals } from "../propose/generate.ts";
 import { inboxAdd } from "../propose/inbox-add.ts";
@@ -63,6 +66,7 @@ import {
   DEFAULT_LIST_LIMIT,
   expandGraph,
   getSource,
+  listCommitments,
   listDecisions,
   listInbox,
   listLinks,
@@ -163,9 +167,11 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
         "propose.generate, propose.apply, propose.reject, task.create, decision.record, " +
-        "inbox.add, inbox.triage, link.add, link.remove) are HITL: gate them behind human " +
+        "inbox.add, inbox.triage, link.add, link.remove, commitment.resolve, " +
+        "commitment.dismiss, commitment.reopen) are HITL: gate them behind human " +
         "approval, never auto-apply. propose.list (read) shows the candidate ledger by " +
-        "state for the approve/reject loop.",
+        "state for the approve/reject loop; commitment.list (read) shows the commitment " +
+        "ledger by state for the resolve/dismiss/reopen loop.",
     },
   );
 
@@ -524,6 +530,46 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
+  // --- commitment.list: read the commitment ledger by state (ADR-0021). ---
+  // Read tool (readOnlyHint: true): outstanding "約束/コミットメント" so a host
+  // can surface them as a "やるべきこと" priority signal alongside Slack demand
+  // in next-actions / personal-brief. Filter by state and direction.
+  server.registerTool(
+    "commitment.list",
+    {
+      title: "List commitments",
+      description:
+        "List commitments most-recently-updated first, optionally filtered by " +
+        "state (open / resolved / dismissed) and direction (owed_by_me / " +
+        "owed_to_me). Read-only: the visibility half of the commitment ledger " +
+        "(ADR-0021). Use as a priority signal in next-actions / personal-brief; " +
+        "the resolve/dismiss/reopen lifecycle lives in separate write tools.",
+      inputSchema: {
+        state: z
+          .enum(["open", "resolved", "dismissed"])
+          .optional()
+          .describe("Filter by lifecycle state (default: all)."),
+        direction: z
+          .enum(["owed_by_me", "owed_to_me"])
+          .optional()
+          .describe("Filter by direction (default: both)."),
+        updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
+        updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
+        limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ state, direction, updatedAfter, updatedBefore, limit }) => {
+      const commitments = listCommitments(sqlite, {
+        ...(state ? { state } : {}),
+        ...(direction ? { direction } : {}),
+        updated: { after: updatedAfter, before: updatedBefore },
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult({ commitments });
+    },
+  );
+
   // --- connector.sync: read-only ingest into the local store (WRITE / HITL). ---
   // Registered only when a writable store is supplied. `readOnlyHint: false`
   // marks it as a write tool so hosts gate it behind human approval (ADR-0004);
@@ -851,6 +897,73 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           }
           throw error;
         }
+      },
+    );
+
+    // --- commitment.resolve / .dismiss / .reopen: ledger lifecycle (ADR-0021). ---
+    // The state-transition half of the commitment ledger. Extraction rides the
+    // `commitment_scan` propose mode (→ CommitmentOpened); these three move a
+    // commitment through its lifecycle. Each appends a Commitment* event. HITL,
+    // status-reporting (no throw): a no-op/invalid/missing transition is reported
+    // in the result so the host can surface it without a crash.
+    server.registerTool(
+      "commitment.resolve",
+      {
+        title: "Resolve commitment",
+        description:
+          "Mark an open commitment fulfilled (appends CommitmentResolved → open → " +
+          "resolved). Write tool: requires human approval — no auto-apply (ADR-0004). " +
+          "Idempotent: an already-resolved commitment is a no-op; a dismissed one is " +
+          "reported invalid_state (reopen first); a missing one is reported missing.",
+        inputSchema: {
+          commitmentId: z.string().min(1).describe("Commitment id from commitment.list."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ commitmentId }) => {
+        const result = commitmentResolve(write.store, { commitmentId });
+        return jsonResult(result);
+      },
+    );
+
+    server.registerTool(
+      "commitment.dismiss",
+      {
+        title: "Dismiss commitment",
+        description:
+          "Dismiss an open commitment as a false-positive / no longer relevant " +
+          "(appends CommitmentDismissed → open → dismissed). Write tool: requires " +
+          "human approval — no auto-apply (ADR-0004). Idempotent: an already-dismissed " +
+          "commitment is a no-op; a resolved one is reported invalid_state (reopen " +
+          "first); a missing one is reported missing.",
+        inputSchema: {
+          commitmentId: z.string().min(1).describe("Commitment id from commitment.list."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ commitmentId }) => {
+        const result = commitmentDismiss(write.store, { commitmentId });
+        return jsonResult(result);
+      },
+    );
+
+    server.registerTool(
+      "commitment.reopen",
+      {
+        title: "Reopen commitment",
+        description:
+          "Move a resolved / dismissed commitment back to open (appends " +
+          "CommitmentReopened). Write tool: requires human approval — no auto-apply " +
+          "(ADR-0004). Idempotent: an already-open commitment is a no-op; a missing " +
+          "one is reported missing.",
+        inputSchema: {
+          commitmentId: z.string().min(1).describe("Commitment id from commitment.list."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ commitmentId }) => {
+        const result = commitmentReopen(write.store, { commitmentId });
+        return jsonResult(result);
       },
     );
   }

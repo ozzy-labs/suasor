@@ -74,6 +74,31 @@ export const proposals = sqliteTable("proposals", {
 });
 
 /**
+ * Commitment ledger (ADR-0021). One row per extracted/confirmed commitment
+ * ("約束/コミットメント"), tracking its state through the HITL lifecycle:
+ *   - `open`      — confirmed and outstanding (commitment.list shows it)
+ *   - `resolved`  — fulfilled (commitment.resolve)
+ *   - `dismissed` — a false-positive / no-longer-relevant (commitment.dismiss)
+ * `direction` records who owes whom (owed_by_me / owed_to_me); `dueDate` and
+ * `person` are optional context. Folded from the `Commitment*` events; matched
+ * back to its source(s) via the `links` projection. Rebuildable (ADR-0002).
+ */
+export const commitments = sqliteTable("commitments", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  /** Who owes whom: "owed_by_me" / "owed_to_me". */
+  direction: text("direction").notNull(),
+  /** Lifecycle state: open / resolved / dismissed. */
+  state: text("state").notNull().default("open"),
+  /** Optional due date (ISO 8601); NULL when the commitment has none. */
+  dueDate: text("due_date"),
+  /** Optional related person (free-form / person id); NULL when unknown. */
+  person: text("person"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
  * Relation graph between projection entities (provenance links).
  * e.g. task → source, decision → source, reply_draft → source.
  *

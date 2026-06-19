@@ -2,18 +2,20 @@
  * Projection read queries backing the MCP read tools (ADR-0004, #8).
  *
  * Pure, side-effect-free SELECTs over the projection tables (`sources` /
- * `tasks` / `decisions` / `inbox` / `proposals`) that the MCP `source.list` /
- * `source.get` / `task.list` / `decision.list` / `inbox.list` / `propose.list`
- * read tools wrap. Read tools must have no side effects (ADR-0004
- * `read = destructive:false`), so every function here only reads.
+ * `tasks` / `decisions` / `inbox` / `proposals` / `commitments`) that the MCP
+ * `source.list` / `source.get` / `task.list` / `decision.list` / `inbox.list` /
+ * `propose.list` / `commitment.list` read tools wrap. Read tools must have no
+ * side effects (ADR-0004 `read = destructive:false`), so every function here
+ * only reads.
  *
  * Time filters target each projection's natural timestamp column (the same
  * physical column the assistant skills filter on, docs/skills/README.md):
- *   - sources    → `observed_at`   (observed_after / observed_before)
- *   - tasks      → `updated_at`     (updated_after / updated_before)
- *   - decisions  → `recorded_at`    (recorded_after / recorded_before)
- *   - inbox      → `updated_at`     (updated_after / updated_before)
- *   - proposals  → `updated_at`     (updated_after / updated_before)
+ *   - sources     → `observed_at`   (observed_after / observed_before)
+ *   - tasks       → `updated_at`     (updated_after / updated_before)
+ *   - decisions   → `recorded_at`    (recorded_after / recorded_before)
+ *   - inbox       → `updated_at`     (updated_after / updated_before)
+ *   - proposals   → `updated_at`     (updated_after / updated_before)
+ *   - commitments → `updated_at`     (updated_after / updated_before)
  * Bounds are inclusive on the lower end and exclusive on the upper end so
  * adjacent ranges don't double-count, and compare ISO 8601 strings
  * lexicographically (valid because the stored timestamps are zero-padded UTC).
@@ -363,6 +365,88 @@ export function listProposals(
     summary: r.summary,
     state: r.state,
     reason: r.reason,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+}
+
+/** A commitment ledger row (ADR-0021). */
+export interface CommitmentRecord {
+  id: string;
+  title: string;
+  /** Who owes whom: "owed_by_me" / "owed_to_me". */
+  direction: string;
+  /** Lifecycle state: open / resolved / dismissed. */
+  state: string;
+  /** Optional due date (ISO 8601); null when the commitment has none. */
+  dueDate: string | null;
+  /** Optional related person; null when unknown. */
+  person: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CommitmentRow {
+  id: string;
+  title: string;
+  direction: string;
+  state: string;
+  due_date: string | null;
+  person: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListCommitmentsOptions {
+  /** Restrict to a lifecycle state (open / resolved / dismissed). */
+  state?: string;
+  /** Restrict to a direction (owed_by_me / owed_to_me). */
+  direction?: string;
+  /** Window over `updated_at`. */
+  updated?: TimeRange;
+  limit?: number;
+}
+
+/**
+ * List commitments most-recently-updated first, optionally filtered by lifecycle
+ * state (open/resolved/dismissed) and direction (owed_by_me/owed_to_me). Backs
+ * `commitment.list` — the read half of the commitment ledger (ADR-0021), so
+ * `brief` / `next-actions` skills can surface "やるべきこと" alongside demand.
+ * Pure SELECT.
+ */
+export function listCommitments(
+  sqlite: Database,
+  options: ListCommitmentsOptions = {},
+): CommitmentRecord[] {
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (options.state !== undefined) {
+    clauses.push("state = ?");
+    params.push(options.state);
+  }
+  if (options.direction !== undefined) {
+    clauses.push("direction = ?");
+    params.push(options.direction);
+  }
+  pushTimeRange(clauses, params, "updated_at", options.updated);
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  params.push(options.limit ?? DEFAULT_LIST_LIMIT);
+  const rows = sqlite
+    .query<CommitmentRow, (string | number)[]>(
+      `SELECT id, title, direction, state, due_date, person, created_at, updated_at
+         FROM commitments
+         ${where}
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+    )
+    .all(...params);
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    direction: r.direction,
+    state: r.state,
+    dueDate: r.due_date,
+    person: r.person,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));

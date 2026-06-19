@@ -11,6 +11,7 @@
  *   - `decision`    → `DecisionRecorded`
  *   - `reply_draft` → `ReplyDraftProposed`
  *   - `triage`      → `InboxItemTriaged`
+ *   - `commitment`  → `CommitmentOpened` (ADR-0021)
  *
  * Idempotence (the issue's acceptance criterion): each candidate's target entity
  * id is content-derived (id.ts), and apply first checks the projection for that
@@ -70,6 +71,10 @@ function entityExists(store: Store, candidate: Candidate, id: string): boolean {
         sqlite.query("SELECT 1 FROM inbox WHERE id = ? AND state = ?").get(id, candidate.state) !==
         null
       );
+    case "commitment":
+      // A commitment already in the ledger (any state) is a no-op: re-extracting
+      // it must not resurrect a resolved/dismissed one nor duplicate an open one.
+      return sqlite.query("SELECT 1 FROM commitments WHERE id = ?").get(id) !== null;
   }
 }
 
@@ -104,6 +109,16 @@ function candidateToEvent(candidate: Candidate, id: string): NewEvent {
         inboxId: id,
         sourceExternalId: candidate.sourceExternalId,
         state: candidate.state,
+      };
+    case "commitment":
+      return {
+        type: "CommitmentOpened",
+        commitmentId: id,
+        title: candidate.title,
+        direction: candidate.direction,
+        dueDate: candidate.dueDate,
+        person: candidate.person,
+        sourceExternalIds: candidate.sourceExternalIds,
       };
   }
 }

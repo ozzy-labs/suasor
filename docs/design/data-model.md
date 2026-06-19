@@ -19,6 +19,8 @@
   - `ProposalRejected` — pending 候補の却下（`reason` 付き、#89）
   - `LinkAdded` — 手動 link の作成（`linkId` + 端点。relation `manual_link`、[ADR-0018](../adr/0018-knowledge-graph-traversal.md) 追補 / #90）
   - `LinkRemoved` — 手動 link の削除（`linkId` 指定・監査可能）
+  - `CommitmentOpened` — commitment の確定登録（`commitmentId` / `title` / `direction`（owed_by_me / owed_to_me）/ `dueDate?` / `person?` + provenance、[ADR-0021](../adr/0021-commitment-ledger.md) / #91）
+  - `CommitmentResolved` / `CommitmentDismissed` / `CommitmentReopened` — commitment の状態遷移（open ⇄ resolved / dismissed、HITL）
 - 共通エンベロープ: `id`（ULID 風・時刻順ソート可）/ `recordedAt`（ISO 8601・store 時刻）/ `schemaVersion`
 - append 経路は raw SQL（`bun:sqlite`、`src/db/events-table.ts`）。replay 順序は `seq`（AUTOINCREMENT）が正本
 - 生 event を読み取り用途で直接引かない（projection 経由）
@@ -32,6 +34,7 @@
   - `decisions` — `id`(PK) / `title` / `rationale` / `recorded_at`
   - `inbox` — `id`(PK) / `source_external_id` / `state` / `updated_at`
   - `proposals` — `candidate_id`(PK) / `mode` / `kind` / `entity_id` / `summary` / `state`（pending / applied / rejected）/ `reason` / `created_at` / `updated_at`（提案 lifecycle ledger、#89。`propose.list` が読む）
+  - `commitments` — `id`(PK) / `title` / `direction`（owed_by_me / owed_to_me）/ `state`（open / resolved / dismissed）/ `due_date` / `person` / `created_at` / `updated_at`（commitment 台帳、[ADR-0021](../adr/0021-commitment-ledger.md) / #91。`commitment.list` が読む）
   - `links` — `id`(PK, autoinc) / `from_kind` / `from_id` / `to_kind` / `to_id` / `relation` / `link_id`（関連グラフ・provenance）。reducer 由来エッジ（`derived_from` / `replies_to` / `references`）は `link_id` が NULL、手動 link（`manual_link`、`link.add` / `link.remove`、[ADR-0018](../adr/0018-knowledge-graph-traversal.md) 追補 / #90）は安定 `link_id` を持ち id 指定で削除可能
 - `sources_fts`（FTS5 仮想テーブル、`tokenize='trigram'` で JA/EN substring）/ `embeddings_vec_default`（`sqlite-vec` vec0、任意）/ `embeddings_meta`（vec0 と並ぶ provenance サイドカー: `external_id`(PK) / `model_id` / `model_version` / `embedded_at`。各ベクトルを生成した model を記録し、`embeddings status` / `rebuild` / `drain`（#87）の drift 検出に使う・[ADR-0006](../adr/0006-ml-delegation.md)）。いずれも init 時に raw DDL で作成（drizzle-kit 管理外・event ではない派生 substrate）
 - **`suasor projections rebuild`** で全 event を replay し projection を同値復元（rebuild idempotence、FR-MNT-1）

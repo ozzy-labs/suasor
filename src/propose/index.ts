@@ -9,7 +9,9 @@
  *   - `task.create` is the direct human "add task" path,
  *   - `decision.record` is the direct human "log decision" path,
  *   - `inbox.add` / `inbox.triage` are the daily inbox capture + resolution loop,
- *   - `link.add` / `link.remove` are the manual knowledge-graph link CRUD (#90).
+ *   - `link.add` / `link.remove` are the manual knowledge-graph link CRUD (#90),
+ *   - `commitment.resolve` / `.dismiss` / `.reopen` drive the commitment ledger
+ *     lifecycle (ADR-0021); extraction rides the `commitment_scan` propose mode.
  *
  * All are HITL: there is no auto-apply path (ADR-0004 / FR-PRO-2).
  */
@@ -24,12 +26,21 @@ export {
   Candidate,
   CandidateInput,
   type CandidateKind,
+  COMMITMENT_DIRECTIONS,
+  CommitmentDirection,
   MODE_ALLOWED_KINDS,
   PROPOSE_MODES,
   ProposeMode,
   TRIAGE_STATES,
   type TriageState,
 } from "./candidates.ts";
+export {
+  CommitmentTransitionInput,
+  type CommitmentTransitionOutput,
+  commitmentDismiss,
+  commitmentReopen,
+  commitmentResolve,
+} from "./commitment.ts";
 export {
   DecisionRecordInput,
   type DecisionRecordOutput,

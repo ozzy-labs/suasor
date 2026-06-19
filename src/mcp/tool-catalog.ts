@@ -73,6 +73,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: true,
     summary: "List proposal candidates by state (pending/applied/rejected).",
   },
+  {
+    name: "commitment.list",
+    readOnlyHint: true,
+    summary: "List commitments by state (open/resolved/dismissed) and direction.",
+  },
 ];
 
 /**
@@ -125,6 +130,21 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     name: "link.remove",
     readOnlyHint: false,
     summary: "Remove a manual link by id (LinkRemoved).",
+  },
+  {
+    name: "commitment.resolve",
+    readOnlyHint: false,
+    summary: "Mark an open commitment fulfilled (CommitmentResolved).",
+  },
+  {
+    name: "commitment.dismiss",
+    readOnlyHint: false,
+    summary: "Dismiss an open commitment as a false-positive (CommitmentDismissed).",
+  },
+  {
+    name: "commitment.reopen",
+    readOnlyHint: false,
+    summary: "Reopen a resolved/dismissed commitment back to open (CommitmentReopened).",
   },
 ];
 

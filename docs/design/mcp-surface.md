@@ -13,6 +13,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
+| `commitment.list` | commitment 台帳一覧（state: `open` / `resolved` / `dismissed`、direction: `owed_by_me` / `owed_to_me` フィルタ可、[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
 | `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
 | `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)）。`graph.expand` の `direction` で後方トレース（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)、下記参照） | 実装済み（#71・#90 / #97） |
@@ -112,7 +113,7 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | tool | 役割 | 状態 |
 |---|---|---|
 | `connector.sync` | 取り込み実行 | 実装済み（#10。下記参照） |
-| `propose.generate` | 返信/タスク/決定/仕分けの候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage`）。候補を `proposals` ledger に `pending` 記録 | 実装済み（#12 / #89。下記参照） |
+| `propose.generate` | 返信/タスク/決定/仕分け/commitment の候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage` / `commitment_scan`）。候補を `proposals` ledger に `pending` 記録 | 実装済み（#12 / #89 / #91。下記参照） |
 | `propose.apply` | 承認された候補のみ適用（idempotent）。適用で ledger を `applied` に遷移 | 実装済み（#12 / #89。下記参照） |
 | `propose.reject` | pending 候補を理由付きで却下（ledger を `rejected` に遷移、idempotent） | 実装済み（#89。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
@@ -121,6 +122,9 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
 | `link.add` | 2 エンティティ間に手動 link を作成（relation `manual_link`） | 実装済み（#90。下記参照） |
 | `link.remove` | 手動 link を id 指定で削除（event・監査可能） | 実装済み（#90。下記参照） |
+| `commitment.resolve` | open の commitment を fulfilled に遷移（[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
+| `commitment.dismiss` | open の commitment を誤検出/不要として却下 | 実装済み（#91。下記参照） |
+| `commitment.reopen` | resolved/dismissed の commitment を open に戻す | 実装済み（#91。下記参照） |
 
 ### `connector.sync`（確定・write / HITL）
 
@@ -176,7 +180,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 
 | 引数 | 型 | 説明 |
 |---|---|---|
-| `mode` | `enum`（必須） | `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage` |
+| `mode` | `enum`（必須） | `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage` / `commitment_scan` |
 | `candidates` | `Candidate[]`（min 1） | ホストが生成した候補配列 |
 
 候補（`candidates[]`）は `kind` による判別共用体。各 mode が出せる kind は対応するアシスタント skill のフロー（[docs/skills/](../skills/)）に一致する:
@@ -187,6 +191,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | `source_extract` | `task` / `decision` / `reply_draft` |
 | `meeting_followup` | `task` / `decision` |
 | `inbox_triage` | `task` / `decision` / `triage` |
+| `commitment_scan` | `commitment` |
 
 各 kind の形（適用先 event に 1:1 対応）:
 
@@ -196,6 +201,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | `decision` | `title` / `rationale` / `sourceExternalIds[]` | `DecisionRecorded` |
 | `reply_draft` | `replyToExternalId` / `body` | `ReplyDraftProposed` |
 | `triage` | `inboxId` / `sourceExternalId` / `state`（`snoozed` / `done` / `dismissed`） | `InboxItemTriaged` |
+| `commitment` | `title` / `direction`（`owed_by_me` / `owed_to_me`） / `dueDate?` / `person?` / `sourceExternalIds[]` | `CommitmentOpened` |
 
 戻り値: `{ "mode": "...", "candidates": [{ "candidateId": "cand_...", "kind": "...", ... }] }`（候補は inert・未適用）。許可されない kind は tool error。
 
@@ -330,6 +336,31 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 引数（Zod）: `{ "linkId": string（min 1） }`（`link.add` が返した `linkId`）。
 
 戻り値: `{ "linkId": "link_...", "status": "removed" }`。**存在しない link の remove は tool error で拒否**する（host が誤りを表示できるよう silent no-op しない）。
+
+### commitment 台帳（確定・[ADR-0021](../adr/0021-commitment-ledger.md)・[Issue #91](https://github.com/ozzy-labs/suasor/issues/91)）
+
+取り込み済み source から LLM で抽出した「約束/コミットメント」（"X までに Y する" の類）を `open` / `resolved` / `dismissed` で HITL 管理する台帳。**抽出は専用 LLM 経路を新設せず propose パイプラインに寄せる**（[ADR-0006](../adr/0006-ml-delegation.md) ML 委譲境界を 1 本に保つ）: `propose.generate` の `commitment_scan` mode が `commitment` 候補を出し、`propose.apply` が `CommitmentOpened` を append して台帳に `open` で登録する。read は `commitment.list`、状態遷移は専用 write tool 群。
+
+```text
+commitment_scan (propose.generate → propose.apply)
+        │ CommitmentOpened
+        ▼
+     ┌──────┐  commitment.resolve   ┌──────────┐
+     │ open │ ────────────────────▶ │ resolved │
+     └──────┘                       └──────────┘
+        │ commitment.dismiss     ▲        │
+        ▼                        │        │ commitment.reopen
+   ┌───────────┐  commitment.reopen       │
+   │ dismissed │ ◀────────────────────────┘
+   └───────────┘
+```
+
+- **`commitment.list`（read）**: `open` / `resolved` / `dismissed` の state と `owed_by_me` / `owed_to_me` の direction でフィルタ。`updated_at` の時間フィルタ可。`brief` / `next-actions` skill が demand と並べて「やるべきこと」signal として取り込める。
+- **`commitment.resolve`（write / HITL）**: `open` → `resolved`（`CommitmentResolved` append）。idempotent（既 `resolved` は no-op）。`dismissed` からは `invalid_state`（先に reopen）、該当なしは `missing`。
+- **`commitment.dismiss`（write / HITL）**: `open` → `dismissed`（誤検出/不要、`CommitmentDismissed` append）。idempotent。`resolved` からは `invalid_state`、該当なしは `missing`。
+- **`commitment.reopen`（write / HITL）**: `resolved` / `dismissed` → `open`（`CommitmentReopened` append）。既 `open` は no-op、該当なしは `missing`。
+
+commitment id は content 由来（`title` + `direction` + provenance）なので、同一 commitment の再抽出は台帳上 no-op（idempotent）で `resolved` / `dismissed` を `open` に蘇生させない。`dueDate` / `person` は可変 context として id に含めない。
 
 ## Tool introspection（`suasor mcp tools`）
 

@@ -98,6 +98,18 @@ export function initSchema(sqlite: Database): void {
     );
     -- propose.apply flips a pending proposal to applied by matching entity_id.
     CREATE INDEX IF NOT EXISTS idx_proposals_entity ON proposals(entity_id);
+    CREATE TABLE IF NOT EXISTS commitments (
+      id          TEXT PRIMARY KEY,
+      title       TEXT NOT NULL,
+      direction   TEXT NOT NULL,
+      state       TEXT NOT NULL DEFAULT 'open',
+      due_date    TEXT,
+      person      TEXT,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
+    -- commitment.list filters by state (open/resolved/dismissed); index it.
+    CREATE INDEX IF NOT EXISTS idx_commitments_state ON commitments(state);
     CREATE TABLE IF NOT EXISTS links (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       from_kind TEXT NOT NULL,
