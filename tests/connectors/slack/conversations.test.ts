@@ -4,13 +4,19 @@ import {
   listConversations,
   renderConfigBlock,
   type SlackConversationsTransport,
+  type SlackUsersTransport,
 } from "../../../src/connectors/slack/conversations.ts";
 
-/** Build a transport that returns a fixed body per requested `types` param. */
+/** Build a conversations transport (+ users.info transport) for tests. */
 function fakeConvos(
   byType: Partial<Record<string, Record<string, unknown>[]>>,
   errors: Partial<Record<string, Record<string, unknown>>> = {},
-): { transport: SlackConversationsTransport; calls: Record<string, string>[] } {
+  users: Record<string, Record<string, unknown>> = {},
+): {
+  transport: SlackConversationsTransport;
+  usersTransport: SlackUsersTransport;
+  calls: Record<string, string>[];
+} {
   const calls: Record<string, string>[] = [];
   const transport: SlackConversationsTransport = async (_token, params) => {
     calls.push(params);
@@ -18,25 +24,73 @@ function fakeConvos(
     if (errors[apiType]) return errors[apiType] as Record<string, unknown>;
     return { ok: true, channels: byType[apiType] ?? [] };
   };
-  return { transport, calls };
+  // users.info: resolve a known user, else report not-found (→ id fallback).
+  const usersTransport: SlackUsersTransport = async (_token, userId) =>
+    users[userId] ? { ok: true, user: users[userId] } : { ok: false, error: "user_not_found" };
+  return { transport, usersTransport, calls };
 }
 
 describe("conversations — listConversations", () => {
-  test("enumerates each type and labels channels / DMs / mpims", async () => {
-    const { transport } = fakeConvos({
-      public_channel: [{ id: "C1", name: "general", is_archived: false }],
-      private_channel: [{ id: "G1", name: "secret" }],
-      im: [{ id: "D1", user: "U9" }],
-      mpim: [{ id: "G2", name: "mpdm-a--b--c" }],
-    });
-    const result = await listConversations("xoxb", { transport });
+  test("enumerates each type and labels channels / DMs (resolved name) / mpims", async () => {
+    const { transport, usersTransport } = fakeConvos(
+      {
+        public_channel: [{ id: "C1", name: "general", is_archived: false }],
+        private_channel: [{ id: "G1", name: "secret" }],
+        im: [{ id: "D1", user: "U9" }],
+        mpim: [{ id: "G2", name: "mpdm-a--b--c" }],
+      },
+      {},
+      { U9: { profile: { display_name: "Alice" } } },
+    );
+    const result = await listConversations("xoxb", { transport, usersTransport });
     const byId = Object.fromEntries(result.conversations.map((c) => [c.id, c]));
     expect(byId.C1?.displayName).toBe("#general");
     expect(byId.C1?.type).toBe("public");
-    expect(byId.D1?.displayName).toBe("dm:U9");
+    expect(byId.D1?.displayName).toBe("dm:Alice"); // resolved via users.info (#1)
     expect(byId.D1?.name).toBeNull();
     expect(byId.G2?.displayName).toBe("mpdm-a--b--c");
     expect(result.missingScopes).toEqual({});
+  });
+
+  test("resolves DM names (display_name → real_name → handle); falls back to dm:<id>", async () => {
+    const { transport, usersTransport } = fakeConvos(
+      {
+        im: [
+          { id: "D1", user: "U1" },
+          { id: "D2", user: "U2" },
+          { id: "D3", user: "U3" },
+          { id: "D4", user: "U4" }, // unknown → users.info reports not_found
+        ],
+      },
+      {},
+      {
+        U1: { profile: { display_name: "alice" } },
+        U2: { profile: { display_name: "", real_name: "Bob R" } }, // empty display → real_name
+        U3: { name: "carol" }, // only the handle
+      },
+    );
+    const result = await listConversations("xoxb", { types: ["im"], transport, usersTransport });
+    const byId = Object.fromEntries(result.conversations.map((c) => [c.id, c.displayName]));
+    expect(byId.D1).toBe("dm:alice");
+    expect(byId.D2).toBe("dm:Bob R");
+    expect(byId.D3).toBe("dm:carol");
+    expect(byId.D4).toBe("dm:U4"); // unresolved → id fallback (no throw)
+  });
+
+  test("sorts conversations a-z within each type (#2)", async () => {
+    const { transport, usersTransport } = fakeConvos({
+      public_channel: [
+        { id: "C2", name: "zebra" },
+        { id: "C1", name: "apple" },
+        { id: "C3", name: "mango" },
+      ],
+    });
+    const result = await listConversations("xoxb", {
+      types: ["public"],
+      transport,
+      usersTransport,
+    });
+    expect(result.conversations.map((c) => c.displayName)).toEqual(["#apple", "#mango", "#zebra"]);
   });
 
   test("a missing listing scope self-reports per type without failing the sweep", async () => {

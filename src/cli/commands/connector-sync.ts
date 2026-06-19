@@ -13,6 +13,7 @@
  */
 import { Command, type CommandClass, Option } from "clipanion";
 import { connectorNames } from "../../connectors/registry.ts";
+import { createProgress } from "../progress.ts";
 
 /** A `suasor <name> sync` command bound to one connector name. */
 class ConnectorSyncCommand extends Command {
@@ -24,6 +25,10 @@ class ConnectorSyncCommand extends Command {
 
   full = Option.Boolean("--full", false, {
     description: "Ignore the saved cursor and re-scan from the beginning.",
+  });
+
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
   });
 
   override async execute(): Promise<number> {
@@ -60,15 +65,28 @@ class ConnectorSyncCommand extends Command {
     // never fail the ingest — FTS still reflects the data.
     const embedder = createEmbedder(config.embedding);
 
+    // Indeterminate progress on stderr while the stream drains (TTY-gated; a
+    // no-op in CI / pipes so stdout/--json stay clean). opshub ADR-0026 parity.
+    const progress = createProgress(
+      this.context.stderr,
+      `${name} sync`,
+      this.noProgress ? false : undefined,
+    );
+
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const outcome = await syncConnector(store, connector, {
         ...(this.full ? { cursor: null } : {}),
         embedder,
-        onWarn: (message) => this.context.stderr.write(`warning: ${name}: ${message}\n`),
+        onProgress: () => progress.tick(),
+        onWarn: (message) => {
+          progress.finish();
+          this.context.stderr.write(`warning: ${name}: ${message}\n`);
+        },
         onEmbedError: (error) =>
           this.context.stderr.write(`warning: ${name} embedding skipped: ${error.message}\n`),
       });
+      progress.finish();
 
       if (this.json) {
         this.context.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
@@ -82,6 +100,7 @@ class ConnectorSyncCommand extends Command {
       );
       return 0;
     } catch (cause) {
+      progress.finish();
       this.context.stderr.write(
         `error: ${name} sync failed: ${cause instanceof Error ? cause.message : String(cause)}\n`,
       );
