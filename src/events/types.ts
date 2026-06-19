@@ -4,8 +4,8 @@
  * The append-only event store is the single source of truth (ADR-0002).
  * Events are immutable and versioned: every event carries `type`,
  * `schemaVersion`, and an envelope of identity/time fields. Projections
- * (`sources` / `tasks` / `decisions` / `inbox` / `links`) are folded from
- * these by reducers and are fully rebuildable via replay.
+ * (`sources` / `tasks` / `decisions` / `inbox` / `proposals` / `links`) are
+ * folded from these by reducers and are fully rebuildable via replay.
  *
  * Versioning: each event keeps its own `schemaVersion` (currently `1`).
  * Breaking payload changes bump the per-type version and are upcast in the
@@ -123,6 +123,42 @@ export const InboxItemTriaged = z.object({
 });
 
 /**
+ * A HITL proposal candidate was generated (Issue #89). Records the candidate in
+ * the `proposals` lifecycle ledger as `pending` so it can be listed
+ * (`propose.list`) and rejected (`propose.reject`). Persisting the *candidate*
+ * (not the domain entity) keeps `propose.generate`'s "no domain entity write"
+ * contract while giving the approve/reject HITL loop a durable surface
+ * (ADR-0004). The target entity id is content-derived (src/propose/id.ts), so
+ * when `propose.apply` later appends the entity event the ledger flips the
+ * matching proposal to `applied` by `entity_id`.
+ */
+export const ProposalGenerated = z.object({
+  type: z.literal("ProposalGenerated"),
+  ...Envelope,
+  /** Content-derived candidate id (stable across regenerate). */
+  candidateId: z.string().min(1),
+  /** Generate mode the candidate came from. */
+  mode: z.string().min(1),
+  /** Candidate kind (task / decision / reply_draft / triage). */
+  kind: z.string().min(1),
+  /** Deterministic target entity id the candidate applies to. */
+  entityId: z.string().min(1),
+  /** Short human-readable summary (title / draft preview) for listings. */
+  summary: z.string().default(""),
+  /** Provenance source ids the candidate derives from (best-effort). */
+  sourceExternalIds: z.array(z.string().min(1)).default([]),
+});
+
+/** A pending proposal candidate was rejected by a human (HITL, ADR-0004). */
+export const ProposalRejected = z.object({
+  type: z.literal("ProposalRejected"),
+  ...Envelope,
+  candidateId: z.string().min(1),
+  /** Why the candidate was rejected (recorded for the ledger). */
+  reason: z.string().default(""),
+});
+
+/**
  * A human/agent created a manual provenance link between two entities (HITL,
  * ADR-0004 / ADR-0018 追補). Unlike the reducer-derived edges (`derived_from` /
  * `replies_to` / `references`), a manual link carries its own stable `linkId`
@@ -158,6 +194,8 @@ export const DomainEvent = z.discriminatedUnion("type", [
   DecisionRecorded,
   ReplyDraftProposed,
   InboxItemTriaged,
+  ProposalGenerated,
+  ProposalRejected,
   LinkAdded,
   LinkRemoved,
 ]);
@@ -173,6 +211,8 @@ export const EVENT_TYPES = [
   "DecisionRecorded",
   "ReplyDraftProposed",
   "InboxItemTriaged",
+  "ProposalGenerated",
+  "ProposalRejected",
   "LinkAdded",
   "LinkRemoved",
 ] as const;
@@ -191,5 +231,7 @@ export type NewEvent =
   | Omit<z.input<typeof DecisionRecorded>, "id" | "recordedAt">
   | Omit<z.input<typeof ReplyDraftProposed>, "id" | "recordedAt">
   | Omit<z.input<typeof InboxItemTriaged>, "id" | "recordedAt">
+  | Omit<z.input<typeof ProposalGenerated>, "id" | "recordedAt">
+  | Omit<z.input<typeof ProposalRejected>, "id" | "recordedAt">
   | Omit<z.input<typeof LinkAdded>, "id" | "recordedAt">
   | Omit<z.input<typeof LinkRemoved>, "id" | "recordedAt">;

@@ -38,6 +38,7 @@ export {
 export {
   ProposeGenerateInput,
   type ProposeGenerateOutput,
+  persistProposals,
   proposeGenerate,
 } from "./generate.ts";
 export { candidateId, entityId, inboxId, manualLinkId } from "./id.ts";
@@ -64,6 +65,11 @@ export {
   type LinkRemoveOutput,
   linkRemove,
 } from "./link-remove.ts";
+export {
+  ProposeRejectInput,
+  type ProposeRejectOutput,
+  proposeReject,
+} from "./reject.ts";
 export {
   TaskCreateInput,
   type TaskCreateOutput,
