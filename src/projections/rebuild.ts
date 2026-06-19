@@ -22,7 +22,15 @@ import { readAllEvents } from "../events/store.ts";
 import { applyEvents } from "./reducer.ts";
 
 /** Projection tables cleared before replay (the event store is untouched). */
-const PROJECTION_TABLES = ["sources", "tasks", "decisions", "inbox", "links", "sources_fts"];
+const PROJECTION_TABLES = [
+  "sources",
+  "tasks",
+  "decisions",
+  "inbox",
+  "proposals",
+  "links",
+  "sources_fts",
+];
 
 /**
  * Delete all rows from the projection tables (event store is preserved). The

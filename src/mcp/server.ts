@@ -4,11 +4,12 @@
  * Exposes Suasor's read tools over MCP using the official TypeScript SDK. The
  * read half: `search` (FTS5), `recall.search` (semantic vec0 KNN when an
  * embedding backend is enabled, else the `embedding_disabled` signal — #11),
- * `source.list` / `source.get`, and `task.list` / `decision.list` /
- * `inbox.list`. The write tools — `connector.sync` (read-only ingest, ADR-0007 /
- * #10), `propose.generate` / `propose.apply` (HITL candidate generation +
- * application, #12), and `task.create` (direct task creation, #12 追補 D2) — are
- * registered when a writable `Store` + config are supplied. Write tools carry
+ * `source.list` / `source.get`, `task.list` / `decision.list` / `inbox.list`,
+ * and `propose.list` (the proposal ledger by state, #89). The write tools —
+ * `connector.sync` (read-only ingest, ADR-0007 / #10), `propose.generate` /
+ * `propose.apply` / `propose.reject` (HITL candidate generation + application +
+ * rejection, #12 / #89), and `task.create` (direct task creation, #12 追補 D2) —
+ * are registered when a writable `Store` + config are supplied. Write tools carry
  * `readOnlyHint: false` so hosts gate them behind HITL (no auto-apply, ADR-0004 /
  * FR-PRO-2).
  *
@@ -36,7 +37,8 @@ import {
   PROPOSE_MODES,
   ProposeMode as ProposeModeSchema,
 } from "../propose/candidates.ts";
-import { proposeGenerate } from "../propose/generate.ts";
+import { persistProposals } from "../propose/generate.ts";
+import { proposeReject } from "../propose/reject.ts";
 import { taskCreate } from "../propose/task-create.ts";
 import {
   createEmbedder,
@@ -56,6 +58,7 @@ import {
   listDecisions,
   listInbox,
   listLinks,
+  listProposals,
   listSlackDemand,
   listSources,
   listTasks,
@@ -151,8 +154,9 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "(FTS5); `recall.search` adds semantic search only when an embedding backend " +
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
-        "propose.generate, propose.apply, task.create) are HITL: gate them behind " +
-        "human approval, never auto-apply.",
+        "propose.generate, propose.apply, propose.reject, task.create) are HITL: gate " +
+        "them behind human approval, never auto-apply. propose.list (read) shows the " +
+        "candidate ledger by state for the approve/reject loop.",
     },
   );
 
@@ -463,6 +467,45 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
+  // --- propose.list: read the HITL proposal lifecycle ledger (Issue #89). ---
+  // Read tool (readOnlyHint: true): the visibility half of the approve/reject
+  // loop. Surfaces candidates by state (pending/applied/rejected) so a host can
+  // show what is awaiting a human decision before calling the write tools.
+  server.registerTool(
+    "propose.list",
+    {
+      title: "List proposal candidates",
+      description:
+        "List generated HITL proposal candidates most-recently-updated first, " +
+        "optionally filtered by state (pending / applied / rejected) and kind " +
+        "(task / decision / reply_draft / triage). Read-only: the visibility half " +
+        "of the propose approve/reject loop (apply/reject are separate write tools).",
+      inputSchema: {
+        state: z
+          .enum(["pending", "applied", "rejected"])
+          .optional()
+          .describe("Filter by lifecycle state (default: all)."),
+        kind: z
+          .enum(["task", "decision", "reply_draft", "triage"])
+          .optional()
+          .describe("Filter by candidate kind (default: all)."),
+        updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
+        updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
+        limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ state, kind, updatedAfter, updatedBefore, limit }) => {
+      const proposals = listProposals(sqlite, {
+        ...(state ? { state } : {}),
+        ...(kind ? { kind } : {}),
+        updated: { after: updatedAfter, before: updatedBefore },
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult({ proposals });
+    },
+  );
+
   // --- connector.sync: read-only ingest into the local store (WRITE / HITL). ---
   // Registered only when a writable store is supplied. `readOnlyHint: false`
   // marks it as a write tool so hosts gate it behind human approval (ADR-0004);
@@ -507,9 +550,11 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         title: "Propose (generate candidates)",
         description:
           `Frame host-produced reply/task/decision/triage candidates into a HITL ` +
-          `proposal (modes: ${modeList}). Persists nothing — it validates and ` +
-          `id-stamps the candidates so a human can approve a subset, then apply ` +
-          `them via propose.apply. No auto-apply (ADR-0004).`,
+          `proposal (modes: ${modeList}). Validates and id-stamps the candidates, ` +
+          `then records them in the proposal ledger as 'pending' (visible via ` +
+          `propose.list) so a human can approve a subset (propose.apply) or reject ` +
+          `(propose.reject). No domain entity is written until apply; no auto-apply ` +
+          `(ADR-0004).`,
         inputSchema: {
           mode: ProposeModeSchema.describe(`Generation mode (${modeList}).`),
           candidates: z
@@ -523,7 +568,7 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         annotations: { readOnlyHint: false, openWorldHint: false },
       },
       async ({ mode, candidates }) => {
-        const result = proposeGenerate({ mode, candidates });
+        const result = persistProposals(write.store, { mode, candidates });
         return jsonResult(result);
       },
     );
@@ -549,6 +594,36 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       },
       async ({ candidates }) => {
         const result = proposeApply(write.store, { candidates });
+        return jsonResult(result);
+      },
+    );
+
+    // --- propose.reject: reject a pending candidate with a reason (Issue #89). ---
+    // Write tool (HITL): the reject half of the approve/reject loop. Flips a
+    // pending proposal to `rejected` so it is no longer offered for approval.
+    // Idempotent: re-rejecting is a no-op; an applied/missing candidate is
+    // reported, not mutated (a rejected candidate cannot be applied).
+    server.registerTool(
+      "propose.reject",
+      {
+        title: "Propose (reject candidate)",
+        description:
+          "Reject a pending proposal candidate (from propose.generate) with an " +
+          "optional reason, recording the decision in the proposal ledger. " +
+          "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+          "Acts only on a pending candidate; an applied or missing one is reported, " +
+          "not changed. Idempotent: re-rejecting is a no-op.",
+        inputSchema: {
+          candidateId: z.string().min(1).describe("Candidate id from propose.generate."),
+          reason: z.string().optional().describe("Why the candidate is rejected (recorded)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ candidateId, reason }) => {
+        const result = proposeReject(write.store, {
+          candidateId,
+          ...(reason !== undefined ? { reason } : {}),
+        });
         return jsonResult(result);
       },
     );

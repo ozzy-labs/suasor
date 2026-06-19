@@ -15,6 +15,8 @@
   - `DecisionRecorded` — 決定の記録（`rationale` + provenance）
   - `ReplyDraftProposed` — 返信下書きの提案（HITL・送信はユーザー手動）
   - `InboxItemTriaged` — inbox item の仕分け（`state`: open / snoozed / done / dismissed）
+  - `ProposalGenerated` — 提案候補の生成（`proposals` ledger に `pending` 記録、#89）
+  - `ProposalRejected` — pending 候補の却下（`reason` 付き、#89）
 - 共通エンベロープ: `id`（ULID 風・時刻順ソート可）/ `recordedAt`（ISO 8601・store 時刻）/ `schemaVersion`
 - append 経路は raw SQL（`bun:sqlite`、`src/db/events-table.ts`）。replay 順序は `seq`（AUTOINCREMENT）が正本
 - 生 event を読み取り用途で直接引かない（projection 経由）
@@ -27,6 +29,7 @@
   - `tasks` — `id`(PK) / `title` / `state`（proposed → applied lifecycle）/ `created_at` / `updated_at`
   - `decisions` — `id`(PK) / `title` / `rationale` / `recorded_at`
   - `inbox` — `id`(PK) / `source_external_id` / `state` / `updated_at`
+  - `proposals` — `candidate_id`(PK) / `mode` / `kind` / `entity_id` / `summary` / `state`（pending / applied / rejected）/ `reason` / `created_at` / `updated_at`（提案 lifecycle ledger、#89。`propose.list` が読む）
   - `links` — `id`(PK, autoinc) / `from_kind` / `from_id` / `to_kind` / `to_id` / `relation`（関連グラフ・provenance）
 - `sources_fts`（FTS5 仮想テーブル、`tokenize='trigram'` で JA/EN substring）/ `embeddings_vec_default`（`sqlite-vec` vec0、任意）。両者は init 時に raw DDL で作成（drizzle-kit 管理外）
 - **`suasor projections rebuild`** で全 event を replay し projection を同値復元（rebuild idempotence、FR-MNT-1）

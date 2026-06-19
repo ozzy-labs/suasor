@@ -67,6 +67,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: true,
     summary: "List inbox items, most-recently-updated first.",
   },
+  {
+    name: "propose.list",
+    readOnlyHint: true,
+    summary: "List proposal candidates by state (pending/applied/rejected).",
+  },
 ];
 
 /**
@@ -82,12 +87,17 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
   {
     name: "propose.generate",
     readOnlyHint: false,
-    summary: "Frame host-produced reply/task/decision/triage candidates (persists nothing).",
+    summary: "Frame reply/task/decision/triage candidates and record them as pending.",
   },
   {
     name: "propose.apply",
     readOnlyHint: false,
     summary: "Persist approved candidates as domain events (idempotent).",
+  },
+  {
+    name: "propose.reject",
+    readOnlyHint: false,
+    summary: "Reject a pending candidate with a reason (idempotent).",
   },
   { name: "task.create", readOnlyHint: false, summary: "Create a task directly (TaskProposed)." },
 ];

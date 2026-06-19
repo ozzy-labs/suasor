@@ -49,6 +49,31 @@ export const inbox = sqliteTable("inbox", {
 });
 
 /**
+ * Proposal lifecycle ledger (Issue #89). One row per HITL candidate the host
+ * generated, tracking its state through the approve/reject loop:
+ *   - `pending`  — generated, awaiting human decision (propose.list shows it)
+ *   - `applied`  — a human approved it and propose.apply persisted the entity
+ *   - `rejected` — a human rejected it via propose.reject (carries a reason)
+ * Folded from `ProposalGenerated` / `ProposalRejected` plus the entity events
+ * propose.apply appends (matched back by `entity_id`). Rebuildable (ADR-0002).
+ */
+export const proposals = sqliteTable("proposals", {
+  candidateId: text("candidate_id").primaryKey(),
+  mode: text("mode").notNull(),
+  kind: text("kind").notNull(),
+  /** Deterministic target entity id the candidate applies to. */
+  entityId: text("entity_id").notNull(),
+  /** Short human-readable summary for listings. */
+  summary: text("summary").notNull().default(""),
+  /** Lifecycle state: pending / applied / rejected. */
+  state: text("state").notNull().default("pending"),
+  /** Rejection reason (empty unless state = rejected). */
+  reason: text("reason").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
  * Relation graph between projection entities (provenance links).
  * e.g. task → source, decision → source, reply_draft → source.
  */

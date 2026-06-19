@@ -30,9 +30,15 @@ export {
 export {
   ProposeGenerateInput,
   type ProposeGenerateOutput,
+  persistProposals,
   proposeGenerate,
 } from "./generate.ts";
 export { candidateId, entityId } from "./id.ts";
+export {
+  ProposeRejectInput,
+  type ProposeRejectOutput,
+  proposeReject,
+} from "./reject.ts";
 export {
   TaskCreateInput,
   type TaskCreateOutput,

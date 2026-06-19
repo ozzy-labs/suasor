@@ -62,6 +62,7 @@ describe("MCP read surface", () => {
         "graph.expand",
         "graph.related",
         "inbox.list",
+        "propose.list",
         "recall.search",
         "search",
         "slack.demand.list",
@@ -392,6 +393,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "graph.expand",
         "graph.related",
         "inbox.list",
+        "propose.list",
         "recall.search",
         "search",
         "slack.demand.list",
@@ -402,6 +404,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "connector.sync",
         "propose.generate",
         "propose.apply",
+        "propose.reject",
         "task.create",
       ].sort(),
     );
@@ -410,7 +413,13 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
   test("every write tool carries readOnlyHint: false (HITL-gated)", async () => {
     const client = await connectWrite();
     const { tools } = await client.listTools();
-    const writeTools = ["connector.sync", "propose.generate", "propose.apply", "task.create"];
+    const writeTools = [
+      "connector.sync",
+      "propose.generate",
+      "propose.apply",
+      "propose.reject",
+      "task.create",
+    ];
     for (const name of writeTools) {
       const tool = tools.find((t) => t.name === name);
       expect(tool?.annotations?.readOnlyHint).toBe(false);
