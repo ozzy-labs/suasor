@@ -45,3 +45,7 @@
 - **新規 graph projection / 専用 graph DB** — 却下。既存 `links` で足りる。over-engineering。
 - **event log を都度 JOIN して辿る** — 却下。projection（links）が既にある目的を無視。遅く脆い。
 - **graph で本文も返す** — 却下。関係のみ返し、本文は `source.get` 等に委譲（単一責務 / payload 抑制）。
+
+## Addendum: `graph.expand` の `direction`（[ADR-0020](0020-multi-actor-coordination-scope.md)、#97）
+
+`graph.expand` に `direction: "out" | "in" | "both"`（既定 `both` = 後方互換）を追加した。各 hop の隣接取得（`listLinks`）を direction で絞ることで、後方限定 provenance トレース（opshub `graph trace` 相当 = 「この成果物は何に由来するか」）を `in` で表現する。`out` は下流 consumer 展開。新ツールは増やさず既存 `graph.expand` の 1 パラメータ追加で実現する（ADR-0020 §決定 3）。cycle guard / edge dedup は direction 適用後も維持する。

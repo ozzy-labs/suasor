@@ -60,7 +60,8 @@ const READ_TOOLS: readonly McpToolInfo[] = [
   {
     name: "graph.expand",
     readOnlyHint: true,
-    summary: "Breadth-first provenance expansion from an entity (N hops).",
+    summary:
+      "Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.",
   },
   {
     name: "inbox.list",
