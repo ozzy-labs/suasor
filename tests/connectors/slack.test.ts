@@ -80,7 +80,7 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
 });
 
 describe("Slack connector — delta cursor (FR-ING-3)", () => {
-  test("passes the cursor as `oldest` and returns the max ts", async () => {
+  test("legacy bare-ts cursor is applied as `oldest`; returns a per-channel map", async () => {
     const { client, calls } = fakeSlack([
       { messages: [{ ts: "1700000001.000000" }, { ts: "1700000050.000000" }] },
     ]);
@@ -91,7 +91,38 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
     await collect(connector.sync(ctx({ cursor: "1699999000.000000" })));
     expect(calls[0]?.oldest).toBe("1699999000.000000");
     const result = await connector.finalize?.();
-    expect(result?.cursor).toBe("1700000050.000000");
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1700000050.000000" });
+  });
+
+  test("per-channel cursor: a quiet channel keeps its own floor (no cross-channel skip)", async () => {
+    // C1 returns from its own floor (900), C2 from its own (500). The bug this
+    // guards against raised C2's `oldest` to C1's ts, skipping C2's 500–900.
+    const { client, calls } = fakeSlack([
+      { messages: [{ ts: "1000.000000" }] }, // first history call → channel C1
+      { messages: [{ ts: "700.000000" }] }, // second history call → channel C2
+    ]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1", "C2"] },
+      { clientFactory: () => client },
+    );
+    await collect(
+      connector.sync(ctx({ cursor: JSON.stringify({ C1: "900.000000", C2: "500.000000" }) })),
+    );
+    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe("900.000000");
+    expect(calls.find((c) => c.channel === "C2")?.oldest).toBe("500.000000");
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1000.000000", C2: "700.000000" });
+  });
+
+  test("a channel with no new messages preserves its floor", async () => {
+    const { client } = fakeSlack([{ messages: [] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "1234.000000" }) })));
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1234.000000" });
   });
 
   test("first run omits `oldest` and paginates via next_cursor", async () => {
