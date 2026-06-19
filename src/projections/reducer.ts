@@ -38,6 +38,23 @@ function upsertLink(
     .run(link.fromKind, link.fromId, link.toKind, link.toId, link.relation);
 }
 
+/**
+ * Flip any `pending` proposal whose target entity id matches `entityId` to
+ * `applied`. Called when propose.apply appends the entity event (TaskProposed /
+ * DecisionRecorded / ReplyDraftProposed / InboxItemTriaged), so the ledger
+ * reflects approval without the entity events needing to carry a candidateId.
+ * Idempotent: re-running over an already-`applied` proposal is a no-op (the
+ * WHERE state = 'pending' guard), and an entity with no proposal row touches
+ * nothing (direct task.create etc. legitimately has no candidate).
+ */
+function markProposalApplied(sqlite: Database, entityId: string, ts: string): void {
+  sqlite
+    .query(
+      "UPDATE proposals SET state = 'applied', updated_at = ? WHERE entity_id = ? AND state = 'pending'",
+    )
+    .run(ts, entityId);
+}
+
 /** Apply a single event to the projections. Idempotent under replay. */
 export function applyEvent(sqlite: Database, event: DomainEvent): void {
   switch (event.type) {
@@ -109,6 +126,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           relation: "derived_from",
         });
       }
+      markProposalApplied(sqlite, event.taskId, event.recordedAt);
       return;
     }
     case "TaskApplied": {
@@ -146,6 +164,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           relation: "derived_from",
         });
       }
+      markProposalApplied(sqlite, event.decisionId, event.recordedAt);
       return;
     }
     case "ReplyDraftProposed": {
@@ -158,6 +177,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
         toId: event.replyToExternalId,
         relation: "replies_to",
       });
+      markProposalApplied(sqlite, event.draftId, event.recordedAt);
       return;
     }
     case "InboxItemTriaged": {
@@ -183,6 +203,44 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
         toId: event.sourceExternalId,
         relation: "references",
       });
+      markProposalApplied(sqlite, event.inboxId, event.recordedAt);
+      return;
+    }
+    case "ProposalGenerated": {
+      // Ledger upsert: a freshly generated candidate enters as `pending`. Replay-
+      // safe — ON CONFLICT preserves an already-decided (applied/rejected) state
+      // so a later regenerate of the same candidate does not resurrect it to
+      // pending, while still refreshing the descriptive columns.
+      sqlite
+        .query(
+          `INSERT INTO proposals
+             (candidate_id, mode, kind, entity_id, summary, state, reason, created_at, updated_at)
+           VALUES ($cid, $mode, $kind, $eid, $summary, 'pending', '', $ts, $ts)
+           ON CONFLICT(candidate_id) DO UPDATE SET
+             mode       = excluded.mode,
+             kind       = excluded.kind,
+             entity_id  = excluded.entity_id,
+             summary    = excluded.summary,
+             updated_at = excluded.updated_at`,
+        )
+        .run({
+          $cid: event.candidateId,
+          $mode: event.mode,
+          $kind: event.kind,
+          $eid: event.entityId,
+          $summary: event.summary,
+          $ts: event.recordedAt,
+        });
+      return;
+    }
+    case "ProposalRejected": {
+      // Reject only acts on a still-pending candidate (an applied proposal stays
+      // applied — the entity is already persisted). No-op when no such row.
+      sqlite
+        .query(
+          "UPDATE proposals SET state = 'rejected', reason = $reason, updated_at = $ts WHERE candidate_id = $cid AND state = 'pending'",
+        )
+        .run({ $cid: event.candidateId, $reason: event.reason, $ts: event.recordedAt });
       return;
     }
     default: {

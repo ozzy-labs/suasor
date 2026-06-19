@@ -12,6 +12,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `recall.search` | 意味検索（embedding 有効時の vec0 KNN。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]） |
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
+| `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
 | `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
 | `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（[ADR-0018](../adr/0018-knowledge-graph-traversal.md)） | 実装済み（#71） |
@@ -100,8 +101,9 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | tool | 役割 | 状態 |
 |---|---|---|
 | `connector.sync` | 取り込み実行 | 実装済み（#10。下記参照） |
-| `propose.generate` | 返信/タスク/決定/仕分けの候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage`） | 実装済み（#12。下記参照） |
-| `propose.apply` | 承認された候補のみ適用（idempotent） | 実装済み（#12。下記参照） |
+| `propose.generate` | 返信/タスク/決定/仕分けの候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage`）。候補を `proposals` ledger に `pending` 記録 | 実装済み（#12 / #89。下記参照） |
+| `propose.apply` | 承認された候補のみ適用（idempotent）。適用で ledger を `applied` に遷移 | 実装済み（#12 / #89。下記参照） |
+| `propose.reject` | pending 候補を理由付きで却下（ledger を `rejected` に遷移、idempotent） | 実装済み（#89。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
 | `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
 | `inbox.add` | 受信箱項目を捕捉（state `open`） | 実装済み（#88。下記参照） |
@@ -133,9 +135,29 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 
 `[embedding].backend` が有効なとき、新規 / 本文変更 source（`observed` + `updated`）は同一モデルで埋め込まれ vec0 に populate される（`recall.search` 用、[retrieval](retrieval.md)）。embedding は best-effort で、サイドカー失敗時も取り込み自体は成功する（FTS は反映済み・`embedded` が 0 になるだけ）。
 
+### propose ライフサイクル（状態機械）
+
+`propose.*` 群は候補の承認/却下 HITL ループを構成する。候補は `proposals` projection（lifecycle ledger）で状態管理され、`propose.list` で状態別に閲覧できる（#89）。
+
+```text
+                propose.generate
+                      │
+                      ▼
+   ┌──────────────[ pending ]──────────────┐
+   │ propose.apply                          │ propose.reject
+   ▼                                        ▼
+[ applied ]                            [ rejected ]
+（domain entity 永続化済み）          （reason 記録・再 apply 不可）
+```
+
+- **状態列**: `pending`（生成・人の決定待ち）/ `applied`（人が承認し `propose.apply` で domain entity を永続化）/ `rejected`（人が `propose.reject` で却下、理由付き）。
+- **ledger と domain entity の分離**: `propose.generate` は **候補（ledger 行）のみ**を `pending` で記録し、domain entity（task / decision 等）は書かない。entity が永続化されるのは `propose.apply` のときだけ（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の「提案 → 承認 → 適用」境界を維持）。
+- **状態遷移の駆動**: `applied` 遷移は `propose.apply` が append する entity event（`TaskProposed` 等）を reducer が **`entity_id` 一致**で ledger に反映して起こす（候補 id を entity event に持たせず provenance を保つ）。`rejected` 遷移は `ProposalRejected` event。いずれも replay で同一終状態に収束する（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+- event: `ProposalGenerated`（→ `pending`）/ `ProposalRejected`（→ `rejected`）。`applied` は既存 entity event の副作用。
+
 ### `propose.generate`（確定・write / HITL・[ADR-0006](../adr/0006-ml-delegation.md) ML 委譲）
 
-ホスト LLM が生成した候補（返信下書き / task / decision / 仕分け）を **構造化して候補化**する write tool。実体は `src/propose/generate.ts`。**永続化しない**: mode ごとの許可 kind に対して候補を検証し、各候補に content 由来の安定 id（`candidateId`）を付与して返すだけ。重い推論はホスト側で行い、プロセス内で ML を実行しない（[ADR-0006](../adr/0006-ml-delegation.md)）。承認 + 適用は `propose.apply` で別途行う（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+ホスト LLM が生成した候補（返信下書き / task / decision / 仕分け）を **構造化して候補化**する write tool。実体は `src/propose/generate.ts`。mode ごとの許可 kind に対して候補を検証し、各候補に content 由来の安定 id（`candidateId`）を付与する。**domain entity は永続化しない**が、候補自体は `proposals` ledger に `pending` として記録する（`ProposalGenerated` event、#89）ことで `propose.list` / `propose.reject` の対象になる。重い推論はホスト側で行い、プロセス内で ML を実行しない（[ADR-0006](../adr/0006-ml-delegation.md)）。承認 + 適用は `propose.apply` で別途行う（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。content 由来 id により、同一候補の再 generate は ledger 上 no-op（idempotent）。
 
 引数（Zod）:
 
@@ -183,6 +205,33 @@ connector の read 専用取り込みを起動する write tool（[connector-con
   "skipped": 0    // 既存で no-op だった候補数
 }
 ```
+
+適用に伴い、対応する `proposals` ledger 行（`entity_id` 一致）は `pending` → `applied` に遷移する（#89。reducer 副作用）。`task.create` 等 ledger 行を持たない直接 entity 追加では何も遷移しない。
+
+### `propose.list`（確定・read）
+
+提案候補の lifecycle ledger を新しい更新順（`updated_at` DESC）に列挙する read tool（実体は `src/mcp/queries.ts` の `listProposals`、`readOnlyHint: true`）。承認/却下ループの「閲覧」側。副作用なしの SELECT のみ。
+
+引数（Zod）:
+
+| 引数 | 型 | 説明 |
+|---|---|---|
+| `state` | `enum`（任意） | `pending` / `applied` / `rejected` で絞り込み |
+| `kind` | `enum`（任意） | `task` / `decision` / `reply_draft` / `triage` で絞り込み |
+| `updatedAfter` / `updatedBefore` | ISO 8601（任意） | `updated_at` 時間窓（下限 inclusive / 上限 exclusive） |
+| `limit` | `number`（任意） | 最大行数（既定 50） |
+
+戻り値: `{ "proposals": [{ "candidateId": "cand_...", "mode": "...", "kind": "...", "entityId": "...", "summary": "...", "state": "pending", "reason": "", "createdAt": "...", "updatedAt": "..." }] }`。
+
+### `propose.reject`（確定・write / HITL・idempotent）
+
+`pending` の候補を理由付きで却下する write tool（実体は `src/propose/reject.ts`）。`ProposalRejected` event を append し、ledger を `pending` → `rejected` に遷移させる。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+引数（Zod）: `{ "candidateId": string, "reason"?: string }`（`candidateId` は `propose.generate` 戻り値の id）。
+
+**状態依存の挙動**: `pending` のときのみ却下（event append）。`applied`（既に適用済み）/ `missing`（該当 ledger 行なし）は遷移させず status で報告し、`rejected` 再呼び出しは `already_rejected`（no-op、idempotent）。却下済み候補は `propose.list` で `pending` として現れなくなるため、ホストは再び承認候補として提示しない。
+
+戻り値: `{ "candidateId": "cand_...", "status": "rejected" | "already_rejected" | "applied" | "missing" }`。
 
 ### `task.create`（確定・write / HITL・#12 追補 D2）
 

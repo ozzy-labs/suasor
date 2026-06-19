@@ -37,6 +37,7 @@ export {
 export {
   ProposeGenerateInput,
   type ProposeGenerateOutput,
+  persistProposals,
   proposeGenerate,
 } from "./generate.ts";
 export { candidateId, entityId, inboxId } from "./id.ts";
@@ -53,6 +54,11 @@ export {
   TriageAction,
   TriageError,
 } from "./inbox-triage.ts";
+export {
+  ProposeRejectInput,
+  type ProposeRejectOutput,
+  proposeReject,
+} from "./reject.ts";
 export {
   TaskCreateInput,
   type TaskCreateOutput,

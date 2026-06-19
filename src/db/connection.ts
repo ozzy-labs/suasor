@@ -85,6 +85,19 @@ export function initSchema(sqlite: Database): void {
       state              TEXT NOT NULL DEFAULT 'open',
       updated_at         TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS proposals (
+      candidate_id TEXT PRIMARY KEY,
+      mode         TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      entity_id    TEXT NOT NULL,
+      summary      TEXT NOT NULL DEFAULT '',
+      state        TEXT NOT NULL DEFAULT 'pending',
+      reason       TEXT NOT NULL DEFAULT '',
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
+    -- propose.apply flips a pending proposal to applied by matching entity_id.
+    CREATE INDEX IF NOT EXISTS idx_proposals_entity ON proposals(entity_id);
     CREATE TABLE IF NOT EXISTS links (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       from_kind TEXT NOT NULL,

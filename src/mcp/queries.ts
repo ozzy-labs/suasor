@@ -2,10 +2,10 @@
  * Projection read queries backing the MCP read tools (ADR-0004, #8).
  *
  * Pure, side-effect-free SELECTs over the projection tables (`sources` /
- * `tasks` / `decisions` / `inbox`) that the MCP `source.list` / `source.get` /
- * `task.list` / `decision.list` / `inbox.list` read tools wrap. Read tools must
- * have no side effects (ADR-0004 `read = destructive:false`), so every function
- * here only reads.
+ * `tasks` / `decisions` / `inbox` / `proposals`) that the MCP `source.list` /
+ * `source.get` / `task.list` / `decision.list` / `inbox.list` / `propose.list`
+ * read tools wrap. Read tools must have no side effects (ADR-0004
+ * `read = destructive:false`), so every function here only reads.
  *
  * Time filters target each projection's natural timestamp column (the same
  * physical column the assistant skills filter on, docs/skills/README.md):
@@ -13,6 +13,7 @@
  *   - tasks      → `updated_at`     (updated_after / updated_before)
  *   - decisions  → `recorded_at`    (recorded_after / recorded_before)
  *   - inbox      → `updated_at`     (updated_after / updated_before)
+ *   - proposals  → `updated_at`     (updated_after / updated_before)
  * Bounds are inclusive on the lower end and exclusive on the upper end so
  * adjacent ranges don't double-count, and compare ISO 8601 strings
  * lexicographically (valid because the stored timestamps are zero-padded UTC).
@@ -282,6 +283,87 @@ export function listInbox(sqlite: Database, options: ListInboxOptions = {}): Inb
     id: r.id,
     sourceExternalId: r.source_external_id,
     state: r.state,
+    updatedAt: r.updated_at,
+  }));
+}
+
+/** A proposal lifecycle ledger row (Issue #89). */
+export interface ProposalRecord {
+  candidateId: string;
+  mode: string;
+  kind: string;
+  entityId: string;
+  summary: string;
+  /** Lifecycle state: pending / applied / rejected. */
+  state: string;
+  /** Rejection reason (empty unless state = rejected). */
+  reason: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProposalRow {
+  candidate_id: string;
+  mode: string;
+  kind: string;
+  entity_id: string;
+  summary: string;
+  state: string;
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListProposalsOptions {
+  /** Restrict to a lifecycle state (pending / applied / rejected). */
+  state?: string;
+  /** Restrict to a candidate kind (task / decision / reply_draft / triage). */
+  kind?: string;
+  /** Window over `updated_at`. */
+  updated?: TimeRange;
+  limit?: number;
+}
+
+/**
+ * List proposal candidates most-recently-updated first, optionally filtered by
+ * lifecycle state (pending/applied/rejected) and kind. Backs `propose.list` —
+ * the read half of the HITL approve/reject loop (Issue #89). Pure SELECT.
+ */
+export function listProposals(
+  sqlite: Database,
+  options: ListProposalsOptions = {},
+): ProposalRecord[] {
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (options.state !== undefined) {
+    clauses.push("state = ?");
+    params.push(options.state);
+  }
+  if (options.kind !== undefined) {
+    clauses.push("kind = ?");
+    params.push(options.kind);
+  }
+  pushTimeRange(clauses, params, "updated_at", options.updated);
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  params.push(options.limit ?? DEFAULT_LIST_LIMIT);
+  const rows = sqlite
+    .query<ProposalRow, (string | number)[]>(
+      `SELECT candidate_id, mode, kind, entity_id, summary, state, reason, created_at, updated_at
+         FROM proposals
+         ${where}
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+    )
+    .all(...params);
+  return rows.map((r) => ({
+    candidateId: r.candidate_id,
+    mode: r.mode,
+    kind: r.kind,
+    entityId: r.entity_id,
+    summary: r.summary,
+    state: r.state,
+    reason: r.reason,
+    createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
 }
