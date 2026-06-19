@@ -4,7 +4,7 @@
  *
  * Wired command surface (docs/design/cli.md):
  *   init · db migrate · projections rebuild · search · <connector> sync ·
- *   mcp serve · skills install · skills list
+ *   mcp serve · slack auth set/test · slack conversations · skills install/list
  * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` /
  * `mcp serve` (MCP read surface, ADR-0004) and `skills install` / `skills list`
  * (assistant-skill catalog, ADR-0008) are live. `<connector> sync` commands are
@@ -25,6 +25,11 @@ import { McpServeCommand } from "./commands/mcp-serve.ts";
 import { ProjectionsRebuildCommand } from "./commands/projections-rebuild.ts";
 import { SearchCommand } from "./commands/search.ts";
 import { SkillsInstallCommand, SkillsListCommand } from "./commands/skills.ts";
+import {
+  SlackAuthSetCommand,
+  SlackAuthTestCommand,
+  SlackConversationsCommand,
+} from "./commands/slack.ts";
 
 /** Build the configured CLI instance. */
 export function buildCli(): Cli {
@@ -43,6 +48,9 @@ export function buildCli(): Cli {
     cli.register(ConnectorSync);
   }
   cli.register(McpServeCommand);
+  cli.register(SlackAuthSetCommand);
+  cli.register(SlackAuthTestCommand);
+  cli.register(SlackConversationsCommand);
   cli.register(SkillsInstallCommand);
   cli.register(SkillsListCommand);
   return cli;

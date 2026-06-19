@@ -6,9 +6,12 @@
  *   nothing is posted back to Slack (ADR-0003).
  * - **delta** — Slack's `conversations.history` is a delta API: it accepts an
  *   `oldest` timestamp. The connector records the most recent message `ts` seen
- *   and returns it as the next cursor so subsequent syncs fetch only newer
- *   messages (FR-ING-3). Bodies also carry a fingerprint so edited messages are
- *   still detected as updates by the sync service.
+ *   **per channel** and returns a JSON `{ <channel>: <ts> }` map as the next
+ *   cursor so each channel resumes from its own high-water mark (FR-ING-3). A
+ *   single shared cursor was a latent data-loss bug: a quiet channel would be
+ *   raised to a busier channel's `ts` and silently skip its own newer messages
+ *   (ADR-0011). A bare-`ts` cursor from before this change is read as a legacy
+ *   floor applied to every channel on the first run after upgrade.
  * - **identity** — `slack:<team>:<channel>:<ts>` (cross-source-unique,
  *   team+channel-prefixed, ADR-0007). `source_type` is `slack_message`.
  * - **import-clean** — `@slack/web-api` is **lazy-imported inside `sync`**, so
@@ -95,13 +98,38 @@ export interface SlackConnectorOptions {
   clientFactory?: SlackClientFactory;
 }
 
+/**
+ * Parse the resume cursor into a per-channel high-water-mark map. A JSON object
+ * is the current format; a bare `ts` string is a legacy cursor (pre-ADR-0011)
+ * applied as a floor to every channel on the first run after upgrade.
+ */
+function parseCursor(raw: string | null): {
+  map: Record<string, string>;
+  legacyFloor: string | null;
+} {
+  if (!raw) return { map: {}, legacyFloor: null };
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, unknown>;
+      const map: Record<string, string> = {};
+      for (const [k, v] of Object.entries(obj)) if (typeof v === "string") map[k] = v;
+      return { map, legacyFloor: null };
+    } catch {
+      // Unparseable cursor → treat as a fresh start rather than crash.
+      return { map: {}, legacyFloor: null };
+    }
+  }
+  return { map: {}, legacyFloor: trimmed };
+}
+
 /** Slack connector implementing the read-only contract (ADR-0007). */
 class SlackConnector implements Connector {
   readonly name = SLACK_CONNECTOR_NAME;
   readonly sourceType = "slack";
 
-  /** Highest message `ts` observed this run → next-run `oldest` cursor. */
-  private maxTs: string | null = null;
+  /** Per-channel highest `ts` observed this run → next-run `oldest` per channel. */
+  private cursors: Record<string, string> = {};
 
   constructor(
     private readonly config: SlackConnectorConfig,
@@ -120,30 +148,44 @@ class SlackConnector implements Connector {
     }
 
     const client = await this.clientFactory(token);
-    this.maxTs = ctx.cursor;
+    const { map: previous, legacyFloor } = parseCursor(ctx.cursor);
+    // Start empty and seed only configured channels below, so cursors for
+    // channels removed from config don't accumulate forever in the stored map.
+    this.cursors = {};
 
     for (const channel of this.config.channels) {
+      // Each channel resumes from its OWN high-water mark (or the legacy floor),
+      // never another channel's — the fix for the single-cursor skip (ADR-0011).
+      const oldest = previous[channel] ?? legacyFloor ?? undefined;
       let cursor: string | undefined;
       do {
         const page = await client.conversations.history({
           channel,
           limit: 200,
-          ...(ctx.cursor ? { oldest: ctx.cursor } : {}),
+          ...(oldest ? { oldest } : {}),
           ...(cursor ? { cursor } : {}),
         });
         for (const item of page.messages ?? []) {
-          if (this.maxTs === null || Number.parseFloat(item.ts) > Number.parseFloat(this.maxTs)) {
-            this.maxTs = item.ts;
+          const seen = this.cursors[channel];
+          if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
+            this.cursors[channel] = item.ts;
           }
           yield toRecord(this.config.team, channel, item);
         }
         cursor = page.response_metadata?.next_cursor || undefined;
       } while (cursor);
+
+      // Preserve the floor for a channel with no new messages so it is not
+      // re-scanned from scratch on the next run.
+      if (this.cursors[channel] === undefined && oldest !== undefined) {
+        this.cursors[channel] = oldest;
+      }
     }
   }
 
   finalize(): SyncResult {
-    return { cursor: this.maxTs };
+    const channels = Object.keys(this.cursors);
+    return { cursor: channels.length > 0 ? JSON.stringify(this.cursors) : null };
   }
 }
 
