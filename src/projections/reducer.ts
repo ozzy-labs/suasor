@@ -18,7 +18,14 @@ function syncSourceFts(sqlite: Database, externalId: string, body: string): void
   sqlite.query("INSERT INTO sources_fts (external_id, body) VALUES (?, ?)").run(externalId, body);
 }
 
-/** Record a provenance link if it does not already exist. */
+/**
+ * Relation label for human/agent-created manual links (ADR-0018 追補 / #90),
+ * distinct from the reducer-derived provenance edges (`derived_from` /
+ * `replies_to` / `references`). Manual links carry a stable `link_id`.
+ */
+export const MANUAL_LINK_RELATION = "manual_link";
+
+/** Record a (derived) provenance link if it does not already exist. */
 function upsertLink(
   sqlite: Database,
   link: { fromKind: string; fromId: string; toKind: string; toId: string; relation: string },
@@ -183,6 +190,36 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
         toId: event.sourceExternalId,
         relation: "references",
       });
+      return;
+    }
+    case "LinkAdded": {
+      // A manual link (ADR-0018 追補 / #90) carries its own stable link_id so it
+      // can be removed by id and replayed deterministically. Idempotent: a second
+      // LinkAdded with the same link_id is a no-op (the row already exists).
+      const existing = sqlite
+        .query<{ id: number }, [string]>("SELECT id FROM links WHERE link_id = ?")
+        .get(event.linkId);
+      if (existing) return;
+      sqlite
+        .query(
+          `INSERT INTO links (from_kind, from_id, to_kind, to_id, relation, link_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          event.fromKind,
+          event.fromId,
+          event.toKind,
+          event.toId,
+          MANUAL_LINK_RELATION,
+          event.linkId,
+        );
+      return;
+    }
+    case "LinkRemoved": {
+      // Delete the manual link by its stable id. Removing an absent link is a
+      // no-op under replay (idempotent) — the write tool guards against removing
+      // a non-existent link at the boundary so the host can surface the error.
+      sqlite.query("DELETE FROM links WHERE link_id = ?").run(event.linkId);
       return;
     }
     default: {

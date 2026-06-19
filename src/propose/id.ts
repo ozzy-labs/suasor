@@ -63,6 +63,27 @@ export function inboxId(sourceExternalId: string): string {
 }
 
 /**
+ * Content-derived id for a manual link (the `link.add` / `link.remove` write
+ * tools, Issue #90). Keyed on the directed endpoint pair (`fromKind/fromId` →
+ * `toKind/toId`), so adding the same link twice upserts the same row (idempotent)
+ * and `link.remove` can target it by id. Direction matters: A→B and B→A are
+ * distinct links. The `link_` prefix keeps the id self-describing.
+ */
+export function manualLinkId(endpoints: {
+  fromKind: string;
+  fromId: string;
+  toKind: string;
+  toId: string;
+}): string {
+  const fp = fnv1a(
+    ["manual_link", endpoints.fromKind, endpoints.fromId, endpoints.toKind, endpoints.toId].join(
+      SEP,
+    ),
+  );
+  return `link_${fp}`;
+}
+
+/**
  * Deterministic target entity id for a candidate (the `taskId` / `decisionId` /
  * `draftId` / `inboxId` the applied event carries). Derived from content so
  * apply upserts the same projection row on re-application.

@@ -14,7 +14,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
-| `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（[ADR-0018](../adr/0018-knowledge-graph-traversal.md)） | 実装済み（#71） |
+| `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)） | 実装済み（#71・#90） |
 
 戻り値はすべて 1 個の `text` content（JSON 文字列）。時間フィルタは各 projection の自然な timestamp 列を対象にし、**下限 inclusive (`>=`) / 上限 exclusive (`<`)**（隣接レンジの二重計上を避ける）。`iso` は ISO 8601（offset 付き）datetime。`limit` は正整数で上限 500。
 
@@ -106,6 +106,8 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
 | `inbox.add` | 受信箱項目を捕捉（state `open`） | 実装済み（#88。下記参照） |
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
+| `link.add` | 2 エンティティ間に手動 link を作成（relation `manual_link`） | 実装済み（#90。下記参照） |
+| `link.remove` | 手動 link を id 指定で削除（event・監査可能） | 実装済み（#90。下記参照） |
 
 ### `connector.sync`（確定・write / HITL）
 
@@ -243,6 +245,31 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 戻り値: `{ "inboxId": "inbox_...", "action": "...", "state": "done" | "dismissed", "createdEntityId"?: "task_..." | "dec_..." }`。
 
 **不正遷移は拒否（tool error）**: 存在しない項目、または既に `open` 以外（`snoozed` / `done` / `dismissed`）の項目を triage しようとすると tool error を返す（host が拒否を表示できるよう silent skip しない）。これにより二重解決や解決済み項目の再オープンを防ぐ。
+
+### `link.add`（確定・write / HITL・[Issue #90](https://github.com/ozzy-labs/suasor/issues/90)）
+
+2 エンティティ間に**手動** provenance link を作成する write tool（[ADR-0018](../adr/0018-knowledge-graph-traversal.md) 追補）。reducer 由来の自動エッジ（`derived_from` / `replies_to` / `references`）と異なり、人/エージェントが明示的に「この 2 つを関連付ける」経路。実体は `src/propose/link-add.ts`。`LinkAdded` event を append → `links` projection に relation `manual_link` で反映（`graph.related` / `graph.expand` が辿れる）。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+引数（Zod）:
+
+| 引数 | 型 | 説明 |
+|---|---|---|
+| `fromKind` | `string`（min 1） | 起点エンティティ kind（例 `task` / `decision` / `source`） |
+| `fromId` | `string`（min 1） | 起点エンティティ id |
+| `toKind` | `string`（min 1） | 終点エンティティ kind |
+| `toId` | `string`（min 1） | 終点エンティティ id |
+
+戻り値: `{ "linkId": "link_...", "status": "created" | "existing" }`。`linkId` は有向な端点ペア（`fromKind/fromId` → `toKind/toId`）由来で、同一 link の再追加は `existing`（no-op、idempotent）。向きは区別する（A→B と B→A は別 link）。**自己ループ（両端が同一 kind + id）は tool error で拒否**する（provenance 上意味を持たないため）。
+
+### `link.remove`（確定・write / HITL・[Issue #90](https://github.com/ozzy-labs/suasor/issues/90)）
+
+手動 link を id 指定で削除する write tool（`link.add` の対）。実体は `src/propose/link-remove.ts`。`LinkRemoved` event を append → `links` projection から該当行が消える（`graph.*` から辿れなくなる）。event log は add/remove ペアを保持するため、link のライフサイクルは監査可能。HITL。
+
+**手動 link のみ削除可能**: reducer 由来の provenance エッジ（`derived_from` / `replies_to` / `references`）は `link_id` を持たず reducer 所有のため削除対象外。削除対象の `linkId` は `graph.related` の neighbor に付与される `linkId` フィールドから取得する。
+
+引数（Zod）: `{ "linkId": string（min 1） }`（`link.add` が返した `linkId`）。
+
+戻り値: `{ "linkId": "link_...", "status": "removed" }`。**存在しない link の remove は tool error で拒否**する（host が誤りを表示できるよう silent no-op しない）。
 
 ## Tool introspection（`suasor mcp tools`）
 

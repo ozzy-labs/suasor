@@ -7,9 +7,11 @@
  * `source.list` / `source.get`, and `task.list` / `decision.list` /
  * `inbox.list`. The write tools — `connector.sync` (read-only ingest, ADR-0007 /
  * #10), `propose.generate` / `propose.apply` (HITL candidate generation +
- * application, #12), `task.create` (direct task creation, #12 追補 D2), and the
+ * application, #12), `task.create` (direct task creation, #12 追補 D2), the
  * direct daily-loop writes `decision.record` / `inbox.add` / `inbox.triage`
- * (Issue #88) — are registered when a writable `Store` + config are supplied.
+ * (Issue #88), and the manual knowledge-graph link CRUD `link.add` /
+ * `link.remove` (Issue #90) — are registered when a writable `Store` + config
+ * are supplied.
  * Write tools carry `readOnlyHint: false` so hosts gate them behind HITL (no
  * auto-apply, ADR-0004 / FR-PRO-2).
  *
@@ -41,6 +43,8 @@ import { decisionRecord } from "../propose/decision-record.ts";
 import { proposeGenerate } from "../propose/generate.ts";
 import { inboxAdd } from "../propose/inbox-add.ts";
 import { inboxTriage, TRIAGE_ACTIONS, TriageError } from "../propose/inbox-triage.ts";
+import { linkAdd } from "../propose/link-add.ts";
+import { linkRemove } from "../propose/link-remove.ts";
 import { taskCreate } from "../propose/task-create.ts";
 import {
   createEmbedder,
@@ -156,7 +160,8 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
         "propose.generate, propose.apply, task.create, decision.record, inbox.add, " +
-        "inbox.triage) are HITL: gate them behind human approval, never auto-apply.",
+        "inbox.triage, link.add, link.remove) are HITL: gate them behind human " +
+        "approval, never auto-apply.",
     },
   );
 
@@ -394,7 +399,8 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       description:
         "Provenance neighbours of an entity (kind + id) over the links projection — " +
         "1 hop in both directions (ADR-0018). Relations: derived_from / replies_to / " +
-        "references. Read-only; fetch bodies via source.get.",
+        "references / manual_link (the latter carry a `linkId` for link.remove). " +
+        "Read-only; fetch bodies via source.get.",
       inputSchema: {
         kind: z.string().min(1).describe("Origin entity kind (e.g. task / decision / source)."),
         id: z.string().min(1).describe("Origin entity id."),
@@ -683,6 +689,81 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           // Invalid state-machine transitions surface as tool errors (not a crash)
           // so the host can show the rejection and the user can correct it.
           if (error instanceof TriageError) {
+            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+          }
+          throw error;
+        }
+      },
+    );
+
+    // --- link.add: create a manual provenance link (Issue #90). ---
+    // The human/agent's own "relate these two entities" path, beyond the
+    // reducer-derived edges. Appends a LinkAdded event → links projection with
+    // the `manual_link` relation (graph.related / graph.expand then traverse it).
+    // Idempotent on the directed endpoint pair; self-loops are rejected. HITL.
+    server.registerTool(
+      "link.add",
+      {
+        title: "Add manual link",
+        description:
+          "Create a manual provenance link (relation `manual_link`) between two " +
+          "entities so graph.related / graph.expand can traverse it — beyond the " +
+          "reducer-derived edges (derived_from / replies_to / references). Write " +
+          "tool: requires human approval — no auto-apply (ADR-0004). Idempotent: " +
+          "re-adding the same directed link is a no-op; a self-loop is rejected.",
+        inputSchema: {
+          fromKind: z
+            .string()
+            .min(1)
+            .describe("Origin entity kind (e.g. task / decision / source)."),
+          fromId: z.string().min(1).describe("Origin entity id."),
+          toKind: z.string().min(1).describe("Target entity kind."),
+          toId: z.string().min(1).describe("Target entity id."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ fromKind, fromId, toKind, toId }) => {
+        try {
+          const result = linkAdd(write.store, { fromKind, fromId, toKind, toId });
+          return jsonResult(result);
+        } catch (error) {
+          // A self-loop (or other invalid input) surfaces as a tool error so the
+          // host can show the rejection rather than crash.
+          if (error instanceof Error) {
+            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+          }
+          throw error;
+        }
+      },
+    );
+
+    // --- link.remove: delete a manual provenance link by id (Issue #90). ---
+    // Removal half of the manual-link pair. Appends a LinkRemoved event → the
+    // row disappears from links (audit-able via the add/remove event pair). Only
+    // manual links (carrying a link_id) are removable; removing a non-existent
+    // link is a tool error so the host surfaces the mistake. HITL.
+    server.registerTool(
+      "link.remove",
+      {
+        title: "Remove manual link",
+        description:
+          "Remove a manual link by its id (the `linkId` returned by link.add). " +
+          "Only manual links are removable — reducer-derived provenance edges are " +
+          "owned by the reducer. Write tool: requires human approval — no " +
+          "auto-apply (ADR-0004). Removing a non-existent link is a tool error.",
+        inputSchema: {
+          linkId: z.string().min(1).describe("Manual link id to remove (from link.add)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ linkId }) => {
+        try {
+          const result = linkRemove(write.store, { linkId });
+          return jsonResult(result);
+        } catch (error) {
+          // Removing an absent link surfaces as a tool error (not a crash) so the
+          // host can show the rejection and the user can correct it.
+          if (error instanceof Error) {
             return { isError: true, content: [{ type: "text" as const, text: error.message }] };
           }
           throw error;

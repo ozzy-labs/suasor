@@ -8,7 +8,8 @@
  *   - `propose.apply` persists approved candidates as domain events (idempotent),
  *   - `task.create` is the direct human "add task" path,
  *   - `decision.record` is the direct human "log decision" path,
- *   - `inbox.add` / `inbox.triage` are the daily inbox capture + resolution loop.
+ *   - `inbox.add` / `inbox.triage` are the daily inbox capture + resolution loop,
+ *   - `link.add` / `link.remove` are the manual knowledge-graph link CRUD (#90).
  *
  * All are HITL: there is no auto-apply path (ADR-0004 / FR-PRO-2).
  */
@@ -39,7 +40,7 @@ export {
   type ProposeGenerateOutput,
   proposeGenerate,
 } from "./generate.ts";
-export { candidateId, entityId, inboxId } from "./id.ts";
+export { candidateId, entityId, inboxId, manualLinkId } from "./id.ts";
 export {
   InboxAddInput,
   type InboxAddOutput,
@@ -53,6 +54,16 @@ export {
   TriageAction,
   TriageError,
 } from "./inbox-triage.ts";
+export {
+  LinkAddInput,
+  type LinkAddOutput,
+  linkAdd,
+} from "./link-add.ts";
+export {
+  LinkRemoveInput,
+  type LinkRemoveOutput,
+  linkRemove,
+} from "./link-remove.ts";
 export {
   TaskCreateInput,
   type TaskCreateOutput,

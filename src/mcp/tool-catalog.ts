@@ -105,6 +105,16 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: false,
     summary: "Resolve an open inbox item (task / decision / discard).",
   },
+  {
+    name: "link.add",
+    readOnlyHint: false,
+    summary: "Create a manual provenance link between two entities (LinkAdded, manual_link).",
+  },
+  {
+    name: "link.remove",
+    readOnlyHint: false,
+    summary: "Remove a manual link by id (LinkRemoved).",
+  },
 ];
 
 /**
