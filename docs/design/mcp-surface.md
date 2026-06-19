@@ -12,6 +12,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `recall.search` | 意味検索（embedding 有効時の vec0 KNN。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]） |
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
+| `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
 | `brief` | 期間サマリ（LLM 要約。委譲先で生成） | 後続 Issue |
 | `graph.related` | 関連 entity 辿り | 後続 Issue |
 
@@ -73,6 +74,16 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 | `task.list` | `state?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
 | `decision.list` | （なし） | `recorded_at`（`recordedAfter` / `recordedBefore`） | `{ "decisions": [...] }` |
 | `inbox.list` | `state?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
+
+### `slack.demand.list`（[ADR-0012](../adr/0012-slack-demand-digest.md)）
+
+取り込み済み `slack_message` source から **query 導出**する Slack demand（@mention / DM）。`source_type='slack_message'` かつ（DM = channel id が `D` 始まり）または（mention = `body LIKE '%<@uid>%'`）。新規 projection table は持たない。
+
+| 追加引数 | 時間窓の対象列 | 戻り値キー |
+|---|---|---|
+| `selfUserId?: string`（mention 用、未指定時は config の `self_user_id` にフォールバック）/ `kinds?: ("mention"\|"dm")[]` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "kind": "mention"\|"dm" }] }` |
+
+`selfUserId` も config も無いと mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は空）。
 
 ### `catchup` skill のバックエンド方針（レビュー D1 確定）
 

@@ -53,6 +53,7 @@ import {
   getSource,
   listDecisions,
   listInbox,
+  listSlackDemand,
   listSources,
   listTasks,
 } from "./queries.ts";
@@ -87,6 +88,12 @@ export interface McpServerDeps {
    * When provided it takes precedence over building one from `embedding`.
    */
   embedder?: Embedder | null;
+  /**
+   * Operator Slack user ids for `slack.demand.list` `<@you>` mention detection
+   * (ADR-0012), resolved from `[connectors.slack]` config. Empty/omitted →
+   * demand falls back to DM-only unless the caller passes `selfUserId`.
+   */
+  slackSelfUserIds?: string[];
   /**
    * Writable store + connector config for the `connector.sync` write tool
    * (ADR-0007 / Issue #10). When omitted, the server exposes read tools only
@@ -301,6 +308,43 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         limit,
       });
       return jsonResult({ decisions });
+    },
+  );
+
+  // --- slack.demand.list ---
+  server.registerTool(
+    "slack.demand.list",
+    {
+      title: "List Slack demand",
+      description:
+        "List unread-worthy Slack signals — @mentions of you and DMs — newest first, " +
+        "derived (read-only, FTS-first) from ingested slack_message sources (ADR-0012). " +
+        "Use as a priority signal in next-actions / personal-brief.",
+      inputSchema: {
+        selfUserId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Your Slack user id (Uxxxx) for @mention detection; falls back to config."),
+        kinds: z
+          .array(z.enum(["mention", "dm"]))
+          .optional()
+          .describe("Restrict to these kinds (default: both)."),
+        observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
+        observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
+        limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ selfUserId, kinds, observedAfter, observedBefore, limit }) => {
+      const selfUserIds = selfUserId ? [selfUserId] : (deps.slackSelfUserIds ?? []);
+      const demand = listSlackDemand(sqlite, {
+        selfUserIds,
+        ...(kinds ? { kinds } : {}),
+        observed: { after: observedAfter, before: observedBefore },
+        limit,
+      });
+      return jsonResult({ demand });
     },
   );
 

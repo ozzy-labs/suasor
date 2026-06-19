@@ -61,11 +61,44 @@ describe("MCP read surface", () => {
         "inbox.list",
         "recall.search",
         "search",
+        "slack.demand.list",
         "source.get",
         "source.list",
         "task.list",
       ].sort(),
     );
+  });
+
+  test("slack.demand.list returns @mentions (config self id) and DMs", async () => {
+    const slack = (id: string, channel: string, body: string) =>
+      store.record({
+        type: "SourceObserved",
+        externalId: id,
+        sourceType: "slack_message",
+        body,
+        observedAt: "2026-06-14T00:00:00.000Z",
+        fingerprint: id,
+        meta: { team: "T1", channel },
+      });
+    slack("m1", "C1", "please review <@U_ME>");
+    slack("d1", "D9", "direct ping");
+    slack("n1", "C1", "ordinary chatter");
+
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "disabled",
+      slackSelfUserIds: ["U_ME"],
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const res = await client.callTool({ name: "slack.demand.list", arguments: {} });
+    const { demand } = parseResult(res as never) as {
+      demand: { externalId: string; kind: string }[];
+    };
+    expect(demand.map((d) => d.externalId).sort()).toEqual(["d1", "m1"]);
+    expect(demand.find((d) => d.externalId === "d1")?.kind).toBe("dm");
   });
 
   test("every tool is annotated read-only (auto-approve hint, no side effects)", async () => {
@@ -308,6 +341,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "inbox.list",
         "recall.search",
         "search",
+        "slack.demand.list",
         "source.get",
         "source.list",
         "task.list",

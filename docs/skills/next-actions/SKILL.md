@@ -17,8 +17,9 @@ description: 「次に何をする?」「やること教えて」「タスク何
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. `task.list`（`state=open` / `state=in_progress`）で未完 task を取る。期間指定があれば `updatedAfter` / `updatedBefore`（ISO 8601、`tasks.updated_at` ベース）でフィルタする
-2. `recall.search` で各 task に関連する context を補強する（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
-3. ホスト LLM が緊急度・依存・期日から優先度順に並べて next-actions を組み立てて返す
+2. `slack.demand.list` で Slack の @mention / DM の未処理 signal を取り、「読むべきが未処理」を priority 上位の入力に含める（[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ
+3. `recall.search` で各 task に関連する context を補強する（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
+4. ホスト LLM が緊急度・依存・期日から優先度順に並べて next-actions を組み立てて返す
 
 ## 制約
 
