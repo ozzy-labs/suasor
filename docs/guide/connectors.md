@@ -217,6 +217,26 @@ browser = "chromium"                     # chromium | firefox | webkit
 - **差分検知**: snapshot の抽出テキスト fingerprint。ページ内容が変わると更新として検知される（fingerprint 差分）
 - **注**: `playwright-core` はブラウザバイナリを同梱しない。実行ホストで `npx playwright install` 等によりエンジンを用意する
 
+## Local（`local`）
+
+設定したローカルディレクトリ群を再帰走査し、ファイルを取り込む（[ADR-0023](../adr/0023-local-filesystem-connectors.md)）。OS 同期済みの Box Drive / OneDrive / Dropbox マウントや任意のフォルダを**パス設定だけで**カバーする汎用 connector で、vendor ごとに connector を増やさない。`web`（Playwright snapshot を包む）と同じ「ローカル発生源」パターン。
+
+- **token**: 不要（ローカル FS のみ。認証経路は持たない）
+- **config**:
+
+```toml
+[connectors.local]
+roots = ["/Users/me/Library/CloudStorage/Box-Box", "/Users/me/OneDrive"]  # 走査対象ディレクトリ
+# textExtensions = [".md", ".txt", ".json", ...]  # 本文を読む拡張子（既定: テキスト系一式）
+# maxBytes = 1000000                               # 本文を読む最大バイト数（超過は name-only）
+```
+
+- **identity**: `local:<sha1(絶対パス)>`（パスごとに安定）/ **source_type**: `local_file`
+- **本文**: `textExtensions` に一致しサイズが `maxBytes` 以内のファイルは本文（= ファイル名 + 内容）を取り込み、それ以外は **name-only**（ファイル名のみ）で取り込む（box と同様、名前で検索可能にする）
+- **差分検知**（FR-ING-3）: `mtime:size:contentHash` の fingerprint。内容編集・メタデータ変更で更新として検知され、無変更ファイルは再 sync で skip される（delta API は無いため fingerprint ベース）
+- **走査**: symlink は辿らない（read-only・循環回避）。読めないディレクトリ / ファイルは warning を出して skip し、pass 全体は止めない
+- **注（API connector との住み分け、ADR-0023 §3）**: 同一ファイルを `box`（API）と `local`（FS）の両方で取り込むと二重化する。identity は実体（パス / `box:file:<id>`）基準で別 source になるため自動統合はされない。設定で「どの connector に任せる範囲か」を住み分ける運用とする
+
 ## 新しい connector の追加
 
 1. `src/connectors/<name>.ts` に `Connector` 実装と factory を書く（SDK は `sync` 内で lazy import）

@@ -8,7 +8,7 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
 suasor init [--force]                  # 設定 + DB 初期化（skills install は別コマンド）
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild             # event replay で projection 再構築
-suasor <connector> sync [--full] [--json]  # 取り込み（github / slack / ms-graph / google / box / web）
+suasor <connector> sync [--full] [--json]  # 取り込み（github / slack / ms-graph / google / box / web / local）
 suasor <connector> auth set [--token T]  # connector の資格情報を OS keychain に保存（github / ms-graph / google / box、省略時 stdin）
 suasor <connector> auth test [--json]    # 保存済み資格情報を検証 + identity + scopes（github / ms-graph / google / box）
 suasor connectors list [--json]        # 登録 connector の enabled / token 設定有無を一覧（introspection）
@@ -32,7 +32,7 @@ suasor --version                       # バージョン出力
 
 実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` / `<connector> auth set` / `<connector> auth test`（github / ms-graph / google / box の汎用 auth verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) を Slack 以外へ拡張）/ `connectors list`（connector registry introspection・[ADR-0007](../adr/0007-connector-contract.md)）/ `embeddings status` / `embeddings rebuild` / `embeddings drain` / `embeddings find-duplicates`（埋め込み層の保守 verb・[ADR-0006](../adr/0006-ml-delegation.md)）/ `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `mcp tools`（MCP tool surface introspection・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset` / `slack cursor backfill`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
 `<connector> sync` は connector registry から 1 connector = 1 command で派生する（[ADR-0007](../adr/0007-connector-contract.md)）。
-稼働 connector: `github` / `slack` / `ms-graph`（Outlook / Calendar / OneDrive / Teams）/ `google`（Drive / Gmail / Calendar）/ `box` / `web`（Playwright snapshot）。setup は [connectors guide](../guide/connectors.md)。
+稼働 connector: `github` / `slack` / `ms-graph`（Outlook / Calendar / OneDrive / Teams）/ `google`（Drive / Gmail / Calendar）/ `box` / `web`（Playwright snapshot）/ `local`（ローカル FS 走査・[ADR-0023](../adr/0023-local-filesystem-connectors.md)）。setup は [connectors guide](../guide/connectors.md)。
 
 ## フラグ（確定）
 

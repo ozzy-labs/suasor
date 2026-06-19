@@ -38,6 +38,10 @@ const REGISTRY: Record<string, FactoryLoader> = {
     const { createWebConnector } = await import("./web.ts");
     return (config: ConnectorConfig) => createWebConnector(config);
   },
+  local: async () => {
+    const { createLocalConnector } = await import("./local.ts");
+    return (config: ConnectorConfig) => createLocalConnector(config);
+  },
 };
 
 /**
@@ -49,6 +53,7 @@ const REGISTRY: Record<string, FactoryLoader> = {
  * Kept here next to the registry so adding a connector declares its secret in
  * one place. Slack's flat/default workspace uses `"token"`; named workspaces use
  * `"<alias>:token"` (ADR-0014) — only the default token is introspected here.
+ * Web and local read the filesystem / public pages only, so they need no auth.
  */
 const SECRET_NAMES: Record<string, readonly string[]> = {
   github: ["token"],
@@ -57,6 +62,7 @@ const SECRET_NAMES: Record<string, readonly string[]> = {
   google: ["refreshToken"],
   box: ["token"],
   web: [],
+  local: [],
 };
 
 /** Names of all registered connectors (cheap; loads no SDK). */

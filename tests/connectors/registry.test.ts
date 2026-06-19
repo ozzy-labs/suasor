@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { connectorNames, hasConnector, loadConnector } from "../../src/connectors/registry.ts";
 
 /** Every connector that must resolve from the registry, in sorted order. */
-const EXPECTED = ["box", "github", "google", "ms-graph", "slack", "web"];
+const EXPECTED = ["box", "github", "google", "local", "ms-graph", "slack", "web"];
 
 describe("connector registry", () => {
   test("connectorNames returns the full registered set, sorted", () => {

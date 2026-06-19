@@ -90,7 +90,7 @@ describe("suasor connectors list", () => {
     expect(code).toBe(0);
     const parsed = JSON.parse(out) as Status[];
     expect(parsed.map((s) => s.name).sort()).toEqual(
-      ["box", "github", "google", "ms-graph", "slack", "web"].sort(),
+      ["box", "github", "google", "local", "ms-graph", "slack", "web"].sort(),
     );
   });
 
