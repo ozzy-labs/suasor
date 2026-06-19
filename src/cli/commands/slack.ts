@@ -487,6 +487,14 @@ export class SlackCursorBackfillCommand extends Command {
     const next: Record<string, Record<string, string>> = structuredClone(current);
     const aliasMap = next[alias] ?? {};
     const before = aliasMap[this.channel];
+    // Backfill goes OLDER. If the floor is not older than the current cursor it
+    // would *advance* it and skip unfetched messages — warn (footgun guard).
+    if (before !== undefined && Number.parseFloat(floorTs) >= Number.parseFloat(before)) {
+      this.context.stderr.write(
+        `warning: --since (${floorTs}) is not older than the current cursor (${before}); ` +
+          "this advances the cursor and would skip unfetched messages\n",
+      );
+    }
     aliasMap[this.channel] = floorTs;
     next[alias] = aliasMap;
 
