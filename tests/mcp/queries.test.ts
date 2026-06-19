@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import {
   buildBrief,
+  expandGraph,
   getSource,
   listDecisions,
   listInbox,
+  listLinks,
   listSlackDemand,
   listSources,
   listTasks,
@@ -278,5 +280,52 @@ describe("buildBrief (ADR-0017)", () => {
     source("c", "2026-06-13T02:00:00.000Z");
     const b = buildBrief(sqlite(), { since: W1, until: W2, limit: 2 });
     expect(b.sources).toHaveLength(2);
+  });
+});
+
+describe("graph traversal: listLinks / expandGraph (ADR-0018)", () => {
+  test("listLinks returns provenance neighbours in both directions", () => {
+    // The reducer materialises task --derived_from--> source from sourceExternalIds.
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    expect(listLinks(sqlite(), "source", "s1")).toEqual([
+      { kind: "task", id: "t1", relation: "derived_from", direction: "in" },
+    ]);
+    expect(listLinks(sqlite(), "task", "t1")).toEqual([
+      { kind: "source", id: "s1", relation: "derived_from", direction: "out" },
+    ]);
+  });
+
+  test("direction and relation filters", () => {
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    expect(listLinks(sqlite(), "task", "t1", { direction: "in" })).toEqual([]); // no incoming
+    expect(listLinks(sqlite(), "task", "t1", { relation: "replies_to" })).toEqual([]); // wrong relation
+  });
+
+  test("expandGraph traverses multi-hop with cycle guard + edge dedup", () => {
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    store.record({
+      type: "DecisionRecorded",
+      decisionId: "d1",
+      title: "d",
+      rationale: "",
+      sourceExternalIds: ["s1"],
+    });
+    const g = expandGraph(sqlite(), "task", "t1", { depth: 2 });
+    expect(g.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual([
+      "decision:d1",
+      "source:s1",
+      "task:t1",
+    ]);
+    expect(g.edges).toHaveLength(2); // t1->s1, d1->s1 (no duplicate t1->s1)
+  });
+
+  test("expandGraph respects the node limit", () => {
+    store.record({
+      type: "TaskProposed",
+      taskId: "t1",
+      title: "t",
+      sourceExternalIds: ["s1", "s2", "s3"],
+    });
+    expect(expandGraph(sqlite(), "task", "t1", { depth: 2, limit: 2 }).nodes).toHaveLength(2);
   });
 });

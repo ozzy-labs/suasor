@@ -93,6 +93,10 @@ export function initSchema(sqlite: Database): void {
       to_id     TEXT NOT NULL,
       relation  TEXT NOT NULL
     );
+    -- Graph traversal (graph.related / graph.expand, ADR-0018) looks up edges by
+    -- endpoint in both directions; index each side.
+    CREATE INDEX IF NOT EXISTS idx_links_from ON links(from_kind, from_id);
+    CREATE INDEX IF NOT EXISTS idx_links_to   ON links(to_kind, to_id);
   `);
 
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English

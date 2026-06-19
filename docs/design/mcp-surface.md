@@ -14,7 +14,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
-| `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（[ADR-0018](../adr/0018-knowledge-graph-traversal.md)） | 設計確定（実装待ち） |
+| `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（[ADR-0018](../adr/0018-knowledge-graph-traversal.md)） | 実装済み（#71） |
 
 戻り値はすべて 1 個の `text` content（JSON 文字列）。時間フィルタは各 projection の自然な timestamp 列を対象にし、**下限 inclusive (`>=`) / 上限 exclusive (`<`)**（隣接レンジの二重計上を避ける）。`iso` は ISO 8601（offset 付き）datetime。`limit` は正整数で上限 500。
 
