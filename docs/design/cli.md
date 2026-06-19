@@ -13,7 +13,7 @@ suasor search [--limit N] [--json] <query>  # FTS 検索
 suasor mcp serve                       # MCP server（stdio）起動（read tools）
 suasor slack auth set [--token T]      # Slack token を OS keychain に保存（省略時 stdin）
 suasor slack auth test [--json]        # token 検証 + granted scopes + feature readiness
-suasor slack conversations [--types T] [--include-archived] [--limit N] [--json]  # 可視会話の列挙 + 設定ブロック出力
+suasor slack conversations [--types T] [--include-archived] [--limit N] [--sort last_self_post] [--json]  # 可視会話の列挙 + 設定ブロック出力
 suasor slack status [--json]           # 保存中の resume cursor（workspace / channel）を表示
 suasor slack cursor reset (--channel C1,C2 | --all) [--workspace A] [--yes]  # cursor を消し floor から取り直す
 suasor skills install [--scope S] [--host DIR] [--dry-run]  # アシスタント skill 展開
@@ -41,6 +41,7 @@ suasor --version                       # バージョン出力
 | `slack conversations` | `--types T` | all | 列挙する型のカンマ列 `public,private,im,mpim` |
 | `slack conversations` | `--include-archived` | false | アーカイブ済み channel も含める |
 | `slack conversations` | `--limit N` | none | 列挙する会話の最大数（正の整数） |
+| `slack conversations` | `--sort last_self_post` | — | engagement 順（自分の最終投稿 ts）。User Token 専用、Bot は N/A degrade（[ADR-0013](../adr/0013-slack-engagement-axis.md)） |
 | `slack conversations` | `--json` | false | 会話一覧 + teamId + missingScopes を JSON で出力 |
 | `slack status` | `--json` | false | resume cursor map（alias→channel→ts）を JSON で出力 |
 | `slack cursor reset` | `--channel C1,C2` | — | reset 対象 channel id（カンマ列）。`--all` と排他 |

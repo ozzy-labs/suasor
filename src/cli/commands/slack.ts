@@ -163,6 +163,9 @@ export class SlackConversationsCommand extends Command {
   limit = Option.String("--limit", { description: "Maximum number of conversations to list." });
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
   workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  sort = Option.String("--sort", {
+    description: "Sort order: last_self_post (engagement; User Token only, ADR-0013).",
+  });
 
   override async execute(): Promise<number> {
     // Validate args before any keychain / network work so bad input fails fast.
@@ -194,6 +197,11 @@ export class SlackConversationsCommand extends Command {
       limit = n;
     }
 
+    if (this.sort !== undefined && this.sort !== "last_self_post") {
+      this.context.stderr.write(`error: invalid --sort: ${this.sort} (valid: last_self_post)\n`);
+      return 1;
+    }
+
     const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
@@ -213,31 +221,61 @@ export class SlackConversationsCommand extends Command {
     ]);
 
     try {
-      // One auth.test resolves the team id for the config block (and validates the token).
-      const { teamId } = await testToken(token);
+      // One auth.test resolves the team id for the config block + the principal
+      // (engagement sort is User Token only — ADR-0013).
+      const { teamId, principal } = await testToken(token);
       const result = await listConversations(token, {
         ...(types ? { types } : {}),
         ...(limit !== undefined ? { limit } : {}),
         includeArchived: this.includeArchived,
       });
 
+      // Engagement axis (--sort=last_self_post): resolve each conversation's
+      // last self-post ts via search.messages and sort by it. Requires a User
+      // Token; a Bot Token degrades to N/A and the default order (ADR-0013).
+      let lastSelfPost: Map<string, string> | null = null;
+      let conversations = result.conversations;
+      if (this.sort === "last_self_post") {
+        if (principal !== "user") {
+          this.context.stderr.write(
+            "warning: --sort=last_self_post is N/A (User Token only) — listing in default order\n",
+          );
+        } else {
+          const { searchLastSelfPost, sortByLastSelfPost } = await import(
+            "../../connectors/slack/search.ts"
+          );
+          lastSelfPost = await searchLastSelfPost(token);
+          conversations = sortByLastSelfPost(conversations, lastSelfPost);
+          this.context.stderr.write(
+            "note: last_self_post reflects Slack's search index, which lags real time (approximate)\n",
+          );
+        }
+      }
+
       if (this.json) {
-        this.context.stdout.write(`${JSON.stringify({ teamId, ...result }, null, 2)}\n`);
+        const withEngagement = lastSelfPost
+          ? conversations.map((c) => ({ ...c, lastSelfPost: lastSelfPost?.get(c.id) ?? null }))
+          : conversations;
+        this.context.stdout.write(
+          `${JSON.stringify({ teamId, conversations: withEngagement, missingScopes: result.missingScopes }, null, 2)}\n`,
+        );
         return 0;
       }
 
-      this.context.stdout.write(
-        `${result.conversations.length} conversation(s) visible to this token:\n`,
-      );
-      for (const c of result.conversations) {
+      this.context.stdout.write(`${conversations.length} conversation(s) visible to this token:\n`);
+      for (const c of conversations) {
         const archived = c.isArchived ? " (archived)" : "";
-        this.context.stdout.write(`  ${c.id}  ${c.displayName}${archived}\n`);
+        const engagement = lastSelfPost ? `  last_self_post=${lastSelfPost.get(c.id) ?? "-"}` : "";
+        this.context.stdout.write(`  ${c.id}  ${c.displayName}${archived}${engagement}\n`);
       }
       for (const [type, scope] of Object.entries(result.missingScopes)) {
         this.context.stderr.write(`warning: ${type} not listed — missing scope ${scope}\n`);
       }
       this.context.stdout.write("\n");
-      for (const line of renderConfigBlock(teamId, result)) {
+      for (const line of renderConfigBlock(teamId, {
+        conversations,
+        missingScopes: result.missingScopes,
+      })) {
         this.context.stdout.write(`${line}\n`);
       }
       this.context.stderr.write(
