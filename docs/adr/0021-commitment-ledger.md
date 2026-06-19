@@ -1,6 +1,6 @@
 # 0021. Commitment ledger（約束/コミットメントの抽出と HITL 管理）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP+HITL）, [ADR-0006](0006-ml-delegation.md)（ML 委譲）, [ADR-0012](0012-slack-demand-digest.md)（demand signal）, [ADR-0002](0002-event-sourced-architecture.md)（event-sourced）

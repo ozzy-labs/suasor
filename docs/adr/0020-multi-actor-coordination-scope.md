@@ -1,6 +1,6 @@
 # 0020. Multi-actor coordination scope（session/handoff/lock/agent-run/workspace）+ graph.trace
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0003](0003-local-first-and-content-minimization.md)（local-first）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP 境界）, [ADR-0009](0009-multi-agent-neutrality.md)（マルチエージェント中立）, [ADR-0018](0018-knowledge-graph-traversal.md)（graph traversal）

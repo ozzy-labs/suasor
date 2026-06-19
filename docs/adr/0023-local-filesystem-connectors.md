@@ -1,6 +1,6 @@
 # 0023. Local-filesystem connectors（box-drive / onedrive-drive とローカル発生源）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0003](0003-local-first-and-content-minimization.md)（local-first）, [ADR-0006](0006-ml-delegation.md)（ML 委譲）

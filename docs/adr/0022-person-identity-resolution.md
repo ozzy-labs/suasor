@@ -1,6 +1,6 @@
 # 0022. Person identity resolution（author handle の同定と HITL merge/split）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP+HITL）, [ADR-0002](0002-event-sourced-architecture.md)（event-sourced）, [ADR-0007](0007-connector-contract.md)（connector author）, [ADR-0012](0012-slack-demand-digest.md)（self_user_id）
