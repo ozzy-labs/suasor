@@ -57,6 +57,7 @@ describe("MCP read surface", () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
+        "brief",
         "decision.list",
         "inbox.list",
         "recall.search",
@@ -99,6 +100,29 @@ describe("MCP read surface", () => {
     };
     expect(demand.map((d) => d.externalId).sort()).toEqual(["d1", "m1"]);
     expect(demand.find((d) => d.externalId === "d1")?.kind).toBe("dm");
+  });
+
+  test("brief bundles the period's material by section (ADR-0017)", async () => {
+    seedSource("s1", "in-window source"); // observedAt 2026-06-14 (seedSource default)
+    store.record(
+      { type: "DecisionRecorded", decisionId: "dec1", title: "d", rationale: "" },
+      new Date("2026-06-14T00:00:00.000Z"),
+    );
+    const client = await connect();
+    const res = await client.callTool({
+      name: "brief",
+      arguments: { since: "2026-06-13T00:00:00.000Z", until: "2026-06-15T00:00:00.000Z" },
+    });
+    const brief = parseResult(res as never) as {
+      window: { since: string; until: string };
+      sources: { externalId: string }[];
+      decisions: { id: string }[];
+      inbox: unknown[];
+      demand: unknown[];
+    };
+    expect(brief.window.since).toBe("2026-06-13T00:00:00.000Z");
+    expect(brief.sources.map((s) => s.externalId)).toContain("s1");
+    expect(brief.decisions.map((d) => d.id)).toEqual(["dec1"]);
   });
 
   test("every tool is annotated read-only (auto-approve hint, no side effects)", async () => {
@@ -337,6 +361,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         // read
+        "brief",
         "decision.list",
         "inbox.list",
         "recall.search",

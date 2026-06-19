@@ -352,3 +352,54 @@ export function listSlackDemand(
     return { ...record, kind: channel.startsWith("D") ? "dm" : "mention" };
   });
 }
+
+/** A period bundle for host summarization (ADR-0017). */
+export interface Brief {
+  /** The window the bundle covers (null when unbounded). */
+  window: { since: string | null; until: string | null };
+  /** Sources observed in the window. */
+  sources: SourceRecord[];
+  /** Tasks updated in the window. */
+  tasks: TaskRecord[];
+  /** Decisions recorded in the window. */
+  decisions: DecisionRecord[];
+  /** Currently-open inbox items (not time-filtered — "what is unprocessed now"). */
+  inbox: InboxRecord[];
+  /** Slack demand (@mention / DM) observed in the window. */
+  demand: SlackDemandRecord[];
+}
+
+export interface BuildBriefOptions {
+  /** Window lower bound (inclusive), ISO 8601. */
+  since?: string;
+  /** Window upper bound (exclusive), ISO 8601. */
+  until?: string;
+  /** Per-section row cap. */
+  limit?: number;
+  /** Operator Slack user ids for demand `<@you>` mentions (ADR-0012). */
+  selfUserIds?: string[];
+}
+
+/**
+ * Assemble the period's material (ADR-0017) so the host LLM can compose the
+ * summary in one round-trip. Pure composition of the existing read queries with
+ * each section's natural time column — no in-process LLM (ADR-0006), no persist.
+ */
+export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): Brief {
+  const { since, until, limit, selfUserIds } = options;
+  const window: TimeRange = { after: since, before: until };
+  const cap = limit !== undefined ? { limit } : {};
+  return {
+    window: { since: since ?? null, until: until ?? null },
+    sources: listSources(sqlite, { observed: window, ...cap }),
+    tasks: listTasks(sqlite, { updated: window, ...cap }),
+    decisions: listDecisions(sqlite, { recorded: window, ...cap }),
+    // Inbox is "currently open", not period-scoped (what is unprocessed now).
+    inbox: listInbox(sqlite, { state: "open", ...cap }),
+    demand: listSlackDemand(sqlite, {
+      observed: window,
+      ...(selfUserIds ? { selfUserIds } : {}),
+      ...cap,
+    }),
+  };
+}

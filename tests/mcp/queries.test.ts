@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import {
+  buildBrief,
   getSource,
   listDecisions,
   listInbox,
@@ -216,5 +217,66 @@ describe("listSlackDemand (ADR-0012)", () => {
     const windowed = listSlackDemand(sqlite(), { observed: { after: "2026-06-11T00:00:00.000Z" } });
     expect(windowed.map((r) => r.externalId)).toEqual(["d3", "d2"]);
     expect(listSlackDemand(sqlite(), { limit: 1 }).map((r) => r.externalId)).toEqual(["d3"]);
+  });
+});
+
+describe("buildBrief (ADR-0017)", () => {
+  const W0 = "2026-06-10T00:00:00.000Z"; // before window
+  const W1 = "2026-06-12T00:00:00.000Z"; // window start
+  const W2 = "2026-06-14T00:00:00.000Z"; // window end (exclusive)
+
+  function seed() {
+    // sources: one in-window (observed), one before
+    source("s-in", "2026-06-13T00:00:00.000Z");
+    source("s-old", W0);
+    // a slack DM in-window
+    store.record({
+      type: "SourceObserved",
+      externalId: "d-in",
+      sourceType: "slack_message",
+      body: "dm",
+      observedAt: "2026-06-13T01:00:00.000Z",
+      fingerprint: "d-in",
+      meta: { team: "T1", channel: "D9" },
+    });
+    // decision recorded in-window (recorded_at = the provided clock)
+    const inWindow = new Date("2026-06-13T00:00:00.000Z");
+    store.record(
+      { type: "DecisionRecorded", decisionId: "dec1", title: "d", rationale: "" },
+      inWindow,
+    );
+    // open inbox item (current, not time-scoped)
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "i1",
+      sourceExternalId: "s-in",
+      state: "open",
+    });
+  }
+
+  test("bundles each section by its natural time column", () => {
+    seed();
+    const b = buildBrief(sqlite(), { since: W1, until: W2 });
+    expect(b.window).toEqual({ since: W1, until: W2 });
+    expect(b.sources.map((s) => s.externalId).sort()).toEqual(["d-in", "s-in"]); // s-old excluded
+    expect(b.decisions.map((d) => d.id)).toEqual(["dec1"]);
+    expect(b.inbox.map((i) => i.id)).toEqual(["i1"]);
+    expect(b.demand.map((d) => d.externalId)).toEqual(["d-in"]); // DM detected
+  });
+
+  test("an out-of-window query yields empty sections", () => {
+    seed();
+    const b = buildBrief(sqlite(), { since: "2026-07-01T00:00:00.000Z" });
+    expect(b.sources).toEqual([]);
+    expect(b.decisions).toEqual([]);
+    expect(b.demand).toEqual([]);
+  });
+
+  test("limit caps each section", () => {
+    source("a", "2026-06-13T00:00:00.000Z");
+    source("b", "2026-06-13T01:00:00.000Z");
+    source("c", "2026-06-13T02:00:00.000Z");
+    const b = buildBrief(sqlite(), { since: W1, until: W2, limit: 2 });
+    expect(b.sources).toHaveLength(2);
   });
 });
