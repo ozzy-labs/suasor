@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/ozzy-labs/suasor/compare/v0.1.2...v0.1.3) (2026-06-19)
+
+
+### Bug Fixes
+
+* derive --version from package.json + sync stale version pins ([#73](https://github.com/ozzy-labs/suasor/issues/73)) ([f334d0f](https://github.com/ozzy-labs/suasor/commit/f334d0f0f120f8e2b297000138c1473bacf7d183))
+
 ## [0.1.2](https://github.com/ozzy-labs/suasor/compare/v0.1.1...v0.1.2) (2026-06-19)
 
 

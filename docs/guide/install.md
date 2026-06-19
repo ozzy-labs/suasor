@@ -1,8 +1,8 @@
 # Install
 
 Suasor ships through four channels ([ADR-0010](../adr/0010-distribution.md)).
-**v0.1.0 is published** — npm, the standalone binaries, and the Docker image are
-all live.
+**Published** — npm, the standalone binaries, and the Docker image are all live
+(see the [latest release](https://github.com/ozzy-labs/suasor/releases/latest)).
 
 Suasor is an *application* (an MCP server), not a library, so it picks its own
 runtime: it runs on **Bun**. Pick a channel by whether you already use Bun — the

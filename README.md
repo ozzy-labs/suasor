@@ -14,7 +14,7 @@ Suasor is a local-first AI secretary. It gathers your scattered work context - c
 
 ## Status
 
-Early development — **v0.1.0 is published** (npm / standalone binaries / Docker). Built spec-first.
+Early development — **published** on npm / standalone binaries / Docker. Built spec-first.
 
 ## Install
 
@@ -25,7 +25,7 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 - **npm — for Bun users** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Requires **Bun ≥ 1.1** ([install Bun](https://bun.sh)) — uses `bun:sqlite`, so `npx`/Node won't run it; pnpm/npm can fetch it but Bun runs it. OIDC-published with provenance.
 - **MCP registry** — discoverable via [`server.json`](server.json).
 
-> v0.1.0 is published. Contributors can also run from source with the Quickstart below.
+> Published on npm / binaries / Docker. Contributors can also run from source with the Quickstart below.
 
 ## Quickstart (provisional)
 
@@ -83,7 +83,7 @@ No Bun on the host? Point it at the Docker image instead (no runtime needed):
   "mcpServers": {
     "suasor": {
       "command": "docker",
-      "args": ["run", "--rm", "-i", "-v", "suasor-data:/data", "ghcr.io/ozzy-labs/suasor:0.1.0"]
+      "args": ["run", "--rm", "-i", "-v", "suasor-data:/data", "ghcr.io/ozzy-labs/suasor:latest"]
     }
   }
 }
