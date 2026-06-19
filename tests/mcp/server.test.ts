@@ -409,6 +409,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "decision.record",
         "inbox.add",
         "inbox.triage",
+        "link.add",
+        "link.remove",
       ].sort(),
     );
   });
@@ -425,6 +427,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "decision.record",
       "inbox.add",
       "inbox.triage",
+      "link.add",
+      "link.remove",
     ];
     for (const name of writeTools) {
       const tool = tools.find((t) => t.name === name);
@@ -529,5 +533,72 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     })) as { isError?: boolean; content: { type: string; text?: string }[] };
     expect(res.isError).toBe(true);
     expect(res.content[0]?.text).toContain("not found");
+  });
+
+  test("link.add creates a manual_link visible via graph.related, link.remove deletes it", async () => {
+    const client = await connectWrite();
+    // task t1 ──manual_link──▶ decision d1
+    const add = parseResult(
+      (await client.callTool({
+        name: "link.add",
+        arguments: { fromKind: "task", fromId: "t1", toKind: "decision", toId: "d1" },
+      })) as never,
+    ) as { linkId: string; status: string };
+    expect(add.status).toBe("created");
+
+    // graph.related surfaces the manual link + its linkId (so it can be removed).
+    const related = parseResult(
+      (await client.callTool({
+        name: "graph.related",
+        arguments: { kind: "task", id: "t1" },
+      })) as never,
+    ) as {
+      neighbors: {
+        kind: string;
+        id: string;
+        relation: string;
+        direction: string;
+        linkId?: string;
+      }[];
+    };
+    expect(related.neighbors).toEqual([
+      { kind: "decision", id: "d1", relation: "manual_link", direction: "out", linkId: add.linkId },
+    ]);
+
+    // link.remove deletes it; the edge disappears from graph.related.
+    const rem = parseResult(
+      (await client.callTool({
+        name: "link.remove",
+        arguments: { linkId: add.linkId },
+      })) as never,
+    ) as { status: string };
+    expect(rem.status).toBe("removed");
+    const after = parseResult(
+      (await client.callTool({
+        name: "graph.related",
+        arguments: { kind: "task", id: "t1" },
+      })) as never,
+    ) as { neighbors: unknown[] };
+    expect(after.neighbors).toEqual([]);
+  });
+
+  test("link.add rejects a self-loop as a tool error", async () => {
+    const client = await connectWrite();
+    const res = (await client.callTool({
+      name: "link.add",
+      arguments: { fromKind: "task", fromId: "t1", toKind: "task", toId: "t1" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("itself");
+  });
+
+  test("link.remove rejects a non-existent link as a tool error", async () => {
+    const client = await connectWrite();
+    const res = (await client.callTool({
+      name: "link.remove",
+      arguments: { linkId: "link_missing" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("no manual link");
   });
 });

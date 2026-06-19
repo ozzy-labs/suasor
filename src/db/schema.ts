@@ -76,6 +76,11 @@ export const proposals = sqliteTable("proposals", {
 /**
  * Relation graph between projection entities (provenance links).
  * e.g. task → source, decision → source, reply_draft → source.
+ *
+ * Reducer-derived edges (`derived_from` / `replies_to` / `references`) carry a
+ * NULL `linkId` and are keyed only by their endpoints. Manual links (`manual_link`,
+ * ADR-0018 追補 / Issue #90) carry a stable content-derived `linkId` so they can be
+ * removed by id (`link.remove`) and replayed deterministically.
  */
 export const links = sqliteTable("links", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -85,6 +90,8 @@ export const links = sqliteTable("links", {
   /** Target entity kind/id (e.g. "source", <externalId>). */
   toKind: text("to_kind").notNull(),
   toId: text("to_id").notNull(),
-  /** Relationship label (e.g. "derived_from", "replies_to"). */
+  /** Relationship label (e.g. "derived_from", "replies_to", "manual_link"). */
   relation: text("relation").notNull(),
+  /** Stable id for a manual link (NULL for reducer-derived edges). */
+  linkId: text("link_id"),
 });

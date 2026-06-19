@@ -494,10 +494,18 @@ export interface GraphNode {
 
 /** A neighbour reached from an origin node in one hop, with the edge it crossed. */
 export interface GraphNeighbor extends GraphNode {
-  /** The link's relation label (`derived_from` / `replies_to` / `references`). */
+  /**
+   * The link's relation label (`derived_from` / `replies_to` / `references` /
+   * `manual_link`).
+   */
   relation: string;
   /** `out` = origin is the link's `from`; `in` = origin is the link's `to`. */
   direction: "out" | "in";
+  /**
+   * Stable id of a manual link (present only for `manual_link` edges, #90), so a
+   * caller can target it with `link.remove`. Reducer-derived edges omit it.
+   */
+  linkId?: string;
 }
 
 export interface ListLinksOptions {
@@ -513,12 +521,14 @@ interface LinkRow {
   to_kind: string;
   to_id: string;
   relation: string;
+  link_id: string | null;
 }
 
 /**
  * One-hop neighbours of an entity over the `links` provenance projection
  * (ADR-0018). Follows `out` edges (origin is `from`) and/or `in` edges (origin
- * is `to`). Read-only; relations are materialised by the reducer.
+ * is `to`). Read-only; reducer-derived relations plus manual links (#90, which
+ * carry a `linkId` so `link.remove` can target them) are returned uniformly.
  */
 export function listLinks(
   sqlite: Database,
@@ -534,23 +544,35 @@ export function listLinks(
   if (direction === "out" || direction === "both") {
     const rows = sqlite
       .query<LinkRow, (string | number)[]>(
-        `SELECT from_kind, from_id, to_kind, to_id, relation
+        `SELECT from_kind, from_id, to_kind, to_id, relation, link_id
            FROM links WHERE from_kind = ? AND from_id = ?${relClause}`,
       )
       .all(kind, id, ...relParam);
     for (const r of rows) {
-      out.push({ kind: r.to_kind, id: r.to_id, relation: r.relation, direction: "out" });
+      out.push({
+        kind: r.to_kind,
+        id: r.to_id,
+        relation: r.relation,
+        direction: "out",
+        ...(r.link_id !== null ? { linkId: r.link_id } : {}),
+      });
     }
   }
   if (direction === "in" || direction === "both") {
     const rows = sqlite
       .query<LinkRow, (string | number)[]>(
-        `SELECT from_kind, from_id, to_kind, to_id, relation
+        `SELECT from_kind, from_id, to_kind, to_id, relation, link_id
            FROM links WHERE to_kind = ? AND to_id = ?${relClause}`,
       )
       .all(kind, id, ...relParam);
     for (const r of rows) {
-      out.push({ kind: r.from_kind, id: r.from_id, relation: r.relation, direction: "in" });
+      out.push({
+        kind: r.from_kind,
+        id: r.from_id,
+        relation: r.relation,
+        direction: "in",
+        ...(r.link_id !== null ? { linkId: r.link_id } : {}),
+      });
     }
   }
   return out;

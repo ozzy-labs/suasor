@@ -158,6 +158,32 @@ export const ProposalRejected = z.object({
   reason: z.string().default(""),
 });
 
+/**
+ * A human/agent created a manual provenance link between two entities (HITL,
+ * ADR-0004 / ADR-0018 追補). Unlike the reducer-derived edges (`derived_from` /
+ * `replies_to` / `references`), a manual link carries its own stable `linkId`
+ * (content-derived from the endpoints) so it can be removed by id and replayed
+ * deterministically. The relation label is always `manual_link`.
+ */
+export const LinkAdded = z.object({
+  type: z.literal("LinkAdded"),
+  ...Envelope,
+  /** Stable, content-derived id for this manual link (endpoints → id). */
+  linkId: z.string().min(1),
+  fromKind: z.string().min(1),
+  fromId: z.string().min(1),
+  toKind: z.string().min(1),
+  toId: z.string().min(1),
+});
+
+/** A manual provenance link was removed by id (HITL, audit-able via the log). */
+export const LinkRemoved = z.object({
+  type: z.literal("LinkRemoved"),
+  ...Envelope,
+  /** Id of the manual link to remove ({@link LinkAdded}.linkId). */
+  linkId: z.string().min(1),
+});
+
 /** Discriminated union of all domain events (ADR-0002). */
 export const DomainEvent = z.discriminatedUnion("type", [
   SourceObserved,
@@ -170,6 +196,8 @@ export const DomainEvent = z.discriminatedUnion("type", [
   InboxItemTriaged,
   ProposalGenerated,
   ProposalRejected,
+  LinkAdded,
+  LinkRemoved,
 ]);
 export type DomainEvent = z.infer<typeof DomainEvent>;
 
@@ -185,6 +213,8 @@ export const EVENT_TYPES = [
   "InboxItemTriaged",
   "ProposalGenerated",
   "ProposalRejected",
+  "LinkAdded",
+  "LinkRemoved",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -202,4 +232,6 @@ export type NewEvent =
   | Omit<z.input<typeof ReplyDraftProposed>, "id" | "recordedAt">
   | Omit<z.input<typeof InboxItemTriaged>, "id" | "recordedAt">
   | Omit<z.input<typeof ProposalGenerated>, "id" | "recordedAt">
-  | Omit<z.input<typeof ProposalRejected>, "id" | "recordedAt">;
+  | Omit<z.input<typeof ProposalRejected>, "id" | "recordedAt">
+  | Omit<z.input<typeof LinkAdded>, "id" | "recordedAt">
+  | Omit<z.input<typeof LinkRemoved>, "id" | "recordedAt">;
