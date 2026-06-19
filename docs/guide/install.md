@@ -15,9 +15,9 @@ the simplest option if you don't already run Bun:
 | want local embedding with zero egress | **Docker (+Ollama)** | none (container only) |
 | already use Bun | **npm** (`bunx`) | Bun ≥ 1.1 |
 
-> Publishing is a deliberate manual step: `release.yaml` runs only on a published
-> GitHub Release or `workflow_dispatch`, never on push/merge (see
-> [Releasing](#releasing-maintainers)). Contributors can run from source via the
+> Releases are automated with release-please: merging its release PR publishes
+> npm + binaries + Docker (see [Releasing](#releasing-maintainers)).
+> Contributors can run from source via the
 > [Quickstart](../../README.md#quickstart-provisional).
 
 ## 1. Standalone single binary
@@ -119,25 +119,32 @@ package over stdio (`bunx @ozzylabs/suasor mcp serve`).
 
 ## Releasing (maintainers)
 
-Publishing is **manual and gated** — `.github/workflows/release.yaml` triggers
-only on `release: published` or `workflow_dispatch`, never on push/merge.
+Releases are **release-please-driven** ([ADR-0010](../adr/0010-distribution.md)).
+`.github/workflows/release.yaml` runs on every push to `main`: release-please
+maintains a **release PR** and, when it merges, cuts the tag + GitHub Release and
+publishes — all in that one workflow.
 
 One-time setup:
 
 - Register the npm **Trusted Publisher** on npmjs.com for `@ozzylabs/suasor`
   (Settings → Publishing → GitHub Actions, workflow `release.yaml`). One publisher
-  per package; no `NPM_TOKEN`.
+  per package; no `NPM_TOKEN`. The workflow filename must stay `release.yaml`.
 - MCP registry: install [`mcp-publisher`](https://github.com/modelcontextprotocol/registry),
   authenticate via GitHub for the `io.github.ozzy-labs/*` namespace.
 
 Cutting a release:
 
-1. Bump `version` in `package.json` (and `server.json`) per [SemVer](https://semver.org); commit via PR.
-2. Create a GitHub Release with tag `v<version>` (or run the workflow via `workflow_dispatch`).
-3. `release.yaml` then: publishes to npm (OIDC + provenance), cross-compiles the
-   single binaries and attaches them to the Release, and builds + pushes the
-   Docker image to GHCR.
-4. MCP registry submission is a separate manual `mcp-publisher publish` step
-   (the npm package carries `mcpName` for ownership validation).
+1. **Merge Conventional Commits to `main`.** release-please opens/updates a
+   `chore(main): release vX.Y.Z` PR that bumps `package.json` + writes
+   `CHANGELOG.md` (in 0.x: `feat` → minor, `fix` → patch).
+2. **Merge that release PR.** release-please creates tag `vX.Y.Z` + the GitHub
+   Release, and the same workflow then publishes to npm (OIDC + provenance),
+   cross-compiles the single binaries and attaches them to the Release, and
+   builds + pushes the Docker image to GHCR.
+3. **Sync `server.json` version** if needed, and submit to the MCP registry via
+   `mcp-publisher publish` (separate manual step; the npm package carries
+   `mcpName` for ownership validation).
 
-Nothing in this flow runs automatically on merge to `main`.
+> Publish runs in `release.yaml` itself (gated on `release_created`), not via a
+> separate `on: release` workflow: a Release made by release-please with
+> `GITHUB_TOKEN` does **not** cascade-trigger `on: release` / `on: push: tags`.
