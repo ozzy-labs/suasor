@@ -60,3 +60,7 @@ NNNN-kebab-case-title.md
 | 0017 | `brief` MCP tool — period bundle for host summarization |
 | 0018 | Knowledge graph traversal — `graph.related` / `graph.expand` |
 | 0019 | Slack fetch-path rate-limit retry (Retry-After-honoured) |
+| 0020 | Multi-actor coordination scope (session/handoff/lock/agent-run/workspace) + graph.trace |
+| 0021 | Commitment ledger (extraction + HITL lifecycle) |
+| 0022 | Person identity resolution (handle dedup, HITL merge/split) |
+| 0023 | Local-filesystem connectors (generic `local`, box-drive/onedrive-drive) |
