@@ -406,6 +406,9 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "propose.apply",
         "propose.reject",
         "task.create",
+        "decision.record",
+        "inbox.add",
+        "inbox.triage",
       ].sort(),
     );
   });
@@ -419,6 +422,9 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "propose.apply",
       "propose.reject",
       "task.create",
+      "decision.record",
+      "inbox.add",
+      "inbox.triage",
     ];
     for (const name of writeTools) {
       const tool = tools.find((t) => t.name === name);
@@ -452,5 +458,76 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     })) as { isError?: boolean; content: { type: string; text?: string }[] };
     expect(res.isError).toBe(true);
     expect(res.content[0]?.text).toContain("unknown connector");
+  });
+
+  test("decision.record appends a decision visible via decision.list", async () => {
+    const client = await connectWrite();
+    const rec = parseResult(
+      (await client.callTool({
+        name: "decision.record",
+        arguments: { title: "use bun", rationale: "fast" },
+      })) as never,
+    ) as { decisionId: string; status: string };
+    expect(rec.status).toBe("created");
+    const list = parseResult(
+      (await client.callTool({ name: "decision.list", arguments: {} })) as never,
+    ) as { decisions: { id: string; title: string }[] };
+    expect(list.decisions.map((d) => d.title)).toContain("use bun");
+    // Idempotent: a second identical record is a no-op (`existing`).
+    const again = parseResult(
+      (await client.callTool({
+        name: "decision.record",
+        arguments: { title: "use bun", rationale: "fast" },
+      })) as never,
+    ) as { status: string };
+    expect(again.status).toBe("existing");
+  });
+
+  test("inbox.add captures an open item visible via inbox.list", async () => {
+    const client = await connectWrite();
+    const add = parseResult(
+      (await client.callTool({
+        name: "inbox.add",
+        arguments: { sourceExternalId: "gh:7" },
+      })) as never,
+    ) as { inboxId: string; status: string };
+    expect(add.status).toBe("created");
+    const list = parseResult(
+      (await client.callTool({ name: "inbox.list", arguments: {} })) as never,
+    ) as { items: { id: string; sourceExternalId: string; state: string }[] };
+    const item = list.items.find((i) => i.id === add.inboxId);
+    expect(item?.state).toBe("open");
+    expect(item?.sourceExternalId).toBe("gh:7");
+  });
+
+  test("inbox.triage (task) creates a task and marks the item done", async () => {
+    const client = await connectWrite();
+    const add = parseResult(
+      (await client.callTool({
+        name: "inbox.add",
+        arguments: { sourceExternalId: "gh:8" },
+      })) as never,
+    ) as { inboxId: string };
+    const tri = parseResult(
+      (await client.callTool({
+        name: "inbox.triage",
+        arguments: { inboxId: add.inboxId, action: "task", title: "do it" },
+      })) as never,
+    ) as { state: string; createdEntityId: string };
+    expect(tri.state).toBe("done");
+    const tasks = parseResult(
+      (await client.callTool({ name: "task.list", arguments: {} })) as never,
+    ) as { tasks: { id: string; title: string }[] };
+    expect(tasks.tasks.find((t) => t.id === tri.createdEntityId)?.title).toBe("do it");
+  });
+
+  test("inbox.triage rejects an invalid transition as a tool error", async () => {
+    const client = await connectWrite();
+    const res = (await client.callTool({
+      name: "inbox.triage",
+      arguments: { inboxId: "inbox_missing", action: "discard" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("not found");
   });
 });

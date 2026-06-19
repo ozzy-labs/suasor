@@ -8,10 +8,11 @@
  * and `propose.list` (the proposal ledger by state, #89). The write tools —
  * `connector.sync` (read-only ingest, ADR-0007 / #10), `propose.generate` /
  * `propose.apply` / `propose.reject` (HITL candidate generation + application +
- * rejection, #12 / #89), and `task.create` (direct task creation, #12 追補 D2) —
- * are registered when a writable `Store` + config are supplied. Write tools carry
- * `readOnlyHint: false` so hosts gate them behind HITL (no auto-apply, ADR-0004 /
- * FR-PRO-2).
+ * rejection, #12 / #89), `task.create` (direct task creation, #12 追補 D2), and
+ * the direct daily-loop writes `decision.record` / `inbox.add` / `inbox.triage`
+ * (Issue #88) — are registered when a writable `Store` + config are supplied.
+ * Write tools carry `readOnlyHint: false` so hosts gate them behind HITL (no
+ * auto-apply, ADR-0004 / FR-PRO-2).
  *
  * Read = no side effects: every read tool only SELECTs (queries.ts) or runs the
  * FTS-first / recall search services (retrieval/), and is annotated
@@ -37,7 +38,10 @@ import {
   PROPOSE_MODES,
   ProposeMode as ProposeModeSchema,
 } from "../propose/candidates.ts";
+import { decisionRecord } from "../propose/decision-record.ts";
 import { persistProposals } from "../propose/generate.ts";
+import { inboxAdd } from "../propose/inbox-add.ts";
+import { inboxTriage, TRIAGE_ACTIONS, TriageError } from "../propose/inbox-triage.ts";
 import { proposeReject } from "../propose/reject.ts";
 import { taskCreate } from "../propose/task-create.ts";
 import {
@@ -154,9 +158,10 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "(FTS5); `recall.search` adds semantic search only when an embedding backend " +
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
-        "propose.generate, propose.apply, propose.reject, task.create) are HITL: gate " +
-        "them behind human approval, never auto-apply. propose.list (read) shows the " +
-        "candidate ledger by state for the approve/reject loop.",
+        "propose.generate, propose.apply, propose.reject, task.create, decision.record, " +
+        "inbox.add, inbox.triage) are HITL: gate them behind human approval, never " +
+        "auto-apply. propose.list (read) shows the candidate ledger by state for the " +
+        "approve/reject loop.",
     },
   );
 
@@ -654,6 +659,110 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
         });
         return jsonResult(result);
+      },
+    );
+
+    // --- decision.record: direct HITL decision recording (Issue #88). ---
+    // The decision counterpart to task.create: the human's own "log this
+    // decision" path. Appends DecisionRecorded → decisions projection. HITL,
+    // idempotent on content (title + provenance).
+    server.registerTool(
+      "decision.record",
+      {
+        title: "Record decision",
+        description:
+          "Record a decision directly (appends DecisionRecorded → decisions projection). " +
+          "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+          "Idempotent: re-recording the same decision (title + provenance) is a no-op.",
+        inputSchema: {
+          title: z.string().min(1).describe("Decision title."),
+          rationale: z.string().optional().describe("Why this decision was made."),
+          sourceExternalIds: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("Source ids this decision derives from (provenance)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ title, rationale, sourceExternalIds }) => {
+        const result = decisionRecord(write.store, {
+          title,
+          ...(rationale !== undefined ? { rationale } : {}),
+          ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
+        });
+        return jsonResult(result);
+      },
+    );
+
+    // --- inbox.add: capture an inbox item (Issue #88). ---
+    // The capture half of the daily triage loop. Appends InboxItemTriaged in the
+    // `open` state → inbox projection. HITL, idempotent on the captured source.
+    server.registerTool(
+      "inbox.add",
+      {
+        title: "Add inbox item",
+        description:
+          "Capture an inbox item referencing a source (appends InboxItemTriaged " +
+          "in the `open` state → inbox projection). Write tool: requires human " +
+          "approval — no auto-apply (ADR-0004). Idempotent: capturing the same " +
+          "source twice is a no-op.",
+        inputSchema: {
+          sourceExternalId: z
+            .string()
+            .min(1)
+            .describe("Source id the inbox item references (provenance)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ sourceExternalId }) => {
+        const result = inboxAdd(write.store, { sourceExternalId });
+        return jsonResult(result);
+      },
+    );
+
+    // --- inbox.triage: resolve an open inbox item (Issue #88 state machine). ---
+    // Moves an `open` item out of the inbox: task / decision creates the derived
+    // entity + marks the item `done`; discard marks it `dismissed`. Only `open`
+    // items may be triaged (invalid transitions are tool errors). HITL.
+    const triageActions = TRIAGE_ACTIONS.join(" / ");
+    server.registerTool(
+      "inbox.triage",
+      {
+        title: "Triage inbox item",
+        description:
+          `Resolve an open inbox item (actions: ${triageActions}). \`task\` / ` +
+          "`decision` create a derived task/decision from the item's source and " +
+          "mark it `done`; `discard` marks it `dismissed`. Only `open` items may " +
+          "be triaged. Write tool: requires human approval — no auto-apply (ADR-0004).",
+        inputSchema: {
+          inboxId: z.string().min(1).describe("Inbox item id to triage."),
+          action: z.enum(TRIAGE_ACTIONS).describe(`Triage action (${triageActions}).`),
+          title: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Title for the derived task/decision (required for task/decision)."),
+          rationale: z.string().optional().describe("Rationale for the derived decision."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ inboxId, action, title, rationale }) => {
+        try {
+          const result = inboxTriage(write.store, {
+            inboxId,
+            action,
+            ...(title !== undefined ? { title } : {}),
+            ...(rationale !== undefined ? { rationale } : {}),
+          });
+          return jsonResult(result);
+        } catch (error) {
+          // Invalid state-machine transitions surface as tool errors (not a crash)
+          // so the host can show the rejection and the user can correct it.
+          if (error instanceof TriageError) {
+            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+          }
+          throw error;
+        }
       },
     );
   }

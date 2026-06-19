@@ -100,6 +100,21 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     summary: "Reject a pending candidate with a reason (idempotent).",
   },
   { name: "task.create", readOnlyHint: false, summary: "Create a task directly (TaskProposed)." },
+  {
+    name: "decision.record",
+    readOnlyHint: false,
+    summary: "Record a decision directly (DecisionRecorded).",
+  },
+  {
+    name: "inbox.add",
+    readOnlyHint: false,
+    summary: "Capture an inbox item referencing a source (InboxItemTriaged, state open).",
+  },
+  {
+    name: "inbox.triage",
+    readOnlyHint: false,
+    summary: "Resolve an open inbox item (task / decision / discard).",
+  },
 ];
 
 /**
