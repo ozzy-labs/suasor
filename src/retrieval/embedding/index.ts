@@ -16,6 +16,17 @@ export {
   type OllamaEmbedderOptions,
 } from "./embedder.ts";
 export {
+  DEFAULT_DUPLICATE_THRESHOLD,
+  type DuplicatePair,
+  type EmbeddingKindStatus,
+  type EmbeddingRebuildResult,
+  type EmbeddingStatus,
+  embeddingDrain,
+  embeddingRebuild,
+  embeddingStatus,
+  findDuplicates,
+} from "./maintenance.ts";
+export {
   DEFAULT_RECALL_LIMIT,
   EMBEDDING_DISABLED_SIGNAL,
   embedSources,
@@ -25,4 +36,5 @@ export {
   recallSearch,
   toVectorBlob,
   upsertSourceVector,
+  type VectorProvenance,
 } from "./recall.ts";

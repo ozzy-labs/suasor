@@ -153,6 +153,29 @@ describe("MCP read surface", () => {
     expect(expand.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual(["source:s1", "task:t1"]);
   });
 
+  test("graph.expand direction traces incoming provenance (ADR-0020)", async () => {
+    // task t1 --derived_from--> source s1; from s1 the backward trace finds t1.
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    const client = await connect();
+
+    const inExpand = parseResult(
+      (await client.callTool({
+        name: "graph.expand",
+        arguments: { kind: "source", id: "s1", depth: 2, direction: "in" },
+      })) as never,
+    ) as { nodes: { kind: string; id: string }[] };
+    expect(inExpand.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual(["source:s1", "task:t1"]);
+
+    // out from s1 finds nothing downstream (s1 has no outgoing edge).
+    const outExpand = parseResult(
+      (await client.callTool({
+        name: "graph.expand",
+        arguments: { kind: "source", id: "s1", depth: 2, direction: "out" },
+      })) as never,
+    ) as { nodes: { kind: string; id: string }[] };
+    expect(outExpand.nodes.map((n) => `${n.kind}:${n.id}`)).toEqual(["source:s1"]);
+  });
+
   test("every tool is annotated read-only (auto-approve hint, no side effects)", async () => {
     const client = await connect();
     const { tools } = await client.listTools();

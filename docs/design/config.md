@@ -50,6 +50,7 @@ backend = "disabled"   # disabled | anthropic | openai | ollama
 [connectors.github]                      # GitHub connector（実装済み・docs/guide/connectors.md）
 repos = ["owner/repo"]                    # 取り込み対象
 state = "all"                             # open | closed | all（既定 all）
+notifications = "off"                     # off | all | repos（既定 off・per-token 通知 stream）
 # baseUrl = "https://github.example.com/api/v3"  # GitHub Enterprise
 ```
 

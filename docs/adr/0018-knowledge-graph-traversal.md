@@ -56,3 +56,7 @@
 4. **不変条件の維持。** event-sourced（[ADR-0002](0002-event-sourced-architecture.md)）: `LinkAdded` / `LinkRemoved` を discriminated union に追加し、reducer で畳む。idempotent（同一 link の再 add は no-op、replay で同値復元）。自己ループ・存在しない link の remove は tool 境界で拒否（tool error、silent skip しない）。
 5. **read 経路との連携。** `graph.related` の neighbor に `linkId`（手動 link のみ）を付与し、削除対象の id を発見できるようにする。reducer 由来エッジは従来どおり `linkId` を持たない。
 6. **本追補のスコープ外。** task↔decision 等の**自動**エッジ拡充は引き続き reducer 追補（別 Issue）。本追補は**手動 link の CRUD**に限定する。
+
+## 追補（#97）: `graph.expand` の `direction`（[ADR-0020](0020-multi-actor-coordination-scope.md)）
+
+`graph.expand` に `direction: "out" | "in" | "both"`（既定 `both` = 後方互換）を追加した。各 hop の隣接取得（`listLinks`）を direction で絞ることで、後方限定 provenance トレース（opshub `graph trace` 相当 = 「この成果物は何に由来するか」）を `in` で表現する。`out` は下流 consumer 展開。新ツールは増やさず既存 `graph.expand` の 1 パラメータ追加で実現する（ADR-0020 §決定 3）。cycle guard / edge dedup は direction 適用後も維持する。

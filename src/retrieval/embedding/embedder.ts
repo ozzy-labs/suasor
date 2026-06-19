@@ -18,6 +18,13 @@ export interface Embedder {
   /** Model identifier (pins the vector space; ingest and query must match). */
   readonly model: string;
   /**
+   * Optional model build/version tag, distinct from {@link model}. Recorded in
+   * the provenance sidecar so a model upgrade (same id, newer build) can be
+   * detected as stale by `embeddings rebuild` even when `model` is unchanged.
+   * Sidecars that do not expose a version leave this undefined (treated as "").
+   */
+  readonly modelVersion?: string;
+  /**
    * Embed one or more texts, returning a vector per input (same order). An
    * empty input array returns an empty array without any network call.
    */

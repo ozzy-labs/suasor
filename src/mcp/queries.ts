@@ -693,6 +693,13 @@ export interface ExpandGraphOptions {
   depth?: number;
   /** Cap on total nodes returned (default {@link DEFAULT_LIST_LIMIT}). */
   limit?: number;
+  /**
+   * Which edge directions to follow per hop (default `both`, backwards
+   * compatible). `in` traces incoming provenance (this entity is derived from /
+   * replies to what?) — the backward `graph trace` of ADR-0020; `out` expands
+   * downstream consumers.
+   */
+  direction?: "out" | "in" | "both";
 }
 
 const nodeKey = (kind: string, id: string) => `${kind} ${id}`;
@@ -703,6 +710,11 @@ const edgeKey = (e: GraphEdge) =>
  * Breadth-first expansion from an origin entity over `links` (ADR-0018), bounded
  * by `depth` and `limit`. A visited-set prevents cycles; edges are de-duplicated
  * (the same edge is reachable from both endpoints in `both`-direction hops).
+ *
+ * `direction` (ADR-0020) bounds which edges each hop follows: `both` (default,
+ * backwards compatible), `in` for a backward provenance trace, or `out` for a
+ * downstream expansion. The cycle guard and edge de-dup apply after the
+ * direction filter.
  */
 export function expandGraph(
   sqlite: Database,
@@ -712,6 +724,7 @@ export function expandGraph(
 ): GraphExpansion {
   const depth = options.depth ?? 2;
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
+  const direction = options.direction ?? "both";
   const visited = new Set<string>([nodeKey(kind, id)]);
   const seenEdges = new Set<string>();
   const nodes: GraphNode[] = [{ kind, id }];
@@ -721,7 +734,7 @@ export function expandGraph(
   for (let hop = 0; hop < depth && frontier.length > 0; hop += 1) {
     const next: GraphNode[] = [];
     for (const node of frontier) {
-      for (const nb of listLinks(sqlite, node.kind, node.id, { direction: "both" })) {
+      for (const nb of listLinks(sqlite, node.kind, node.id, { direction })) {
         const target: GraphNode = { kind: nb.kind, id: nb.id };
         const edge: GraphEdge =
           nb.direction === "out"

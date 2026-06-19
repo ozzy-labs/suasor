@@ -14,7 +14,7 @@
  * update repopulates cleanly.
  */
 import type { Database } from "bun:sqlite";
-import { DEFAULT_VEC_TABLE } from "../../db/connection.ts";
+import { DEFAULT_VEC_TABLE, VEC_META_TABLE } from "../../db/connection.ts";
 import type { SearchHit } from "../search.ts";
 import { type Embedder, EmbeddingError } from "./embedder.ts";
 
@@ -47,17 +47,51 @@ export function toVectorBlob(vector: number[]): Uint8Array {
   return new Uint8Array(Float32Array.from(vector).buffer);
 }
 
+/** Model provenance recorded alongside a stored vector (maintenance verbs). */
+export interface VectorProvenance {
+  /** Model identifier (`embedder.model`); pins the vector space. */
+  modelId: string;
+  /** Optional model build/version tag (`embedder.modelVersion`, default ""). */
+  modelVersion?: string;
+  /** ISO timestamp the vector was embedded (default `now`). */
+  embeddedAt?: string;
+}
+
 /**
  * Upsert a single source's embedding into the vec0 table (delete-then-insert,
  * keyed by `external_id`). Idempotent: re-embedding the same source replaces the
  * prior vector rather than duplicating it.
+ *
+ * When `provenance` is supplied the model identity is mirrored into the
+ * `embeddings_meta` sidecar so the maintenance verbs (status / rebuild / drain,
+ * ADR-0006) can tell embedded sources apart and detect model drift. Callers that
+ * omit it (legacy tests) leave the sidecar untouched.
  */
-export function upsertSourceVector(sqlite: Database, externalId: string, vector: number[]): void {
+export function upsertSourceVector(
+  sqlite: Database,
+  externalId: string,
+  vector: number[],
+  provenance?: VectorProvenance,
+): void {
   const blob = toVectorBlob(vector);
   sqlite.query(`DELETE FROM ${DEFAULT_VEC_TABLE} WHERE external_id = ?`).run(externalId);
   sqlite
     .query(`INSERT INTO ${DEFAULT_VEC_TABLE} (external_id, embedding) VALUES (?, ?)`)
     .run(externalId, blob);
+  if (provenance) {
+    sqlite.query(`DELETE FROM ${VEC_META_TABLE} WHERE external_id = ?`).run(externalId);
+    sqlite
+      .query(
+        `INSERT INTO ${VEC_META_TABLE} (external_id, model_id, model_version, embedded_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        externalId,
+        provenance.modelId,
+        provenance.modelVersion ?? "",
+        provenance.embeddedAt ?? new Date().toISOString(),
+      );
+  }
 }
 
 /**
@@ -84,12 +118,16 @@ export async function embedSources(
       error: cause instanceof EmbeddingError ? cause : new EmbeddingError(String(cause), cause),
     };
   }
+  const provenance: VectorProvenance = {
+    modelId: embedder.model,
+    modelVersion: embedder.modelVersion ?? "",
+  };
   let embedded = 0;
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i];
     const vector = vectors[i];
     if (source && vector) {
-      upsertSourceVector(sqlite, source.externalId, vector);
+      upsertSourceVector(sqlite, source.externalId, vector, provenance);
       embedded++;
     }
   }

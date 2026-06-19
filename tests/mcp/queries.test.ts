@@ -319,6 +319,63 @@ describe("graph traversal: listLinks / expandGraph (ADR-0018)", () => {
     expect(g.edges).toHaveLength(2); // t1->s1, d1->s1 (no duplicate t1->s1)
   });
 
+  test("expandGraph direction filters the traversal (ADR-0020 graph.trace)", () => {
+    // Graph: task:t1 --derived_from--> source:s1 <--derived_from-- decision:d1
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    store.record({
+      type: "DecisionRecorded",
+      decisionId: "d1",
+      title: "d",
+      rationale: "",
+      sourceExternalIds: ["s1"],
+    });
+
+    // both (default) reaches every node — backwards compatible.
+    const both = expandGraph(sqlite(), "task", "t1", { depth: 2, direction: "both" });
+    expect(both.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual([
+      "decision:d1",
+      "source:s1",
+      "task:t1",
+    ]);
+    expect(both).toEqual(expandGraph(sqlite(), "task", "t1", { depth: 2 }));
+
+    // out from t1 follows the outgoing derived_from to s1, but s1 has no
+    // outgoing edge, so d1 (an incoming neighbour of s1) is not reached.
+    const out = expandGraph(sqlite(), "task", "t1", { depth: 2, direction: "out" });
+    expect(out.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual(["source:s1", "task:t1"]);
+    expect(out.edges).toHaveLength(1);
+
+    // in from t1: t1 has no incoming edge, so the traversal stops at the origin.
+    const inFromTask = expandGraph(sqlite(), "task", "t1", { depth: 2, direction: "in" });
+    expect(inFromTask.nodes.map((n) => `${n.kind}:${n.id}`)).toEqual(["task:t1"]);
+    expect(inFromTask.edges).toHaveLength(0);
+
+    // in from s1: backward provenance trace finds both consumers (t1, d1).
+    const inFromSource = expandGraph(sqlite(), "source", "s1", { depth: 2, direction: "in" });
+    expect(inFromSource.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual([
+      "decision:d1",
+      "source:s1",
+      "task:t1",
+    ]);
+    expect(inFromSource.edges).toHaveLength(2);
+  });
+
+  test("expandGraph direction preserves cycle guard + edge dedup", () => {
+    // Diamond: t1 -> s1, d1 -> s1; from s1 the `in` traversal reaches t1 and d1
+    // each exactly once (visited-set) with each edge emitted once (seenEdges).
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    store.record({
+      type: "DecisionRecorded",
+      decisionId: "d1",
+      title: "d",
+      rationale: "",
+      sourceExternalIds: ["s1"],
+    });
+    const g = expandGraph(sqlite(), "source", "s1", { depth: 5, direction: "in" });
+    expect(g.nodes).toHaveLength(3); // s1, t1, d1 — no revisits
+    expect(g.edges).toHaveLength(2); // t1->s1, d1->s1 — no duplicates
+  });
+
   test("expandGraph respects the node limit", () => {
     store.record({
       type: "TaskProposed",
