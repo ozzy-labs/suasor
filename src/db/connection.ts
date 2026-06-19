@@ -130,6 +130,9 @@ export function initSchema(sqlite: Database): void {
   `);
 }
 
+/** Sidecar table recording which model produced each stored vector (ADR-0006). */
+export const VEC_META_TABLE = "embeddings_meta";
+
 /** Create the default vec0 table. Requires the sqlite-vec extension loaded. */
 export function initVecTable(sqlite: Database, dim: number = DEFAULT_EMBEDDING_DIM): void {
   // vec0 is a cheap substrate kept regardless of backend; populate is gated on
@@ -138,6 +141,21 @@ export function initVecTable(sqlite: Database, dim: number = DEFAULT_EMBEDDING_D
     `CREATE VIRTUAL TABLE IF NOT EXISTS ${DEFAULT_VEC_TABLE} USING vec0(
       external_id TEXT PRIMARY KEY,
       embedding float[${dim}]
+    );`,
+  );
+  // Provenance sidecar for the maintenance verbs (status / rebuild / drain,
+  // ADR-0006). vec0 stores only (external_id, embedding) with no room for the
+  // model identity, so a plain table records which model produced each vector.
+  // It is a derived substrate (not events, ADR-0002): populated alongside the
+  // vector on ingest, dropped and repopulated by `embeddings rebuild`. `model_id`
+  // pins the vector space; `model_version` lets a model upgrade (same id, newer
+  // build) be detected as stale even when `model_id` is unchanged.
+  sqlite.exec(
+    `CREATE TABLE IF NOT EXISTS ${VEC_META_TABLE} (
+      external_id   TEXT PRIMARY KEY,
+      model_id      TEXT NOT NULL,
+      model_version TEXT NOT NULL DEFAULT '',
+      embedded_at   TEXT NOT NULL
     );`,
   );
 }

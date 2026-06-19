@@ -5,8 +5,9 @@
  * Wired command surface (docs/design/cli.md):
  *   init · db migrate · projections rebuild · search · <connector> sync ·
  *   <connector> auth set/test (github/ms-graph/google/box) · connectors list ·
- *   mcp serve · mcp tools · slack auth set/test · slack conversations ·
- *   slack status · slack cursor reset · skills install/list
+ *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
+ *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
+ *   skills install/list
  * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` /
  * `mcp serve` (MCP read surface, ADR-0004) and `skills install` / `skills list`
  * (assistant-skill catalog, ADR-0008) are live. `<connector> sync` commands are
@@ -24,6 +25,7 @@ import { connectorAuthCommands } from "./commands/connector-auth.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
+import { embeddingsCommands } from "./commands/embeddings.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
 import { McpToolsCommand } from "./commands/mcp-tools.ts";
@@ -59,6 +61,9 @@ export function buildCli(): Cli {
     cli.register(ConnectorAuth);
   }
   cli.register(ConnectorsListCommand);
+  for (const EmbeddingsCommand of embeddingsCommands as CommandClass[]) {
+    cli.register(EmbeddingsCommand);
+  }
   cli.register(McpServeCommand);
   cli.register(McpToolsCommand);
   cli.register(SlackAuthSetCommand);

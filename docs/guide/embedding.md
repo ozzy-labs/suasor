@@ -70,6 +70,38 @@ suasor github sync --full   # 全 source を再取り込み → 再 embedding
 
 MCP `recall.search` read tool で意味検索ができる（[mcp-surface](../design/mcp-surface.md) / [retrieval](../design/retrieval.md)）。最近傍順（L2 distance 昇順）で hits を返す。embedding 無効・サイドカー到達不能のときは空 + `embedding_disabled` シグナルで FTS にフォールバックする。
 
+## 保守 verb（status / rebuild / drain / find-duplicates）
+
+埋め込み層は sync 時に自動 populate されるが、運用者から状態が見えにくい。`embeddings` サブコマンド（[ADR-0006](../adr/0006-ml-delegation.md)・[cli](../design/cli.md)）で可視化・修復する。各 source のベクトルがどの model で生成されたかは `embeddings_meta` サイドカー（vec0 と並ぶ派生 substrate・event ではない）が記録し、drift 検出に使う。
+
+```bash
+# 状態確認: entity 種別ごとに embedded / pending / stale を集計、有効 backend / model を表示
+suasor embeddings status
+# 出力例:
+#   backend: ollama  model: bge-m3  auto: true
+#     github_issue: 18/20 embedded, 1 pending, 1 stale
+#     slack_message: 40/40 embedded, 0 pending, 0 stale
+#     total: 58/60 embedded, 1 pending, 1 stale
+
+# model を変えた後: 現行 model と異なる/欠落の source を再埋め込み（--full で全件）
+suasor embeddings rebuild
+suasor embeddings rebuild --full
+
+# サイドカー停止中の sync で取りこぼした pending を catch-up
+suasor embeddings drain
+
+# near-dup（cosine 類似度 >= 閾値）のペアを列挙（重複取り込みの発見）
+suasor embeddings find-duplicates --threshold 0.95
+```
+
+- **status**: `embedded`（現行 model のベクトルあり）/ `pending`（ベクトル未生成）/ `stale`（別 model で生成済み）。backend 無効時は全件 pending として「有効化すれば何が埋め込まれるか」を示す。
+- **rebuild**: 記録 model が現行 `[embedding].model`（+ version）と異なる/欠落の source を再埋め込み。settled な状態では冪等（再実行で 0 件）。`model` を変えたらこれ（または `--full`）を実行する。
+- **drain**: ベクトル未生成の pending だけを catch-up（stale-but-present は rebuild の担当）。
+- **find-duplicates**: vec0 のベクトル間 cosine 類似度が `--threshold`（既定 0.95）超のペアを列挙する。
+- 共通: `[embedding].backend` 無効時は全 verb が明示メッセージで no-op 終了。`rebuild` / `drain` の埋め込みは **best-effort**（サイドカー失敗は warning に留め、部分件数を返す）。`--json` で機械可読出力。
+
+> `embeddings rebuild` / `embeddings rebuild --full` は §4 の `suasor <connector> sync --full` を再取り込みなしで置き換える（既存の取り込み済み source をそのまま再埋め込みするため connector を再スキャンしない）。新規取り込みも兼ねたい場合は引き続き `sync --full` を使う。
+
 ## トラブルシュート
 
 - `recall.search` が常に空 + `embedding_disabled`:
@@ -77,5 +109,6 @@ MCP `recall.search` read tool で意味検索ができる（[mcp-surface](../des
   - Ollama が起動し `baseUrl` で到達できるか（`curl <baseUrl>/api/tags`）
   - `model` を pull 済みか（`ollama pull <model>`）
 - recall の精度が悪い / 取り込み直後にヒットしない:
-  - backend を有効化する前に取り込んだ source はベクトルが無い → `suasor <connector> sync --full` で再生成
-  - ingest と query で `model` が一致しているか（途中で変えたら `--full` で再生成）
+  - backend を有効化する前に取り込んだ source はベクトルが無い → `suasor embeddings drain`（pending のみ）または `suasor <connector> sync --full` で再生成
+  - ingest と query で `model` が一致しているか（途中で変えたら `suasor embeddings rebuild`、または `sync --full` で再生成）
+  - 現状を確かめたい → `suasor embeddings status` で embedded / pending / stale を確認

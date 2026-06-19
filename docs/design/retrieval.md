@@ -26,8 +26,9 @@
 - backend: `disabled`（既定）/ `ollama` / `openai` / `voyage`。**`local`(in-process torch) は持たない**（[ADR-0006](../adr/0006-ml-delegation.md)）。現状 `ollama` のみ実装。`openai` / `voyage` は config 上は受理するが embedder 未実装のため `recall.search` は `embedding_disabled` に degrade する
 - `ollama` backend = `POST <baseUrl>/api/embed`（既定 `http://localhost:11434`、`bge-m3` 等の多言語モデル）。batch API（`{ model, input: string[] }` → `{ embeddings: number[][] }`）。egress なし
 - 文書 embedding（ingest 時）とクエリ embedding（query 時）は**同一モデル必須**（ベクトル空間整合）。`[embedding].model` が両者を駆動する単一の値で、`OllamaEmbedder` の 1 インスタンスが両方を埋め込むため model 混在は構造的に起きない
-- ベクトルは `sqlite-vec` の `vec0`（`embeddings_vec_default`）に little-endian float32 blob で格納。upsert は `external_id` キーの delete-then-insert（FTS の sync と同じ流儀）
+- ベクトルは `sqlite-vec` の `vec0`（`embeddings_vec_default`）に little-endian float32 blob で格納。upsert は `external_id` キーの delete-then-insert（FTS の sync と同じ流儀）。同時に provenance サイドカー `embeddings_meta`（`external_id` / `model_id` / `model_version` / `embedded_at`）へ生成 model を記録し、保守 verb の drift 検出に使う
 - **populate（取り込み時）**: `syncConnector` が新規 / 本文変更 source のみを batch embed して vec0 へ書き込む（未変更は再埋め込みしない）。CLI `suasor <connector> sync` / MCP `connector.sync` の両経路で同一。embedding は **best-effort**: サイドカー失敗時も ingest は成功し（FTS は反映済み）、警告のみ出す（`onEmbedError` / CLI は stderr）
+- **maintenance（保守）**: `embeddings status` / `rebuild` / `drain` / `find-duplicates`（[cli](cli.md) / [embedding guide](../guide/embedding.md)、#87）が埋め込み層を運用者から可視化・修復する。`status` は entity 種別ごとに embedded / pending / stale を集計、`rebuild` は `embeddings_meta` の記録 model が現行 `[embedding].model`（+ version）と異なる/欠落の source を再埋め込み（`--full` は全件）、`drain` は pending のみ catch-up、`find-duplicates` は vec0 ベクトル間 cosine 類似度の near-dup ペアを列挙する。実装は `src/retrieval/embedding/maintenance.ts`（SQL + thin embedder client のみ、ML はサイドカー委譲）
 - **search（query 時）**: `recall.search`（[mcp-surface](mcp-surface.md)）が query を埋め込み、`vec0` の KNN（`WHERE embedding MATCH ? AND k = ?`）で最近傍を引き、`sources` を JOIN してメタ/本文を返す。`score` は L2 distance（小さいほど近い、best-first）
 
 ## Graceful degradation

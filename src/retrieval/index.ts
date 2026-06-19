@@ -5,12 +5,21 @@
 
 export {
   createEmbedder,
+  DEFAULT_DUPLICATE_THRESHOLD,
   DEFAULT_RECALL_LIMIT,
+  type DuplicatePair,
   EMBEDDING_DISABLED_SIGNAL,
   type Embedder,
   EmbeddingError,
+  type EmbeddingKindStatus,
+  type EmbeddingRebuildResult,
+  type EmbeddingStatus,
+  embeddingDrain,
+  embeddingRebuild,
+  embeddingStatus,
   embedSources,
   type FetchLike,
+  findDuplicates,
   OllamaEmbedder,
   type OllamaEmbedderOptions,
   type RecallOptions,
@@ -19,6 +28,7 @@ export {
   recallSearch,
   toVectorBlob,
   upsertSourceVector,
+  type VectorProvenance,
 } from "./embedding/index.ts";
 export {
   buildFtsMatch,
