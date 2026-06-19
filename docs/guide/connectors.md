@@ -119,6 +119,7 @@ suasor slack sync                      # （= <connector> sync）取り込み
 
 - **demand signal**（[ADR-0012](../adr/0012-slack-demand-digest.md)）: 取り込み済み `slack_message` から @mention（`self_user_id` 設定時）/ DM を MCP `slack.demand.list` で「読むべきが未処理」signal として取得（query 導出・追加 fetch なし）。`next-actions` / `personal-brief` skill が priority 上位に組み込む。
 - **engagement axis**（[ADR-0013](../adr/0013-slack-engagement-axis.md)）: `suasor slack conversations --sort=last_self_post` で「自分が最後に投稿した時刻」順に会話を並べる。`search.messages`（`from:me`）を使うため **User Token（`xoxp-`）専用**で、Bot Token では `N/A` に degrade（通常順で列挙）。値は Slack 全文 index の遅延により概算。
+- **rate-limit retry**（[ADR-0019](../adr/0019-slack-fetch-rate-limit-retry.md)）: 運用/discovery/auth/search の fetch 経路（`users.conversations` / `users.info` / `auth.test` / `search.messages`）は 429 で即死せず、`Retry-After` を尊重（無ければ 1s/2s/4s backoff・既定 3 試行）して回復する（共有 `slackFetch`）。sync hot path（`conversations.history` / `replies`）は `@slack/web-api` の既定 retry に委譲（二重に持たない）。
 - **date floor / recovery**（[ADR-0016](../adr/0016-slack-sync-date-floor.md)）: `since`（per-workspace 可）で cold-start の下限を設ける。下限は saved cursor が無い channel にのみ適用され、resume 済み channel は cursor を優先する。運用 verb:
   - `suasor slack status [--json]` — 保存中の cursor（workspace / channel ごとの resume ts）を表示
   - `suasor slack cursor reset --channel C1,C2 | --all [--workspace A] [--yes]` — cursor を消し、次回 sync で `since` floor から取り直す（`--yes` 無しは preview のみ）

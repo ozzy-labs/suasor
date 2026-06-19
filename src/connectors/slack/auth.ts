@@ -8,11 +8,13 @@
  * import("./scopes.ts").renderFeaturesBlock}) is derived from that with no extra
  * call.
  *
- * Import-clean (ADR-0007): no Slack SDK. The default transport uses the global
- * `fetch`, lazily, inside {@link testToken} — top-level imports are types only.
- * The resolved token is never echoed in thrown errors; we surface the Slack API
- * `error` code (a documented short string) instead.
+ * Import-clean (ADR-0007): no Slack SDK. The default transport goes through the
+ * shared rate-limit-aware `slackFetch` (ADR-0019), reading `x-oauth-scopes` from
+ * the returned headers. The resolved token is never echoed in thrown errors; we
+ * surface the Slack API `error` code (a documented short string) instead.
  */
+
+import { slackFetch } from "./_fetch.ts";
 
 /** Identity + granted scopes resolved from a successful `auth.test`. */
 export interface SlackTokenTest {
@@ -31,19 +33,14 @@ export type SlackAuthTransport = (
   token: string,
 ) => Promise<{ scopesHeader: string | null; body: Record<string, unknown> }>;
 
-/** Default transport: a single `fetch` POST to `auth.test`, reading the scope header. */
+/** Default transport: a rate-limit-aware POST to `auth.test`, reading the scope header. */
 const defaultTransport: SlackAuthTransport = async (token) => {
-  const res = await fetch("https://slack.com/api/auth.test", {
+  const { headers, body } = await slackFetch("https://slack.com/api/auth.test", {
+    token,
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" },
   });
-  return {
-    scopesHeader: res.headers.get("x-oauth-scopes"),
-    body: (await res.json()) as Record<string, unknown>,
-  };
+  return { scopesHeader: headers.get("x-oauth-scopes"), body };
 };
 
 function asString(value: unknown): string {
