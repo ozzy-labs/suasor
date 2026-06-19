@@ -42,10 +42,21 @@ suasor github auth test                # PAT 検証 + login + granted scopes（G
 [connectors.github]
 repos = ["owner/repo", "owner/another-repo"]  # 取り込み対象
 state = "all"                                  # open | closed | all（既定 all）
+notifications = "off"                          # off | all | repos（既定 off）
 # baseUrl = "https://github.example.com/api/v3"  # GitHub Enterprise の場合
 ```
 
-`repos` が空の場合は何も取り込まない（トークンも要求しない）。
+`repos` が空かつ `notifications = "off"` の場合は何も取り込まない（トークンも要求しない）。
+
+#### notifications（per-token 通知 stream）
+
+`notifications` を有効にすると、`GET /notifications`（自分宛の mention / review request / assign 等の personal stream）を取り込む（Issue #93）。これは **repo 単位ではなく token 単位**の stream で、`repos` allowlist とは別軸の cursor を持つ。read-only（thread list を読むだけで既読化しない）。
+
+- `off`（既定）: 取り込まない（既存の issue / PR のみ挙動を維持）
+- `all`: 通知された全 repo を取り込む（`repos` に無い repo の通知も入る）
+- `repos`: `repos` allowlist に含まれる repo の通知のみ取り込む（フィルタ out された thread も cursor は前進し、次回の再 flood を防ぐ）
+
+`notifications = "all"` は `repos` が空でも単独で機能する（token の通知 stream のみ取り込む）。通知に必要な PAT scope: classic は `notifications`（または `repo`）、fine-grained は対象 repo の **Notifications: read-only**。Slack の `slack.demand.list` と同様、github notifications も将来 demand 系 MCP tool の入力になり得る demand signal。
 
 ### 3. 取り込みの実行
 
@@ -61,9 +72,9 @@ suasor github sync --json     # 件数 + cursor を JSON 出力
 github sync: 12 observed, 3 updated, 5 unchanged.
 ```
 
-- **identity**: source の `external_id` は `gh:<owner>/<repo>:issue:<number>` / `gh:<owner>/<repo>:pull_request:<number>`（ソース横断で一意）
-- **source_type**: `github_issue` / `github_pull_request`
-- **差分検知**（FR-ING-3）: issues の `since` cursor（delta API）で更新分のみ取得し、本文 fingerprint で未変更を skip。再実行は冪等（未変更ソースは更新イベントを生まない）
+- **identity**: source の `external_id` は `gh:<owner>/<repo>:issue:<number>` / `gh:<owner>/<repo>:pull_request:<number>`。notifications は token 単位のため repo prefix を持たず `gh:notification:<thread-id>`（いずれもソース横断で一意）
+- **source_type**: `github_issue` / `github_pull_request` / `github_notification`
+- **差分検知**（FR-ING-3）: issues の `since` cursor（delta API）で更新分のみ取得し、本文 fingerprint で未変更を skip。notifications は **token 軸の独立した `since` cursor** を持ち、issues 軸とは別に前進する（cursor は `{ issues, notifications }` の JSON map で保存。旧来の bare-string cursor は issues floor として後方互換解釈）。再実行は冪等（未変更ソースは更新イベントを生まない）
 
 ### 4. 検索
 
