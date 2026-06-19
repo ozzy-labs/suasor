@@ -10,9 +10,11 @@
  * failing the whole sweep (opshub ADR-0040 §A: listing over-claims if folded
  * into readiness, so it self-reports here).
  *
- * Import-clean (ADR-0007): no Slack SDK. The default transport uses the global
- * `fetch` lazily; top-level imports are types only.
+ * Import-clean (ADR-0007): no Slack SDK. The default transport goes through the
+ * shared rate-limit-aware `slackFetch` (ADR-0019); top-level imports stay light.
  */
+
+import { slackFetch } from "./_fetch.ts";
 
 /** The four conversation types this helper understands (keys match `scopes.ts`). */
 export type ConversationType = "public" | "private" | "im" | "mpim";
@@ -77,21 +79,22 @@ export type SlackUsersTransport = (
   userId: string,
 ) => Promise<Record<string, unknown>>;
 
-/** Default transport: a `fetch` GET to `users.conversations` with query params. */
+/** Default transport: a rate-limit-aware GET to `users.conversations` (ADR-0019). */
 const defaultTransport: SlackConversationsTransport = async (token, params) => {
   const query = new URLSearchParams(params).toString();
-  const res = await fetch(`https://slack.com/api/users.conversations?${query}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const { body } = await slackFetch(`https://slack.com/api/users.conversations?${query}`, {
+    token,
   });
-  return (await res.json()) as Record<string, unknown>;
+  return body;
 };
 
-/** Default `users.info` transport: a `fetch` GET resolving a user id → profile. */
+/** Default `users.info` transport: a rate-limit-aware GET resolving id → profile. */
 const defaultUsersTransport: SlackUsersTransport = async (token, userId) => {
-  const res = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  return (await res.json()) as Record<string, unknown>;
+  const { body } = await slackFetch(
+    `https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`,
+    { token },
+  );
+  return body;
 };
 
 /**

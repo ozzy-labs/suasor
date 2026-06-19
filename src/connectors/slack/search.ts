@@ -12,9 +12,11 @@
  * - **Index lag**: Slack's full-text index lags real time, so last_self_post is
  *   an approximate "most recent engagement", not an exact value.
  *
- * Import-clean (ADR-0007): no Slack SDK. The default transport uses the global
- * `fetch` lazily; top-level imports are types only.
+ * Import-clean (ADR-0007): no Slack SDK. The default transport goes through the
+ * shared rate-limit-aware `slackFetch` (ADR-0019); top-level imports stay light.
  */
+
+import { slackFetch } from "./_fetch.ts";
 
 /** One `search.messages` page fetch, decoupled from `fetch` for tests. */
 export type SlackSearchTransport = (
@@ -22,13 +24,11 @@ export type SlackSearchTransport = (
   params: Record<string, string>,
 ) => Promise<Record<string, unknown>>;
 
-/** Default transport: a `fetch` GET to `search.messages` with query params. */
+/** Default transport: a rate-limit-aware GET to `search.messages` with query params. */
 const defaultTransport: SlackSearchTransport = async (token, params) => {
   const query = new URLSearchParams(params).toString();
-  const res = await fetch(`https://slack.com/api/search.messages?${query}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  return (await res.json()) as Record<string, unknown>;
+  const { body } = await slackFetch(`https://slack.com/api/search.messages?${query}`, { token });
+  return body;
 };
 
 /** Per-page match count (Slack's `search.messages` ceiling is 100). */

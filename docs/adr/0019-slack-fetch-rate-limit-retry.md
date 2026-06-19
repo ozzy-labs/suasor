@@ -1,6 +1,6 @@
 # 0019. Slack fetch-path rate-limit retry (Retry-After-honoured)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Related: [ADR-0007](0007-connector-contract.md)（connector / import-clean）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（運用 verb・conversations）, [ADR-0013](0013-slack-engagement-axis.md)（search.messages）
