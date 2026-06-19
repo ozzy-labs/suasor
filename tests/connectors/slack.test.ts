@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { SourceRecord, SyncContext } from "../../src/connectors/contract.ts";
 import {
   createSlackConnector,
+  cursorToAliasMap,
+  parseSinceToTs,
   type SlackClientLike,
   SlackConnectorConfig,
+  serializeCursor,
   workspaceSecretName,
 } from "../../src/connectors/slack.ts";
 
@@ -309,5 +312,89 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
     expect(calls[0]?.oldest).toBe("50.000000");
     const result = await connector.finalize?.();
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "100.000000" } });
+  });
+});
+
+describe("Slack connector — date floor (ADR-0016)", () => {
+  const NOW = Date.UTC(2026, 0, 31, 0, 0, 0); // fixed clock (ms)
+  const floorFor = (secondsAgo: number) => `${Math.floor(NOW / 1000) - secondsAgo}.000000`;
+
+  test("parseSinceToTs: relative units and ISO date", () => {
+    expect(parseSinceToTs("30d", NOW)).toBe(floorFor(30 * 86400));
+    expect(parseSinceToTs("2w", NOW)).toBe(floorFor(2 * 604800));
+    expect(parseSinceToTs("12h", NOW)).toBe(floorFor(12 * 3600));
+    expect(parseSinceToTs("2026-01-01", NOW)).toBe(
+      `${Math.floor(Date.parse("2026-01-01") / 1000)}.000000`,
+    );
+  });
+
+  test("parseSinceToTs: unparseable → null", () => {
+    expect(parseSinceToTs("nonsense", NOW)).toBeNull();
+    expect(parseSinceToTs("5y", NOW)).toBeNull();
+  });
+
+  test("applies the `since` floor as `oldest` for an unsynced channel", async () => {
+    const { client, calls } = fakeSlack([{ messages: [{ ts: floorFor(0) }] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"], since: "30d" },
+      { clientFactory: () => client, now: () => NOW },
+    );
+    await collect(connector.sync(ctx()));
+    expect(calls[0]?.oldest).toBe(floorFor(30 * 86400));
+  });
+
+  test("a saved cursor wins over the floor (resume, don't re-fetch older)", async () => {
+    const { client, calls } = fakeSlack([{ messages: [] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"], since: "30d" },
+      { clientFactory: () => client, now: () => NOW },
+    );
+    await collect(
+      connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: floorFor(1000) } }) })),
+    );
+    expect(calls[0]?.oldest).toBe(floorFor(1000)); // cursor, not the 30d floor
+  });
+
+  test("per-workspace `since` floors apply independently", async () => {
+    const { client, calls } = fakeSlack([{ messages: [] }, { messages: [] }]);
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"], since: "7d" },
+          beta: { team: "TB", channels: ["C2"], since: "1d" },
+        },
+      },
+      {
+        clientFactory: () => client,
+        now: () => NOW,
+        // both tokens present
+      },
+    );
+    await collect(
+      connector.sync(
+        ctx({ secret: async (n) => (n === "acme:token" ? "a" : n === "beta:token" ? "b" : null) }),
+      ),
+    );
+    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(7 * 86400));
+    expect(calls.find((c) => c.channel === "C2")?.oldest).toBe(floorFor(1 * 86400));
+  });
+});
+
+describe("Slack cursor helpers (ADR-0016)", () => {
+  test("cursorToAliasMap reads nested, flat, and bare-ts cursors", () => {
+    expect(cursorToAliasMap(JSON.stringify({ default: { C1: "1.0" } }))).toEqual({
+      default: { C1: "1.0" },
+    });
+    expect(cursorToAliasMap(JSON.stringify({ C1: "1.0" }))).toEqual({ default: { C1: "1.0" } });
+    expect(cursorToAliasMap(null)).toEqual({});
+    expect(cursorToAliasMap("1700.0")).toEqual({}); // bare ts has no per-channel structure
+  });
+
+  test("serializeCursor prunes empty aliases and returns null when empty", () => {
+    expect(serializeCursor({ default: { C1: "1.0" }, beta: {} })).toBe(
+      JSON.stringify({ default: { C1: "1.0" } }),
+    );
+    expect(serializeCursor({})).toBeNull();
+    expect(serializeCursor({ acme: {} })).toBeNull();
   });
 });
