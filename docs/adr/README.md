@@ -51,3 +51,4 @@ NNNN-kebab-case-title.md
 | 0008 | Assistant skills |
 | 0009 | Multi-agent neutrality |
 | 0010 | Distribution |
+| 0011 | Slack operational verbs (auth test / conversations) and readiness |
