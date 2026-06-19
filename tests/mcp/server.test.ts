@@ -59,6 +59,8 @@ describe("MCP read surface", () => {
       [
         "brief",
         "decision.list",
+        "graph.expand",
+        "graph.related",
         "inbox.list",
         "recall.search",
         "search",
@@ -123,6 +125,30 @@ describe("MCP read surface", () => {
     expect(brief.window.since).toBe("2026-06-13T00:00:00.000Z");
     expect(brief.sources.map((s) => s.externalId)).toContain("s1");
     expect(brief.decisions.map((d) => d.id)).toEqual(["dec1"]);
+  });
+
+  test("graph.related / graph.expand traverse the links projection (ADR-0018)", async () => {
+    // task t1 --derived_from--> source s1 (materialised by the reducer).
+    store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+    const client = await connect();
+
+    const related = parseResult(
+      (await client.callTool({
+        name: "graph.related",
+        arguments: { kind: "source", id: "s1" },
+      })) as never,
+    ) as { neighbors: { kind: string; id: string; relation: string; direction: string }[] };
+    expect(related.neighbors).toEqual([
+      { kind: "task", id: "t1", relation: "derived_from", direction: "in" },
+    ]);
+
+    const expand = parseResult(
+      (await client.callTool({
+        name: "graph.expand",
+        arguments: { kind: "task", id: "t1", depth: 1 },
+      })) as never,
+    ) as { nodes: { kind: string; id: string }[] };
+    expect(expand.nodes.map((n) => `${n.kind}:${n.id}`).sort()).toEqual(["source:s1", "task:t1"]);
   });
 
   test("every tool is annotated read-only (auto-approve hint, no side effects)", async () => {
@@ -363,6 +389,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         // read
         "brief",
         "decision.list",
+        "graph.expand",
+        "graph.related",
         "inbox.list",
         "recall.search",
         "search",

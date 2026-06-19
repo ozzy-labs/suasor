@@ -51,9 +51,11 @@ import { VERSION } from "../version.ts";
 import {
   buildBrief,
   DEFAULT_LIST_LIMIT,
+  expandGraph,
   getSource,
   listDecisions,
   listInbox,
+  listLinks,
   listSlackDemand,
   listSources,
   listTasks,
@@ -377,6 +379,61 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         selfUserIds: deps.slackSelfUserIds ?? [],
       });
       return jsonResult(brief);
+    },
+  );
+
+  // --- graph.related ---
+  server.registerTool(
+    "graph.related",
+    {
+      title: "Related entities (1 hop)",
+      description:
+        "Provenance neighbours of an entity (kind + id) over the links projection — " +
+        "1 hop in both directions (ADR-0018). Relations: derived_from / replies_to / " +
+        "references. Read-only; fetch bodies via source.get.",
+      inputSchema: {
+        kind: z.string().min(1).describe("Origin entity kind (e.g. task / decision / source)."),
+        id: z.string().min(1).describe("Origin entity id."),
+        direction: z
+          .enum(["out", "in", "both"])
+          .optional()
+          .describe("Edge directions to follow (default: both)."),
+        relation: z.string().min(1).optional().describe("Restrict to a single relation label."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ kind, id, direction, relation }) => {
+      const neighbors = listLinks(sqlite, kind, id, {
+        ...(direction ? { direction } : {}),
+        ...(relation ? { relation } : {}),
+      });
+      return jsonResult({ origin: { kind, id }, neighbors });
+    },
+  );
+
+  // --- graph.expand ---
+  server.registerTool(
+    "graph.expand",
+    {
+      title: "Expand graph (N hops)",
+      description:
+        "Breadth-first provenance expansion from an entity over the links projection, " +
+        "bounded by depth + limit (ADR-0018). Returns reached nodes + the edges " +
+        "between them. Read-only.",
+      inputSchema: {
+        kind: z.string().min(1).describe("Origin entity kind."),
+        id: z.string().min(1).describe("Origin entity id."),
+        depth: z.number().int().positive().max(10).optional().describe("Max hops (default 2)."),
+        limit: limitShape.describe(`Max nodes (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ kind, id, depth, limit }) => {
+      const expansion = expandGraph(sqlite, kind, id, {
+        ...(depth !== undefined ? { depth } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult({ origin: { kind, id }, ...expansion });
     },
   );
 

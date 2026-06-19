@@ -403,3 +403,144 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
     }),
   };
 }
+
+/** One graph node: a projection entity addressed by kind + id (ADR-0018). */
+export interface GraphNode {
+  kind: string;
+  id: string;
+}
+
+/** A neighbour reached from an origin node in one hop, with the edge it crossed. */
+export interface GraphNeighbor extends GraphNode {
+  /** The link's relation label (`derived_from` / `replies_to` / `references`). */
+  relation: string;
+  /** `out` = origin is the link's `from`; `in` = origin is the link's `to`. */
+  direction: "out" | "in";
+}
+
+export interface ListLinksOptions {
+  /** Which edge directions to follow (default `both`). */
+  direction?: "out" | "in" | "both";
+  /** Restrict to a single relation label. */
+  relation?: string;
+}
+
+interface LinkRow {
+  from_kind: string;
+  from_id: string;
+  to_kind: string;
+  to_id: string;
+  relation: string;
+}
+
+/**
+ * One-hop neighbours of an entity over the `links` provenance projection
+ * (ADR-0018). Follows `out` edges (origin is `from`) and/or `in` edges (origin
+ * is `to`). Read-only; relations are materialised by the reducer.
+ */
+export function listLinks(
+  sqlite: Database,
+  kind: string,
+  id: string,
+  options: ListLinksOptions = {},
+): GraphNeighbor[] {
+  const direction = options.direction ?? "both";
+  const relClause = options.relation ? " AND relation = ?" : "";
+  const relParam = options.relation ? [options.relation] : [];
+  const out: GraphNeighbor[] = [];
+
+  if (direction === "out" || direction === "both") {
+    const rows = sqlite
+      .query<LinkRow, (string | number)[]>(
+        `SELECT from_kind, from_id, to_kind, to_id, relation
+           FROM links WHERE from_kind = ? AND from_id = ?${relClause}`,
+      )
+      .all(kind, id, ...relParam);
+    for (const r of rows) {
+      out.push({ kind: r.to_kind, id: r.to_id, relation: r.relation, direction: "out" });
+    }
+  }
+  if (direction === "in" || direction === "both") {
+    const rows = sqlite
+      .query<LinkRow, (string | number)[]>(
+        `SELECT from_kind, from_id, to_kind, to_id, relation
+           FROM links WHERE to_kind = ? AND to_id = ?${relClause}`,
+      )
+      .all(kind, id, ...relParam);
+    for (const r of rows) {
+      out.push({ kind: r.from_kind, id: r.from_id, relation: r.relation, direction: "in" });
+    }
+  }
+  return out;
+}
+
+/** A directed edge in a graph expansion (always `from` → `to`). */
+export interface GraphEdge {
+  from: GraphNode;
+  to: GraphNode;
+  relation: string;
+}
+
+/** The result of a breadth-first graph expansion (origin is `nodes[0]`). */
+export interface GraphExpansion {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface ExpandGraphOptions {
+  /** Max hops from the origin (default 2). */
+  depth?: number;
+  /** Cap on total nodes returned (default {@link DEFAULT_LIST_LIMIT}). */
+  limit?: number;
+}
+
+const nodeKey = (kind: string, id: string) => `${kind} ${id}`;
+const edgeKey = (e: GraphEdge) =>
+  `${e.from.kind} ${e.from.id} ${e.to.kind} ${e.to.id} ${e.relation}`;
+
+/**
+ * Breadth-first expansion from an origin entity over `links` (ADR-0018), bounded
+ * by `depth` and `limit`. A visited-set prevents cycles; edges are de-duplicated
+ * (the same edge is reachable from both endpoints in `both`-direction hops).
+ */
+export function expandGraph(
+  sqlite: Database,
+  kind: string,
+  id: string,
+  options: ExpandGraphOptions = {},
+): GraphExpansion {
+  const depth = options.depth ?? 2;
+  const limit = options.limit ?? DEFAULT_LIST_LIMIT;
+  const visited = new Set<string>([nodeKey(kind, id)]);
+  const seenEdges = new Set<string>();
+  const nodes: GraphNode[] = [{ kind, id }];
+  const edges: GraphEdge[] = [];
+  let frontier: GraphNode[] = [{ kind, id }];
+
+  for (let hop = 0; hop < depth && frontier.length > 0; hop += 1) {
+    const next: GraphNode[] = [];
+    for (const node of frontier) {
+      for (const nb of listLinks(sqlite, node.kind, node.id, { direction: "both" })) {
+        const target: GraphNode = { kind: nb.kind, id: nb.id };
+        const edge: GraphEdge =
+          nb.direction === "out"
+            ? { from: node, to: target, relation: nb.relation }
+            : { from: target, to: node, relation: nb.relation };
+        const ek = edgeKey(edge);
+        if (!seenEdges.has(ek)) {
+          seenEdges.add(ek);
+          edges.push(edge);
+        }
+        const nk = nodeKey(nb.kind, nb.id);
+        if (!visited.has(nk)) {
+          visited.add(nk);
+          nodes.push(target);
+          next.push(target);
+          if (nodes.length >= limit) return { nodes, edges };
+        }
+      }
+    }
+    frontier = next;
+  }
+  return { nodes, edges };
+}
