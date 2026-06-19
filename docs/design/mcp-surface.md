@@ -15,7 +15,7 @@ read tool 群は `src/mcp/`（`server.ts` = tool 登録 / `queries.ts` = project
 | `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
 | `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
-| `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)） | 実装済み（#71・#90） |
+| `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)）。`graph.expand` の `direction` で後方トレース（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)、下記参照） | 実装済み（#71・#90 / #97） |
 
 戻り値はすべて 1 個の `text` content（JSON 文字列）。時間フィルタは各 projection の自然な timestamp 列を対象にし、**下限 inclusive (`>=`) / 上限 exclusive (`<`)**（隣接レンジの二重計上を避ける）。`iso` は ISO 8601（offset 付き）datetime。`limit` は正整数で上限 500。
 
@@ -85,6 +85,17 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 | `selfUserId?: string`（mention 用、未指定時は config の `self_user_id` にフォールバック）/ `kinds?: ("mention"\|"dm")[]` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "kind": "mention"\|"dm" }] }` |
 
 `selfUserId` も config も無いと mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は空）。
+
+### `graph.related` / `graph.expand`（[ADR-0018](../adr/0018-knowledge-graph-traversal.md) / [ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）
+
+既存 `links` projection 上の provenance traversal。`graph.related` は origin の 1-hop 隣接、`graph.expand` は depth/limit で束ねた BFS 展開を返す。relation は自動エッジ `derived_from` / `replies_to` / `references` と手動エッジ `manual_link`（#90、手動 link は `linkId` 付き）。本文は `source.get` で取得する。
+
+| tool | 引数 | 戻り値キー |
+|---|---|---|
+| `graph.related` | `kind` / `id` / `direction?: "out"\|"in"\|"both"`（既定 `both`） / `relation?` | `{ "origin", "neighbors": [{ kind, id, relation, direction, linkId? }] }` |
+| `graph.expand` | `kind` / `id` / `depth?`（既定 2、max 10） / `direction?: "out"\|"in"\|"both"`（既定 `both`） / `limit?` | `{ "origin", "nodes": [...], "edges": [{ from, to, relation }] }` |
+
+`direction`（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）は各 hop で辿る辺の向きを絞る。既定 `both` は従来挙動（後方互換）。`in` は **incoming のみ**を遡る後方 provenance トレース（opshub `graph trace` 相当 = 「この成果物は何に由来するか」）、`out` は下流の consumer 展開。cycle guard（visited-set）と edge dedup（seenEdges）は direction 適用後も維持する。新ツールは増やさず `graph.expand` の 1 パラメータ追加で表現する（ADR-0020 §決定 3）。
 
 ### `catchup` skill のバックエンド方針（レビュー D1 確定）
 

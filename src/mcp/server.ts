@@ -432,19 +432,27 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       title: "Expand graph (N hops)",
       description:
         "Breadth-first provenance expansion from an entity over the links projection, " +
-        "bounded by depth + limit (ADR-0018). Returns reached nodes + the edges " +
-        "between them. Read-only.",
+        "bounded by depth + limit (ADR-0018). direction bounds each hop: both (default), " +
+        "in for a backward provenance trace (graph trace), or out for downstream expansion " +
+        "(ADR-0020). Returns reached nodes + the edges between them. Read-only.",
       inputSchema: {
         kind: z.string().min(1).describe("Origin entity kind."),
         id: z.string().min(1).describe("Origin entity id."),
         depth: z.number().int().positive().max(10).optional().describe("Max hops (default 2)."),
+        direction: z
+          .enum(["out", "in", "both"])
+          .optional()
+          .describe(
+            "Edge directions to follow per hop (default: both). in = backward provenance trace.",
+          ),
         limit: limitShape.describe(`Max nodes (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ kind, id, depth, limit }) => {
+    async ({ kind, id, depth, direction, limit }) => {
       const expansion = expandGraph(sqlite, kind, id, {
         ...(depth !== undefined ? { depth } : {}),
+        ...(direction ? { direction } : {}),
         ...(limit !== undefined ? { limit } : {}),
       });
       return jsonResult({ origin: { kind, id }, ...expansion });
