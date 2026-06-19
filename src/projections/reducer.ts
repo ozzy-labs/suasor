@@ -388,6 +388,67 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       refreshIdentityCount(sqlite, event.newPersonId, event.recordedAt);
       return;
     }
+    case "CommitmentOpened": {
+      // A confirmed commitment enters the ledger as `open` (ADR-0021). ON
+      // CONFLICT refreshes the descriptive columns but leaves `state` untouched
+      // so a re-extraction of the same commitment does not resurrect a resolved/
+      // dismissed one to open (replay-safe, content-derived id).
+      sqlite
+        .query(
+          `INSERT INTO commitments
+             (id, title, direction, state, due_date, person, created_at, updated_at)
+           VALUES ($id, $title, $dir, 'open', $due, $person, $ts, $ts)
+           ON CONFLICT(id) DO UPDATE SET
+             title      = excluded.title,
+             direction  = excluded.direction,
+             due_date   = excluded.due_date,
+             person     = excluded.person,
+             updated_at = excluded.updated_at`,
+        )
+        .run({
+          $id: event.commitmentId,
+          $title: event.title,
+          $dir: event.direction,
+          $due: event.dueDate,
+          $person: event.person,
+          $ts: event.recordedAt,
+        });
+      for (const sourceId of event.sourceExternalIds) {
+        upsertLink(sqlite, {
+          fromKind: "commitment",
+          fromId: event.commitmentId,
+          toKind: "source",
+          toId: sourceId,
+          relation: "derived_from",
+        });
+      }
+      // A commitment extracted via the commitment_scan propose mode has a pending
+      // proposals-ledger row (persistProposals); flip it to applied by entity_id,
+      // mirroring task/decision/reply_draft/triage so propose.list stays accurate.
+      markProposalApplied(sqlite, event.commitmentId, event.recordedAt);
+      return;
+    }
+    case "CommitmentResolved": {
+      // Advance an existing commitment to `resolved`. A transition for a missing
+      // commitment is a no-op under replay (no row to fabricate), mirroring
+      // TaskApplied — the write tool guards invalid transitions at the boundary.
+      sqlite
+        .query("UPDATE commitments SET state = 'resolved', updated_at = $ts WHERE id = $id")
+        .run({ $id: event.commitmentId, $ts: event.recordedAt });
+      return;
+    }
+    case "CommitmentDismissed": {
+      sqlite
+        .query("UPDATE commitments SET state = 'dismissed', updated_at = $ts WHERE id = $id")
+        .run({ $id: event.commitmentId, $ts: event.recordedAt });
+      return;
+    }
+    case "CommitmentReopened": {
+      sqlite
+        .query("UPDATE commitments SET state = 'open', updated_at = $ts WHERE id = $id")
+        .run({ $id: event.commitmentId, $ts: event.recordedAt });
+      return;
+    }
     default: {
       // Exhaustiveness guard: a new event type must be handled above.
       const _exhaustive: never = event;

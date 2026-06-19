@@ -14,6 +14,7 @@
  *   - `decision`    → `DecisionRecorded`
  *   - `reply_draft` → `ReplyDraftProposed`
  *   - `triage`      → `InboxItemTriaged`
+ *   - `commitment`  → `CommitmentOpened` (ADR-0021)
  *
  * Modes constrain which candidate kinds a generate call may emit, matching the
  * assistant skills that drive each mode (docs/skills/):
@@ -21,6 +22,7 @@
  *   - `source_extract`   → task / decision / reply_draft (source-extract skill)
  *   - `meeting_followup` → task / decision (meeting-followup skill)
  *   - `inbox_triage`     → task / decision / triage (inbox-triage skill)
+ *   - `commitment_scan`  → commitment (commitment ledger, ADR-0021)
  *
  * Nothing here persists: candidates are inert until a human approves a subset
  * and the host calls `propose.apply` (no auto-apply path, ADR-0004 / FR-PRO-2).
@@ -33,6 +35,7 @@ export const PROPOSE_MODES = [
   "source_extract",
   "meeting_followup",
   "inbox_triage",
+  "commitment_scan",
 ] as const;
 export const ProposeMode = z.enum(PROPOSE_MODES);
 export type ProposeMode = z.infer<typeof ProposeMode>;
@@ -42,8 +45,13 @@ export const TRIAGE_STATES = ["snoozed", "done", "dismissed"] as const;
 export const TriageState = z.enum(TRIAGE_STATES);
 export type TriageState = z.infer<typeof TriageState>;
 
+/** Direction a `commitment` candidate carries (owed-by-me / owed-to-me, ADR-0021). */
+export const COMMITMENT_DIRECTIONS = ["owed_by_me", "owed_to_me"] as const;
+export const CommitmentDirection = z.enum(COMMITMENT_DIRECTIONS);
+export type CommitmentDirection = z.infer<typeof CommitmentDirection>;
+
 /** Candidate kinds, each mapping 1:1 to the domain event apply will append. */
-export const CANDIDATE_KINDS = ["task", "decision", "reply_draft", "triage"] as const;
+export const CANDIDATE_KINDS = ["task", "decision", "reply_draft", "triage", "commitment"] as const;
 export type CandidateKind = (typeof CANDIDATE_KINDS)[number];
 
 /**
@@ -81,6 +89,24 @@ const TriageCandidate = z.object({
 });
 
 /**
+ * A `commitment` candidate (→ `CommitmentOpened`, ADR-0021). The host LLM
+ * extracts the commitment statement (`title`) and `direction` (owed-by-me /
+ * owed-to-me); `dueDate` / `person` are optional context, and
+ * `sourceExternalIds` carry provenance back to the source(s) it was extracted
+ * from.
+ */
+const CommitmentCandidate = z.object({
+  kind: z.literal("commitment"),
+  title: z.string().min(1),
+  direction: CommitmentDirection,
+  /** Optional due date (ISO 8601); omit when the commitment carries none. */
+  dueDate: z.iso.datetime({ offset: true }).nullable().default(null),
+  /** Optional related person (free-form / person id). */
+  person: z.string().min(1).nullable().default(null),
+  sourceExternalIds: z.array(z.string().min(1)).default([]),
+});
+
+/**
  * A candidate as supplied to `propose.generate` (no id yet — generate assigns a
  * stable `candidateId` so the host can reference exactly which ones to apply).
  */
@@ -89,6 +115,7 @@ export const CandidateInput = z.discriminatedUnion("kind", [
   DecisionCandidate,
   ReplyDraftCandidate,
   TriageCandidate,
+  CommitmentCandidate,
 ]);
 export type CandidateInput = z.infer<typeof CandidateInput>;
 
@@ -98,6 +125,7 @@ export const Candidate = z.discriminatedUnion("kind", [
   DecisionCandidate.extend({ candidateId: z.string().min(1) }),
   ReplyDraftCandidate.extend({ candidateId: z.string().min(1) }),
   TriageCandidate.extend({ candidateId: z.string().min(1) }),
+  CommitmentCandidate.extend({ candidateId: z.string().min(1) }),
 ]);
 export type Candidate = z.infer<typeof Candidate>;
 
@@ -107,4 +135,5 @@ export const MODE_ALLOWED_KINDS: Record<ProposeMode, readonly CandidateKind[]> =
   source_extract: ["task", "decision", "reply_draft"],
   meeting_followup: ["task", "decision"],
   inbox_triage: ["task", "decision", "triage"],
+  commitment_scan: ["commitment"],
 };

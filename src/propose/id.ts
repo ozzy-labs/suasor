@@ -44,6 +44,16 @@ function candidateFingerprint(candidate: CandidateInput): string {
       return ["reply_draft", candidate.replyToExternalId, candidate.body].join(SEP);
     case "triage":
       return ["triage", candidate.inboxId, candidate.state].join(SEP);
+    case "commitment":
+      // Keyed on the statement + direction + provenance (not dueDate/person, which
+      // are mutable context): re-extracting the same commitment with a refreshed
+      // due date lands on the same ledger row (idempotent, ADR-0021).
+      return [
+        "commitment",
+        candidate.title,
+        candidate.direction,
+        [...candidate.sourceExternalIds].sort().join(","),
+      ].join(SEP);
   }
 }
 
@@ -100,5 +110,7 @@ export function entityId(candidate: Candidate): string {
     case "triage":
       // Triage targets an existing inbox item; its id is the entity id.
       return candidate.inboxId;
+    case "commitment":
+      return `cmt_${fp}`;
   }
 }

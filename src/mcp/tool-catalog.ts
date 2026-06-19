@@ -74,6 +74,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     summary: "List proposal candidates by state (pending/applied/rejected).",
   },
   {
+    name: "commitment.list",
+    readOnlyHint: true,
+    summary: "List commitments by state (open/resolved/dismissed) and direction.",
+  },
+  {
     name: "person.list",
     readOnlyHint: true,
     summary: "List resolved persons with their connector author identities (ADR-0022).",
@@ -140,6 +145,21 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     name: "person.split",
     readOnlyHint: false,
     summary: "Split one identity off a person into another (PersonSplit).",
+  },
+  {
+    name: "commitment.resolve",
+    readOnlyHint: false,
+    summary: "Mark an open commitment fulfilled (CommitmentResolved).",
+  },
+  {
+    name: "commitment.dismiss",
+    readOnlyHint: false,
+    summary: "Dismiss an open commitment as a false-positive (CommitmentDismissed).",
+  },
+  {
+    name: "commitment.reopen",
+    readOnlyHint: false,
+    summary: "Reopen a resolved/dismissed commitment back to open (CommitmentReopened).",
   },
 ];
 

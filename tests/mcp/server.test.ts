@@ -58,6 +58,7 @@ describe("MCP read surface", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         "brief",
+        "commitment.list",
         "decision.list",
         "graph.expand",
         "graph.related",
@@ -413,6 +414,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       [
         // read
         "brief",
+        "commitment.list",
         "decision.list",
         "graph.expand",
         "graph.related",
@@ -436,6 +438,9 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "inbox.triage",
         "link.add",
         "link.remove",
+        "commitment.resolve",
+        "commitment.dismiss",
+        "commitment.reopen",
         "person.merge",
         "person.split",
       ].sort(),
@@ -456,6 +461,9 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "inbox.triage",
       "link.add",
       "link.remove",
+      "commitment.resolve",
+      "commitment.dismiss",
+      "commitment.reopen",
       "person.merge",
       "person.split",
     ];
@@ -629,5 +637,49 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     })) as { isError?: boolean; content: { type: string; text?: string }[] };
     expect(res.isError).toBe(true);
     expect(res.content[0]?.text).toContain("no manual link");
+  });
+
+  test("commitment ledger: generate→apply→list→resolve over MCP (ADR-0021)", async () => {
+    const client = await connectWrite();
+    // Extract a commitment via the propose pipeline (commitment_scan mode).
+    const gen = parseResult(
+      (await client.callTool({
+        name: "propose.generate",
+        arguments: {
+          mode: "commitment_scan",
+          candidates: [
+            { kind: "commitment", title: "send report by Friday", direction: "owed_by_me" },
+          ],
+        },
+      })) as never,
+    ) as { candidates: { candidateId: string }[] };
+    await client.callTool({
+      name: "propose.apply",
+      arguments: { candidates: gen.candidates },
+    });
+
+    // It shows up as open in commitment.list.
+    const open = parseResult(
+      (await client.callTool({
+        name: "commitment.list",
+        arguments: { state: "open" },
+      })) as never,
+    ) as { commitments: { id: string; direction: string; state: string }[] };
+    expect(open.commitments).toHaveLength(1);
+    const id = open.commitments[0]?.id as string;
+    expect(open.commitments[0]?.direction).toBe("owed_by_me");
+
+    // Resolve it (write tool) → no longer open.
+    const resolved = parseResult(
+      (await client.callTool({
+        name: "commitment.resolve",
+        arguments: { commitmentId: id },
+      })) as never,
+    ) as { status: string };
+    expect(resolved.status).toBe("resolved");
+    const stillOpen = parseResult(
+      (await client.callTool({ name: "commitment.list", arguments: { state: "open" } })) as never,
+    ) as { commitments: unknown[] };
+    expect(stillOpen.commitments).toHaveLength(0);
   });
 });
