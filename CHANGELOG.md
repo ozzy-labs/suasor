@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/ozzy-labs/suasor/compare/v0.1.1...v0.1.2) (2026-06-19)
+
+
+### Bug Fixes
+
+* **release:** v-prefixed tags (no component) + robust docker version ([#67](https://github.com/ozzy-labs/suasor/issues/67)) ([773f4f1](https://github.com/ozzy-labs/suasor/commit/773f4f1da2b89925ba004e6e2a8ec0351e866459))
+
 ## [0.1.1](https://github.com/ozzy-labs/suasor/compare/suasor-v0.1.0...suasor-v0.1.1) (2026-06-19)
 
 
