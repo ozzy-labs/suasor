@@ -148,13 +148,15 @@ class SlackConnector implements Connector {
     }
 
     const client = await this.clientFactory(token);
-    const { map, legacyFloor } = parseCursor(ctx.cursor);
-    this.cursors = { ...map };
+    const { map: previous, legacyFloor } = parseCursor(ctx.cursor);
+    // Start empty and seed only configured channels below, so cursors for
+    // channels removed from config don't accumulate forever in the stored map.
+    this.cursors = {};
 
     for (const channel of this.config.channels) {
       // Each channel resumes from its OWN high-water mark (or the legacy floor),
       // never another channel's — the fix for the single-cursor skip (ADR-0011).
-      const oldest = this.cursors[channel] ?? legacyFloor ?? undefined;
+      const oldest = previous[channel] ?? legacyFloor ?? undefined;
       let cursor: string | undefined;
       do {
         const page = await client.conversations.history({

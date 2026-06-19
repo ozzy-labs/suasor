@@ -114,6 +114,20 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1000.000000", C2: "700.000000" });
   });
 
+  test("drops cursor entries for channels no longer in config (no unbounded growth)", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "2000.000000" }] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    // The stored map still carries a stale C9 that is no longer configured.
+    await collect(
+      connector.sync(ctx({ cursor: JSON.stringify({ C1: "1000.000000", C9: "999.000000" }) })),
+    );
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "2000.000000" });
+  });
+
   test("a channel with no new messages preserves its floor", async () => {
     const { client } = fakeSlack([{ messages: [] }]);
     const connector = createSlackConnector(
