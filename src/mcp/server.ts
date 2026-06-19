@@ -49,6 +49,7 @@ import {
 import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import { VERSION } from "../version.ts";
 import {
+  buildBrief,
   DEFAULT_LIST_LIMIT,
   getSource,
   listDecisions,
@@ -345,6 +346,37 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         limit,
       });
       return jsonResult({ demand });
+    },
+  );
+
+  // --- brief ---
+  server.registerTool(
+    "brief",
+    {
+      title: "Period brief bundle",
+      description:
+        "Bundle the period's material — tasks/decisions updated, sources/Slack demand " +
+        "observed, and currently-open inbox — for the host LLM to summarize in one " +
+        "round-trip. Read-only; the tool gathers, the host composes the summary " +
+        "(ADR-0017). Default window: the last 24h.",
+      inputSchema: {
+        since: isoDateTime.optional().describe("Window start (inclusive). Default: 24h ago."),
+        until: isoDateTime.optional().describe("Window end (exclusive). Default: now."),
+        limit: limitShape.describe(`Per-section max rows (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ since, until, limit }) => {
+      const now = new Date();
+      const effSince = since ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      const effUntil = until ?? now.toISOString();
+      const brief = buildBrief(sqlite, {
+        since: effSince,
+        until: effUntil,
+        ...(limit !== undefined ? { limit } : {}),
+        selfUserIds: deps.slackSelfUserIds ?? [],
+      });
+      return jsonResult(brief);
     },
   );
 
