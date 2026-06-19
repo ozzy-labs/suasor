@@ -77,6 +77,21 @@ describe("propose lifecycle ledger (#89)", () => {
     expect(sqlite().query("SELECT 1 FROM decisions").all()).toHaveLength(1);
   });
 
+  test("apply flips a commitment_scan proposal to applied (ADR-0021)", () => {
+    const generated = persistProposals(store, {
+      mode: "commitment_scan",
+      candidates: [{ kind: "commitment", title: "ship by Friday", direction: "owed_by_me" }],
+    });
+    proposeApply(store, { candidates: generated.candidates as Candidate[] });
+
+    expect(listProposals(sqlite(), { state: "pending" })).toHaveLength(0);
+    const applied = listProposals(sqlite(), { state: "applied" });
+    expect(applied).toHaveLength(1);
+    expect(applied[0]?.kind).toBe("commitment");
+    // The commitment entity now exists in the ledger.
+    expect(sqlite().query("SELECT 1 FROM commitments").all()).toHaveLength(1);
+  });
+
   test("reject flips pending → rejected and records the reason", () => {
     const generated = persistProposals(store, {
       mode: "source_extract",

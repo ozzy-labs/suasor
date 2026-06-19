@@ -314,6 +314,10 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           relation: "derived_from",
         });
       }
+      // A commitment extracted via the commitment_scan propose mode has a pending
+      // proposals-ledger row (persistProposals); flip it to applied by entity_id,
+      // mirroring task/decision/reply_draft/triage so propose.list stays accurate.
+      markProposalApplied(sqlite, event.commitmentId, event.recordedAt);
       return;
     }
     case "CommitmentResolved": {
