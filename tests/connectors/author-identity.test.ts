@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { authorFromMeta } from "../../src/connectors/author.ts";
-import type { Connector, SourceRecord, SyncContext, SyncResult } from "../../src/connectors/contract.ts";
+import type {
+  Connector,
+  SourceRecord,
+  SyncContext,
+  SyncResult,
+} from "../../src/connectors/contract.ts";
 import { syncConnector } from "../../src/connectors/index.ts";
 import { Store } from "../../src/db/index.ts";
 import { personIdFor } from "../../src/projections/person.ts";

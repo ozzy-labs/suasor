@@ -55,13 +55,12 @@ export function personMerge(
   }
 
   const sqlite = store.connection.sqlite;
-  const movedIdentities = (
-    sqlite
-      .query<{ n: number }, [string]>(
-        "SELECT COUNT(*) AS n FROM person_identities WHERE person_id = ?",
-      )
-      .get(sourcePersonId) as { n: number }
-  ).n;
+  const countRow = sqlite
+    .query<{ n: number }, [string]>(
+      "SELECT COUNT(*) AS n FROM person_identities WHERE person_id = ?",
+    )
+    .get(sourcePersonId);
+  const movedIdentities = countRow?.n ?? 0;
 
   // The source must be a person we actually know (has, or had, identities). An
   // unknown id is surfaced so the operator can't merge away a typo.

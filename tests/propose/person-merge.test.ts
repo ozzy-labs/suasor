@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
+import { identityKey, personIdFor } from "../../src/projections/person.ts";
 import { personMerge } from "../../src/propose/person-merge.ts";
 import { personSplit } from "../../src/propose/person-split.ts";
-import { identityKey, personIdFor } from "../../src/projections/person.ts";
 
 let store: Store;
 
@@ -32,9 +32,7 @@ function identityPerson(connector: string, handle: string): string | undefined {
 
 function identityCount(personId: string): number | undefined {
   const row = store.connection.sqlite
-    .query<{ identity_count: number }, [string]>(
-      "SELECT identity_count FROM persons WHERE id = ?",
-    )
+    .query<{ identity_count: number }, [string]>("SELECT identity_count FROM persons WHERE id = ?")
     .get(personId);
   return row?.identity_count;
 }

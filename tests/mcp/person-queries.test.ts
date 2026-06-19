@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import { listPersons } from "../../src/mcp/queries.ts";
-import { personMerge } from "../../src/propose/person-merge.ts";
 import { personIdFor } from "../../src/projections/person.ts";
+import { personMerge } from "../../src/propose/person-merge.ts";
 
 let store: Store;
 
@@ -36,7 +36,12 @@ describe("person.list query (ADR-0022)", () => {
     expect(gh?.displayName).toBe("Octo Cat");
     expect(gh?.identityCount).toBe(1);
     expect(gh?.identities).toEqual([
-      { connector: "github", handle: "octocat", displayName: "Octo Cat", observedAt: expect.any(String) },
+      {
+        connector: "github",
+        handle: "octocat",
+        displayName: "Octo Cat",
+        observedAt: expect.any(String),
+      },
     ]);
   });
 
