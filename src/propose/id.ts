@@ -53,6 +53,16 @@ export function candidateId(mode: ProposeMode, candidate: CandidateInput): strin
 }
 
 /**
+ * Content-derived inbox item id for the `inbox.add` write tool (Issue #88).
+ * Keyed on the source the item captures, so capturing the same source twice
+ * upserts the same inbox row (idempotent) rather than creating a duplicate item.
+ * The `inbox_` prefix keeps the id self-describing in the projection.
+ */
+export function inboxId(sourceExternalId: string): string {
+  return `inbox_${fnv1a(["inbox", sourceExternalId].join(SEP))}`;
+}
+
+/**
  * Deterministic target entity id for a candidate (the `taskId` / `decisionId` /
  * `draftId` / `inboxId` the applied event carries). Derived from content so
  * apply upserts the same projection row on re-application.
