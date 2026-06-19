@@ -149,6 +149,8 @@ interface SlackMessageItem {
   text?: string;
   user?: string;
   thread_ts?: string;
+  /** Reply count on a thread parent; `>0` triggers a `conversations.replies` fetch (ADR-0015). */
+  reply_count?: number;
 }
 
 /** Build the `SourceRecord` for one message of a channel. */
@@ -177,6 +179,17 @@ export interface SlackClientLike {
   conversations: {
     history: (args: {
       channel: string;
+      oldest?: string;
+      limit?: number;
+      cursor?: string;
+    }) => Promise<{
+      messages?: SlackMessageItem[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+    /** Thread replies for a parent message (`ts`), paginated like `history` (ADR-0015). */
+    replies: (args: {
+      channel: string;
+      ts: string;
       oldest?: string;
       limit?: number;
       cursor?: string;
@@ -314,23 +327,15 @@ class SlackConnector implements Connector {
         // Each channel resumes from its OWN high-water mark; a never-synced
         // channel starts at the floor so cold-start stays bounded.
         const oldest = prevChannels[channel] ?? floor;
-        let cursor: string | undefined;
-        do {
-          const page = await client.conversations.history({
-            channel,
-            limit: 200,
-            ...(oldest ? { oldest } : {}),
-            ...(cursor ? { cursor } : {}),
-          });
-          for (const item of page.messages ?? []) {
-            const seen = aliasCursors[channel];
-            if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
-              aliasCursors[channel] = item.ts;
-            }
-            yield toRecord(ws.team, channel, item);
+        for await (const item of fetchChannelItems(client, channel, oldest)) {
+          // History messages and thread replies advance the same per-channel
+          // cursor — the highest ts seen (a reply may be newest) resumes next run.
+          const seen = aliasCursors[channel];
+          if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
+            aliasCursors[channel] = item.ts;
           }
-          cursor = page.response_metadata?.next_cursor || undefined;
-        } while (cursor);
+          yield toRecord(ws.team, channel, item);
+        }
 
         // Preserve the floor for a channel with no new messages so it is not
         // re-scanned from scratch on the next run.
@@ -352,6 +357,63 @@ class SlackConnector implements Connector {
   finalize(): SyncResult {
     return { cursor: serializeCursor(this.cursors) };
   }
+}
+
+/**
+ * Stream a channel's messages: `conversations.history` pages, and for every
+ * thread parent (`reply_count > 0`) the thread's replies via
+ * `conversations.replies` (ADR-0015). Replies are interleaved right after their
+ * parent. Only parents with replies are expanded, so quiet messages cost no
+ * extra API call (N+1 guard).
+ */
+async function* fetchChannelItems(
+  client: SlackClientLike,
+  channel: string,
+  oldest: string | undefined,
+): AsyncIterable<SlackMessageItem> {
+  let cursor: string | undefined;
+  do {
+    const page = await client.conversations.history({
+      channel,
+      limit: 200,
+      ...(oldest ? { oldest } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const item of page.messages ?? []) {
+      yield item;
+      if (item.reply_count && item.reply_count > 0) {
+        yield* fetchThreadReplies(client, channel, item.ts, oldest);
+      }
+    }
+    cursor = page.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+}
+
+/**
+ * Stream a thread's replies for parent `parentTs`. Slack returns the parent as
+ * the first element of `conversations.replies`; it is skipped here because the
+ * caller already yielded it from `history` (no duplicate `SourceRecord`).
+ */
+async function* fetchThreadReplies(
+  client: SlackClientLike,
+  channel: string,
+  parentTs: string,
+  oldest: string | undefined,
+): AsyncIterable<SlackMessageItem> {
+  let cursor: string | undefined;
+  do {
+    const page = await client.conversations.replies({
+      channel,
+      ts: parentTs,
+      limit: 200,
+      ...(oldest ? { oldest } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const item of page.messages ?? []) {
+      if (item.ts !== parentTs) yield item; // skip the parent echo
+    }
+    cursor = page.response_metadata?.next_cursor || undefined;
+  } while (cursor);
 }
 
 /**
