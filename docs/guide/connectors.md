@@ -112,6 +112,7 @@ suasor slack sync                      # （= <connector> sync）取り込み
 
   `auth test` は scope ごとに `public channel sync` / `private channel sync` / `DM sync` / `group-DM (mpim) sync` / `engagement axis` の readiness（`READY` / `READY (degraded: +users:read …)` / `MISSING <scope>` / `N/A (User Token only)`）を出す。READY は scope の保証のみで、未参加 channel は `not_in_channel` のまま（membership は別レイヤ）
 
+- **engagement axis**（[ADR-0013](../adr/0013-slack-engagement-axis.md)）: `suasor slack conversations --sort=last_self_post` で「自分が最後に投稿した時刻」順に会話を並べる。`search.messages`（`from:me`）を使うため **User Token（`xoxp-`）専用**で、Bot Token では `N/A` に degrade（通常順で列挙）。値は Slack 全文 index の遅延により概算。
 - **date floor / recovery**（[ADR-0016](../adr/0016-slack-sync-date-floor.md)）: `since`（per-workspace 可）で cold-start の下限を設ける。下限は saved cursor が無い channel にのみ適用され、resume 済み channel は cursor を優先する。運用 verb:
   - `suasor slack status [--json]` — 保存中の cursor（workspace / channel ごとの resume ts）を表示
   - `suasor slack cursor reset --channel C1,C2 | --all [--workspace A] [--yes]` — cursor を消し、次回 sync で `since` floor から取り直す（`--yes` 無しは preview のみ）

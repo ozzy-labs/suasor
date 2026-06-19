@@ -70,4 +70,10 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     expect(code).toBe(1);
     expect(err).toContain("auth set --workspace acme");
   });
+
+  test("conversations rejects an invalid --sort before any token lookup (ADR-0013)", async () => {
+    const { code, err } = await run(["slack", "conversations", "--sort", "bogus"]);
+    expect(code).toBe(1);
+    expect(err).toContain("invalid --sort");
+  });
 });
