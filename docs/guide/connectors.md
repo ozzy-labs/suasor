@@ -75,7 +75,7 @@ MCP 経由では `search` read tool で同じ検索ができる（[retrieval](..
 channel メッセージを取り込む（`@slack/web-api`）。
 
 - **token**: Bot Token（`channels:history` / `groups:history` の read scope）。env override `SUASOR_CONNECTOR_SLACK_TOKEN`、keychain account `connector:slack:token`
-- **config**:
+- **config（単一 workspace / 後方互換）**:
 
 ```toml
 [connectors.slack]
@@ -83,8 +83,21 @@ team = "T0123ABCD"            # id prefix（rename しても安定）
 channels = ["C0123ABCD"]      # 取り込み対象 channel id（空なら何もしない）
 ```
 
-- **identity**: `slack:<team>:<channel>:<ts>` / **source_type**: `slack_message`
-- **差分検知**: `conversations.history` の `oldest` cursor。cursor は **channel ごと**の最新 `ts` を持つ JSON map（`{ "<channel>": "<ts>" }`）で、各 channel は自分の high-water mark から resume する（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）。旧来の単一 `ts` cursor は upgrade 後の初回のみ全 channel の floor として解釈する
+- **config（マルチ workspace、[ADR-0014](../adr/0014-slack-multi-workspace.md)）**: `[connectors.slack.workspaces.<alias>]` を並べると 1 install で N workspace を取り込む。flat な `[connectors.slack]`（上）は `default` alias として後方互換に読む。
+
+```toml
+[connectors.slack.workspaces.acme]
+team = "T0ACME"
+channels = ["C0ACME1", "C0ACME2"]
+[connectors.slack.workspaces.beta]
+team = "T0BETA"
+channels = ["C0BETA1"]
+```
+
+  token は alias ごとに `connector:slack:<alias>:token`（env override `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN`）。`suasor slack auth set/test` / `slack conversations` は `--workspace <alias>` で対象 token を切り替える。`slack sync` は全 alias を **per-workspace エラー隔離**で処理し、token 未設定の alias は warning を出して skip（他 alias は同期継続）。
+
+- **identity**: `slack:<team>:<channel>:<ts>`（team prefix で workspace 横断一意）/ **source_type**: `slack_message`
+- **差分検知**: `conversations.history` の `oldest` cursor。cursor は **alias → channel** の最新 `ts` を持つ JSON map（`{ "<alias>": { "<channel>": "<ts>" } }`）で、各 channel は自分の high-water mark から resume する（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) / [ADR-0014](../adr/0014-slack-multi-workspace.md)）。旧来の flat map（`{ "<channel>": "<ts>" }`）は `default` alias、単一 `ts` は upgrade 後初回の floor として後方互換解釈する
 - **オンボーディング**（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）:
 
 ```bash

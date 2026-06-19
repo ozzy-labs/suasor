@@ -4,6 +4,7 @@ import {
   createSlackConnector,
   type SlackClientLike,
   SlackConnectorConfig,
+  workspaceSecretName,
 } from "../../src/connectors/slack.ts";
 
 type HistoryArgs = { channel: string; oldest?: string; limit?: number; cursor?: string };
@@ -91,7 +92,8 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
     await collect(connector.sync(ctx({ cursor: "1699999000.000000" })));
     expect(calls[0]?.oldest).toBe("1699999000.000000");
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1700000050.000000" });
+    // Cursor is now per-alias → per-channel; a single-workspace config is `default`.
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "1700000050.000000" } });
   });
 
   test("per-channel cursor: a quiet channel keeps its own floor (no cross-channel skip)", async () => {
@@ -111,7 +113,9 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
     expect(calls.find((c) => c.channel === "C1")?.oldest).toBe("900.000000");
     expect(calls.find((c) => c.channel === "C2")?.oldest).toBe("500.000000");
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1000.000000", C2: "700.000000" });
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      default: { C1: "1000.000000", C2: "700.000000" },
+    });
   });
 
   test("drops cursor entries for channels no longer in config (no unbounded growth)", async () => {
@@ -125,7 +129,7 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
       connector.sync(ctx({ cursor: JSON.stringify({ C1: "1000.000000", C9: "999.000000" }) })),
     );
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "2000.000000" });
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "2000.000000" } });
   });
 
   test("a channel with no new messages preserves its floor", async () => {
@@ -136,7 +140,7 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
     );
     await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "1234.000000" }) })));
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1234.000000" });
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "1234.000000" } });
   });
 
   test("first run omits `oldest` and paginates via next_cursor", async () => {
@@ -177,5 +181,133 @@ describe("Slack connector — guards", () => {
     );
     expect(await collect(connector.sync(ctx()))).toEqual([]);
     expect(built).toBe(false);
+  });
+});
+
+describe("Slack connector — multi-workspace (ADR-0014)", () => {
+  test("workspaceSecretName: default workspace vs named alias", () => {
+    expect(workspaceSecretName()).toBe("token");
+    expect(workspaceSecretName("acme")).toBe("acme:token");
+  });
+
+  test("syncs each workspace with its own token and team-prefixed ids", async () => {
+    const tokens: string[] = [];
+    const { client } = fakeSlack([
+      { messages: [{ ts: "10.000000" }] }, // acme → C1
+      { messages: [{ ts: "20.000000" }] }, // beta → C2
+    ]);
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C2"] },
+        },
+      },
+      {
+        clientFactory: (t) => {
+          tokens.push(t);
+          return client;
+        },
+      },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) =>
+            name === "acme:token" ? "tok-a" : name === "beta:token" ? "tok-b" : null,
+        }),
+      ),
+    );
+    expect(tokens).toEqual(["tok-a", "tok-b"]);
+    expect(records.map((r) => r.externalId)).toEqual([
+      "slack:TA:C1:10.000000",
+      "slack:TB:C2:20.000000",
+    ]);
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      acme: { C1: "10.000000" },
+      beta: { C2: "20.000000" },
+    });
+  });
+
+  test("skips a workspace with no token (warns) and keeps syncing the rest", async () => {
+    const warns: string[] = [];
+    const tokens: string[] = [];
+    const { client } = fakeSlack([{ messages: [{ ts: "30.000000" }] }]); // only beta fetches
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C2"] },
+        },
+      },
+      {
+        clientFactory: (t) => {
+          tokens.push(t);
+          return client;
+        },
+      },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "beta:token" ? "tok-b" : null), // acme missing
+          onWarn: (m: string) => warns.push(m),
+        }),
+      ),
+    );
+    expect(tokens).toEqual(["tok-b"]); // acme never built a client (isolation)
+    expect(records.map((r) => r.externalId)).toEqual(["slack:TB:C2:30.000000"]);
+    expect(warns.some((w) => w.includes("acme") && w.includes("--workspace acme"))).toBe(true);
+  });
+
+  test("preserves a skipped workspace's prior cursor (skip is not a reset)", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "40.000000" }] }]);
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C2"] },
+        },
+      },
+      { clientFactory: () => client },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "beta:token" ? "tok-b" : null),
+          cursor: JSON.stringify({ acme: { C1: "5.000000" }, beta: { C2: "9.000000" } }),
+          onWarn: () => {},
+        }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      acme: { C1: "5.000000" }, // preserved (skipped)
+      beta: { C2: "40.000000" }, // advanced
+    });
+  });
+
+  test("throws only when NO workspace resolves a token", async () => {
+    const { client } = fakeSlack([]);
+    const connector = createSlackConnector(
+      { workspaces: { acme: { team: "TA", channels: ["C1"] } } },
+      { clientFactory: () => client },
+    );
+    await expect(
+      collect(connector.sync(ctx({ secret: async () => null, onWarn: () => {} }))),
+    ).rejects.toThrow(/no token configured for any workspace/);
+  });
+
+  test("reads a flat (pre-multi-workspace) cursor as the default workspace", async () => {
+    const { client, calls } = fakeSlack([{ messages: [{ ts: "100.000000" }] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "50.000000" }) })));
+    expect(calls[0]?.oldest).toBe("50.000000");
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "100.000000" } });
   });
 });

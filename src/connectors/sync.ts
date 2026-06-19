@@ -53,6 +53,8 @@ export interface SyncOptions {
   secrets?: SecretStoreOptions;
   /** Progress sink for long-running syncs (forwarded to the connector). */
   onProgress?: (record: SourceRecord) => void;
+  /** Non-fatal warning sink, forwarded to the connector as `ctx.onWarn`. */
+  onWarn?: (message: string) => void;
   /** Clock injection for deterministic event timestamps in tests. */
   now?: () => Date;
   /**
@@ -126,6 +128,7 @@ export async function syncConnector(
   const ctx: SyncContext = {
     cursor,
     secret: makeSecretResolver(connector.name, options.secrets),
+    ...(options.onWarn ? { onWarn: options.onWarn } : {}),
   };
 
   let observed = 0;

@@ -34,6 +34,14 @@ export interface SyncContext {
    * only stream records need not call this — doing so would double-count.
    */
   readonly onProgress?: (record: SourceRecord) => void;
+  /**
+   * Optional non-fatal warning channel. A connector that keeps going past a
+   * recoverable problem (e.g. one of several Slack workspaces has no token, so
+   * it is skipped while the rest sync — ADR-0014) emits a human-readable message
+   * here instead of throwing. The sync service routes it to stderr; when absent
+   * the connector simply has no place to report and stays silent.
+   */
+  readonly onWarn?: (message: string) => void;
 }
 
 /** A single observed source body produced by a connector (read-only). */
