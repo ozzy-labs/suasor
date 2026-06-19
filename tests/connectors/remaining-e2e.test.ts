@@ -33,6 +33,7 @@ describe("Slack: sync → projection → FTS", () => {
             history: async () => ({
               messages: [{ ts: "1700000000.000100", text: "rocket launch scheduled", user: "U1" }],
             }),
+            replies: async () => ({ messages: [] }),
           },
         }),
       },
@@ -55,6 +56,7 @@ describe("Slack: sync → projection → FTS", () => {
             history: async () => ({
               messages: [{ ts: "1700000000.000100", text: "rocket launch scheduled", user: "U1" }],
             }),
+            replies: async () => ({ messages: [] }),
           },
         }),
       },

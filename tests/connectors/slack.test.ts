@@ -11,16 +11,23 @@ import {
 } from "../../src/connectors/slack.ts";
 
 type HistoryArgs = { channel: string; oldest?: string; limit?: number; cursor?: string };
+type Msg = { ts: string; text?: string; user?: string; thread_ts?: string; reply_count?: number };
 type HistoryPage = {
-  messages?: Array<{ ts: string; text?: string; user?: string; thread_ts?: string }>;
+  messages?: Msg[];
   response_metadata?: { next_cursor?: string };
 };
+type ReplyCall = { channel: string; ts: string; oldest?: string };
 
-function fakeSlack(pages: HistoryPage[]): {
+function fakeSlack(
+  pages: HistoryPage[],
+  repliesByTs: Record<string, HistoryPage> = {},
+): {
   client: SlackClientLike;
   calls: HistoryArgs[];
+  replyCalls: ReplyCall[];
 } {
   const calls: HistoryArgs[] = [];
+  const replyCalls: ReplyCall[] = [];
   let i = 0;
   const client: SlackClientLike = {
     conversations: {
@@ -28,9 +35,13 @@ function fakeSlack(pages: HistoryPage[]): {
         calls.push(args);
         return pages[i++] ?? { messages: [] };
       },
+      async replies(args) {
+        replyCalls.push({ channel: args.channel, ts: args.ts, oldest: args.oldest });
+        return repliesByTs[args.ts] ?? { messages: [] };
+      },
     },
   };
-  return { client, calls };
+  return { client, calls, replyCalls };
 }
 
 function ctx(overrides: Partial<SyncContext> = {}): SyncContext {
@@ -377,6 +388,65 @@ describe("Slack connector — date floor (ADR-0016)", () => {
     );
     expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(7 * 86400));
     expect(calls.find((c) => c.channel === "C2")?.oldest).toBe(floorFor(1 * 86400));
+  });
+});
+
+describe("Slack connector — thread replies (ADR-0015)", () => {
+  test("fetches replies for thread parents and skips the parent echo", async () => {
+    const { client, replyCalls } = fakeSlack(
+      [{ messages: [{ ts: "100.000000", reply_count: 2, thread_ts: "100.000000" }] }],
+      {
+        "100.000000": {
+          messages: [
+            { ts: "100.000000", text: "parent", thread_ts: "100.000000" }, // echoed → skipped
+            { ts: "101.000000", text: "reply A", thread_ts: "100.000000" },
+            { ts: "102.000000", text: "reply B", thread_ts: "100.000000" },
+          ],
+        },
+      },
+    );
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records.map((r) => r.externalId)).toEqual([
+      "slack:T1:C1:100.000000", // parent, once (from history)
+      "slack:T1:C1:101.000000",
+      "slack:T1:C1:102.000000",
+    ]);
+    expect(records[1]?.meta).toMatchObject({ threadTs: "100.000000" });
+    expect(replyCalls).toEqual([{ channel: "C1", ts: "100.000000", oldest: undefined }]);
+    // The newest reply ts becomes the channel cursor.
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "102.000000" } });
+  });
+
+  test("does not call replies for messages without replies (N+1 guard)", async () => {
+    const { client, replyCalls } = fakeSlack([
+      { messages: [{ ts: "100.000000" }, { ts: "101.000000", reply_count: 0 }] },
+    ]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    await collect(connector.sync(ctx()));
+    expect(replyCalls).toEqual([]);
+  });
+
+  test("passes the channel oldest to replies (resume window)", async () => {
+    const { client, replyCalls } = fakeSlack(
+      [{ messages: [{ ts: "500.000000", reply_count: 1, thread_ts: "500.000000" }] }],
+      { "500.000000": { messages: [{ ts: "501.000000", thread_ts: "500.000000" }] } },
+    );
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    await collect(
+      connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: "499.000000" } }) })),
+    );
+    expect(replyCalls[0]?.oldest).toBe("499.000000");
   });
 });
 

@@ -98,6 +98,7 @@ channels = ["C0BETA1"]
   token は alias ごとに `connector:slack:<alias>:token`（env override `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN`）。`suasor slack auth set/test` / `slack conversations` は `--workspace <alias>` で対象 token を切り替える。`slack sync` は全 alias を **per-workspace エラー隔離**で処理し、token 未設定の alias は warning を出して skip（他 alias は同期継続）。
 
 - **identity**: `slack:<team>:<channel>:<ts>`（team prefix で workspace 横断一意）/ **source_type**: `slack_message`
+- **thread replies**（[ADR-0015](../adr/0015-slack-thread-replies.md)）: `conversations.history` の各メッセージで `reply_count > 0` の親について `conversations.replies` を辿り、返信も取り込む（返信を持たないメッセージは叩かない＝N+1 抑制）。返信も同じ identity / `threadTs` meta で、per-channel cursor は履歴と返信の最大 `ts` を共有する。注意: 親が cursor/floor より古いスレッドへの新規返信は対象外（thread 単位 cursor は持たない設計）
 - **差分検知**: `conversations.history` の `oldest` cursor。cursor は **alias → channel** の最新 `ts` を持つ JSON map（`{ "<alias>": { "<channel>": "<ts>" } }`）で、各 channel は自分の high-water mark から resume する（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) / [ADR-0014](../adr/0014-slack-multi-workspace.md)）。旧来の flat map（`{ "<channel>": "<ts>" }`）は `default` alias、単一 `ts` は upgrade 後初回の floor として後方互換解釈する
 - **オンボーディング**（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）:
 
