@@ -111,3 +111,38 @@ describe("search — sortByLastSelfPost", () => {
     expect(input.map((c) => c.id)).toEqual(["A", "B", "C"]);
   });
 });
+
+describe("search — onProgress (#84)", () => {
+  test("ticks once per fetched page", async () => {
+    const { transport } = fakeSearch({
+      "1": {
+        ok: true,
+        messages: { matches: [], paging: { pages: 3, page: 1 } },
+      },
+      "2": {
+        ok: true,
+        messages: { matches: [], paging: { pages: 3, page: 2 } },
+      },
+      "3": {
+        ok: true,
+        messages: { matches: [], paging: { pages: 3, page: 3 } },
+      },
+    });
+    let ticks = 0;
+    await searchLastSelfPost("xoxp", { transport, onProgress: () => (ticks += 1) });
+    expect(ticks).toBe(3);
+  });
+
+  test("a throwing reporter never fails the search (best-effort)", async () => {
+    const { transport } = fakeSearch({
+      "1": { ok: true, messages: { matches: [], paging: { pages: 1, page: 1 } } },
+    });
+    const map = await searchLastSelfPost("xoxp", {
+      transport,
+      onProgress: () => {
+        throw new Error("boom");
+      },
+    });
+    expect(map.size).toBe(0);
+  });
+});

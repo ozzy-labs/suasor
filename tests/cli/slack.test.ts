@@ -76,4 +76,18 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     expect(code).toBe(1);
     expect(err).toContain("invalid --sort");
   });
+
+  test("conversations --no-progress is accepted and arg validation still runs first (#84)", async () => {
+    // --no-progress is a registered flag; bad --types still fails fast before any
+    // token / network / progress work.
+    const { code, err } = await run([
+      "slack",
+      "conversations",
+      "--no-progress",
+      "--types",
+      "bogus",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("invalid --types");
+  });
 });

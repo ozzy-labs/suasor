@@ -166,6 +166,12 @@ export class SlackConversationsCommand extends Command {
   sort = Option.String("--sort", {
     description: "Sort order: last_self_post (engagement; User Token only, ADR-0013).",
   });
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
+  });
+
+  /** Clock for the relative-time column; overridden in tests for determinism. */
+  protected now: () => number = () => Date.now();
 
   override async execute(): Promise<number> {
     // Validate args before any keychain / network work so bad input fails fast.
@@ -215,10 +221,22 @@ export class SlackConversationsCommand extends Command {
       return 1;
     }
 
-    const [{ testToken }, { listConversations, renderConfigBlock }] = await Promise.all([
-      import("../../connectors/slack/auth.ts"),
-      import("../../connectors/slack/conversations.ts"),
-    ]);
+    const [{ testToken }, { listConversations, renderConfigBlock }, { createProgress }] =
+      await Promise.all([
+        import("../../connectors/slack/auth.ts"),
+        import("../../connectors/slack/conversations.ts"),
+        import("../progress.ts"),
+      ]);
+
+    // Indeterminate progress on stderr while DM name resolution + search paging
+    // run, so a multi-second sweep is not silent (#84; same pattern as
+    // connector-sync, ADR-0026). TTY-gated and suppressed by --no-progress, so
+    // --json / piped output stays clean and CLI tests assert on stdout unchanged.
+    const progress = createProgress(
+      this.context.stderr,
+      "slack conversations",
+      this.noProgress ? false : undefined,
+    );
 
     try {
       // One auth.test resolves the team id for the config block + the principal
@@ -228,6 +246,7 @@ export class SlackConversationsCommand extends Command {
         ...(types ? { types } : {}),
         ...(limit !== undefined ? { limit } : {}),
         includeArchived: this.includeArchived,
+        onProgress: () => progress.tick(),
       });
 
       // Engagement axis (--sort=last_self_post): resolve each conversation's
@@ -237,6 +256,7 @@ export class SlackConversationsCommand extends Command {
       let conversations = result.conversations;
       if (this.sort === "last_self_post") {
         if (principal !== "user") {
+          progress.finish();
           this.context.stderr.write(
             "warning: --sort=last_self_post is N/A (User Token only) — listing in default order\n",
           );
@@ -244,13 +264,15 @@ export class SlackConversationsCommand extends Command {
           const { searchLastSelfPost, sortByLastSelfPost } = await import(
             "../../connectors/slack/search.ts"
           );
-          lastSelfPost = await searchLastSelfPost(token);
+          lastSelfPost = await searchLastSelfPost(token, { onProgress: () => progress.tick() });
           conversations = sortByLastSelfPost(conversations, lastSelfPost);
+          progress.finish();
           this.context.stderr.write(
             "note: last_self_post reflects Slack's search index, which lags real time (approximate)\n",
           );
         }
       }
+      progress.finish();
 
       if (this.json) {
         const withEngagement = lastSelfPost
@@ -262,10 +284,17 @@ export class SlackConversationsCommand extends Command {
         return 0;
       }
 
+      // Humanize the engagement ts for the table (the --json path above keeps
+      // the raw ts); "-" stays when there is no recorded self-post (#84).
+      const { formatSlackTs } = await import("../slack-time.ts");
       this.context.stdout.write(`${conversations.length} conversation(s) visible to this token:\n`);
       for (const c of conversations) {
         const archived = c.isArchived ? " (archived)" : "";
-        const engagement = lastSelfPost ? `  last_self_post=${lastSelfPost.get(c.id) ?? "-"}` : "";
+        let engagement = "";
+        if (lastSelfPost) {
+          const ts = lastSelfPost.get(c.id);
+          engagement = `  last_self_post=${ts ? formatSlackTs(ts, this.now) : "-"}`;
+        }
         this.context.stdout.write(`  ${c.id}  ${c.displayName}${archived}${engagement}\n`);
       }
       for (const [type, scope] of Object.entries(result.missingScopes)) {
@@ -283,6 +312,7 @@ export class SlackConversationsCommand extends Command {
       );
       return 0;
     } catch (cause) {
+      progress.finish();
       this.context.stderr.write(
         `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
       );
@@ -308,6 +338,9 @@ export class SlackStatusCommand extends Command {
 
   json = Option.Boolean("--json", false, { description: "Emit the cursor map as JSON." });
 
+  /** Clock for the relative-time column; overridden in tests for determinism. */
+  protected now: () => number = () => Date.now();
+
   override async execute(): Promise<number> {
     const map = await readSlackCursor(this);
     if (map === null) return 1;
@@ -321,11 +354,15 @@ export class SlackStatusCommand extends Command {
       this.context.stdout.write("slack cursors: (none — never synced, or reset)\n");
       return 0;
     }
+    // Humanize the resume ts so an operator can read "what was synced until
+    // when" at a glance; the --json path above keeps the raw ts (#84). `now` is
+    // injectable so the relative phrasing is deterministic under test.
+    const { formatSlackTs } = await import("../slack-time.ts");
     this.context.stdout.write("slack cursors:\n");
     for (const alias of aliases) {
       this.context.stdout.write(`  [${alias}]\n`);
       for (const [channel, ts] of Object.entries(map[alias] ?? {})) {
-        this.context.stdout.write(`    ${channel}  ${ts}\n`);
+        this.context.stdout.write(`    ${channel}  ${formatSlackTs(ts, this.now)}\n`);
       }
     }
     return 0;
