@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.4](https://github.com/ozzy-labs/suasor/compare/v0.1.3...v0.1.4) (2026-06-19)
+
+
+### Features
+
+* **mcp:** brief period-bundle read tool (ADR-0017) ([#75](https://github.com/ozzy-labs/suasor/issues/75)) ([65b34dc](https://github.com/ozzy-labs/suasor/commit/65b34dcd7bb3409a1d4eb3f249006f0029890bc6))
+* **mcp:** knowledge-graph traversal tools graph.related/graph.expand (ADR-0018) ([#77](https://github.com/ozzy-labs/suasor/issues/77)) ([f0f232c](https://github.com/ozzy-labs/suasor/commit/f0f232c80eafcfb4280d24afdac621d262cb4dce))
+
+
+### Bug Fixes
+
+* **slack:** resolve DM names, sort conversations a-z, add sync progress ([#78](https://github.com/ozzy-labs/suasor/issues/78)) ([34ddef6](https://github.com/ozzy-labs/suasor/commit/34ddef67c5762c5044598bf3a88eb5c0970a9eb3))
+
 ## [0.1.3](https://github.com/ozzy-labs/suasor/compare/v0.1.2...v0.1.3) (2026-06-19)
 
 
