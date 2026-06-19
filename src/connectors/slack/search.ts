@@ -89,3 +89,16 @@ export async function searchLastSelfPost(
 
   return result;
 }
+
+/**
+ * Order conversations by engagement (last self-post ts, descending). Items with
+ * no recorded self-post sort last (ts 0). Pure + stable-friendly so the
+ * `slack conversations --sort=last_self_post` ordering is unit-testable.
+ */
+export function sortByLastSelfPost<T extends { id: string }>(
+  conversations: readonly T[],
+  lastSelfPost: Map<string, string>,
+): T[] {
+  const score = (id: string) => Number.parseFloat(lastSelfPost.get(id) ?? "0");
+  return [...conversations].sort((a, b) => score(b.id) - score(a.id));
+}

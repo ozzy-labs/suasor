@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type SlackSearchTransport,
   searchLastSelfPost,
+  sortByLastSelfPost,
 } from "../../../src/connectors/slack/search.ts";
 
 function fakeSearch(pagesByPage: Record<string, Record<string, unknown>>): {
@@ -90,5 +91,23 @@ describe("search — searchLastSelfPost (ADR-0013)", () => {
     const map = await searchLastSelfPost("xoxp", { transport });
     expect(map.size).toBe(1);
     expect(map.get("C2")).toBe("20.0");
+  });
+});
+
+describe("search — sortByLastSelfPost", () => {
+  const convos = [{ id: "A" }, { id: "B" }, { id: "C" }];
+
+  test("orders by last self-post ts descending; no-post items sort last", () => {
+    const map = new Map([
+      ["A", "100.0"],
+      ["C", "300.0"],
+    ]); // B has no self-post
+    expect(sortByLastSelfPost(convos, map).map((c) => c.id)).toEqual(["C", "A", "B"]);
+  });
+
+  test("does not mutate the input array", () => {
+    const input = [...convos];
+    sortByLastSelfPost(input, new Map([["B", "9.0"]]));
+    expect(input.map((c) => c.id)).toEqual(["A", "B", "C"]);
   });
 });

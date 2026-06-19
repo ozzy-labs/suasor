@@ -241,10 +241,11 @@ export class SlackConversationsCommand extends Command {
             "warning: --sort=last_self_post is N/A (User Token only) — listing in default order\n",
           );
         } else {
-          const { searchLastSelfPost } = await import("../../connectors/slack/search.ts");
+          const { searchLastSelfPost, sortByLastSelfPost } = await import(
+            "../../connectors/slack/search.ts"
+          );
           lastSelfPost = await searchLastSelfPost(token);
-          const score = (id: string) => Number.parseFloat(lastSelfPost?.get(id) ?? "0");
-          conversations = [...conversations].sort((a, b) => score(b.id) - score(a.id));
+          conversations = sortByLastSelfPost(conversations, lastSelfPost);
           this.context.stderr.write(
             "note: last_self_post reflects Slack's search index, which lags real time (approximate)\n",
           );
