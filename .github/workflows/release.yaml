@@ -1,19 +1,32 @@
 name: Release
 
-# Distribution channels (ADR-0010): npm (OIDC Trusted Publisher), single
-# binaries (bun --compile) attached to the GitHub Release, and a
-# batteries-included Docker image on GHCR.
+# release-please-driven release (ADR-0010).
 #
-# IMPORTANT: nothing publishes on push/merge. This workflow runs only when a
-# human publishes a GitHub Release or manually dispatches it — actual publish
-# is a deliberate manual step.
+# On every push to `main`, release-please-action either:
+#   1. Updates / opens a "release PR" (`chore(main): release vX.Y.Z`) that
+#      batches Conventional Commits since the last release into a version bump
+#      (package.json) + CHANGELOG entry, OR
+#   2. (when that release PR is merged) creates the matching git tag + GitHub
+#      Release in one step — setting `release_created: true`.
+#
+# Publish (npm / single binaries / Docker) runs in THIS workflow, gated on
+# `release_created`. It is NOT a separate `on: release` workflow because a
+# Release created by release-please via `GITHUB_TOKEN` does **not**
+# cascade-trigger `on: release` / `on: push: tags` workflows (GitHub's
+# anti-recursion). The npm Trusted Publisher on npmjs.com is registered against
+# this workflow filename (`release.yaml`) — keep the filename stable.
+#
+# References: googleapis/release-please-action · npm Trusted Publishers (OIDC) ·
+# knowledge MCP `tools/release-please` / `standards/npm-trusted-publishers`.
+
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write # upload release assets
+  contents: write # release-please commits/tags/releases + upload release assets
+  pull-requests: write # release-please opens/updates the release PR
   id-token: write # npm OIDC Trusted Publisher (no NPM_TOKEN)
   packages: write # GHCR push
 
@@ -22,14 +35,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-please:
+    name: Run release-please
+    runs-on: ubuntu-24.04
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   npm:
     name: npm publish (OIDC + provenance)
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-24.04
     steps:
+      # Check out the tag release-please just created so we build from the
+      # exact bumped package.json, not arbitrary main HEAD.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        # No --frozen-lockfile: release-please bumps package.json but not
+        # bun.lock, so the self-version entry is one revision behind at the
+        # tagged commit. Let bun re-resolve so publish stays self-healing.
+        run: bun install
       - name: Build
         run: bun run build
       # Node provides an npm CLI new enough for OIDC Trusted Publishers
@@ -39,6 +75,8 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - name: Install latest npm (>= 11.5.1 required for trusted publishing)
+        run: npm install -g npm@latest
       - name: Publish to npm
         # No NPM_TOKEN: authenticated via the Trusted Publisher configured on
         # npmjs.com (Settings -> Publishing). Provenance is attached because the
@@ -47,6 +85,8 @@ jobs:
 
   binaries:
     name: single binary (${{ matrix.target }})
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -59,9 +99,11 @@ jobs:
           - bun-windows-x64
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
       - name: Compile
         # Connector SDKs that pull heavy/native deps are kept external (matches
         # package.json `compile`); the standalone binary ships core + a few
@@ -81,22 +123,19 @@ jobs:
             --external @napi-rs/keyring
           echo "ASSET=${asset}" >> "${GITHUB_ENV}"
       - name: Attach to release
-        if: github.event_name == 'release'
-        run: gh release upload "${{ github.event.release.tag_name }}" "${ASSET}" --clobber
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" "${ASSET}" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Upload as workflow artifact (manual dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
 
   docker:
     name: docker image (GHCR, batteries-included +Ollama)
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -107,12 +146,12 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          # On `push: main` there is no tag ref, so derive the SemVer tags from
+          # the release-please tag_name (`vX.Y.Z`) explicitly.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
-            type=sha
-
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
           context: .
