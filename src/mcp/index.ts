@@ -23,3 +23,4 @@ export {
   serveMcp,
 } from "./serve.ts";
 export { buildMcpServer, EMBEDDING_DISABLED_SIGNAL, type McpServerDeps } from "./server.ts";
+export { type McpToolInfo, mcpToolCatalog } from "./tool-catalog.ts";

@@ -40,9 +40,37 @@ const REGISTRY: Record<string, FactoryLoader> = {
   },
 };
 
+/**
+ * The secret name(s) each connector resolves via `ctx.secret(...)` (see the
+ * `secrets — ...` note atop each connector module). Used by introspection
+ * (`connectors list`) to report whether a credential is configured **without**
+ * disclosing its value. Web needs no auth (public pages only), so it has none.
+ *
+ * Kept here next to the registry so adding a connector declares its secret in
+ * one place. Slack's flat/default workspace uses `"token"`; named workspaces use
+ * `"<alias>:token"` (ADR-0014) — only the default token is introspected here.
+ */
+const SECRET_NAMES: Record<string, readonly string[]> = {
+  github: ["token"],
+  slack: ["token"],
+  "ms-graph": ["clientSecret"],
+  google: ["refreshToken"],
+  box: ["token"],
+  web: [],
+};
+
 /** Names of all registered connectors (cheap; loads no SDK). */
 export function connectorNames(): string[] {
   return Object.keys(REGISTRY).sort();
+}
+
+/**
+ * Secret names a connector reads via `ctx.secret(...)` (empty when it needs no
+ * auth, e.g. `web`). Used by `connectors list` to report credential presence
+ * without reading values. Unknown connectors return `[]`.
+ */
+export function connectorSecretNames(name: string): readonly string[] {
+  return SECRET_NAMES[name] ?? [];
 }
 
 /** Whether a connector name is registered. */
