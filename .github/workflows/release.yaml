@@ -136,6 +136,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
+      # Read the SemVer from package.json (not the git tag) so the image tags are
+      # robust regardless of the tag-naming scheme (e.g. a component prefix).
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -146,11 +151,11 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
-          # On `push: main` there is no tag ref, so derive the SemVer tags from
-          # the release-please tag_name (`vX.Y.Z`) explicitly.
+          # On `push: main` there is no tag ref, so feed the package version
+          # explicitly → `:X.Y.Z`, `:X.Y`, and `:latest`.
           tags: |
-            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{version}},value=${{ steps.ver.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.version }}
             type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
