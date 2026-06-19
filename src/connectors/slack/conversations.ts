@@ -65,6 +65,12 @@ export interface ListConversationsOptions {
   readonly transport?: SlackConversationsTransport;
   /** `users.info` transport override for DM name resolution (tests inject a fake). */
   readonly usersTransport?: SlackUsersTransport;
+  /**
+   * Called once per fetched page / resolved DM name so a CLI can render an
+   * indeterminate progress counter while the sweep runs (#84). Best-effort: any
+   * throw is ignored so progress reporting never fails the listing.
+   */
+  readonly onProgress?: () => void;
 }
 
 /** One `users.conversations` page fetch, decoupled from `fetch` for tests. */
@@ -178,6 +184,12 @@ export async function listConversations(
   const types = options.types ?? TYPE_ORDER;
   const transport = options.transport ?? defaultTransport;
   const usersTransport = options.usersTransport ?? defaultUsersTransport;
+  // Best-effort progress tick: a throw in the reporter must not fail the sweep.
+  const tick = () => {
+    try {
+      options.onProgress?.();
+    } catch {}
+  };
   const nameCache = new Map<string, string | null>();
   const conversations: SlackConversation[] = [];
   const missingScopes: Partial<Record<ConversationType, string>> = {};
@@ -196,6 +208,7 @@ export async function listConversations(
       if (cursor) params.cursor = cursor;
 
       const body = await transport(token, params);
+      tick(); // one page fetched
       if (body.ok !== true) {
         const error = typeof body.error === "string" ? body.error : "unknown";
         if (error === "missing_scope") {
@@ -216,6 +229,7 @@ export async function listConversations(
         // listing shows a person, not a `dm:U123` id (opshub parity).
         if (type === "im" && typeof raw.user === "string") {
           const resolved = await resolveUserName(token, raw.user, usersTransport, nameCache);
+          tick(); // one DM counterpart resolved (the slow, per-row users.info loop)
           if (resolved) conv = { ...conv, displayName: `dm:${resolved}` };
         }
         typeRows.push(conv);
