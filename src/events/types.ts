@@ -4,8 +4,9 @@
  * The append-only event store is the single source of truth (ADR-0002).
  * Events are immutable and versioned: every event carries `type`,
  * `schemaVersion`, and an envelope of identity/time fields. Projections
- * (`sources` / `tasks` / `decisions` / `inbox` / `proposals` / `links`) are
- * folded from these by reducers and are fully rebuildable via replay.
+ * (`sources` / `tasks` / `decisions` / `inbox` / `proposals` / `commitments` /
+ * `persons` / `links`) are folded from these by reducers and are fully
+ * rebuildable via replay.
  *
  * Versioning: each event keeps its own `schemaVersion` (currently `1`).
  * Breaking payload changes bump the per-type version and are upcast in the
@@ -240,6 +241,58 @@ export const PersonSplit = z.object({
   newPersonId: z.string().min(1),
 });
 
+/** Direction of a commitment relative to the operator (ADR-0021). */
+export const COMMITMENT_DIRECTIONS = ["owed_by_me", "owed_to_me"] as const;
+export const CommitmentDirection = z.enum(COMMITMENT_DIRECTIONS);
+export type CommitmentDirection = z.infer<typeof CommitmentDirection>;
+
+/**
+ * A commitment ("約束/コミットメント") was opened (ADR-0021). The confirmed
+ * candidate (extracted via the propose pipeline, ADR-0006) enters the
+ * `commitments` ledger in the `open` state. `direction` records who owes whom
+ * (owed-by-me / owed-to-me); `dueDate` and `person` are optional context; the
+ * provenance `sourceExternalIds` link back to the source(s) it was extracted
+ * from. The state machine (open → resolved/dismissed, reopen → open) is driven
+ * by the `Commitment*` events below (HITL, ADR-0004).
+ */
+export const CommitmentOpened = z.object({
+  type: z.literal("CommitmentOpened"),
+  ...Envelope,
+  /** Content-derived commitment id (stable across re-extraction). */
+  commitmentId: z.string().min(1),
+  /** Short human-readable statement of the commitment ("X までに Y する"). */
+  title: z.string().min(1),
+  /** Who owes whom (owed-by-me / owed-to-me). */
+  direction: CommitmentDirection,
+  /** Optional due date (ISO 8601), when the commitment carries one. */
+  dueDate: IsoDateTime.nullable().default(null),
+  /** Optional related person (free-form / person id). */
+  person: z.string().nullable().default(null),
+  /** Source(s) the commitment was extracted from (provenance → `links`). */
+  sourceExternalIds: z.array(z.string().min(1)).default([]),
+});
+
+/** An open commitment was resolved (fulfilled) by a human (HITL, ADR-0004). */
+export const CommitmentResolved = z.object({
+  type: z.literal("CommitmentResolved"),
+  ...Envelope,
+  commitmentId: z.string().min(1),
+});
+
+/** An open commitment was dismissed (e.g. a false-positive extraction; HITL). */
+export const CommitmentDismissed = z.object({
+  type: z.literal("CommitmentDismissed"),
+  ...Envelope,
+  commitmentId: z.string().min(1),
+});
+
+/** A resolved/dismissed commitment was reopened back to `open` (HITL). */
+export const CommitmentReopened = z.object({
+  type: z.literal("CommitmentReopened"),
+  ...Envelope,
+  commitmentId: z.string().min(1),
+});
+
 /** Discriminated union of all domain events (ADR-0002). */
 export const DomainEvent = z.discriminatedUnion("type", [
   SourceObserved,
@@ -257,6 +310,10 @@ export const DomainEvent = z.discriminatedUnion("type", [
   PersonIdentityObserved,
   PersonsMerged,
   PersonSplit,
+  CommitmentOpened,
+  CommitmentResolved,
+  CommitmentDismissed,
+  CommitmentReopened,
 ]);
 export type DomainEvent = z.infer<typeof DomainEvent>;
 
@@ -277,6 +334,10 @@ export const EVENT_TYPES = [
   "PersonIdentityObserved",
   "PersonsMerged",
   "PersonSplit",
+  "CommitmentOpened",
+  "CommitmentResolved",
+  "CommitmentDismissed",
+  "CommitmentReopened",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -299,4 +360,8 @@ export type NewEvent =
   | Omit<z.input<typeof LinkRemoved>, "id" | "recordedAt">
   | Omit<z.input<typeof PersonIdentityObserved>, "id" | "recordedAt">
   | Omit<z.input<typeof PersonsMerged>, "id" | "recordedAt">
-  | Omit<z.input<typeof PersonSplit>, "id" | "recordedAt">;
+  | Omit<z.input<typeof PersonSplit>, "id" | "recordedAt">
+  | Omit<z.input<typeof CommitmentOpened>, "id" | "recordedAt">
+  | Omit<z.input<typeof CommitmentResolved>, "id" | "recordedAt">
+  | Omit<z.input<typeof CommitmentDismissed>, "id" | "recordedAt">
+  | Omit<z.input<typeof CommitmentReopened>, "id" | "recordedAt">;

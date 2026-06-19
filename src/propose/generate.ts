@@ -71,6 +71,8 @@ function candidateSummary(candidate: Candidate): string {
       return candidate.body;
     case "triage":
       return `${candidate.inboxId} → ${candidate.state}`;
+    case "commitment":
+      return candidate.title;
   }
 }
 
@@ -84,6 +86,8 @@ function candidateSources(candidate: Candidate): string[] {
       return [candidate.replyToExternalId];
     case "triage":
       return [candidate.sourceExternalId];
+    case "commitment":
+      return candidate.sourceExternalIds;
   }
 }
 

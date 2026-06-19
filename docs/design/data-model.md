@@ -22,6 +22,8 @@
   - `PersonIdentityObserved` — connector author handle を person に紐付け（1 handle = 1 person、[ADR-0022](../adr/0022-person-identity-resolution.md) / #92。sync が author から自動発行）
   - `PersonsMerged` — 2 person を 1 つに統合（HITL。source の identity を target へ付け替え・監査可能・可逆）
   - `PersonSplit` — 1 identity を別 person へ分離（merge の逆操作・HITL）
+  - `CommitmentOpened` — commitment の確定登録（`commitmentId` / `title` / `direction`（owed_by_me / owed_to_me）/ `dueDate?` / `person?` + provenance、[ADR-0021](../adr/0021-commitment-ledger.md) / #91）
+  - `CommitmentResolved` / `CommitmentDismissed` / `CommitmentReopened` — commitment の状態遷移（open ⇄ resolved / dismissed、HITL）
 - 共通エンベロープ: `id`（ULID 風・時刻順ソート可）/ `recordedAt`（ISO 8601・store 時刻）/ `schemaVersion`
 - append 経路は raw SQL（`bun:sqlite`、`src/db/events-table.ts`）。replay 順序は `seq`（AUTOINCREMENT）が正本
 - 生 event を読み取り用途で直接引かない（projection 経由）
@@ -35,6 +37,7 @@
   - `decisions` — `id`(PK) / `title` / `rationale` / `recorded_at`
   - `inbox` — `id`(PK) / `source_external_id` / `state` / `updated_at`
   - `proposals` — `candidate_id`(PK) / `mode` / `kind` / `entity_id` / `summary` / `state`（pending / applied / rejected）/ `reason` / `created_at` / `updated_at`（提案 lifecycle ledger、#89。`propose.list` が読む）
+  - `commitments` — `id`(PK) / `title` / `direction`（owed_by_me / owed_to_me）/ `state`（open / resolved / dismissed）/ `due_date` / `person` / `created_at` / `updated_at`（commitment 台帳、[ADR-0021](../adr/0021-commitment-ledger.md) / #91。`commitment.list` が読む）
   - `links` — `id`(PK, autoinc) / `from_kind` / `from_id` / `to_kind` / `to_id` / `relation` / `link_id`（関連グラフ・provenance）。reducer 由来エッジ（`derived_from` / `replies_to` / `references`）は `link_id` が NULL、手動 link（`manual_link`、`link.add` / `link.remove`、[ADR-0018](../adr/0018-knowledge-graph-traversal.md) 追補 / #90）は安定 `link_id` を持ち id 指定で削除可能
   - `persons` — `id`(PK) / `display_name` / `identity_count` / `created_at` / `updated_at`（person 解決、[ADR-0022](../adr/0022-person-identity-resolution.md) / #92）。merge で空になった person は `identity_count = 0` で `person.list` から除外
   - `person_identities` — `identity_key`(PK = `<connector>:<handle>`) / `person_id` / `connector` / `handle` / `display_name` / `observed_at`（connector author handle → person。`person.merge` / `person.split` が `person_id` を付け替え）
