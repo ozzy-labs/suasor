@@ -179,7 +179,15 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     await run(["init"]);
     await seedCursor(JSON.stringify({ default: { C1: "100.000000" } })); // current is old
     // 2026-01-01 ts (~1.7e9) is newer than 100 → advancing, not backfilling.
-    const { err } = await run(["slack", "cursor", "backfill", "--channel", "C1", "--since", "2026-01-01"]);
+    const { err } = await run([
+      "slack",
+      "cursor",
+      "backfill",
+      "--channel",
+      "C1",
+      "--since",
+      "2026-01-01",
+    ]);
     expect(err).toContain("not older than the current cursor");
   });
 
