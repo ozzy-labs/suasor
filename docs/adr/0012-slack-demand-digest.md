@@ -1,6 +1,6 @@
 # 0012. Slack demand digest（mention/DM signal）+ `slack.demand.list`
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#48](https://github.com/ozzy-labs/suasor/issues/48) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)

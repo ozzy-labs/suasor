@@ -1,6 +1,6 @@
 # 0014. Slack multi-workspace（`[connectors.slack.workspaces.<alias>]`）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#50](https://github.com/ozzy-labs/suasor/issues/50) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)

@@ -1,6 +1,6 @@
 # 0015. Slack thread replies の取り込み（`conversations.replies`）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#51](https://github.com/ozzy-labs/suasor/issues/51) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)

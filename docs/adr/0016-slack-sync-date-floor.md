@@ -1,6 +1,6 @@
 # 0016. Slack sync date floor + cursor reset/backfill recovery verbs
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#52](https://github.com/ozzy-labs/suasor/issues/52) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)

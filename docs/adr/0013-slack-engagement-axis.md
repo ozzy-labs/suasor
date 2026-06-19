@@ -1,6 +1,6 @@
 # 0013. Slack engagement axis（`search.messages` / last_self_post、User Token）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#49](https://github.com/ozzy-labs/suasor/issues/49) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)
