@@ -83,6 +83,8 @@ team = "T0123ABCD"            # id prefix（rename しても安定）
 channels = ["C0123ABCD"]      # 取り込み対象 channel id（空なら何もしない）
 since = "30d"                 # cold-start 下限（任意、ADR-0016）。30d / 4w / 12h / 2026-01-01
 self_user_id = "U0SELF"       # 自分の Slack user id（任意、ADR-0012）。slack.demand.list の @mention 検出用
+[connectors.slack.channel_since]
+C0123ABCD = "90d"             # per-channel の since 上書き（任意、#57）。未指定 channel は since にフォールバック
 ```
 
 - **config（マルチ workspace、[ADR-0014](../adr/0014-slack-multi-workspace.md)）**: `[connectors.slack.workspaces.<alias>]` を並べると 1 install で N workspace を取り込む。flat な `[connectors.slack]`（上）は `default` alias として後方互換に読む。
@@ -118,6 +120,8 @@ suasor slack sync                      # （= <connector> sync）取り込み
 - **date floor / recovery**（[ADR-0016](../adr/0016-slack-sync-date-floor.md)）: `since`（per-workspace 可）で cold-start の下限を設ける。下限は saved cursor が無い channel にのみ適用され、resume 済み channel は cursor を優先する。運用 verb:
   - `suasor slack status [--json]` — 保存中の cursor（workspace / channel ごとの resume ts）を表示
   - `suasor slack cursor reset --channel C1,C2 | --all [--workspace A] [--yes]` — cursor を消し、次回 sync で `since` floor から取り直す（`--yes` 無しは preview のみ）
+  - `suasor slack cursor backfill --channel C1 --since 180d [--workspace A] [--yes]` — 指定 channel の cursor を `--since` floor（現在位置より過去）へ下げ、次回 sync で未取得 window を取り直す（floor より古い backfill 用、#57）
+  - `since` は per-channel 上書きも可（`[connectors.slack.channel_since]`、#57）
 
 ## Microsoft Graph（`ms-graph`）
 

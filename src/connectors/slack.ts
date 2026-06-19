@@ -43,6 +43,12 @@ export const SlackWorkspaceConfig = z.object({
    */
   since: z.string().min(1).optional(),
   /**
+   * Per-channel `since` override (ADR-0016 / #57): a map of channel id → floor
+   * (`30d` / `2026-01-01`) that takes precedence over the workspace-level
+   * `since` for those channels. Channels not listed fall back to `since`.
+   */
+  channel_since: z.record(z.string(), z.string().min(1)).optional(),
+  /**
    * The operator's own Slack user id (`Uxxxx`) for this workspace, used by
    * `slack.demand.list` to detect `<@you>` mentions (ADR-0012). Resolve it from
    * `slack auth test` (the `userId` field). Optional: without it, demand falls
@@ -68,6 +74,8 @@ export const SlackConnectorConfig = z.object({
   channels: z.array(z.string().min(1)).default([]),
   /** Cold-start date floor for the flat/default workspace (ADR-0016). */
   since: z.string().min(1).optional(),
+  /** Per-channel `since` override for the flat/default workspace (ADR-0016 / #57). */
+  channel_since: z.record(z.string(), z.string().min(1)).optional(),
   /** Operator's own user id for the flat/default workspace (ADR-0012). */
   self_user_id: z.string().min(1).optional(),
   workspaces: z.record(z.string(), SlackWorkspaceConfig).optional(),
@@ -113,6 +121,7 @@ interface ResolvedWorkspace {
   channels: string[];
   secretName: string;
   since?: string;
+  channelSince?: Record<string, string>;
 }
 
 /** Expand the config into the concrete list of workspaces to sync. */
@@ -125,6 +134,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       channels: w.channels,
       secretName: workspaceSecretName(alias),
       ...(w.since ? { since: w.since } : {}),
+      ...(w.channel_since ? { channelSince: w.channel_since } : {}),
     }));
   }
   return [
@@ -134,6 +144,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       channels: config.channels,
       secretName: workspaceSecretName(),
       ...(config.since ? { since: config.since } : {}),
+      ...(config.channel_since ? { channelSince: config.channel_since } : {}),
     },
   ];
 }
@@ -344,17 +355,20 @@ class SlackConnector implements Connector {
         const client = await this.clientFactory(token);
         const aliasCursors: Record<string, string> = {};
 
-        // Cold-start floor (ADR-0016): the `since` config converted to an `oldest`
-        // ts, combined with the default workspace's legacy floor. Applied only to
-        // channels with no saved cursor (a resumed channel keeps its cursor).
-        const sinceFloor = ws.since
-          ? (parseSinceToTs(ws.since, this.now()) ?? undefined)
-          : undefined;
+        // The default workspace's legacy floor (bare-ts cursor pre-ADR-0011).
         const legacy =
           ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined;
-        const floor = higherTs(sinceFloor, legacy);
 
         for (const channel of ws.channels) {
+          // Cold-start floor (ADR-0016 / #57): a per-channel `since` override
+          // wins over the workspace `since`, combined with the legacy floor.
+          // Applied only to channels with no saved cursor (a resumed channel
+          // keeps its own high-water mark).
+          const sinceStr = ws.channelSince?.[channel] ?? ws.since;
+          const sinceFloor = sinceStr
+            ? (parseSinceToTs(sinceStr, this.now()) ?? undefined)
+            : undefined;
+          const floor = higherTs(sinceFloor, legacy);
           // Each channel resumes from its OWN high-water mark; a never-synced
           // channel starts at the floor so cold-start stays bounded.
           const oldest = prevChannels[channel] ?? floor;

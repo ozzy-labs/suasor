@@ -136,4 +136,71 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     expect(code).toBe(1);
     expect(err).toContain("--channel");
   });
+
+  test("cursor backfill without --yes previews and does not mutate (#57)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "999999999.000000" } }));
+    const preview = await run([
+      "slack",
+      "cursor",
+      "backfill",
+      "--channel",
+      "C1",
+      "--since",
+      "2026-01-01",
+    ]);
+    expect(preview.code).toBe(0);
+    expect(preview.out).toContain("would backfill");
+    const status = await run(["slack", "status", "--json"]);
+    expect(JSON.parse(status.out)).toEqual({ default: { C1: "999999999.000000" } });
+  });
+
+  test("cursor backfill --yes lowers the channel cursor to the floor (#57)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "999999999.000000" } }));
+    const floorTs = `${Math.floor(Date.parse("2026-01-01") / 1000)}.000000`;
+    const reset = await run([
+      "slack",
+      "cursor",
+      "backfill",
+      "--channel",
+      "C1",
+      "--since",
+      "2026-01-01",
+      "--yes",
+    ]);
+    expect(reset.code).toBe(0);
+    expect(reset.out).toContain("backfilled");
+    const status = await run(["slack", "status", "--json"]);
+    expect(JSON.parse(status.out)).toEqual({ default: { C1: floorTs } });
+  });
+
+  test("cursor backfill warns when --since is not older than the current cursor (#57 footgun)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "100.000000" } })); // current is old
+    // 2026-01-01 ts (~1.7e9) is newer than 100 → advancing, not backfilling.
+    const { err } = await run(["slack", "cursor", "backfill", "--channel", "C1", "--since", "2026-01-01"]);
+    expect(err).toContain("not older than the current cursor");
+  });
+
+  test("cursor backfill requires --channel and --since", async () => {
+    await run(["init"]);
+    expect((await run(["slack", "cursor", "backfill", "--since", "30d"])).code).toBe(1);
+    expect((await run(["slack", "cursor", "backfill", "--channel", "C1"])).code).toBe(1);
+  });
+
+  test("cursor backfill rejects an invalid --since", async () => {
+    await run(["init"]);
+    const { code, err } = await run([
+      "slack",
+      "cursor",
+      "backfill",
+      "--channel",
+      "C1",
+      "--since",
+      "nonsense",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("invalid --since");
+  });
 });

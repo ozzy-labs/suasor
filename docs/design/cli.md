@@ -16,12 +16,13 @@ suasor slack auth test [--json]        # token 検証 + granted scopes + feature
 suasor slack conversations [--types T] [--include-archived] [--limit N] [--sort last_self_post] [--json]  # 可視会話の列挙 + 設定ブロック出力
 suasor slack status [--json]           # 保存中の resume cursor（workspace / channel）を表示
 suasor slack cursor reset (--channel C1,C2 | --all) [--workspace A] [--yes]  # cursor を消し floor から取り直す
+suasor slack cursor backfill --channel C1 --since 180d [--workspace A] [--yes]  # cursor を過去 floor へ下げ未取得分を取り直す
 suasor skills install [--scope S] [--host DIR] [--dry-run]  # アシスタント skill 展開
 suasor skills list [--scope S] [--host DIR] [--json]        # アシスタント skill 状態一覧
 suasor --version                       # バージョン出力
 ```
 
-実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` / `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
+実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` / `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset` / `slack cursor backfill`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
 `<connector> sync` は connector registry から 1 connector = 1 command で派生する（[ADR-0007](../adr/0007-connector-contract.md)）。
 稼働 connector: `github` / `slack` / `ms-graph`（Outlook / Calendar / OneDrive / Teams）/ `google`（Drive / Gmail / Calendar）/ `box` / `web`（Playwright snapshot）。setup は [connectors guide](../guide/connectors.md)。
 
@@ -47,6 +48,8 @@ suasor --version                       # バージョン出力
 | `slack cursor reset` | `--channel C1,C2` | — | reset 対象 channel id（カンマ列）。`--all` と排他 |
 | `slack cursor reset` | `--all` | false | 全 channel（`--workspace` 指定時はその alias）を reset |
 | `slack cursor reset` | `--yes` | false | 実適用（無指定は preview のみ） |
+| `slack cursor backfill` | `--channel C1` / `--since 180d` | — | 指定 channel の cursor を `--since` floor（過去）へ下げる（#57） |
+| `slack cursor backfill` | `--yes` | false | 実適用（無指定は preview のみ） |
 | `skills install` | `--scope S` | all | 展開先 `claude`（`.claude/skills/`） \| `agents`（`.agents/skills/`） \| `all` |
 | `skills install` | `--host DIR` | cwd | 展開先のベースディレクトリ（プロジェクトルート） |
 | `skills install` | `--dry-run` | false | 書き込まず変更内容（created / updated / unchanged）だけ表示 |

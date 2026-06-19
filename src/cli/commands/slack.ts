@@ -438,10 +438,104 @@ export class SlackCursorResetCommand extends Command {
   }
 }
 
+/** `slack cursor backfill` — lower a channel's cursor to re-fetch older history. */
+export class SlackCursorBackfillCommand extends Command {
+  static override paths = [[SLACK, "cursor", "backfill"]];
+
+  static override usage = Command.Usage({
+    category: "Slack",
+    description: "Lower a channel's cursor to a past floor so the next sync re-fetches it.",
+    details: `
+      Recovery verb (ADR-0016 / #57): sets the channel's saved cursor to the
+      '--since' floor (older than its current position), so the next 'slack
+      sync' re-fetches the gap. Unlike 'cursor reset' (which clears to the
+      configured floor), this targets an explicit, possibly older floor.
+      Requires --yes to apply; without it the change is previewed only.
+    `,
+    examples: [
+      ["Preview a 180-day backfill", "suasor slack cursor backfill --channel C0123 --since 180d"],
+      ["Apply it", "suasor slack cursor backfill --channel C0123 --since 2026-01-01 --yes"],
+    ],
+  });
+
+  channel = Option.String("--channel", { description: "Channel id to backfill." });
+  since = Option.String("--since", { description: "Floor to lower to (30d / 4w / 2026-01-01)." });
+  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  yes = Option.Boolean("--yes", false, {
+    description: "Apply the backfill (without it, preview only).",
+  });
+
+  override async execute(): Promise<number> {
+    if (!this.channel || !this.since) {
+      this.context.stderr.write("error: --channel <id> and --since <floor> are both required\n");
+      return 1;
+    }
+
+    const { parseSinceToTs, serializeCursor } = await import("../../connectors/slack.ts");
+    const floorTs = parseSinceToTs(this.since, Date.now());
+    if (floorTs === null) {
+      this.context.stderr.write(
+        `error: invalid --since: ${this.since} (use 30d / 4w / 2026-01-01)\n`,
+      );
+      return 1;
+    }
+
+    const current = await readSlackCursor(this);
+    if (current === null) return 1;
+
+    const alias = this.workspace ?? "default";
+    const next: Record<string, Record<string, string>> = structuredClone(current);
+    const aliasMap = next[alias] ?? {};
+    const before = aliasMap[this.channel];
+    // Backfill goes OLDER. If the floor is not older than the current cursor it
+    // would *advance* it and skip unfetched messages — warn (footgun guard).
+    if (before !== undefined && Number.parseFloat(floorTs) >= Number.parseFloat(before)) {
+      this.context.stderr.write(
+        `warning: --since (${floorTs}) is not older than the current cursor (${before}); ` +
+          "this advances the cursor and would skip unfetched messages\n",
+      );
+    }
+    aliasMap[this.channel] = floorTs;
+    next[alias] = aliasMap;
+
+    const summary = `[${alias}] ${this.channel}: ${before ?? "(none)"} → ${floorTs}`;
+    if (!this.yes) {
+      this.context.stdout.write(`would backfill: ${summary}\n`);
+      this.context.stdout.write("(preview — re-run with --yes to apply)\n");
+      return 0;
+    }
+
+    const [{ loadConfig }, { Store }] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+    ]);
+    const config = await loadConfig();
+    const dbPath = config.storage.dbPath;
+    if (dbPath === null) {
+      this.context.stderr.write("error: storage.dbPath is not configured\n");
+      return 1;
+    }
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    try {
+      store.record({
+        type: "ConnectorSyncCompleted",
+        connector: SLACK,
+        cursor: serializeCursor(next),
+        count: 0,
+      });
+    } finally {
+      store.close();
+    }
+    this.context.stdout.write(`backfilled: ${summary}\n`);
+    this.context.stdout.write("next: run `suasor slack sync` to re-fetch the older window.\n");
+    return 0;
+  }
+}
+
 /**
  * Load the saved Slack cursor as an alias → channel → ts map, or `null` on a
- * config error (after writing the error to stderr). Shared by `slack status`
- * and `slack cursor reset`.
+ * config error (after writing the error to stderr). Shared by `slack status`,
+ * `slack cursor reset`, and `slack cursor backfill`.
  */
 async function readSlackCursor(
   cmd: Command,

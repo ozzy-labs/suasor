@@ -447,6 +447,17 @@ describe("Slack connector — date floor (ADR-0016)", () => {
     expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(7 * 86400));
     expect(calls.find((c) => c.channel === "C2")?.oldest).toBe(floorFor(1 * 86400));
   });
+
+  test("per-channel `since` override wins over the workspace since (#57)", async () => {
+    const { client, calls } = fakeSlack([{ messages: [] }, { messages: [] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1", "C2"], since: "30d", channel_since: { C2: "1d" } },
+      { clientFactory: () => client, now: () => NOW },
+    );
+    await collect(connector.sync(ctx()));
+    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(30 * 86400)); // workspace
+    expect(calls.find((c) => c.channel === "C2")?.oldest).toBe(floorFor(1 * 86400)); // override
+  });
 });
 
 describe("Slack connector — thread replies (ADR-0015)", () => {
