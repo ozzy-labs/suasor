@@ -103,6 +103,9 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `propose.generate` | 返信/タスク/決定/仕分けの候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage`） | 実装済み（#12。下記参照） |
 | `propose.apply` | 承認された候補のみ適用（idempotent） | 実装済み（#12。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
+| `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
+| `inbox.add` | 受信箱項目を捕捉（state `open`） | 実装済み（#88。下記参照） |
+| `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
 
 ### `connector.sync`（確定・write / HITL）
 
@@ -193,6 +196,53 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
 
 戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来で、同一内容の再作成は `existing`（no-op、idempotent）。
+
+### `decision.record`（確定・write / HITL・[Issue #88](https://github.com/ozzy-labs/suasor/issues/88)）
+
+人が直接 decision を記録する write tool（`task.create` の decision 版）。実体は `src/propose/decision-record.ts`。`DecisionRecorded` event を append → `decisions` projection。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+引数（Zod）:
+
+| 引数 | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `title` | `string`（min 1） | — | decision タイトル |
+| `rationale` | `string`（任意） | `""` | 決定理由 |
+| `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
+
+戻り値: `{ "decisionId": "dec_...", "status": "created" | "existing" }`。`decisionId` は title + provenance 由来（`rationale` は id に含めない＝`propose.apply` の `decision` 候補と同一 fingerprint）で、同一内容の再記録は `existing`（no-op、idempotent）。
+
+### `inbox.add`（確定・write / HITL・[Issue #88](https://github.com/ozzy-labs/suasor/issues/88)）
+
+受信箱項目を捕捉する write tool（日次 triage ループの捕捉側）。実体は `src/propose/inbox-add.ts`。`InboxItemTriaged`（state `open`）を append → `inbox` projection（`InboxItemTriaged` が唯一の inbox lifecycle event で、捕捉は `open` への遷移）。HITL。
+
+引数（Zod）: `{ "sourceExternalId": string（min 1） }`（捕捉する source。provenance → `links` の `references`）。
+
+戻り値: `{ "inboxId": "inbox_...", "status": "created" | "existing" }`。`inboxId` は source 由来で、同一 source の再捕捉は `existing`（no-op、idempotent）。
+
+### `inbox.triage`（確定・write / HITL・state machine・[Issue #88](https://github.com/ozzy-labs/suasor/issues/88)）
+
+`open` の受信箱項目を inbox から出す write tool（triage ループの解決側）。実体は `src/propose/inbox-triage.ts`。`inbox` projection 上の小さな state machine で、項目は `open` のときのみ triage 可能。
+
+| `action` | 効果 | inbox 遷移 | 生成 entity |
+|---|---|---|---|
+| `task` | `TaskProposed`（項目の source 由来 task）を append | → `done` | task（`title` 必須） |
+| `decision` | `DecisionRecorded`（source 由来 decision）を append | → `done` | decision（`title` 必須、`rationale` 任意） |
+| `discard` | （entity なし） | → `dismissed` | — |
+
+引数（Zod）:
+
+| 引数 | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `inboxId` | `string`（min 1） | — | triage 対象の inbox 項目 id |
+| `action` | `enum`（`task` / `decision` / `discard`） | — | 遷移先 |
+| `title` | `string`（任意） | — | 生成する task/decision の title（`task` / `decision` で必須） |
+| `rationale` | `string`（任意） | — | 生成する decision の rationale（`decision` のみ） |
+
+生成される task/decision の id は `task.create` / `decision.record` と同一の content 由来 id（`src/propose/id.ts`）で、同一内容なら同じ projection 行に着地する。
+
+戻り値: `{ "inboxId": "inbox_...", "action": "...", "state": "done" | "dismissed", "createdEntityId"?: "task_..." | "dec_..." }`。
+
+**不正遷移は拒否（tool error）**: 存在しない項目、または既に `open` 以外（`snoozed` / `done` / `dismissed`）の項目を triage しようとすると tool error を返す（host が拒否を表示できるよう silent skip しない）。これにより二重解決や解決済み項目の再オープンを防ぐ。
 
 ## Tool introspection（`suasor mcp tools`）
 
