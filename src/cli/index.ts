@@ -4,8 +4,9 @@
  *
  * Wired command surface (docs/design/cli.md):
  *   init · db migrate · projections rebuild · search · <connector> sync ·
- *   connectors list · mcp serve · mcp tools · slack auth set/test ·
- *   slack conversations · slack status · slack cursor reset · skills install/list
+ *   <connector> auth set/test (github/ms-graph/google/box) · connectors list ·
+ *   mcp serve · mcp tools · slack auth set/test · slack conversations ·
+ *   slack status · slack cursor reset · skills install/list
  * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` /
  * `mcp serve` (MCP read surface, ADR-0004) and `skills install` / `skills list`
  * (assistant-skill catalog, ADR-0008) are live. `<connector> sync` commands are
@@ -19,6 +20,7 @@
  */
 import { Builtins, Cli, type CommandClass } from "clipanion";
 import { VERSION } from "../version.ts";
+import { connectorAuthCommands } from "./commands/connector-auth.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
@@ -52,6 +54,9 @@ export function buildCli(): Cli {
   cli.register(SearchCommand);
   for (const ConnectorSync of connectorSyncCommands() as CommandClass[]) {
     cli.register(ConnectorSync);
+  }
+  for (const ConnectorAuth of connectorAuthCommands() as CommandClass[]) {
+    cli.register(ConnectorAuth);
   }
   cli.register(ConnectorsListCommand);
   cli.register(McpServeCommand);

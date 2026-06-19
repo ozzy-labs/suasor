@@ -51,3 +51,15 @@ opshub（先行実装）はこれらを `slack auth test`（granted scopes + 機
 - **env トークン + 手動 id 発見のまま据え置き** — 却下。silent misconfig を残し、オンボーディングが完結しない。
 - **readiness を config/membership 認識にする** — 却下。channel id 型解決に per-channel `conversations.info` が要り、`not_in_channel` を readiness に持ち込んで過剰主張になる（opshub ADR-0040 と同じ結論）。
 - **ADR に feature→scope 表をデータとして持つ** — 却下。コード const と二重 SSOT になり drift する。
+
+## 追補（Issue #85）: auth verb を Slack 以外へ拡張
+
+- Date: 2026-06-19
+- Related: [Issue #85](https://github.com/ozzy-labs/suasor/issues/85)（非 Slack connector の auth set / auth test）
+
+本 ADR は当初 auth verb を **Slack 専用**として実装した（決定 2 / scope 境界 4）が、github / ms-graph / google / box も token を持ちながら「保存 onboarding 導線が無く、`sync` 実行時にしか資格情報を検証できない」同じ穴を抱えていた（「黙って空」回避の方針に反する）。本 ADR の「複数 connector が必要になった時点で抽出する」方針（Alternatives 第 1 項）に従い、汎用の `<connector> auth set` / `<connector> auth test` verb を追加する判断を記録する。
+
+- **保存層は再利用**: `auth set` は `src/connectors/secrets.ts` の `storeSecret`（connector 非依存）をそのまま使い、各 connector の primary secret（github=`token` / ms-graph=`clientSecret` / google=`refreshToken` / box=`token`）を keychain（`connector:<name>:<secret>`）へ保存する。`config.toml` には書かない（NFR-PRV-4）。
+- **検証は connector ごとの最小 probe**: `auth test` は `src/connectors/<name>/auth.ts` の `fetch`-only round-trip（SDK 非依存・import-clean、ADR-0007）で資格情報の有効性を検証する。github=`GET /user`（`x-oauth-scopes`）/ ms-graph=client-credential token 交換 / google=refresh→access token 交換 / box=`GET /2.0/users/me`。token は error に出さない。
+- **verb は data-driven**: `src/connectors/auth-specs.ts` の `AUTH_SPECS`（connector→secret 名 + probe）を SSOT に CLI 表面を派生する。汎用 connector contract（`sync` のみ）は引き続き太らせない（決定 2 と整合）。
+- **Slack は別物として維持**: Slack は scope readiness（feature→scope の capability model）・マルチ workspace（ADR-0014）を持つため、汎用 verb には寄せず独自の `slack auth set/test` を維持する。汎用 `auth test` の readiness は「scope が報告されたか」程度の自己申告（`READY` / `MISSING` / `N/A`）に留め、過剰主張しない。

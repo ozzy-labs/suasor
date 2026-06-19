@@ -9,6 +9,8 @@ suasor init [--force]                  # 設定 + DB 初期化（skills install 
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild             # event replay で projection 再構築
 suasor <connector> sync [--full] [--json]  # 取り込み（github / slack / ms-graph / google / box / web）
+suasor <connector> auth set [--token T]  # connector の資格情報を OS keychain に保存（github / ms-graph / google / box、省略時 stdin）
+suasor <connector> auth test [--json]    # 保存済み資格情報を検証 + identity + scopes（github / ms-graph / google / box）
 suasor connectors list [--json]        # 登録 connector の enabled / token 設定有無を一覧（introspection）
 suasor search [--limit N] [--json] <query>  # FTS 検索
 suasor mcp serve                       # MCP server（stdio）起動（read tools）
@@ -24,7 +26,7 @@ suasor skills list [--scope S] [--host DIR] [--json]        # アシスタント
 suasor --version                       # バージョン出力
 ```
 
-実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` / `connectors list`（connector registry introspection・[ADR-0007](../adr/0007-connector-contract.md)）/ `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `mcp tools`（MCP tool surface introspection・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset` / `slack cursor backfill`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
+実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` / `<connector> auth set` / `<connector> auth test`（github / ms-graph / google / box の汎用 auth verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) を Slack 以外へ拡張）/ `connectors list`（connector registry introspection・[ADR-0007](../adr/0007-connector-contract.md)）/ `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `mcp tools`（MCP tool surface introspection・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset` / `slack cursor backfill`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
 `<connector> sync` は connector registry から 1 connector = 1 command で派生する（[ADR-0007](../adr/0007-connector-contract.md)）。
 稼働 connector: `github` / `slack` / `ms-graph`（Outlook / Calendar / OneDrive / Teams）/ `google`（Drive / Gmail / Calendar）/ `box` / `web`（Playwright snapshot）。setup は [connectors guide](../guide/connectors.md)。
 
@@ -39,6 +41,8 @@ suasor --version                       # バージョン出力
 | `<connector> sync` | `--full` | false | 保存済み cursor を無視して全件再スキャン |
 | `<connector> sync` | `--json` | false | 件数 + cursor（`SyncOutcome`）を JSON で出力 |
 | `<connector> sync` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
+| `<connector> auth set` | `--token T` | stdin | 保存する資格情報値（省略時は stdin から読む）。github=PAT / ms-graph=client secret / google=refresh token / box=access token |
+| `<connector> auth test` | `--json` | false | identity / scopes / features readiness を JSON で出力 |
 | `connectors list` | `--json` | false | 人間可読リストの代わりに `{name, enabled, tokenConfigured}[]` を JSON で出力 |
 | `mcp tools` | `--json` | false | 人間可読リストの代わりに `{name, readOnlyHint, summary}[]` を JSON で出力 |
 | `slack auth set` | `--token T` | stdin | 保存する token 値（省略時は stdin から読む） |
@@ -66,6 +70,7 @@ suasor --version                       # バージョン出力
 - `search <query>` は FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。trigram FTS5 を既定経路とし、3-gram に満たない短クエリ（日本語の 1–2 文字等）は LIKE substring fallback に切り替わる（[retrieval](retrieval.md)）。サービス本体は `src/retrieval/`
 - `<connector> sync` は `[embedding].backend` 有効時、新規 / 本文変更 source を埋め込んで vec0 に populate する（`SyncOutcome.embedded`、人間可読出力では `… , N embedded`）。embedding は best-effort でサイドカー失敗は warning（stderr）に留め取り込みは成功する（[embedding setup](../guide/embedding.md) / [retrieval](retrieval.md)）
 - `<connector> sync` 実行中は **stderr に進捗（処理件数）を表示**する（`src/cli/progress.ts`）。stdout / `--json` を汚さないよう stderr、かつ **TTY 限定**（CI / パイプ / リダイレクトでは自動的に無音）。`--no-progress` で明示無効化（opshub ADR-0026 相当）。`slack conversations` も同じ `createProgress` を使い、DM 名前解決ループ（`users.info`）と `--sort=last_self_post` の `search.messages` ページングを進捗表示でラップする（#84）
+- `<connector> auth set` / `<connector> auth test` は github / ms-graph / google / box の汎用 auth verb（Issue #85・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) の運用 verb を Slack 以外へ拡張）。`auth set` は connector の primary secret（github=`token` / ms-graph=`clientSecret` / google=`refreshToken` / box=`token`）を keychain（service `suasor`、account `connector:<name>:<secret>`）へ保存（`storeSecret` 再利用、`config.toml` には書かない）。`auth test` は read-only の単発 round-trip で資格情報の有効性を検証し、identity・granted scopes（API が返す場合）・`features:` readiness（`READY` / `MISSING` / `N/A`）を出す。github=`GET /user`（`x-oauth-scopes`）/ ms-graph=client-credential token 交換 / google=refresh→access token 交換 / box=`GET /2.0/users/me`。いずれも connector SDK を読まず `fetch` のみ（import-clean、[ADR-0007](../adr/0007-connector-contract.md)）で token を error に出さない。Slack は scope readiness / マルチ workspace を持つ独自の `slack auth set/test` を維持。サービス本体は `src/connectors/<name>/auth.ts` + `src/connectors/auth-specs.ts`
 - `slack status` / `slack conversations` は ts を人間可読に整形する（#84）。`slack status` の resume cursor と `slack conversations --sort=last_self_post` の engagement 列は raw epoch ではなく `YYYY-MM-DD HH:MM (<相対時刻>)` 形式で出す（`src/cli/slack-time.ts`、相対時刻はテストで `now` 注入により決定的）。**`--json` 出力は後方互換のため raw ts を維持**する
 - `connectors list` は connector registry（[ADR-0007](../adr/0007-connector-contract.md)、`<connector> sync` の派生元）を起動なしで introspect する。各 connector の `enabled`（`[connectors.<name>]` slice が存在し `enabled = false` でない）と token 設定有無（`resolveSecret` で env override → keychain を確認、**値は出さない**・NFR-PRV-4）を返す。auth 不要な connector（`web`）は token を `n/a`（JSON は `tokenConfigured: null`）。connector ごとの secret 名は registry の `SECRET_NAMES`（`src/connectors/registry.ts`）が SSOT。サービス本体は `src/cli/commands/connectors-list.ts`
 - `mcp tools` は MCP tool surface（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)、[mcp-surface](mcp-surface.md)）を **server を起動せず**列挙する。各ツールの read/write 区分（`readOnlyHint`）と概要を出す。カタログは `src/mcp/tool-catalog.ts` をデータの SSOT とし、`tests/mcp/tool-catalog.test.ts` が実際に登録される server の tool（name / readOnlyHint）と突き合わせて drift を防ぐ。サービス本体は `src/cli/commands/mcp-tools.ts`
