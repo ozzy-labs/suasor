@@ -46,6 +46,17 @@
 - **event log を都度 JOIN して辿る** — 却下。projection（links）が既にある目的を無視。遅く脆い。
 - **graph で本文も返す** — 却下。関係のみ返し、本文は `source.get` 等に委譲（単一責務 / payload 抑制）。
 
-## Addendum: `graph.expand` の `direction`（[ADR-0020](0020-multi-actor-coordination-scope.md)、#97）
+## 追補（#90）: 手動 link CRUD — `link.add` / `link.remove`
+
+本 ADR の決定 5 は「将来のエッジ拡充は reducer 側で（別 Issue）」とした。[Issue #90](https://github.com/ozzy-labs/suasor/issues/90) はその第一弾として、**自動導出（`derived_from` / `replies_to` / `references`）以外**の関連付けを運用者/エージェントが手動で作成・削除できる write tool を追加する。
+
+1. **`link.add`（write / HITL）。** 2 エンティティ間に手動 link を作成する。`LinkAdded` event を append → `links` projection に relation `manual_link` で反映。`readOnlyHint: false`（auto-apply なし、[ADR-0004](0004-mcp-agent-boundary-and-hitl.md)）。
+2. **`link.remove`（write / HITL）。** 手動 link を `linkId` 指定で削除する。`LinkRemoved` event を append → 該当行を削除。event log は add/remove ペアを保持し**監査可能**。
+3. **手動 link は安定 `link_id` を持つ。** reducer 由来エッジは端点のみで keyed（`link_id` は NULL）だが、手動 link は有向な端点ペア由来の content-derived id（`src/propose/id.ts` の `manualLinkId`）を持つ。これにより (a) `link.remove` が id で対象を特定でき、(b) replay 決定性（add→remove は行なし、add のみは行復元）を担保する。`links` テーブルに nullable `link_id` 列を追加（projection 拡張のみ、再 ingest 不要）。
+4. **不変条件の維持。** event-sourced（[ADR-0002](0002-event-sourced-architecture.md)）: `LinkAdded` / `LinkRemoved` を discriminated union に追加し、reducer で畳む。idempotent（同一 link の再 add は no-op、replay で同値復元）。自己ループ・存在しない link の remove は tool 境界で拒否（tool error、silent skip しない）。
+5. **read 経路との連携。** `graph.related` の neighbor に `linkId`（手動 link のみ）を付与し、削除対象の id を発見できるようにする。reducer 由来エッジは従来どおり `linkId` を持たない。
+6. **本追補のスコープ外。** task↔decision 等の**自動**エッジ拡充は引き続き reducer 追補（別 Issue）。本追補は**手動 link の CRUD**に限定する。
+
+## 追補（#97）: `graph.expand` の `direction`（[ADR-0020](0020-multi-actor-coordination-scope.md)）
 
 `graph.expand` に `direction: "out" | "in" | "both"`（既定 `both` = 後方互換）を追加した。各 hop の隣接取得（`listLinks`）を direction で絞ることで、後方限定 provenance トレース（opshub `graph trace` 相当 = 「この成果物は何に由来するか」）を `in` で表現する。`out` は下流 consumer 展開。新ツールは増やさず既存 `graph.expand` の 1 パラメータ追加で実現する（ADR-0020 §決定 3）。cycle guard / edge dedup は direction 適用後も維持する。

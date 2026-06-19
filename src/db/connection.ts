@@ -104,12 +104,17 @@ export function initSchema(sqlite: Database): void {
       from_id   TEXT NOT NULL,
       to_kind   TEXT NOT NULL,
       to_id     TEXT NOT NULL,
-      relation  TEXT NOT NULL
+      relation  TEXT NOT NULL,
+      -- Stable id for a manual link (manual_link, ADR-0018 追補 / #90); NULL for
+      -- reducer-derived edges. link.remove deletes by this id.
+      link_id   TEXT
     );
     -- Graph traversal (graph.related / graph.expand, ADR-0018) looks up edges by
     -- endpoint in both directions; index each side.
     CREATE INDEX IF NOT EXISTS idx_links_from ON links(from_kind, from_id);
     CREATE INDEX IF NOT EXISTS idx_links_to   ON links(to_kind, to_id);
+    -- Manual links are addressed by their stable link_id (link.remove); index it.
+    CREATE INDEX IF NOT EXISTS idx_links_link_id ON links(link_id);
   `);
 
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English
