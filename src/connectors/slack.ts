@@ -320,7 +320,9 @@ class SlackConnector implements Connector {
     // Start empty and seed only configured aliases/channels below, so cursors
     // for workspaces/channels removed from config don't accumulate forever.
     this.cursors = {};
-    let anyTokenResolved = false;
+    let resolvedCount = 0; // workspaces that had a token
+    let failedCount = 0; // workspaces that errored mid-fetch
+    let lastError: unknown;
 
     for (const ws of workspaces) {
       const token = await ctx.secret(ws.secretName);
@@ -335,47 +337,70 @@ class SlackConnector implements Connector {
         if (previous[ws.alias]) this.cursors[ws.alias] = { ...previous[ws.alias] };
         continue;
       }
-      anyTokenResolved = true;
-
-      const client = await this.clientFactory(token);
+      resolvedCount += 1;
       const prevChannels = previous[ws.alias] ?? {};
-      const aliasCursors: Record<string, string> = {};
 
-      // Cold-start floor (ADR-0016): the `since` config converted to an `oldest`
-      // ts, combined with the default workspace's legacy floor. Applied only to
-      // channels with no saved cursor (a resumed channel keeps its cursor).
-      const sinceFloor = ws.since ? (parseSinceToTs(ws.since, this.now()) ?? undefined) : undefined;
-      const legacy = ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined;
-      const floor = higherTs(sinceFloor, legacy);
+      try {
+        const client = await this.clientFactory(token);
+        const aliasCursors: Record<string, string> = {};
 
-      for (const channel of ws.channels) {
-        // Each channel resumes from its OWN high-water mark; a never-synced
-        // channel starts at the floor so cold-start stays bounded.
-        const oldest = prevChannels[channel] ?? floor;
-        for await (const item of fetchChannelItems(client, channel, oldest)) {
-          // History messages and thread replies advance the same per-channel
-          // cursor — the highest ts seen (a reply may be newest) resumes next run.
-          const seen = aliasCursors[channel];
-          if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
-            aliasCursors[channel] = item.ts;
+        // Cold-start floor (ADR-0016): the `since` config converted to an `oldest`
+        // ts, combined with the default workspace's legacy floor. Applied only to
+        // channels with no saved cursor (a resumed channel keeps its cursor).
+        const sinceFloor = ws.since
+          ? (parseSinceToTs(ws.since, this.now()) ?? undefined)
+          : undefined;
+        const legacy =
+          ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined;
+        const floor = higherTs(sinceFloor, legacy);
+
+        for (const channel of ws.channels) {
+          // Each channel resumes from its OWN high-water mark; a never-synced
+          // channel starts at the floor so cold-start stays bounded.
+          const oldest = prevChannels[channel] ?? floor;
+          for await (const item of fetchChannelItems(client, channel, oldest)) {
+            // History messages and thread replies advance the same per-channel
+            // cursor — the highest ts seen (a reply may be newest) resumes next run.
+            const seen = aliasCursors[channel];
+            if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
+              aliasCursors[channel] = item.ts;
+            }
+            yield toRecord(ws.team, channel, item);
           }
-          yield toRecord(ws.team, channel, item);
-        }
 
-        // Preserve the floor for a channel with no new messages so it is not
-        // re-scanned from scratch on the next run.
-        if (aliasCursors[channel] === undefined && oldest !== undefined) {
-          aliasCursors[channel] = oldest;
+          // Preserve the floor for a channel with no new messages so it is not
+          // re-scanned from scratch on the next run.
+          if (aliasCursors[channel] === undefined && oldest !== undefined) {
+            aliasCursors[channel] = oldest;
+          }
         }
+        this.cursors[ws.alias] = aliasCursors;
+      } catch (error) {
+        // Mid-fetch isolation (#56): a fetch failure in one workspace must not
+        // abort the others. Surface it as a warning and preserve this alias's
+        // prior cursor (its configured channels) so the failure isn't a reset.
+        failedCount += 1;
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.onWarn?.(`workspace '${ws.alias}' failed mid-sync: ${message}`);
+        const preserved: Record<string, string> = {};
+        for (const channel of ws.channels) {
+          if (prevChannels[channel]) preserved[channel] = prevChannels[channel];
+        }
+        if (Object.keys(preserved).length > 0) this.cursors[ws.alias] = preserved;
       }
-      this.cursors[ws.alias] = aliasCursors;
     }
 
-    if (!anyTokenResolved) {
+    if (resolvedCount === 0) {
       throw new Error(
         "slack connector: no token configured for any workspace " +
           "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
       );
+    }
+    // Every workspace that had a token failed → surface the error rather than
+    // reporting a silent success. A partial failure (some succeeded) is isolated.
+    if (failedCount > 0 && failedCount === resolvedCount) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
     }
   }
 
