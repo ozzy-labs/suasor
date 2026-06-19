@@ -9,6 +9,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Config, loadConfig } from "../config/index.ts";
+import { resolveSelfUserIds } from "../connectors/slack.ts";
 import { Store } from "../db/index.ts";
 import { buildMcpServer } from "./server.ts";
 
@@ -59,6 +60,8 @@ function defaultBuildServer({ store, config }: { store: ServeStore; config: Conf
     // Full [embedding] config drives recall.search (real vec0 search when a
     // backend is enabled, else graceful degrade to FTS — ADR-0005/0006).
     embedding: config.embedding,
+    // Operator user ids for slack.demand.list @mention detection (ADR-0012).
+    slackSelfUserIds: resolveSelfUserIds(config.connectors.slack ?? {}),
     // Enable the `connector.sync` write tool (HITL) over the same store
     // (ADR-0007 / Issue #10 D5). The `[embedding]` config in `config` also lets
     // ingest (re)populate vec0. Hosts gate the write via `readOnlyHint: false`.

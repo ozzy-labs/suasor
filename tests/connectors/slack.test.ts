@@ -4,6 +4,7 @@ import {
   createSlackConnector,
   cursorToAliasMap,
   parseSinceToTs,
+  resolveSelfUserIds,
   type SlackClientLike,
   SlackConnectorConfig,
   serializeCursor,
@@ -466,5 +467,20 @@ describe("Slack cursor helpers (ADR-0016)", () => {
     );
     expect(serializeCursor({})).toBeNull();
     expect(serializeCursor({ acme: {} })).toBeNull();
+  });
+});
+
+describe("resolveSelfUserIds (ADR-0012)", () => {
+  test("collects flat + per-workspace ids, de-duplicated; empty when none", () => {
+    expect(resolveSelfUserIds({ self_user_id: "U1" })).toEqual(["U1"]);
+    expect(
+      resolveSelfUserIds({
+        workspaces: { a: { self_user_id: "U2" }, b: { self_user_id: "U3" } },
+      }).sort(),
+    ).toEqual(["U2", "U3"]);
+    expect(
+      resolveSelfUserIds({ self_user_id: "U1", workspaces: { a: { self_user_id: "U1" } } }),
+    ).toEqual(["U1"]); // de-duplicated
+    expect(resolveSelfUserIds({})).toEqual([]);
   });
 });

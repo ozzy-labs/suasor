@@ -285,3 +285,70 @@ export function listInbox(sqlite: Database, options: ListInboxOptions = {}): Inb
     updatedAt: r.updated_at,
   }));
 }
+
+/** A Slack demand signal: an `@you` mention or a DM, classified by `kind`. */
+export interface SlackDemandRecord extends SourceRecord {
+  /** `dm` when the source is a direct message; otherwise `mention`. */
+  kind: "mention" | "dm";
+}
+
+export interface ListSlackDemandOptions {
+  /** Operator user ids (`Uxxxx`) for `<@you>` mention detection (ADR-0012). */
+  selfUserIds?: string[];
+  /** Restrict to these kinds (default: both `mention` and `dm`). */
+  kinds?: ("mention" | "dm")[];
+  /** Window over `observed_at`. */
+  observed?: TimeRange;
+  /** Max rows (default {@link DEFAULT_LIST_LIMIT}). */
+  limit?: number;
+}
+
+/** A `slack_message` source id is a DM when its channel id starts with `D`. */
+const DM_CHANNEL_CLAUSE = "json_extract(meta, '$.channel') LIKE 'D%'";
+
+/**
+ * List Slack demand — unread-worthy signals derived (FTS-first, no extra fetch)
+ * from ingested `slack_message` sources: `@you` mentions and DMs (ADR-0012).
+ * Newest-first. A row is `dm` when its channel id starts with `D`, else
+ * `mention`. Mentions need `selfUserIds`; without any, only DMs are returned
+ * (and a `kinds: ["mention"]` filter then yields nothing).
+ */
+export function listSlackDemand(
+  sqlite: Database,
+  options: ListSlackDemandOptions = {},
+): SlackDemandRecord[] {
+  const kinds = options.kinds ?? ["mention", "dm"];
+  const selfUserIds = options.selfUserIds ?? [];
+
+  const orClauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (kinds.includes("dm")) orClauses.push(DM_CHANNEL_CLAUSE);
+  if (kinds.includes("mention")) {
+    for (const uid of selfUserIds) {
+      orClauses.push("body LIKE ?");
+      params.push(`%<@${uid}>%`);
+    }
+  }
+  // No applicable predicate (e.g. mention-only with no self ids) → no demand.
+  if (orClauses.length === 0) return [];
+
+  const clauses = ["source_type = 'slack_message'", `(${orClauses.join(" OR ")})`];
+  pushTimeRange(clauses, params, "observed_at", options.observed);
+  params.push(options.limit ?? DEFAULT_LIST_LIMIT);
+
+  const rows = sqlite
+    .query<SourceRow, (string | number)[]>(
+      `SELECT external_id, source_type, body, fingerprint, observed_at, meta
+         FROM sources
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY observed_at DESC
+        LIMIT ?`,
+    )
+    .all(...params);
+
+  return rows.map((row) => {
+    const record = toSourceRecord(row);
+    const channel = typeof record.meta.channel === "string" ? record.meta.channel : "";
+    return { ...record, kind: channel.startsWith("D") ? "dm" : "mention" };
+  });
+}

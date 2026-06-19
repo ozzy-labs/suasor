@@ -4,6 +4,7 @@ import {
   getSource,
   listDecisions,
   listInbox,
+  listSlackDemand,
   listSources,
   listTasks,
 } from "../../src/mcp/queries.ts";
@@ -142,5 +143,78 @@ describe("listInbox", () => {
       state: "done",
     });
     expect(listInbox(sqlite(), { state: "open" }).map((i) => i.id)).toEqual(["i1"]);
+  });
+});
+
+describe("listSlackDemand (ADR-0012)", () => {
+  /** Seed a slack_message source with a channel + body. */
+  function slack(externalId: string, channel: string, body: string, observedAt: string) {
+    store.record({
+      type: "SourceObserved",
+      externalId,
+      sourceType: "slack_message",
+      body,
+      observedAt,
+      fingerprint: externalId,
+      meta: { team: "T1", channel, ts: externalId },
+    });
+  }
+
+  test("detects @mentions of self and DMs; ignores ordinary messages", () => {
+    slack("m1", "C1", "hey <@U_ME> can you review", "2026-06-10T00:00:00.000Z"); // mention
+    slack("d1", "D9", "direct hello", "2026-06-11T00:00:00.000Z"); // DM
+    slack("n1", "C1", "unrelated channel chatter", "2026-06-12T00:00:00.000Z"); // neither
+    const rows = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(rows.map((r) => r.externalId).sort()).toEqual(["d1", "m1"]);
+    expect(rows.find((r) => r.externalId === "d1")?.kind).toBe("dm");
+    expect(rows.find((r) => r.externalId === "m1")?.kind).toBe("mention");
+  });
+
+  test("newest-first by observed_at", () => {
+    slack("d1", "D9", "older", "2026-06-10T00:00:00.000Z");
+    slack("d2", "D9", "newer", "2026-06-12T00:00:00.000Z");
+    expect(listSlackDemand(sqlite()).map((r) => r.externalId)).toEqual(["d2", "d1"]);
+  });
+
+  test("kinds=['dm'] excludes mentions; ['mention'] excludes DMs", () => {
+    slack("m1", "C1", "ping <@U_ME>", "2026-06-10T00:00:00.000Z");
+    slack("d1", "D9", "dm", "2026-06-11T00:00:00.000Z");
+    expect(
+      listSlackDemand(sqlite(), { selfUserIds: ["U_ME"], kinds: ["dm"] }).map((r) => r.externalId),
+    ).toEqual(["d1"]);
+    expect(
+      listSlackDemand(sqlite(), { selfUserIds: ["U_ME"], kinds: ["mention"] }).map(
+        (r) => r.externalId,
+      ),
+    ).toEqual(["m1"]);
+  });
+
+  test("without selfUserIds, default kinds returns DMs only", () => {
+    slack("m1", "C1", "ping <@U_ME>", "2026-06-10T00:00:00.000Z");
+    slack("d1", "D9", "dm", "2026-06-11T00:00:00.000Z");
+    expect(listSlackDemand(sqlite()).map((r) => r.externalId)).toEqual(["d1"]);
+  });
+
+  test("mention-only with no selfUserIds yields nothing (no predicate)", () => {
+    slack("d1", "D9", "dm", "2026-06-11T00:00:00.000Z");
+    expect(listSlackDemand(sqlite(), { kinds: ["mention"] })).toEqual([]);
+  });
+
+  test("matches any of several self user ids", () => {
+    slack("m1", "C1", "hi <@U_ALT>", "2026-06-10T00:00:00.000Z");
+    expect(
+      listSlackDemand(sqlite(), { selfUserIds: ["U_ME", "U_ALT"], kinds: ["mention"] }).map(
+        (r) => r.externalId,
+      ),
+    ).toEqual(["m1"]);
+  });
+
+  test("respects the observed window and limit", () => {
+    slack("d1", "D9", "a", "2026-06-10T00:00:00.000Z");
+    slack("d2", "D9", "b", "2026-06-11T00:00:00.000Z");
+    slack("d3", "D9", "c", "2026-06-12T00:00:00.000Z");
+    const windowed = listSlackDemand(sqlite(), { observed: { after: "2026-06-11T00:00:00.000Z" } });
+    expect(windowed.map((r) => r.externalId)).toEqual(["d3", "d2"]);
+    expect(listSlackDemand(sqlite(), { limit: 1 }).map((r) => r.externalId)).toEqual(["d3"]);
   });
 });
