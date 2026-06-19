@@ -325,6 +325,63 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
     const result = await connector.finalize?.();
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "100.000000" } });
   });
+
+  test("isolates a mid-fetch failure: other workspaces still sync, failure warns (#56)", async () => {
+    const warns: string[] = [];
+    const okClient = fakeSlack([{ messages: [{ ts: "50.000000" }] }]).client;
+    const badClient: SlackClientLike = {
+      conversations: {
+        history: async () => {
+          throw new Error("ratelimited");
+        },
+        replies: async () => ({ messages: [] }),
+      },
+    };
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C2"] },
+        },
+      },
+      { clientFactory: (t) => (t === "tok-a" ? okClient : badClient) },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (n) => (n === "acme:token" ? "tok-a" : n === "beta:token" ? "tok-b" : null),
+          cursor: JSON.stringify({ beta: { C2: "9.000000" } }),
+          onWarn: (m: string) => warns.push(m),
+        }),
+      ),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["slack:TA:C1:50.000000"]); // acme synced
+    expect(warns.some((w) => w.includes("beta") && w.includes("failed mid-sync"))).toBe(true);
+    const result = await connector.finalize?.();
+    // acme advanced; beta's prior cursor preserved (failure is not a reset).
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      acme: { C1: "50.000000" },
+      beta: { C2: "9.000000" },
+    });
+  });
+
+  test("throws when every workspace with a token fails mid-fetch (#56)", async () => {
+    const badClient: SlackClientLike = {
+      conversations: {
+        history: async () => {
+          throw new Error("boom");
+        },
+        replies: async () => ({ messages: [] }),
+      },
+    };
+    const connector = createSlackConnector(
+      { workspaces: { acme: { team: "TA", channels: ["C1"] } } },
+      { clientFactory: () => badClient },
+    );
+    await expect(
+      collect(connector.sync(ctx({ secret: async () => "tok", onWarn: () => {} }))),
+    ).rejects.toThrow(/boom/);
+  });
 });
 
 describe("Slack connector — date floor (ADR-0016)", () => {
