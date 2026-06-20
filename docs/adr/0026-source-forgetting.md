@@ -1,12 +1,12 @@
 # 0026. source の forget（ローカル purge + event redaction）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-20
 - Deciders: Suasor maintainers
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（event-sourced / append-only）, [ADR-0003](0003-local-first-and-content-minimization.md)（content-minimization）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（HITL）, [ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md)（FTS/vec）
 - Tracks: #141
 
-> Status: **Proposed**。本 ADR はレビュー用ドラフト。Accepted 後に実装 PR（`SourceForgotten` event + redaction + purge + `source.forget` tool）へ進む。
+> Status: **Accepted**（2026-06-20 レビュー反映後 承認）。実装: `SourceForgotten` event + reducer 駆動 delete + redaction + sidecar purge + `source.forget` tool。
 
 ## Context
 
