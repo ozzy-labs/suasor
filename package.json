@@ -9,6 +9,7 @@
   },
   "files": [
     "dist/index.js",
+    "scripts/postinstall.mjs",
     "docs/skills"
   ],
   "engines": {
@@ -30,7 +31,8 @@
     "lint": "biome check .",
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "format": "biome format --write .",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "repository": {
     "type": "git",

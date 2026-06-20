@@ -106,6 +106,16 @@ suasor --version                             #     (npm i -g also works; Bun run
 > Requires **Bun ≥ 1.1** (`engines.bun`): Suasor uses `bun:sqlite` and other
 > `Bun.*` APIs, so it cannot run under Node — use `bunx`, **not** `npx`. If you
 > don't run Bun, use the standalone binary or the Docker image above.
+>
+> **Bun check at install & startup.** `engines.bun` is only advisory under npm, so
+> a fetch with no Bun on the host still *succeeds*. To avoid a silent later
+> failure, the package runs a `postinstall` hook that prints a **warning** (it
+> never fails the install) when no `bun` is detected, pointing you at Bun / the
+> binary / Docker. At runtime the CLI also checks the Bun version on startup and
+> exits with a short, human-readable message (no stack trace) if Bun is missing or
+> below 1.1 — instead of the opaque `ERR_UNSUPPORTED_ESM_URL_SCHEME` you would
+> otherwise hit under Node. Set `SUASOR_SKIP_POSTINSTALL=1` to silence the
+> install-time advisory (e.g. in CI that only fetches the tarball).
 
 Published with [npm Trusted Publishers (OIDC)](../adr/0010-distribution.md) — no
 long-lived `NPM_TOKEN` — with build provenance attestation (public repo).
