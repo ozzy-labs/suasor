@@ -162,7 +162,27 @@ describe("real bundled catalog", () => {
     const src = resolveSkillsSource();
     expect(src).not.toBeNull();
     const skills = listBundledSkills(src);
-    expect(skills.length).toBeGreaterThanOrEqual(15);
+    expect(skills.length).toBeGreaterThanOrEqual(18);
     expect(skills.map((s) => s.name)).toContain("personal-brief");
+  });
+
+  test("ships the ledger / identity HITL skills (commitment / proposal / person)", () => {
+    const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
+    expect(names).toContain("commitment-review");
+    expect(names).toContain("proposal-review");
+    expect(names).toContain("person-cleanup");
+  });
+
+  test("every bundled skill has frontmatter whose name matches its directory", () => {
+    for (const skill of listBundledSkills(resolveSkillsSource())) {
+      const body = readFileSync(skill.sourcePath, "utf8");
+      const block = body.match(/^---\n([\s\S]*?)\n---/)?.[1];
+      expect(block).toBeDefined();
+      const frontmatter = block ?? "";
+      const name = frontmatter.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+      expect(name).toBe(skill.name);
+      // description is the natural-language trigger surface; it must be present.
+      expect(frontmatter).toMatch(/^description:\s*\S/m);
+    }
   });
 });
