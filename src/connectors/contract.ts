@@ -90,6 +90,27 @@ export interface SyncResult {
    * fingerprint-based connectors. Stored on `ConnectorSyncCompleted.cursor`.
    */
   readonly cursor: string | null;
+  /**
+   * Whether the pass completed with a *partial* failure: some internal sub-unit
+   * (e.g. one of several Slack workspaces — ADR-0014) failed while the rest
+   * succeeded, so the records that were collected are kept (the connector does
+   * not throw, which would discard them) but the run is not a clean success.
+   *
+   * The sync service surfaces this on {@link SyncOutcome.partialFailure}; the CLI
+   * treats it as a non-zero exit so a partial failure is not silently hidden
+   * behind exit 0 in cron / CI (ADR-0027 exit-code parity, Issue #166). A
+   * connector with no internal sub-units never sets it (`undefined` ⇒ no partial
+   * failure).
+   */
+  readonly partialFailure?: boolean;
+  /**
+   * Optional human-readable summary lines for the pass (e.g. one per Slack
+   * workspace: `acme=ok, beta=failed(cursor 保持), gamma=skipped`, ADR-0014).
+   * The sync service forwards them on {@link SyncOutcome.summaryLines} so the CLI
+   * can print a per-sub-unit breakdown after the counts. Omitted ⇒ nothing extra
+   * to print (the counts line stands alone).
+   */
+  readonly summaryLines?: readonly string[];
 }
 
 /**

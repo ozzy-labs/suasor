@@ -40,6 +40,9 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     expect(code).toBe(0);
     expect(out).toContain("slack auth");
     expect(out).toContain("slack conversations");
+    // `slack sync` (the per-connector ingest verb) is registered too; its
+    // multi-workspace partial-failure summary + exit code is the subject of #166.
+    expect(out).toContain("slack sync");
   });
 
   test("auth test without a configured token exits 1 with guidance", async () => {

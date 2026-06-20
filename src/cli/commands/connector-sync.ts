@@ -132,7 +132,10 @@ class ConnectorSyncCommand extends Command {
 
       if (this.json) {
         this.context.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
-        return 0;
+        // A partial failure (e.g. one Slack workspace failed, ADR-0014) keeps the
+        // records it did collect but exits non-zero so cron / CI can gate on it
+        // (ADR-0027 exit-code parity, #166).
+        return outcome.partialFailure ? 1 : 0;
       }
 
       const embedNote = embedder ? `, ${outcome.embedded} embedded` : "";
@@ -141,6 +144,19 @@ class ConnectorSyncCommand extends Command {
         `${name} sync: ${outcome.observed} observed, ${outcome.updated} updated, ` +
           `${outcome.unchanged} unchanged${embedNote}${extractNote}.\n`,
       );
+      // Per-sub-unit summary lines (e.g. one per Slack workspace, ADR-0014): the
+      // breakdown that makes a partial failure legible (which workspace failed).
+      for (const line of outcome.summaryLines ?? []) {
+        this.context.stdout.write(`${name}: ${line}\n`);
+      }
+      // Partial failure → non-zero exit (the counts above still reflect what was
+      // collected) so a per-workspace failure is not hidden behind exit 0 (#166).
+      if (outcome.partialFailure) {
+        this.context.stderr.write(
+          `error: ${name} sync: one or more workspaces failed (see summary above)\n`,
+        );
+        return 1;
+      }
       return 0;
     } catch (cause) {
       progress.finish();

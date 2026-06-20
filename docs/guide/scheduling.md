@@ -122,6 +122,8 @@ journalctl --user -u suasor-sync.service          # ログを確認
 
 `--json` の形は connector ごとの結果（`{ connector, ok, outcome?, error? }`）と集計（`succeeded` / `failed`）を含む（[CLI リファレンス](../design/cli.md) の `BulkSyncResult`）。
 
+**部分失敗も exit 1 で検知できる**（[ADR-0014](../adr/0014-slack-multi-workspace.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)）: Slack のマルチ workspace のように 1 connector が内部に複数の取り込み単位（workspace）を持つ場合、**一部の workspace だけが失敗した部分失敗**も connector 失敗として集計され `suasor sync` 全体が exit 1 になる（取り込めた workspace のレコードは保持される）。`slack sync` 単体でも同様に部分失敗で exit 1 となり、末尾に workspace 別サマリ行を出す。これにより「一部 workspace だけ token 切れ / rate limit」を exit code を gate にした cron / CI で取りこぼさない（従来は「全 workspace 失敗時のみ exit 1」で部分失敗が exit 0 に隠れていた）。`--json` では各 connector の `outcome.partialFailure` / `outcome.summaryLines` で機械可読に判別できる。
+
 ## なぜ常駐デーモンにしないのか
 
 常駐 `--watch` は多重起動ロック・クラッシュ復旧・再起動管理という複雑性を持ち込む。Suasor は single-user / local-first 前提でこの種の調整機構を意図的に持たない（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）。OS スケジューラは既にこれらを解決しているので、定期実行はそちらに委譲する（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）。`brief`（期間ダイジェスト）も同じく cron / CI 前提で設計されており、運用モデルは一貫している（[ADR-0017](../adr/0017-brief-period-bundle.md)）。

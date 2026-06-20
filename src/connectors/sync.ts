@@ -53,6 +53,20 @@ export interface SyncOutcome {
    * record was extractable (or extraction degraded to name-only).
    */
   extracted: number;
+  /**
+   * Whether the connector reported a partial failure: some internal sub-unit
+   * (e.g. one Slack workspace, ADR-0014) failed while the rest succeeded. The
+   * collected records are kept, but the CLI treats this as a non-zero exit so a
+   * partial failure is not hidden behind exit 0 in cron / CI (ADR-0027, Issue
+   * #166). `false` for a clean run / a connector with no sub-units.
+   */
+  partialFailure: boolean;
+  /**
+   * Optional per-sub-unit summary lines the connector emitted (e.g. one line per
+   * Slack workspace, ADR-0014). The CLI prints these after the counts. Omitted
+   * when the connector reported none.
+   */
+  summaryLines?: readonly string[];
 }
 
 export interface SyncOptions {
@@ -374,5 +388,10 @@ export async function syncConnector(
     cursor: nextCursor,
     embedded,
     extracted,
+    // Partial-failure flag (e.g. one Slack workspace failed, ADR-0014 / #166):
+    // the records are kept, but the caller surfaces a non-zero exit so the
+    // failure is not hidden behind exit 0. Connectors with no sub-units omit it.
+    partialFailure: finalResult.partialFailure ?? false,
+    ...(finalResult.summaryLines ? { summaryLines: finalResult.summaryLines } : {}),
   };
 }

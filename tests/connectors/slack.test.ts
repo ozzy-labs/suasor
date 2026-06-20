@@ -427,6 +427,109 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
   });
 });
 
+describe("Slack connector — per-workspace summary + partial-failure flag (ADR-0014, #166)", () => {
+  const okClient = () => fakeSlack([{ messages: [{ ts: "50.000000" }] }]).client;
+  const badClient = (): SlackClientLike => ({
+    conversations: {
+      history: async () => {
+        throw new Error("ratelimited");
+      },
+      replies: async () => ({ messages: [] }),
+    },
+  });
+
+  test("partial failure (one ws fails, others sync): flag set + summary names each ws", async () => {
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] }, // ok
+          beta: { team: "TB", channels: ["C2"] }, // fails mid-fetch
+          gamma: { team: "TG", channels: ["C3"] }, // skipped (no token)
+        },
+      },
+      { clientFactory: (t) => (t === "tok-a" ? okClient() : badClient()) },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (n) => (n === "acme:token" ? "tok-a" : n === "beta:token" ? "tok-b" : null),
+          onWarn: () => {},
+        }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines).toEqual([
+      "workspaces: acme=ok, beta=failed (cursor preserved), gamma=skipped (no token)",
+    ]);
+  });
+
+  test("all workspaces ok: no partial failure, summary all=ok", async () => {
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C2"] },
+        },
+      },
+      { clientFactory: () => okClient() },
+    );
+    await collect(connector.sync(ctx({ secret: async () => "tok", onWarn: () => {} })));
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(false);
+    expect(result?.summaryLines).toEqual(["workspaces: acme=ok, beta=ok"]);
+  });
+
+  test("failed workspace's prior cursor is preserved (failure is not a reset)", async () => {
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] }, // ok → advances
+          beta: { team: "TB", channels: ["C2"] }, // fails → cursor preserved
+        },
+      },
+      { clientFactory: (t) => (t === "tok-a" ? okClient() : badClient()) },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (n) => (n === "acme:token" ? "tok-a" : "tok-b"),
+          cursor: JSON.stringify({ beta: { C2: "9.000000" } }),
+          onWarn: () => {},
+        }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      acme: { C1: "50.000000" }, // advanced
+      beta: { C2: "9.000000" }, // preserved (failure is not a reset)
+    });
+  });
+
+  test("single flat workspace success: summary present, no partial failure", async () => {
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => okClient() },
+    );
+    await collect(connector.sync(ctx()));
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(false);
+    expect(result?.summaryLines).toEqual(["workspaces: default=ok"]);
+  });
+
+  test("empty config (no channels): no summary line, no partial failure", async () => {
+    const connector = createSlackConnector(
+      { team: "T1", channels: [] },
+      { clientFactory: () => okClient() },
+    );
+    await collect(connector.sync(ctx()));
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure ?? false).toBe(false);
+    expect(result?.summaryLines).toBeUndefined();
+  });
+});
+
 describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)", () => {
   /**
    * A client whose `conversations.history` throws a `SlackAPIError`-shaped error

@@ -198,14 +198,22 @@ export class SyncAllCommand extends Command {
       }
 
       for (const entry of result.results) {
-        if (entry.ok && entry.outcome) {
+        if (entry.outcome) {
+          // A clean success OR a partial failure (records were collected, but one
+          // sub-unit failed, ADR-0014 / #166): print the counts either way, then
+          // the per-sub-unit summary, then a trailing `(partial failure)` marker
+          // when the entry is marked failed so the exit-1 reason is legible.
           const o = entry.outcome;
           const embedNote = embedder ? `, ${o.embedded} embedded` : "";
           const extractNote = extractor ? `, ${o.extracted} extracted` : "";
+          const partialNote = entry.ok ? "" : " (partial failure)";
           this.context.stdout.write(
             `${entry.connector}: ${o.observed} observed, ${o.updated} updated, ` +
-              `${o.unchanged} unchanged${embedNote}${extractNote}.\n`,
+              `${o.unchanged} unchanged${embedNote}${extractNote}${partialNote}.\n`,
           );
+          for (const line of o.summaryLines ?? []) {
+            this.context.stdout.write(`${entry.connector}: ${line}\n`);
+          }
         } else {
           this.context.stdout.write(`${entry.connector}: failed (${entry.error}).\n`);
         }

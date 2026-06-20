@@ -405,6 +405,9 @@ export function serializeCursor(map: Record<string, Record<string, string>>): st
   return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
 }
 
+/** Per-workspace outcome of a sync pass, used to build the summary (ADR-0014). */
+type WorkspaceStatus = "ok" | "failed" | "skipped";
+
 /** Slack connector implementing the read-only contract (ADR-0007 / ADR-0014). */
 class SlackConnector implements Connector {
   readonly name = SLACK_CONNECTOR_NAME;
@@ -412,6 +415,13 @@ class SlackConnector implements Connector {
 
   /** Per-alias → per-channel highest `ts` observed this run → next-run cursor. */
   private cursors: Record<string, Record<string, string>> = {};
+
+  /**
+   * Per-workspace status for this run (insertion order = config order), used to
+   * build the end-of-run summary line and decide the partial-failure flag
+   * (ADR-0014 / #166). Reset at the start of each `sync`.
+   */
+  private workspaceStatus: { alias: string; status: WorkspaceStatus }[] = [];
 
   constructor(
     private readonly config: SlackConnectorConfig,
@@ -427,6 +437,7 @@ class SlackConnector implements Connector {
     // Start empty and seed only configured aliases/channels below, so cursors
     // for workspaces/channels removed from config don't accumulate forever.
     this.cursors = {};
+    this.workspaceStatus = [];
     let resolvedCount = 0; // workspaces that had a token
     let failedCount = 0; // workspaces that errored mid-fetch
     let lastError: unknown;
@@ -458,6 +469,7 @@ class SlackConnector implements Connector {
             : `\`suasor slack auth set --workspace ${ws.alias}\``;
         ctx.onWarn?.(`workspace '${ws.alias}' skipped: no token (run ${hint})`);
         if (previous[ws.alias]) this.cursors[ws.alias] = { ...previous[ws.alias] };
+        this.workspaceStatus.push({ alias: ws.alias, status: "skipped" });
         continue;
       }
       resolvedCount += 1;
@@ -518,6 +530,7 @@ class SlackConnector implements Connector {
           }
         }
         this.cursors[ws.alias] = aliasCursors;
+        this.workspaceStatus.push({ alias: ws.alias, status: "ok" });
 
         // One aggregated warn naming every unreachable channel (which, and why),
         // so the operator sees the membership gap instead of a silent empty sync.
@@ -541,6 +554,7 @@ class SlackConnector implements Connector {
           if (prevChannels[channel]) preserved[channel] = prevChannels[channel];
         }
         if (Object.keys(preserved).length > 0) this.cursors[ws.alias] = preserved;
+        this.workspaceStatus.push({ alias: ws.alias, status: "failed" });
       }
     }
 
@@ -558,7 +572,30 @@ class SlackConnector implements Connector {
   }
 
   finalize(): SyncResult {
-    return { cursor: serializeCursor(this.cursors) };
+    const cursor = serializeCursor(this.cursors);
+    // No multi-workspace status to report (e.g. an empty/no-channel config that
+    // returned before the loop): keep the result minimal, no summary line.
+    if (this.workspaceStatus.length === 0) return { cursor };
+
+    // One summary line naming each workspace's outcome (ADR-0014 / #166), e.g.
+    // `slack: acme=ok, beta=failed (cursor preserved), gamma=skipped (no token)`.
+    // A failed workspace's prior cursor is preserved (the failure is not a
+    // reset) — annotate it so an operator reads the recovery state inline.
+    const parts = this.workspaceStatus.map(({ alias, status }) => {
+      if (status === "failed") return `${alias}=failed (cursor preserved)`;
+      if (status === "skipped") return `${alias}=skipped (no token)`;
+      return `${alias}=ok`;
+    });
+    const summaryLines = [`workspaces: ${parts.join(", ")}`];
+
+    // A partial failure: at least one workspace failed AND at least one did not
+    // (a clean run is all-ok/skipped; an all-failed run already threw upstream so
+    // finalize is never reached). The caller turns this into a non-zero exit so a
+    // partial failure is not hidden behind exit 0 in cron / CI (ADR-0027, #166).
+    const failed = this.workspaceStatus.filter((w) => w.status === "failed").length;
+    const partialFailure = failed > 0 && failed < this.workspaceStatus.length;
+
+    return { cursor, partialFailure, summaryLines };
   }
 }
 
