@@ -84,6 +84,78 @@ describe("Box connector — pagination + fingerprint cursor", () => {
   });
 });
 
+/** A fake whose `listFolder` throws for folder ids named in `failFolders`. */
+function fakeFailingBox(opts: {
+  pagesByFolder: Record<string, BoxPage[]>;
+  failFolders: Record<string, Error>;
+}): BoxClientLike {
+  const cursors: Record<string, number> = {};
+  return {
+    async listFolder(folderId, _marker) {
+      if (opts.failFolders[folderId]) throw opts.failFolders[folderId];
+      const list = opts.pagesByFolder[folderId] ?? [];
+      const idx = cursors[folderId] ?? 0;
+      cursors[folderId] = idx + 1;
+      return list[idx] ?? { files: [] };
+    },
+  };
+}
+
+describe("Box connector — per-resource error isolation (Issue #193)", () => {
+  test("one folder failing is skipped; the rest stream; one aggregated warn", async () => {
+    const client = fakeFailingBox({
+      pagesByFolder: {
+        "1": [{ files: [{ id: "f1", name: "a.pdf" }] }],
+        "3": [{ files: [{ id: "f3", name: "c.pdf" }] }],
+      },
+      failFolders: { "2": new Error("403 Forbidden") },
+    });
+    const warns: string[] = [];
+    const connector = createBoxConnector(
+      { folders: ["1", "2", "3"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
+    expect(records.map((r) => r.externalId).sort()).toEqual(["box:file:f1", "box:file:f3"]);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("2 folder OK, 1 failed (cursor preserved)");
+    expect(warns[0]).toContain("2 (403 Forbidden)");
+  });
+
+  test("partial failure sets partialFailure + a summary line in finalize", async () => {
+    const client = fakeFailingBox({
+      pagesByFolder: { "1": [{ files: [{ id: "f1", name: "a" }] }] },
+      failFolders: { "2": new Error("boom") },
+    });
+    const connector = createBoxConnector({ folders: ["1", "2"] }, { clientFactory: () => client });
+    await collect(connector.sync(ctx({ onWarn: () => {} })));
+    const result = await connector.finalize?.();
+    expect(result?.cursor).toBeNull();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines?.[0]).toBe("folders: 1=ok, 2=failed (cursor preserved)");
+  });
+
+  test("all folders failing throws", async () => {
+    const client = fakeFailingBox({
+      pagesByFolder: {},
+      failFolders: { "1": new Error("403"), "2": new Error("404") },
+    });
+    const connector = createBoxConnector({ folders: ["1", "2"] }, { clientFactory: () => client });
+    await expect(collect(connector.sync(ctx({ onWarn: () => {} })))).rejects.toThrow(/40[34]/);
+  });
+
+  test("a clean run sets no partialFailure", async () => {
+    const client = fakeFailingBox({
+      pagesByFolder: { "1": [{ files: [{ id: "f1", name: "a" }] }] },
+      failFolders: {},
+    });
+    const connector = createBoxConnector({ folders: ["1"] }, { clientFactory: () => client });
+    await collect(connector.sync(ctx()));
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBeUndefined();
+  });
+});
+
 describe("Box connector — guards", () => {
   test("throws when no token is configured", async () => {
     const connector = createBoxConnector(

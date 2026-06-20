@@ -24,6 +24,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** Google resource families this connector can ingest. */
 export const GoogleResource = z.enum(["drive", "gmail", "calendar"]);
@@ -176,6 +177,9 @@ class GoogleConnector implements Connector {
   readonly name = GOOGLE_CONNECTOR_NAME;
   readonly sourceType = "google";
 
+  /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
+  private isolation: IsolationResult | null = null;
+
   constructor(
     private readonly config: GoogleConnectorConfig,
     private readonly clientFactory: GoogleClientFactory,
@@ -197,21 +201,47 @@ class GoogleConnector implements Connector {
       refreshToken,
       calendarId: this.config.calendarId,
     });
+    this.isolation = null;
 
-    for (const resource of this.config.resources) {
-      let pageToken: string | undefined;
-      do {
-        const page = await client.listPage(resource, pageToken);
-        for (const item of page.items) {
-          yield toRecord(resource, item);
-        }
-        pageToken = page.nextPageToken;
-      } while (pageToken);
-    }
+    // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
+    // resource family failing (e.g. Drive 403) records a warn and is skipped
+    // while the rest stream; only an all-resources failure throws.
+    const fetchResource = (resource: GoogleResource): AsyncIterable<SourceRecord> =>
+      (async function* () {
+        let pageToken: string | undefined;
+        do {
+          const page = await client.listPage(resource, pageToken);
+          for (const item of page.items) {
+            yield toRecord(resource, item);
+          }
+          pageToken = page.nextPageToken;
+        } while (pageToken);
+      })();
+
+    yield* syncResourcesIsolated(
+      this.config.resources,
+      ctx,
+      (resource) => resource,
+      "resource",
+      fetchResource,
+      (result) => {
+        this.isolation = result;
+      },
+    );
   }
 
   finalize(): SyncResult {
-    // Fingerprint-based change detection; no per-run cursor to persist.
+    // Fingerprint-based change detection; no per-run cursor to persist. A
+    // partial resource failure is surfaced so the CLI exits non-zero without
+    // discarding the collected records (ADR-0027, Issue #193).
+    const iso = this.isolation;
+    if (iso?.partialFailure) {
+      return {
+        cursor: null,
+        partialFailure: true,
+        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
+      };
+    }
     return { cursor: null };
   }
 }
