@@ -170,6 +170,60 @@ describe("searchSources — empty results", () => {
   });
 });
 
+describe("searchSources — transparency fields (totalHits / truncated / analyzedQuery)", () => {
+  test("a complete (non-truncated) FTS result reports totalHits == hits and truncated false", () => {
+    seed("a", "rocket science is hard", "2026-06-14T00:00:00.000Z");
+    seed("b", "rocket fuel chemistry", "2026-06-14T00:01:00.000Z");
+
+    const result = searchSources(store.connection.sqlite, "rocket");
+    expect(result.hits).toHaveLength(2);
+    expect(result.totalHits).toBe(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  test("a limit-truncated FTS result reports the full totalHits and truncated true", () => {
+    for (let i = 0; i < 5; i++) {
+      seed(`s${i}`, `rocket number ${i}`, `2026-06-14T00:0${i}:00.000Z`);
+    }
+    const result = searchSources(store.connection.sqlite, "rocket", { limit: 2 });
+    expect(result.hits).toHaveLength(2);
+    expect(result.totalHits).toBe(5);
+    expect(result.truncated).toBe(true);
+  });
+
+  test("a limit-truncated LIKE fallback result also reports the full totalHits", () => {
+    for (let i = 0; i < 4; i++) {
+      seed(`g${i}`, `go item ${i}`, `2026-06-14T00:0${i}:00.000Z`);
+    }
+    const result = searchSources(store.connection.sqlite, "go", { limit: 2 });
+    expect(result.strategy).toBe("like-fallback");
+    expect(result.hits).toHaveLength(2);
+    expect(result.totalHits).toBe(4);
+    expect(result.truncated).toBe(true);
+  });
+
+  test("analyzedQuery is the whitespace-split tokens on the FTS path", () => {
+    seed("a", "deploy the rocket", "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "  deploy   rocket ");
+    expect(result.analyzedQuery).toEqual(["deploy", "rocket"]);
+  });
+
+  test("analyzedQuery is the single trimmed query on the LIKE fallback path", () => {
+    seed("a", "go now", "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "  go ");
+    expect(result.strategy).toBe("like-fallback");
+    expect(result.analyzedQuery).toEqual(["go"]);
+  });
+
+  test("an empty query reports empty transparency fields", () => {
+    seed("a", "deploy the rocket", "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "   ");
+    expect(result.totalHits).toBe(0);
+    expect(result.truncated).toBe(false);
+    expect(result.analyzedQuery).toEqual([]);
+  });
+});
+
 describe("searchSources — limit & FTS maintenance", () => {
   test("respects the limit option", () => {
     for (let i = 0; i < 5; i++) {

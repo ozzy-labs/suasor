@@ -52,7 +52,10 @@ suasor --version                       # バージョン出力
 | `onboard` | `--json` | false | 各ステップ結果（auth / config 追記有無 / sync / scheduler 種別）を機械可読出力 |
 | `db migrate` | `--vec` / `--no-vec` | true | sqlite-vec の vec0 substrate を作る／作らない |
 | `search` | `--limit N` | 20 | 返す hit の最大数（正の整数。非正値は error） |
-| `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy）を JSON で出力 |
+| `search` | `--source-type <type>` | （任意） | `source_type` 完全一致で絞る（例: `github_issue`） |
+| `search` | `--observed-after <iso>` | （任意） | `observed_at` 下限（ISO 8601、inclusive `>=`） |
+| `search` | `--observed-before <iso>` | （任意） | `observed_at` 上限（ISO 8601、exclusive `<`） |
+| `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy + totalHits / truncated / analyzedQuery）を JSON で出力 |
 | `brief` | `--since D` | `24h` | 期間下限。相対（`24h` / `7d` / `2w`）または ISO date。下限 inclusive |
 | `brief` | `--until ISO` | now | 期間上限（exclusive）、ISO date/datetime |
 | `brief` | `--limit N` | 50 | セクションごとの最大行数（正の整数。非正値は error） |
@@ -102,6 +105,9 @@ suasor --version                       # バージョン出力
 | `skills list` | `--json` | false | 人間可読リストの代わりに `SkillStatus[]`（name / host / state / mirrorPath）を JSON で出力 |
 
 - `search <query>` は FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。trigram FTS5 を既定経路とし、3-gram に満たない短クエリ（日本語の 1–2 文字等）は LIKE substring fallback に切り替わる（[retrieval](retrieval.md)）。サービス本体は `src/retrieval/`
+  - **透明性（ADR-0007「no silent wrong answer」）**: 人間向け出力は使われた strategy を併記（`3 result(s) [fts]:` / `No results [fts].`）し、`--limit` で打ち切られた場合は `3 of 12 result(s) [fts]:` と総数を示す。`--json` は `totalHits` / `truncated` / `analyzedQuery`（トークン化結果）を加えて返し、「打ち切り」と「完全」をエージェントが区別できる
+  - **クエリはリテラル**: FTS5 演算子（`AND`/`OR`/`NOT`・`*`・`""`・`()`・`NEAR`）は解釈されず、各トークンをそのまま検索する（インジェクション・構文エラー防止、[retrieval](retrieval.md)）
+  - **フィルタ**: `--source-type` / `--observed-after` / `--observed-before` は FTS / 短クエリ fallback の両経路に同一適用（ランキング不変、候補集合を絞るのみ・#142）
 - `brief` は `brief` MCP tool（[ADR-0017](../adr/0017-brief-period-bundle.md)）と同じ `buildBrief` バンドル（tasks/decisions/sources/demand + open inbox）を **非対話に stdout 出力**する read CLI。対話エージェント不在の **定期実行**（cron / CI、knowledge `ai/practice` の「AI エージェント定期実行」）で日次/週次ダイジェストを出す用途。要約はプロセス外（`--json` を外部 summarizer にパイプ、ML 委譲 [ADR-0006](../adr/0006-ml-delegation.md)）。`--since` は相対（`24h`/`7d`/`2w`）または ISO、Slack demand の `selfUserIds` は `[connectors.slack]` config から解決する。サービス本体は `src/cli/commands/brief.ts`（query は `src/mcp/queries.ts` の `buildBrief` を流用）
 - `<connector> sync` は `[embedding].backend` 有効時、新規 / 本文変更 source を埋め込んで vec0 に populate する（`SyncOutcome.embedded`、人間可読出力では `… , N embedded`）。embedding は best-effort でサイドカー失敗は warning（stderr）に留め取り込みは成功する（[embedding setup](../guide/embedding.md) / [retrieval](retrieval.md)）
 - `<connector> sync` は `[extraction].backend` 有効時、新規 / 変更された Office/PDF（extractable）source の本文をサイドカー抽出テキストに差し替える（`SyncOutcome.extracted`、人間可読出力では `… , N extracted`、[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。初期スコープは `local` connector。抽出も best-effort で unsupported / oversized / 失敗は warning（stderr）+ name-only fallback。**抽出を後から有効化した既存ファイル / `[extraction].version` を bump した場合は、内容未変更でも drift として次の `sync` で自動再抽出される**（`extraction_meta` に記録した version と現行 version の差分検知・ADR-0024 §6）。fingerprint はファイル実体ベースのままで差分検知に影響しない

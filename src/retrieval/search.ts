@@ -53,6 +53,22 @@ export interface SearchResult {
   hits: SearchHit[];
   /** Which retrieval path produced the hits (for observability/tests). */
   strategy: SearchStrategy;
+  /**
+   * Total number of matches before the `limit` was applied. Lets a caller tell
+   * "20/20 truncated" apart from "5/5 complete" (ADR-0007 "no silent wrong
+   * answer"): `hits.length` is the returned slice, `totalHits` is the full
+   * count. Always `>= hits.length`.
+   */
+  totalHits: number;
+  /** `true` when matches were cut off by `limit` (`totalHits > hits.length`). */
+  truncated: boolean;
+  /**
+   * The tokens the query was actually analyzed into for retrieval. For the FTS
+   * path these are the whitespace-split tokens that drive the trigram MATCH; for
+   * the LIKE fallback it is the single trimmed query string used as a substring.
+   * Surfaces *what was searched* so a thin/empty result has a visible cause.
+   */
+  analyzedQuery: string[];
 }
 
 /**
@@ -142,13 +158,17 @@ interface FtsRow {
   rank: number;
 }
 
+interface CountRow {
+  total: number;
+}
+
 /** FTS5 path: trigram MATCH over `sources_fts`, ranked by bm25 (best-first). */
 function searchFts(
   sqlite: Database,
   query: string,
   limit: number,
   filters: SearchFilters,
-): SearchHit[] {
+): { hits: SearchHit[]; totalHits: number } {
   const match = buildFtsMatch(query);
   // Metadata filters apply to the joined `sources` row (alias `s`), so they
   // narrow both paths uniformly without touching ranking.
@@ -168,13 +188,27 @@ function searchFts(
         LIMIT ?`,
     )
     .all(match, ...params, limit);
-  return rows.map((r) => ({
+  // Count the full match set (pre-limit) so callers can detect truncation. Only
+  // run the extra COUNT when the page is full — a short page can't be truncated.
+  const totalHits =
+    rows.length < limit
+      ? rows.length
+      : (sqlite
+          .query<CountRow, (string | number)[]>(
+            `SELECT COUNT(*) AS total
+               FROM sources_fts
+               JOIN sources s ON s.external_id = sources_fts.external_id
+              WHERE ${where}`,
+          )
+          .get(match, ...params)?.total ?? rows.length);
+  const hits = rows.map((r) => ({
     externalId: r.external_id,
     sourceType: r.source_type,
     observedAt: r.observed_at,
     score: r.rank,
     body: r.body,
   }));
+  return { hits, totalHits };
 }
 
 interface LikeRow {
@@ -196,7 +230,7 @@ function searchLikeFallback(
   query: string,
   limit: number,
   filters: SearchFilters,
-): SearchHit[] {
+): { hits: SearchHit[]; totalHits: number } {
   const pattern = `%${escapeLike(query.trim())}%`;
   // No alias here (single-table scan), so qualify the filter columns with the
   // table name to keep the generated SQL unambiguous and consistent.
@@ -211,20 +245,32 @@ function searchLikeFallback(
         LIMIT ?`,
     )
     .all(pattern, ...params, limit);
-  return rows.map((r) => ({
+  const totalHits =
+    rows.length < limit
+      ? rows.length
+      : (sqlite
+          .query<CountRow, (string | number)[]>(
+            `SELECT COUNT(*) AS total FROM sources WHERE ${where}`,
+          )
+          .get(pattern, ...params)?.total ?? rows.length);
+  const hits = rows.map((r) => ({
     externalId: r.external_id,
     sourceType: r.source_type,
     observedAt: r.observed_at,
     score: 0,
     body: r.body,
   }));
+  return { hits, totalHits };
 }
 
 /**
  * Search ingested source bodies (FTS-first, FR-RET-1).
  *
- * Returns ranked hits best-first. An empty or whitespace-only query yields no
- * hits (and reports the `fts` strategy). The retrieval path is chosen by the
+ * Returns ranked hits best-first along with transparency fields (`totalHits` /
+ * `truncated` / `analyzedQuery`) so callers can distinguish a complete result
+ * set from a `limit`-truncated one and see what the query tokenized to. An empty
+ * or whitespace-only query yields no hits (and reports the `fts` strategy). The
+ * retrieval path is chosen by the
  * *longest* token length: if even the longest token is too short for the
  * trigram index (< {@link TRIGRAM_LENGTH}) the LIKE fallback runs over the
  * whole query, otherwise FTS5 MATCH runs.
@@ -247,18 +293,34 @@ export function searchSources(
   };
   const trimmed = query.trim();
   if (trimmed.length === 0) {
-    return { hits: [], strategy: "fts" };
+    return { hits: [], strategy: "fts", totalHits: 0, truncated: false, analyzedQuery: [] };
   }
+
+  const tokens = trimmed.split(/\s+/).filter((t) => t.length > 0);
 
   // The trigram index can only match a token once it is >= 3 code points. If
   // the *longest* token is still too short, MATCH would return nothing, so we
   // use the LIKE substring fallback for the whole query instead.
-  const longestToken = trimmed
-    .split(/\s+/)
-    .reduce((max, t) => Math.max(max, codePointLength(t)), 0);
+  const longestToken = tokens.reduce((max, t) => Math.max(max, codePointLength(t)), 0);
   if (longestToken < TRIGRAM_LENGTH) {
-    return { hits: searchLikeFallback(sqlite, trimmed, limit, filters), strategy: "like-fallback" };
+    const { hits, totalHits } = searchLikeFallback(sqlite, trimmed, limit, filters);
+    // The fallback searches the whole trimmed query as one substring, so the
+    // "analyzed query" is that single string rather than the per-token split.
+    return {
+      hits,
+      strategy: "like-fallback",
+      totalHits,
+      truncated: totalHits > hits.length,
+      analyzedQuery: [trimmed],
+    };
   }
 
-  return { hits: searchFts(sqlite, trimmed, limit, filters), strategy: "fts" };
+  const { hits, totalHits } = searchFts(sqlite, trimmed, limit, filters);
+  return {
+    hits,
+    strategy: "fts",
+    totalHits,
+    truncated: totalHits > hits.length,
+    analyzedQuery: tokens,
+  };
 }

@@ -52,10 +52,15 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
       "body": "..."               // ローカル保持本文（ADR-0003）
     }
   ],
-  "strategy": "fts"               // "fts" | "like-fallback"（短クエリは後者）
+  "strategy": "fts",              // "fts" | "like-fallback"（短クエリは後者）
+  "totalHits": 5,                 // limit 適用前の総マッチ数（>= hits.length）
+  "truncated": false,             // limit で打ち切られたか（totalHits > hits.length）
+  "analyzedQuery": ["rocket"]     // 実際に検索に使われたトークン（fallback 時は [trimmed query] 1 要素）
 }
 ```
 
+- `totalHits` / `truncated` は「20/20 打ち切り」と「5/5 完全」をエージェントが区別するための透明性フィールド（ADR-0007「no silent wrong answer」）
+- `analyzedQuery` は FTS パスでは whitespace 分割トークン、LIKE fallback では trimmed query 1 要素。痩せ/空結果の原因（何が検索されたか）を可視化する
 - ランキング・短クエリ fallback・クエリエスケープの詳細は [retrieval](retrieval.md) を参照
 - 意味検索が要るケースは `recall.search`（embedding 有効時）へ
 

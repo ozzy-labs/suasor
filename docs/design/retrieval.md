@@ -18,7 +18,8 @@
 - **境界**: 最長 token が **ちょうど 3 文字以上**なら FTS 経路。混在クエリ（例: `go home`）は最長 token（`home`）が条件を満たせば FTS 経路で全 token を AND する
 - **0 件 / 空クエリ**: 空・空白のみのクエリは hard error にせず空 hit（strategy=`fts`）。マッチ無しも空 hit
 - **メタフィルタ（任意・#142）**: `searchSources(sqlite, query, { sourceType?, observedAfter?, observedBefore?, limit? })`。`sourceType` は `sources.source_type` 完全一致、`observedAfter` / `observedBefore` は `observed_at` の窓（**下限 inclusive `>=` / 上限 exclusive `<`**、projection 読み取り tool と同一規約）。フィルタは JOIN 済み `sources` 行に対する WHERE で、**FTS / LIKE fallback の両経路に同一適用**（ランキングは不変、候補集合を絞るのみ）。フィルタ未指定時は従来結果と一致（additive）
-- **戻り値**: `{ hits: SearchHit[], strategy: "fts" | "like-fallback" }`。`SearchHit = { externalId, sourceType, observedAt, score, body }`
+- **戻り値**: `{ hits: SearchHit[], strategy: "fts" | "like-fallback", totalHits: number, truncated: boolean, analyzedQuery: string[] }`。`SearchHit = { externalId, sourceType, observedAt, score, body }`
+- **透明性フィールド（ADR-0007「no silent wrong answer」）**: `totalHits` は `limit` 適用前の総マッチ数（`COUNT(*)`、ページが満杯のときのみ追加クエリ）で常に `>= hits.length`。`truncated` は `totalHits > hits.length`（`limit` で打ち切られたか）。`analyzedQuery` は実際に検索に使われたトークン列で、FTS パスでは whitespace 分割トークン、LIKE fallback では trimmed query を 1 要素に持つ配列。エージェントが「20/20 打ち切り」と「5/5 完全」を区別し、痩せ/空結果の原因を把握できるようにする
 
 ## Embedding（任意・サイドカー委譲）
 
