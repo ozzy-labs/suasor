@@ -30,6 +30,11 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 
 [llm]
 backend = "disabled"   # disabled | anthropic | openai | ollama
+
+[extraction]
+backend = "disabled"   # disabled | markitdown — Office/PDF body extraction sidecar (ADR-0024)
+# baseUrl = "http://localhost:8929"   # markitdown sidecar (/extract is appended)
+# maxBytes = 5000000                  # cap on extracted text; larger inputs stay name-only
 `;
 
 export class InitCommand extends Command {

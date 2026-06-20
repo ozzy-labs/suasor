@@ -30,6 +30,10 @@ export type EmbeddingBackend = z.infer<typeof EmbeddingBackend>;
 export const LlmBackend = z.enum(["disabled", "anthropic", "openai", "ollama"]);
 export type LlmBackend = z.infer<typeof LlmBackend>;
 
+/** Document-extraction backends (ADR-0024). `markitdown` is the implemented sidecar. */
+export const ExtractionBackend = z.enum(["disabled", "markitdown"]);
+export type ExtractionBackend = z.infer<typeof ExtractionBackend>;
+
 /** Default Ollama sidecar base URL (`/api/embed` is appended by the client). */
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 /** Default multilingual embedding model (JA↔EN, 1024-dim) for Ollama. */
@@ -39,6 +43,11 @@ export const DEFAULT_OLLAMA_MODEL = "bge-m3";
  * agree with the runtime fallback `DEFAULT_EMBEDDING_DIM` in src/db/connection.ts.
  */
 const DEFAULT_EMBEDDING_DIM = 1024;
+
+/** Default markitdown extraction sidecar base URL (`/extract` appended by the client). */
+export const DEFAULT_MARKITDOWN_BASE_URL = "http://localhost:8929";
+/** Default cap on extracted text bytes (ADR-0024 §5; large PDFs degrade to name-only). */
+const DEFAULT_EXTRACTION_MAX_BYTES = 5_000_000;
 
 /**
  * `[embedding]` — optional sidecar (ADR-0005/0006). Default disabled so the
@@ -81,6 +90,25 @@ export const LlmConfig = z
 export type LlmConfig = z.infer<typeof LlmConfig>;
 
 /**
+ * `[extraction]` — optional document-extraction sidecar (ADR-0024). Default
+ * disabled so the base install stays light; Office/PDF bodies stay name-only
+ * until a sidecar is configured. ML is delegated to a sidecar (markitdown-style,
+ * ADR-0006) — no in-process parsers. `maxBytes` caps extracted text so a large
+ * PDF cannot bloat the store/FTS (oversized → name-only fallback). Unknown keys
+ * are preserved (`passthrough`) for backend-specific options not yet modeled.
+ */
+export const ExtractionConfig = z
+  .object({
+    backend: ExtractionBackend.default("disabled"),
+    /** Sidecar base URL (markitdown). `/extract` is appended by the client. */
+    baseUrl: z.string().url().default(DEFAULT_MARKITDOWN_BASE_URL),
+    /** Max extracted-text bytes; larger inputs degrade to name-only. */
+    maxBytes: z.number().int().positive().default(DEFAULT_EXTRACTION_MAX_BYTES),
+  })
+  .passthrough();
+export type ExtractionConfig = z.infer<typeof ExtractionConfig>;
+
+/**
  * Root config. `connectors` is an open record extended per-connector by
  * #7–#12; values are left lenient at the foundation layer.
  *
@@ -93,6 +121,7 @@ export const Config = z.object({
   storage: StorageConfig.default(() => StorageConfig.parse({})),
   embedding: EmbeddingConfig.default(() => EmbeddingConfig.parse({})),
   llm: LlmConfig.default(() => LlmConfig.parse({})),
+  extraction: ExtractionConfig.default(() => ExtractionConfig.parse({})),
   connectors: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 export type Config = z.infer<typeof Config>;
