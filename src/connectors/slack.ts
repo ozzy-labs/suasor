@@ -229,6 +229,35 @@ function higherTs(a: string | undefined, b: string | undefined): string | undefi
 }
 
 /**
+ * Slack error codes that mean a *single channel* is unreachable — the bot has
+ * not joined it / was never `/invite`'d, or the id is stale / archived — as
+ * opposed to a workspace-wide failure (`ratelimited`, auth, network). Readiness
+ * (`auth test`) is a scope verdict only; membership is a separate layer
+ * (ADR-0011), so these are surfaced per channel as an aggregated warn rather than
+ * aborting the whole workspace and silently dropping the reachable channels.
+ */
+const UNREACHABLE_CHANNEL_ERRORS = new Set(["not_in_channel", "channel_not_found", "is_archived"]);
+
+/**
+ * Extract the Slack `error` code from a thrown error, or `null`. `@slack/web-api`
+ * raises a `SlackAPIError` carrying `data.error` (the `ok:false` code); fakes /
+ * raw-fetch transports may instead surface the code in the message. Only codes in
+ * {@link UNREACHABLE_CHANNEL_ERRORS} are recovered from the message (so an
+ * unrelated message that merely contains the word is not misclassified).
+ */
+function unreachableChannelCode(error: unknown): string | null {
+  const data = (error as { data?: { error?: unknown } } | null)?.data;
+  if (data && typeof data.error === "string" && UNREACHABLE_CHANNEL_ERRORS.has(data.error)) {
+    return data.error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  for (const code of UNREACHABLE_CHANNEL_ERRORS) {
+    if (message.includes(code)) return code;
+  }
+  return null;
+}
+
+/**
  * Slack conversation ids start with `C` (public channel), `G` (private channel
  * / group-DM), or `D` (DM). A configured `channels` value that does not — most
  * commonly a channel **name** like `#general` — is almost certainly a
@@ -437,6 +466,10 @@ class SlackConnector implements Connector {
       try {
         const client = await this.clientFactory(token);
         const aliasCursors: Record<string, string> = {};
+        // Channels this run could not reach (not_in_channel / channel_not_found /
+        // is_archived): collected per channel and surfaced as one aggregated warn
+        // so READY-but-unjoined channels are no longer silently empty (ADR-0011).
+        const unreachable: { channel: string; code: string }[] = [];
 
         // The default workspace's legacy floor (bare-ts cursor pre-ADR-0011).
         const legacy =
@@ -455,14 +488,27 @@ class SlackConnector implements Connector {
           // Each channel resumes from its OWN high-water mark; a never-synced
           // channel starts at the floor so cold-start stays bounded.
           const oldest = prevChannels[channel] ?? floor;
-          for await (const item of fetchChannelItems(client, channel, oldest)) {
-            // History messages and thread replies advance the same per-channel
-            // cursor — the highest ts seen (a reply may be newest) resumes next run.
-            const seen = aliasCursors[channel];
-            if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
-              aliasCursors[channel] = item.ts;
+          try {
+            for await (const item of fetchChannelItems(client, channel, oldest)) {
+              // History messages and thread replies advance the same per-channel
+              // cursor — the highest ts seen (a reply may be newest) resumes next run.
+              const seen = aliasCursors[channel];
+              if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
+                aliasCursors[channel] = item.ts;
+              }
+              yield toRecord(ws.team, channel, item);
             }
-            yield toRecord(ws.team, channel, item);
+          } catch (error) {
+            // A channel-scoped unreachable error (not_in_channel etc.) must not
+            // abort the workspace's other channels: record it for the aggregated
+            // warn, preserve any prior cursor, and move on. Other errors
+            // (ratelimited, auth, network) are workspace-wide → rethrow to the
+            // per-workspace isolation below (#56).
+            const code = unreachableChannelCode(error);
+            if (code === null) throw error;
+            unreachable.push({ channel, code });
+            if (prevChannels[channel]) aliasCursors[channel] = prevChannels[channel];
+            continue;
           }
 
           // Preserve the floor for a channel with no new messages so it is not
@@ -472,6 +518,16 @@ class SlackConnector implements Connector {
           }
         }
         this.cursors[ws.alias] = aliasCursors;
+
+        // One aggregated warn naming every unreachable channel (which, and why),
+        // so the operator sees the membership gap instead of a silent empty sync.
+        if (unreachable.length > 0) {
+          const detail = unreachable.map((u) => `${u.channel} (${u.code})`).join(", ");
+          ctx.onWarn?.(
+            `workspace '${ws.alias}': ${unreachable.length} channel(s) unreachable — ${detail}; ` +
+              "the bot must join the channel (or be /invite'd) to ingest it",
+          );
+        }
       } catch (error) {
         // Mid-fetch isolation (#56): a fetch failure in one workspace must not
         // abort the others. Surface it as a warning and preserve this alias's

@@ -18,6 +18,22 @@ const SLACK = "slack";
 const WORKSPACE_DESC =
   "Workspace alias for a multi-workspace setup (omit for the default workspace).";
 
+/**
+ * Render one `slack conversations` table row (pure, so it is unit-testable
+ * without the network seam). `isMember` drives the leading join mark: `✓` for a
+ * reachable (joined) conversation, a blank cell otherwise — an unjoined channel
+ * returns `not_in_channel` and ingests nothing until the bot joins (ADR-0011,
+ * #165). `engagement` is the already-formatted `last_self_post=…` suffix (or "").
+ */
+export function formatConversationRow(
+  conv: { id: string; displayName: string; isArchived: boolean; isMember: boolean },
+  engagement = "",
+): string {
+  const joined = conv.isMember ? "✓" : " ";
+  const archived = conv.isArchived ? " (archived)" : "";
+  return `  ${joined}       ${conv.id}  ${conv.displayName}${archived}${engagement}`;
+}
+
 /** `slack auth set` — store the Slack token in the OS keychain. */
 export class SlackAuthSetCommand extends Command {
   static override paths = [[SLACK, "auth", "set"]];
@@ -288,20 +304,31 @@ export class SlackConversationsCommand extends Command {
       // the raw ts); "-" stays when there is no recorded self-post (#84).
       const { formatSlackTs } = await import("../slack-time.ts");
       this.context.stdout.write(`${conversations.length} conversation(s) visible to this token:\n`);
-      // Label the columns ID / Name so it is unambiguous that the first column
-      // is the value to copy into `channels` (config wants ids, not names —
-      // Issue #158). The header is omitted when there is nothing to label.
+      // Label the columns Joined / ID / Name so it is unambiguous that the second
+      // column is the value to copy into `channels` (config wants ids, not names —
+      // Issue #158) and that the leading mark is reachability. The header is
+      // omitted when there is nothing to label.
       if (conversations.length > 0) {
-        this.context.stdout.write("  ID / Name\n");
+        this.context.stdout.write("  Joined  ID / Name\n");
       }
+      // `✓` = the token's principal is a member (reachable by sync); a blank cell
+      // means not joined → that channel returns `not_in_channel` and ingests
+      // nothing until the bot joins / is /invite'd (ADR-0011). See
+      // formatConversationRow for the row layout.
       for (const c of conversations) {
-        const archived = c.isArchived ? " (archived)" : "";
         let engagement = "";
         if (lastSelfPost) {
           const ts = lastSelfPost.get(c.id);
           engagement = `  last_self_post=${ts ? formatSlackTs(ts, this.now) : "-"}`;
         }
-        this.context.stdout.write(`  ${c.id}  ${c.displayName}${archived}${engagement}\n`);
+        this.context.stdout.write(`${formatConversationRow(c, engagement)}\n`);
+      }
+      // Explain the mark only when at least one channel is unjoined, so the common
+      // all-joined case stays terse.
+      if (conversations.some((c) => !c.isMember)) {
+        this.context.stderr.write(
+          "note: channels without a ✓ are not joined — they return `not_in_channel` and ingest nothing until the bot joins / is /invite'd (ADR-0011)\n",
+        );
       }
       for (const [type, scope] of Object.entries(result.missingScopes)) {
         this.context.stderr.write(`warning: ${type} not listed — missing scope ${scope}\n`);

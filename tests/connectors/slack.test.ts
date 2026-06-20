@@ -427,6 +427,115 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
   });
 });
 
+describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)", () => {
+  /**
+   * A client whose `conversations.history` throws a `SlackAPIError`-shaped error
+   * (`data.error`) for channels in `unreachable`, and returns one message for the
+   * rest. Mirrors how `@slack/web-api` surfaces `ok:false` codes.
+   */
+  function perChannelClient(
+    unreachable: Record<string, string>,
+    ok: Record<string, Msg[]> = {},
+  ): SlackClientLike {
+    return {
+      conversations: {
+        async history(args) {
+          const code = unreachable[args.channel];
+          if (code) {
+            const err = new Error(`An API error occurred: ${code}`) as Error & {
+              data: { ok: false; error: string };
+            };
+            err.data = { ok: false, error: code };
+            throw err;
+          }
+          return { messages: ok[args.channel] ?? [] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+    };
+  }
+
+  test("one unreachable channel: others still ingest, channel named in one warn", async () => {
+    const warns: string[] = [];
+    const client = perChannelClient(
+      { C2: "not_in_channel" },
+      { C1: [{ ts: "100.000000" }], C3: [{ ts: "200.000000" }] },
+    );
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1", "C2", "C3"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx({ onWarn: (m: string) => warns.push(m) })));
+    // The two reachable channels ingested; the unreachable one is skipped.
+    expect(records.map((r) => r.externalId)).toEqual([
+      "slack:T1:C1:100.000000",
+      "slack:T1:C3:200.000000",
+    ]);
+    // Exactly one aggregated warn naming C2 + the reason.
+    const warn = warns.find((w) => w.includes("unreachable"));
+    expect(warn).toBeDefined();
+    expect(warn).toContain("C2 (not_in_channel)");
+    expect(warn).not.toContain("C1");
+    expect(warn).not.toContain("C3");
+    // Cursor advanced for the reachable channels; C2 has no cursor (never read).
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      default: { C1: "100.000000", C3: "200.000000" },
+    });
+  });
+
+  test("all channels unreachable: aggregated warn lists each, no throw", async () => {
+    const warns: string[] = [];
+    const client = perChannelClient({ C1: "not_in_channel", C2: "channel_not_found" });
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1", "C2"] },
+      { clientFactory: () => client },
+    );
+    // All-channel failure is NOT a workspace failure — it does not throw (the
+    // workspace token was valid; the bot simply is not in any channel).
+    const records = await collect(connector.sync(ctx({ onWarn: (m: string) => warns.push(m) })));
+    expect(records).toEqual([]);
+    const warn = warns.find((w) => w.includes("unreachable"));
+    expect(warn).toContain("2 channel(s)");
+    expect(warn).toContain("C1 (not_in_channel)");
+    expect(warn).toContain("C2 (channel_not_found)");
+  });
+
+  test("unreachable channel preserves its prior cursor (skip is not a reset)", async () => {
+    const client = perChannelClient({ C1: "not_in_channel" });
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    await collect(
+      connector.sync(
+        ctx({ cursor: JSON.stringify({ default: { C1: "42.000000" } }), onWarn: () => {} }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "42.000000" } });
+  });
+
+  test("a non-channel error (ratelimited) still aborts the workspace (not per-channel)", async () => {
+    const client: SlackClientLike = {
+      conversations: {
+        history: async () => {
+          throw new Error("ratelimited");
+        },
+        replies: async () => ({ messages: [] }),
+      },
+    };
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    // Only workspace → its sole error propagates (every resolved workspace failed).
+    await expect(collect(connector.sync(ctx({ onWarn: () => {} })))).rejects.toThrow(/ratelimited/);
+  });
+});
+
 describe("Slack connector — date floor (ADR-0016)", () => {
   const NOW = Date.UTC(2026, 0, 31, 0, 0, 0); // fixed clock (ms)
   const floorFor = (secondsAgo: number) => `${Math.floor(NOW / 1000) - secondsAgo}.000000`;

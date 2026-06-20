@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { formatConversationRow } from "../../src/cli/commands/slack.ts";
 import { buildCli } from "../../src/cli/index.ts";
 
 /** Run the CLI capturing stdout/stderr (Slack token env cleared for isolation). */
@@ -89,5 +90,38 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     ]);
     expect(code).toBe(1);
     expect(err).toContain("invalid --types");
+  });
+});
+
+describe("slack conversations — joined mark (ADR-0011, #165)", () => {
+  test("a joined channel gets a ✓; an unjoined channel gets a blank cell", () => {
+    const joined = formatConversationRow({
+      id: "C1",
+      displayName: "#general",
+      isArchived: false,
+      isMember: true,
+    });
+    const unjoined = formatConversationRow({
+      id: "C2",
+      displayName: "#locked",
+      isArchived: false,
+      isMember: false,
+    });
+    expect(joined).toContain("✓");
+    expect(joined).toContain("C1");
+    expect(joined).toContain("#general");
+    expect(unjoined).not.toContain("✓");
+    expect(unjoined).toContain("C2");
+    // The id column stays aligned across joined/unjoined rows (mark is one cell).
+    expect(joined.indexOf("C1")).toBe(unjoined.indexOf("C2"));
+  });
+
+  test("the engagement suffix and (archived) flag still render", () => {
+    const row = formatConversationRow(
+      { id: "C3", displayName: "#old", isArchived: true, isMember: true },
+      "  last_self_post=2026-01-01 00:00 (5mo ago)",
+    );
+    expect(row).toContain("(archived)");
+    expect(row).toContain("last_self_post=2026-01-01");
   });
 });
