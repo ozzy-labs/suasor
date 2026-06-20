@@ -14,8 +14,9 @@
  * at the top level; the store and SDK load lazily via the registry/service.
  */
 import { z } from "zod";
-import type { EmbeddingConfig } from "../config/schema.ts";
+import type { EmbeddingConfig, ExtractionConfig } from "../config/schema.ts";
 import type { Store } from "../db/index.ts";
+import { createExtractor } from "../extraction/index.ts";
 import { createEmbedder } from "../retrieval/embedding/index.ts";
 import { type SecretStoreOptions, syncConnector } from "./index.ts";
 import { loadConnector } from "./registry.ts";
@@ -44,6 +45,8 @@ export const ConnectorSyncOutput = z.object({
   cursor: z.string().nullable(),
   /** Sources (re)embedded into vec0 this run; 0 when embedding is disabled. */
   embedded: z.number().int().nonnegative(),
+  /** Sources whose body was replaced with extracted text; 0 when disabled (ADR-0024). */
+  extracted: z.number().int().nonnegative(),
 });
 export type ConnectorSyncOutput = z.infer<typeof ConnectorSyncOutput>;
 
@@ -66,6 +69,8 @@ export interface ConnectorSyncDeps {
   config: {
     connectors: Record<string, Record<string, unknown>>;
     embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
+    /** `[extraction]` section; when backend is enabled, Office/PDF bodies are extracted (ADR-0024). */
+    extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
   };
   /** Secret backend override (tests inject; defaults to env + keychain). */
   secrets?: SecretStoreOptions;
@@ -85,10 +90,15 @@ export async function runConnectorSyncTool(
   // populates vec0 with the same model recall queries with. Embedding is
   // best-effort inside the sync service (a sidecar failure won't fail ingest).
   const embedder = deps.config.embedding ? createEmbedder(deps.config.embedding) : null;
+  // Build an extractor from [extraction] (null when disabled) so Office/PDF
+  // bodies are converted to text at ingest (best-effort, ADR-0024).
+  const extractor = deps.config.extraction ? createExtractor(deps.config.extraction) : null;
   const outcome = await syncConnector(deps.store, connector, {
     ...(cursor !== undefined ? { cursor } : {}),
     ...(deps.secrets ? { secrets: deps.secrets } : {}),
     embedder,
+    extractor,
+    ...(deps.config.extraction ? { extractionMaxBytes: deps.config.extraction.maxBytes } : {}),
   });
   return ConnectorSyncOutput.parse(outcome);
 }

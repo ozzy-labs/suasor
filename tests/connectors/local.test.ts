@@ -213,3 +213,36 @@ describe("Local connector — default walker against a real temp dir", () => {
     expect(warnings.some((w) => w.includes("cannot stat root"))).toBe(true);
   });
 });
+
+describe("Local connector — extractable marking (ADR-0024)", () => {
+  test("attaches an extractable handle to Office/PDF entries (name-only body)", async () => {
+    const entry: LocalFileEntry = {
+      path: "/mnt/box/specs/design.docx",
+      name: "design.docx",
+      mtimeMs: 1_700_000_000_000,
+      size: 4096,
+    };
+    const connector = createLocalConnector(
+      { roots: ["/mnt/box"] },
+      { walkerFactory: fakeWalker({ "/mnt/box": [entry] }) },
+    );
+    const [rec] = await collect(connector.sync(ctx));
+    expect(rec?.body).toBe("design.docx"); // name-only until extracted
+    expect(rec?.extractable?.filename).toBe("design.docx");
+    expect(rec?.extractable?.byteSize).toBe(4096);
+    expect(typeof rec?.extractable?.readBytes).toBe("function");
+  });
+
+  test("does not attach extractable to text or unknown extensions", async () => {
+    const entries: LocalFileEntry[] = [
+      { path: "/r/a.md", name: "a.md", mtimeMs: 1, size: 5, content: "hi" },
+      { path: "/r/b.png", name: "b.png", mtimeMs: 1, size: 9 },
+    ];
+    const connector = createLocalConnector(
+      { roots: ["/r"] },
+      { walkerFactory: fakeWalker({ "/r": entries }) },
+    );
+    const recs = await collect(connector.sync(ctx));
+    expect(recs.every((r) => r.extractable === undefined)).toBe(true);
+  });
+});

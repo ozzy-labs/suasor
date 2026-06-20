@@ -169,11 +169,14 @@ connector の read 専用取り込みを起動する write tool（[connector-con
   "updated": 3,      // 本文変更（fingerprint 差分）
   "unchanged": 5,    // 未変更で skip
   "cursor": "2026-06-12T00:00:00Z", // 次回 resume cursor（fingerprint 系は null）
-  "embedded": 15     // vec0 に (再)populate した source 数（embedding 無効時は 0）
+  "embedded": 15,    // vec0 に (再)populate した source 数（embedding 無効時は 0）
+  "extracted": 2     // 本文を抽出テキストに差し替えた source 数（extraction 無効時は 0・ADR-0024）
 }
 ```
 
 `[embedding].backend` が有効なとき、新規 / 本文変更 source（`observed` + `updated`）は同一モデルで埋め込まれ vec0 に populate される（`recall.search` 用、[retrieval](retrieval.md)）。embedding は best-effort で、サイドカー失敗時も取り込み自体は成功する（FTS は反映済み・`embedded` が 0 になるだけ）。
+
+`[extraction].backend` が有効なとき、新規 / 変更された extractable な source（Office/PDF。初期スコープ `local` connector）は本文がサイドカー抽出テキストに差し替えられる（`extracted`、[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。抽出も best-effort で、unsupported / oversized / 失敗時は name-only に degrade（取り込みは成功）。抽出は fingerprint 確定前・embedding 前に走るため、embedding は抽出テキストを埋め込む。
 
 ### propose ライフサイクル（状態機械）
 

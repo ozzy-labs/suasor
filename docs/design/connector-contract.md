@@ -27,6 +27,11 @@ interface SourceRecord {
   readonly observedAt: string;  // ISO 8601
   readonly meta: Record<string, unknown>;
   readonly fingerprint?: string; // 省略時は sync service が body の SHA-256 を計算
+  readonly extractable?: {        // 任意: 文書抽出ハンドル（ADR-0024）
+    readonly filename: string;    //   サイドカーが拡張子で dispatch
+    readonly byteSize: number;    //   oversized 入力を skip 判定
+    readBytes(): Promise<Uint8Array>; // 遅延: 抽出実行時のみ読む
+  };
 }
 
 interface SyncResult {
@@ -43,6 +48,8 @@ interface SyncResult {
 - 既存行なし → `SourceObserved` を append（新規）
 - 既存行あり・fingerprint 一致 → skip（unchanged）
 - 既存行あり・fingerprint 不一致 → `SourceBodyUpdated` を append（変更）
+
+**文書抽出（ADR-0024）**: extractor 供給時、新規/変更 record が `extractable` を持てば、event append・embedding の前に本文をサイドカー抽出テキストへ差し替える（共通段。初期スコープ `local`）。`fingerprint` はファイル実体ベースのまま（抽出は差分検知に影響しない）。best-effort で unsupported / oversized / 失敗は name-only に degrade。`readBytes` は新規/変更かつ extractor 有効時のみ呼ばれる（unchanged では読まない）。
 
 run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。append は `Store.record`（event append + projection 畳み込みを 1 トランザクション）経由なので、検索は取り込み直後に反映される（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 

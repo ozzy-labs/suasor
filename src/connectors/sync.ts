@@ -22,6 +22,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { Store } from "../db/index.ts";
+import type { Extractor } from "../extraction/index.ts";
 import { personIdFor } from "../projections/person.ts";
 import type { Embedder } from "../retrieval/embedding/index.ts";
 import { embedSources } from "../retrieval/embedding/index.ts";
@@ -46,6 +47,12 @@ export interface SyncOutcome {
    * `0` when no embedder is configured (FTS-only), or when nothing changed.
    */
   embedded: number;
+  /**
+   * Number of sources whose body was replaced with sidecar-extracted text this
+   * run (ADR-0024). `0` when no extractor is configured, or when no new/changed
+   * record was extractable (or extraction degraded to name-only).
+   */
+  extracted: number;
 }
 
 export interface SyncOptions {
@@ -69,6 +76,51 @@ export interface SyncOptions {
   embedder?: Embedder | null;
   /** Called when embedding fails (best-effort populate; ingest still succeeds). */
   onEmbedError?: (error: Error) => void;
+  /**
+   * Optional document extractor (ADR-0024). When supplied, new/changed records
+   * carrying an `extractable` handle have their body replaced with the sidecar's
+   * extracted text (before the event is recorded and before embedding). Best-
+   * effort: oversized inputs, unsupported formats, or extractor failures degrade
+   * to the name-only body and do NOT fail ingest. `null`/omitted keeps Office/PDF
+   * name-only.
+   */
+  extractor?: Extractor | null;
+  /** Max bytes for both the input file and the stored extracted text (ADR-0024 §5). */
+  extractionMaxBytes?: number;
+  /** Called when extraction fails (best-effort; ingest still succeeds name-only). */
+  onExtractError?: (error: Error) => void;
+}
+
+/** Default cap when a caller supplies an extractor but no explicit max. */
+const DEFAULT_EXTRACTION_MAX_BYTES = 5_000_000;
+
+/**
+ * Resolve the effective body for a new/changed record: the sidecar-extracted
+ * text when extraction applies, else the connector's body (name-only). Pure
+ * best-effort — every failure path returns the original body so ingest proceeds.
+ */
+async function extractBody(
+  record: SourceRecord,
+  options: SyncOptions,
+): Promise<{ body: string; extracted: boolean }> {
+  const extractor = options.extractor;
+  if (!extractor || !record.extractable) return { body: record.body, extracted: false };
+  const maxBytes = options.extractionMaxBytes ?? DEFAULT_EXTRACTION_MAX_BYTES;
+  const { filename, byteSize, readBytes } = record.extractable;
+  if (byteSize > maxBytes) {
+    options.onWarn?.(`extraction skipped (${byteSize} > ${maxBytes} bytes): ${filename}`);
+    return { body: record.body, extracted: false };
+  }
+  try {
+    const text = await extractor.extract(await readBytes(), filename);
+    if (text === null) return { body: record.body, extracted: false }; // unsupported
+    const capped = text.length > maxBytes ? text.slice(0, maxBytes) : text;
+    // Keep name discoverability (parity with text-file bodies: name + content).
+    return { body: `${filename}\n\n${capped}`, extracted: true };
+  } catch (cause) {
+    options.onExtractError?.(cause instanceof Error ? cause : new Error(String(cause)));
+    return { body: record.body, extracted: false };
+  }
 }
 
 /** Hex SHA-256 of a string (default fingerprint when a connector omits one). */
@@ -136,6 +188,7 @@ export async function syncConnector(
   let observed = 0;
   let updated = 0;
   let unchanged = 0;
+  let extracted = 0;
   // Bodies whose vector needs (re)populating — new or changed sources only.
   // Unchanged sources keep their existing vector (fingerprint equality).
   const toEmbed: { externalId: string; body: string }[] = [];
@@ -163,13 +216,25 @@ export async function syncConnector(
       }
     }
 
+    if (prior === fingerprint) {
+      unchanged += 1;
+      options.onProgress?.(record);
+      continue;
+    }
+
+    // New or changed: run extraction (best-effort, before recording the event so
+    // the stored body + embedding use the extracted text). fingerprint is the
+    // file-entity hash above, unaffected by extraction (ADR-0024 §3/§6).
+    const { body, extracted: didExtract } = await extractBody(record, options);
+    if (didExtract) extracted += 1;
+
     if (prior === null) {
       store.record(
         {
           type: "SourceObserved",
           externalId: record.externalId,
           sourceType: record.sourceType,
-          body: record.body,
+          body,
           observedAt: record.observedAt,
           fingerprint,
           meta: record.meta,
@@ -177,15 +242,12 @@ export async function syncConnector(
         now(),
       );
       observed += 1;
-      toEmbed.push({ externalId: record.externalId, body: record.body });
-    } else if (prior === fingerprint) {
-      unchanged += 1;
     } else {
       store.record(
         {
           type: "SourceBodyUpdated",
           externalId: record.externalId,
-          body: record.body,
+          body,
           observedAt: record.observedAt,
           fingerprint,
           meta: record.meta,
@@ -193,8 +255,8 @@ export async function syncConnector(
         now(),
       );
       updated += 1;
-      toEmbed.push({ externalId: record.externalId, body: record.body });
     }
+    toEmbed.push({ externalId: record.externalId, body });
 
     options.onProgress?.(record);
   }
@@ -222,5 +284,13 @@ export async function syncConnector(
     now(),
   );
 
-  return { connector: connector.name, observed, updated, unchanged, cursor: nextCursor, embedded };
+  return {
+    connector: connector.name,
+    observed,
+    updated,
+    unchanged,
+    cursor: nextCursor,
+    embedded,
+    extracted,
+  };
 }
