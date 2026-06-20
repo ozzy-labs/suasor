@@ -69,4 +69,64 @@ describe("task.update (direct HITL task lifecycle transition)", () => {
     // @ts-expect-error invalid state is rejected by the Zod enum at runtime
     expect(() => taskUpdate(store, { taskId, state: "archived" })).toThrow();
   });
+
+  describe("scheduling fields (ADR-0028)", () => {
+    function schedulingOf(taskId: string) {
+      return store.connection.sqlite
+        .query("SELECT due_date, priority FROM tasks WHERE id = ?")
+        .get(taskId) as { due_date: string | null; priority: string | null } | null;
+    }
+
+    test("a non-null dueDate / priority (re)sets them even when state is unchanged", () => {
+      const { taskId } = taskCreate(store, { title: "set due later" });
+      taskUpdate(store, { taskId, state: "open" });
+      // Same state but a scheduling update → not a no-op.
+      const out = taskUpdate(store, {
+        taskId,
+        state: "open",
+        dueDate: "2026-07-01T00:00:00.000Z",
+        priority: "high",
+      });
+      expect(out.status).toBe("updated");
+      expect(schedulingOf(taskId)).toEqual({
+        due_date: "2026-07-01T00:00:00.000Z",
+        priority: "high",
+      });
+    });
+
+    test("null scheduling on a state transition leaves an existing due date untouched", () => {
+      const { taskId } = taskCreate(store, {
+        title: "keep due",
+        dueDate: "2026-07-01T00:00:00.000Z",
+        priority: "normal",
+      });
+      taskUpdate(store, { taskId, state: "in_progress" });
+      expect(schedulingOf(taskId)).toEqual({
+        due_date: "2026-07-01T00:00:00.000Z",
+        priority: "normal",
+      });
+    });
+
+    test("same-state with no scheduling update stays an unchanged no-op", () => {
+      const { taskId } = taskCreate(store, { title: "noop" });
+      taskUpdate(store, { taskId, state: "completed" });
+      const before = store.connection.sqlite.query("SELECT count(*) AS n FROM events").get() as {
+        n: number;
+      };
+      const again = taskUpdate(store, { taskId, state: "completed" });
+      expect(again.status).toBe("unchanged");
+      const after = store.connection.sqlite.query("SELECT count(*) AS n FROM events").get() as {
+        n: number;
+      };
+      expect(after.n).toBe(before.n);
+    });
+
+    test("rejects an invalid priority value", () => {
+      const { taskId } = taskCreate(store, { title: "bad priority" });
+      expect(() =>
+        // @ts-expect-error invalid priority is rejected by the Zod enum at runtime
+        taskUpdate(store, { taskId, state: "open", priority: "urgent" }),
+      ).toThrow();
+    });
+  });
 });

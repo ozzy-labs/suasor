@@ -116,9 +116,11 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | tool | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|---|
-| `task.list` | `state?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
+| `task.list` | `state?: string` / `dueBefore?: string` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
 | `decision.list` | （なし） | `recorded_at`（`recordedAfter` / `recordedBefore`） | `{ "decisions": [...] }` |
 | `inbox.list` | `state?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
+
+`task.list` の各 task レコードは `dueDate` / `priority`（low / normal / high・null 可）と、read 時派生の `overdue`（`dueDate < now AND state ∈ {open, in_progress}`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）を持つ。`dueBefore` は `due_date < ?` で絞り（null due は除外）、`overdue: true` は overdue な task のみに絞る。overdue は projection に焼かず read 時に計算する（`now` は決定論テスト用に注入可能、replay 不変性を保つため・[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 
 ### `slack.demand.list`（[ADR-0012](../adr/0012-slack-demand-digest.md)）
 
@@ -322,9 +324,11 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | 引数 | 型 | 既定 | 説明 |
 |---|---|---|---|
 | `title` | `string`（min 1） | — | task タイトル |
+| `dueDate` | `string`（ISO 8601・任意） | null | 期日（[ADR-0028](../adr/0028-task-scheduling-fields.md)） |
+| `priority` | `enum`（`low` / `normal` / `high`・任意） | null | 優先度（[ADR-0028](../adr/0028-task-scheduling-fields.md)） |
 | `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
 
-戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来で、同一内容の再作成は `existing`（no-op、idempotent）。
+戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来（`dueDate` / `priority` は id に含めない＝期日変更で別 task に分裂しない、[ADR-0028](../adr/0028-task-scheduling-fields.md)）で、同一内容の再作成は `existing`（no-op、idempotent）。
 
 ### `task.update`（確定・write / HITL）
 
@@ -336,10 +340,13 @@ task の lifecycle 状態を遷移させる write tool（`task.create` が task 
 |---|---|---|
 | `taskId` | `string`（min 1） | 遷移対象の task id |
 | `state` | `enum` | 遷移先 `open` / `in_progress` / `completed` / `dropped` |
+| `dueDate` | `string`（ISO 8601・任意） | 同時に期日を (re)set（null は既存値維持、[ADR-0028](../adr/0028-task-scheduling-fields.md)） |
+| `priority` | `enum`（`low` / `normal` / `high`・任意） | 同時に優先度を (re)set（null は既存値維持、[ADR-0028](../adr/0028-task-scheduling-fields.md)） |
 
 戻り値: `{ "taskId": "task_...", "status": "updated" \| "unchanged" \| "missing", "state": "completed" \| null }`。
 
-- **idempotent**: 現在 state と同一への遷移は `unchanged`（event を append しない）。`missing`（該当 task なし）は status で報告し throw しない（commitment 遷移群と同じ作法）
+- **idempotent**: 現在 state と同一かつ scheduling 更新なし（`dueDate` / `priority` ともに null）は `unchanged`（event を append しない）。`missing`（該当 task なし）は status で報告し throw しない（commitment 遷移群と同じ作法）
+- **scheduling 更新**: 同一 state でも非 null の `dueDate` / `priority` を渡せば (re)set として `updated`（[ADR-0028](../adr/0028-task-scheduling-fields.md)）。reducer は null を COALESCE で既存値維持する
 - **禁止遷移なし**: 4 状態は相互に到達可能（`completed` の task を `in_progress` に戻す等も許可）。task lifecycle に invalid 遷移は設けない
 - 新規 task の作成は `task.create`（本 tool は遷移専用で title を持たない）
 

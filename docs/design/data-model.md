@@ -11,8 +11,8 @@
   - `SourceBodyUpdated` — 既存ソースの本文変更（fingerprint/cursor で検知）。`SourceObserved` ともに**全文 body を保持**するため、event log から本文版履歴を復元できる（`source.history` read tool、#121）
   - `SourceForgotten` — source のローカル purge（[ADR-0026](../adr/0026-source-forgetting.md)・`externalId` / `reason?` のみで **body なし**）。reducer が `sources`/`sources_fts` を DELETE。あわせて過去の `SourceObserved`/`SourceBodyUpdated` の `body` は **redaction**（空白化）され、event log にも本文を残さない（append-only の明示的例外）
   - `ConnectorSyncCompleted` — sync 完了（`cursor` / `count` を保持。resume 用）
-  - `TaskProposed` — task 候補の提案（HITL・未適用）
-  - `TaskApplied` — 提案 task の承認・適用（`state`: open / in_progress / completed / dropped）
+  - `TaskProposed` — task 候補の提案（HITL・未適用。`dueDate?` / `priority?`（low / normal / high）の scheduling fields を持つ、[ADR-0028](../adr/0028-task-scheduling-fields.md) / #147。欠落時は null＝旧 event の replay 互換）
+  - `TaskApplied` — 提案 task の承認・適用（`state`: open / in_progress / completed / dropped。`dueDate?` / `priority?` を任意に同時 (re)set。null は既存値を維持＝reducer が COALESCE、[ADR-0028](../adr/0028-task-scheduling-fields.md)）
   - `DecisionRecorded` — 決定の記録（`rationale` + provenance）
   - `ReplyDraftProposed` — 返信下書きの提案（HITL・送信はユーザー手動）
   - `DraftExported` — 下書きをローカルファイルに書き出した監査記録（[ADR-0025](../adr/0025-local-draft-export.md)・`path` / `format`（`md`/`txt`/`docx`/`pptx`/`xlsx`、#138）/ `sourceExternalId?` のみで **body は持たない**。projection なし＝reducer no-op、replay でファイル再生成しない）
@@ -35,7 +35,7 @@
 - Drizzle 管理のテーブル（`src/db/schema.ts`）。event を reducer（`src/projections/reducer.ts`）で畳んで生成
 - 確定テーブル:
   - `sources` — `external_id`(PK) / `source_type` / `body` / `fingerprint` / `observed_at` / `meta`(JSON)
-  - `tasks` — `id`(PK) / `title` / `state`（`proposed` → `open` / `in_progress` / `completed` / `dropped`、`task.update` で遷移）/ `created_at` / `updated_at`
+  - `tasks` — `id`(PK) / `title` / `state`（`proposed` → `open` / `in_progress` / `completed` / `dropped`、`task.update` で遷移）/ `due_date` / `priority`（scheduling fields、[ADR-0028](../adr/0028-task-scheduling-fields.md) / #147。null 可。**overdue は焼かない**＝`due_date < now AND state ∈ {open, in_progress}` を `task.list` の read 時に派生）/ `created_at` / `updated_at`
   - `decisions` — `id`(PK) / `title` / `rationale` / `recorded_at`
   - `inbox` — `id`(PK) / `source_external_id` / `state` / `updated_at`
   - `proposals` — `candidate_id`(PK) / `mode` / `kind` / `entity_id` / `summary` / `state`（pending / applied / rejected）/ `reason` / `created_at` / `updated_at`（提案 lifecycle ledger、#89。`propose.list` が読む）
@@ -55,3 +55,4 @@
 
 - projection スキーマ変更は drizzle-kit（`drizzle.config.ts` / `bun run db:generate` → `drizzle/`）。`events` 表・FTS5・vec0 仮想テーブル・`embeddings_meta` サイドカーは drizzle-kit 管理外（init 時 raw DDL）
 - 原則 **drop + rebuild**（replay）で吸収できるため in-place migration の比重は低い
+- 既存 DB への**列追加**（例: tasks の `due_date` / `priority`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）は init 時に冪等な `ALTER TABLE ... ADD COLUMN`（`PRAGMA table_info` で存在確認）で吸収する（SQLite に `ADD COLUMN IF NOT EXISTS` がないため）。`suasor db migrate` で適用、非破壊・冪等

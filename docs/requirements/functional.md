@@ -22,6 +22,7 @@ ID は `FR-<area>-<n>`。MUST/SHOULD/MAY は RFC 2119。
 - **FR-ADV-1 (MUST)** 要約（brief）・横断調査（research）等の read 系を提供
 - **FR-PRO-1 (MUST)** 返信・タスク・決定の **候補を提案**する（generate）
 - **FR-PRO-2 (MUST)** 提案の適用は **HITL**。人の承認なしに適用・送信しない（auto-apply なし）（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）
+- **FR-PRO-3 (SHOULD)** task は **期日（`dueDate`）と優先度（`priority`: low / normal / high）** を持てる。`task.list` は **overdue**（`dueDate < now AND state ∈ {open, in_progress}`）を read 時に派生して surface する（projection に焼かない＝replay 不変性を維持、[ADR-0028](../adr/0028-task-scheduling-fields.md) / [ADR-0002](../adr/0002-event-sourced-architecture.md)）
 
 ## Assistant skills
 

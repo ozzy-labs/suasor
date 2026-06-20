@@ -119,6 +119,113 @@ describe("tasks lifecycle", () => {
   });
 });
 
+describe("task scheduling fields (ADR-0028)", () => {
+  test("TaskProposed folds dueDate / priority onto the projection row", () => {
+    const now = new Date("2026-06-14T00:00:00.000Z");
+    store.record(
+      {
+        type: "TaskProposed",
+        taskId: "t1",
+        title: "ship it",
+        dueDate: "2026-06-30T00:00:00.000Z",
+        priority: "high",
+        sourceExternalIds: [],
+      },
+      now,
+    );
+    const task = rows(store, "tasks") as Array<{
+      due_date: string | null;
+      priority: string | null;
+    }>;
+    expect(task[0]?.due_date).toBe("2026-06-30T00:00:00.000Z");
+    expect(task[0]?.priority).toBe("high");
+  });
+
+  test("dueDate / priority default to null when omitted (backward-compatible)", () => {
+    store.record(
+      { type: "TaskProposed", taskId: "t1", title: "vague", sourceExternalIds: [] },
+      new Date("2026-06-14T00:00:00.000Z"),
+    );
+    const task = rows(store, "tasks") as Array<{
+      due_date: string | null;
+      priority: string | null;
+    }>;
+    expect(task[0]?.due_date).toBeNull();
+    expect(task[0]?.priority).toBeNull();
+  });
+
+  test("TaskApplied with non-null dueDate (re)sets it; null leaves it untouched", () => {
+    const now = new Date("2026-06-14T00:00:00.000Z");
+    store.record(
+      {
+        type: "TaskProposed",
+        taskId: "t1",
+        title: "with due",
+        dueDate: "2026-06-30T00:00:00.000Z",
+        priority: "normal",
+        sourceExternalIds: [],
+      },
+      now,
+    );
+    // Advance state only (null scheduling) — existing dueDate / priority preserved.
+    store.record({ type: "TaskApplied", taskId: "t1", state: "in_progress" }, now);
+    let task = rows(store, "tasks") as Array<{
+      state: string;
+      due_date: string | null;
+      priority: string | null;
+    }>;
+    expect(task[0]?.state).toBe("in_progress");
+    expect(task[0]?.due_date).toBe("2026-06-30T00:00:00.000Z");
+    expect(task[0]?.priority).toBe("normal");
+
+    // A non-null dueDate on apply overwrites it.
+    store.record(
+      {
+        type: "TaskApplied",
+        taskId: "t1",
+        state: "in_progress",
+        dueDate: "2026-07-15T00:00:00.000Z",
+        priority: "high",
+      },
+      now,
+    );
+    task = rows(store, "tasks") as Array<{
+      state: string;
+      due_date: string | null;
+      priority: string | null;
+    }>;
+    expect(task[0]?.due_date).toBe("2026-07-15T00:00:00.000Z");
+    expect(task[0]?.priority).toBe("high");
+  });
+
+  test("a legacy TaskProposed event (no dueDate/priority) replays to null (replay-stable)", () => {
+    // Simulate a pre-ADR-0028 event row persisted without the scheduling fields.
+    const sqlite = store.connection.sqlite;
+    const payload = JSON.stringify({
+      type: "TaskProposed",
+      id: "01OLD",
+      recordedAt: "2026-06-14T00:00:00.000Z",
+      schemaVersion: 1,
+      taskId: "legacy",
+      title: "old task",
+      sourceExternalIds: [],
+    });
+    sqlite
+      .query(
+        "INSERT INTO events (id, type, schema_version, recorded_at, payload) VALUES (?, 'TaskProposed', 1, ?, ?)",
+      )
+      .run("01OLD", "2026-06-14T00:00:00.000Z", payload);
+    // Rebuild from the event log: the missing fields default to null on parse.
+    store.rebuild();
+    const task = sqlite
+      .query("SELECT due_date, priority, title FROM tasks WHERE id = 'legacy'")
+      .get() as { due_date: string | null; priority: string | null; title: string };
+    expect(task.title).toBe("old task");
+    expect(task.due_date).toBeNull();
+    expect(task.priority).toBeNull();
+  });
+});
+
 describe("decisions / inbox / reply drafts", () => {
   test("DecisionRecorded upserts a decision and link", () => {
     store.record(

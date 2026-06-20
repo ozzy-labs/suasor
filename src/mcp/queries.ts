@@ -192,11 +192,21 @@ export function listSourceHistory(
   });
 }
 
-/** A task projection row. */
+/** A task projection row, with the read-time-derived `overdue` flag (ADR-0028). */
 export interface TaskRecord {
   id: string;
   title: string;
   state: string;
+  /** Optional due date (ISO 8601); null when the task has none (ADR-0028). */
+  dueDate: string | null;
+  /** Optional priority (low/normal/high); null when unprioritised (ADR-0028). */
+  priority: string | null;
+  /**
+   * Derived at read time (NOT stored — ADR-0028): the task has a `dueDate` in the
+   * past relative to `now` and is still actionable (state ∈ {open, in_progress}).
+   * Current-time state must not be folded into a replay-stable projection.
+   */
+  overdue: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -205,8 +215,18 @@ interface TaskRow {
   id: string;
   title: string;
   state: string;
+  due_date: string | null;
+  priority: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Lifecycle states for which an overdue task is still actionable (ADR-0028). */
+const OVERDUE_ACTIVE_STATES = new Set(["open", "in_progress"]);
+
+/** Derive overdue (read-time, ADR-0028): past due AND still actionable. */
+function isOverdue(dueDate: string | null, state: string, now: string): boolean {
+  return dueDate !== null && dueDate < now && OVERDUE_ACTIVE_STATES.has(state);
 }
 
 export interface ListTasksOptions {
@@ -214,36 +234,67 @@ export interface ListTasksOptions {
   state?: string;
   /** Window over `updated_at`. */
   updated?: TimeRange;
+  /** Keep only tasks with `due_date < dueBefore` (ISO 8601, ADR-0028). */
+  dueBefore?: string;
+  /** Keep only overdue tasks (read-time derived: past due AND active, ADR-0028). */
+  overdue?: boolean;
+  /**
+   * Reference "now" for the overdue derivation (ISO 8601). Injectable so the
+   * overdue boundary is deterministic under test (ADR-0028); defaults to the
+   * current wall clock.
+   */
+  now?: string;
   limit?: number;
 }
 
-/** List tasks most-recently-updated first. */
+/**
+ * List tasks most-recently-updated first. `overdue` is derived per row at read
+ * time (ADR-0028) from `dueBefore`-comparable `now`, never stored. When
+ * `overdue: true` is requested the rows are post-filtered after the SELECT (the
+ * derivation is not a SQL column), so the limit is applied to the filtered set.
+ */
 export function listTasks(sqlite: Database, options: ListTasksOptions = {}): TaskRecord[] {
+  const now = options.now ?? new Date().toISOString();
+  const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   const clauses: string[] = [];
   const params: (string | number)[] = [];
   if (options.state !== undefined) {
     clauses.push("state = ?");
     params.push(options.state);
   }
+  if (options.dueBefore !== undefined) {
+    clauses.push("due_date IS NOT NULL AND due_date < ?");
+    params.push(options.dueBefore);
+  }
   pushTimeRange(clauses, params, "updated_at", options.updated);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-  params.push(options.limit ?? DEFAULT_LIST_LIMIT);
+  // overdue is a read-time derivation, not a column: when filtering by it, defer
+  // the LIMIT to the post-filter step so it isn't truncated before the filter.
+  const sqlLimit = options.overdue === true ? Number.MAX_SAFE_INTEGER : limit;
+  params.push(sqlLimit);
   const rows = sqlite
     .query<TaskRow, (string | number)[]>(
-      `SELECT id, title, state, created_at, updated_at
+      `SELECT id, title, state, due_date, priority, created_at, updated_at
          FROM tasks
          ${where}
         ORDER BY updated_at DESC
         LIMIT ?`,
     )
     .all(...params);
-  return rows.map((r) => ({
+  let records = rows.map((r) => ({
     id: r.id,
     title: r.title,
     state: r.state,
+    dueDate: r.due_date,
+    priority: r.priority,
+    overdue: isOverdue(r.due_date, r.state, now),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
+  if (options.overdue === true) {
+    records = records.filter((r) => r.overdue).slice(0, limit);
+  }
+  return records;
 }
 
 /** A decision projection row. */

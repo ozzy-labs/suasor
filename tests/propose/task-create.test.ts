@@ -51,4 +51,43 @@ describe("task.create (direct HITL task creation, #12 追補 D2)", () => {
   test("rejects an empty title", () => {
     expect(() => taskCreate(store, { title: "" })).toThrow();
   });
+
+  describe("scheduling fields (ADR-0028)", () => {
+    function schedulingOf(taskId: string) {
+      return store.connection.sqlite
+        .query("SELECT due_date, priority FROM tasks WHERE id = ?")
+        .get(taskId) as { due_date: string | null; priority: string | null } | null;
+    }
+
+    test("folds dueDate / priority onto the created task", () => {
+      const { taskId } = taskCreate(store, {
+        title: "with schedule",
+        dueDate: "2026-07-01T00:00:00.000Z",
+        priority: "high",
+      });
+      expect(schedulingOf(taskId)).toEqual({
+        due_date: "2026-07-01T00:00:00.000Z",
+        priority: "high",
+      });
+    });
+
+    test("dueDate / priority default to null when omitted", () => {
+      const { taskId } = taskCreate(store, { title: "no schedule" });
+      expect(schedulingOf(taskId)).toEqual({ due_date: null, priority: null });
+    });
+
+    test("dueDate / priority are NOT part of the derived id (same title+provenance → same id)", () => {
+      const a = taskCreate(store, { title: "same", dueDate: "2026-07-01T00:00:00.000Z" });
+      const b = taskCreate(store, { title: "same", priority: "low" });
+      expect(b.taskId).toBe(a.taskId);
+      // The second is a no-op (existing), so the original dueDate is preserved.
+      expect(b.status).toBe("existing");
+      expect(schedulingOf(a.taskId)?.due_date).toBe("2026-07-01T00:00:00.000Z");
+    });
+
+    test("rejects an invalid priority value", () => {
+      // @ts-expect-error invalid priority is rejected by the Zod enum at runtime
+      expect(() => taskCreate(store, { title: "bad", priority: "urgent" })).toThrow();
+    });
+  });
 });
