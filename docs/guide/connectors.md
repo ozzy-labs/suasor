@@ -265,6 +265,15 @@ resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
 - **identity**: `google:<resource>:<id>` / **source_type**: `google_drive` / `gmail_message` / `google_calendar`
 - **差分検知**: `nextPageToken` でページングし、本文 fingerprint で未変更を skip
 - **onboarding**（Issue #85）: `suasor google auth set`（refresh token を keychain に保存）/ `suasor google auth test`（refresh→access token 交換で疎通を検証し granted scope を出力）。`auth test` は config の `clientId` を要求し、installed/web client の場合は `connector:google:clientSecret` を keychain に置けば併せて使う（public client は不要）。
+- **calendar discovery**（[ADR-0030](../adr/0030-connector-discovery-verbs.md)）: `calendarId` を Web UI から手写しすると typo で calendar の sync が **silent に 0 件**になりやすい。token から可視カレンダーを列挙して貼れる discovery verb を使う（github の `github repos` 相当）:
+
+  ```bash
+  suasor google calendars                  # 可視カレンダーを列挙し [connectors.google] ブロックを出力
+  suasor google calendars --filter team    # id / summary の部分一致（case-insensitive）で絞る
+  suasor google calendars --json           # items + configBlock を JSON 出力
+  ```
+
+  refresh token を access token に交換した上で `GET /calendar/v3/users/me/calendarList`（`nextPageToken` ページング）を `fetch` のみ（`googleapis` 非依存・import-clean、[ADR-0007](../adr/0007-connector-contract.md)）で列挙し、calendarId / summary / timeZone / primary を出す。config の `clientId` を要求し、installed/web client は keychain の `connector:google:clientSecret` を併せて使う（`auth test` と同型）。出力末尾の paste-ready な `[connectors.google]` ブロックは（github の `repos` 配列と違い）**単一の** `calendarId` を primary（または先頭）カレンダーに設定し、他カレンダーは `# calendarId = "..."` のコメント行で並べるので、貼り替えるだけで対象を切り替えられる。refresh token / client secret / access token は error に出さない。
 - **feature readiness**（Issue #194）: `auth test` は config の `resources` ごとに `features:` 行を出す（Slack 同形式）。Google の token response は granted scope URL を列挙するため、各 resource の scope（`drive` / `gmail`（または `mail.google.com`）/ `calendar`）が granted scope に含まれれば `READY`、無ければ `MISSING <scope>`。`resources` 未設定なら `ingestion: N/A (no resources configured)` の 1 行のみ:
 
   ```text

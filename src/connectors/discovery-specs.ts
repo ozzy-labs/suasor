@@ -92,6 +92,43 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
       return { items, configBlock: renderConfigBlock(result) };
     },
   },
+  google: {
+    connector: "google",
+    verb: "calendars",
+    summary: "List calendars the token can see and print a paste-ready config block.",
+    itemNoun: "calendar",
+    async discover({ secret, config, filter, onProgress }) {
+      const refreshToken = await secret("refreshToken");
+      if (!refreshToken) throw new Error("no google refreshToken configured");
+      const clientId = asString(config.clientId);
+      if (!clientId) throw new Error("google: clientId is required in config");
+      const clientSecret = (await secret("clientSecret")) ?? undefined;
+      const { listCalendars, renderConfigBlock } = await import("./google/calendars.ts");
+      const result = await listCalendars(
+        { clientId, refreshToken, ...(clientSecret ? { clientSecret } : {}) },
+        {
+          ...(filter ? { filter } : {}),
+          ...(onProgress ? { onProgress } : {}),
+        },
+      );
+      const items: DiscoveryItem[] = result.calendars.map((c) => {
+        const label = [c.summary || "(no summary)", c.timeZone, c.primary ? "primary" : ""]
+          .filter((p) => p.length > 0)
+          .join(", ");
+        return {
+          value: c.id,
+          label,
+          attrs: {
+            summary: c.summary,
+            timeZone: c.timeZone,
+            primary: c.primary,
+            accessRole: c.accessRole,
+          },
+        };
+      });
+      return { items, configBlock: renderConfigBlock(result) };
+    },
+  },
 };
 
 /** Connectors that expose a discovery verb (sorted). */
