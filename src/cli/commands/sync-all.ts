@@ -228,3 +228,123 @@ export class SyncAllCommand extends Command {
     }
   }
 }
+
+/**
+ * `suasor sync status [--json]` — per-connector freshness view (ADR-0033).
+ *
+ * Reads the `sync_runs` projection (folded from SyncRunStarted / SyncRunEnded)
+ * and shows each connector's last sync time, counts, and outcome so an operator
+ * can tell whether the local data is stale or a recent run failed — without
+ * digging through the OS scheduler's logs (scheduling is delegated, ADR-0027).
+ *
+ * Read-only (autonomous OK, ADR-0004). Enabled connectors that have never synced
+ * are listed as "never synced" so a missing connector is not silently absent.
+ * `--json` emits a machine-readable array for cron monitoring (ADR-0027 parity).
+ */
+export class SyncStatusCommand extends Command {
+  static override paths = [["sync", "status"]];
+
+  static override usage = Command.Usage({
+    category: "Ingest",
+    description: "Show per-connector sync freshness (last sync time / counts / outcome).",
+    details: `
+      Shows each connector's latest sync run (ADR-0033): when it last synced, how
+      many sources it observed / updated / left unchanged, and whether the run
+      succeeded, partially failed, or errored. Folded from the sync run history
+      events, so it reflects failed runs too (a connector that throws still
+      records an errored run) — something the resume cursor alone never surfaced.
+
+      Next run is not shown: periodic execution is delegated to the OS scheduler
+      (ADR-0027), so Suasor derives freshness from the last run instead. Use
+      --json for machine-readable output (cron monitoring).
+
+      Connectors that are enabled but have never synced are listed as
+      "never synced" so a missing connector is not silently absent.
+    `,
+    examples: [
+      ["Show sync freshness", "suasor sync status"],
+      ["Machine-readable output", "suasor sync status --json"],
+    ],
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the per-connector freshness rows as JSON.",
+  });
+
+  override async execute(): Promise<number> {
+    const [{ loadConfig }, { Store }, { listSyncRuns }] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../mcp/queries.ts"),
+    ]);
+
+    const config = await loadConfig();
+    const dbPath = config.storage.dbPath;
+    if (dbPath === null) {
+      this.context.stderr.write("error: storage.dbPath is not configured\n");
+      return 1;
+    }
+
+    // Enabled connectors (registry order) so a connector that is configured but
+    // has never synced is surfaced as "never synced" rather than omitted.
+    const { selectEnabledConnectors } = await import("../../connectors/sync-all.ts");
+    const enabled = selectEnabledConnectors(connectorNames(), config.connectors);
+
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    try {
+      const runs = listSyncRuns(store.connection.sqlite);
+      const byConnector = new Map(runs.map((r) => [r.connector, r]));
+
+      // Union of enabled connectors and any connector that has run history (so a
+      // since-disabled connector's last run is still visible), enabled first.
+      const names = [
+        ...enabled,
+        ...runs.map((r) => r.connector).filter((c) => !enabled.includes(c)),
+      ];
+
+      if (this.json) {
+        const rows = names.map((connector) => {
+          const r = byConnector.get(connector);
+          return r
+            ? {
+                connector,
+                status: r.status,
+                startedAt: r.startedAt,
+                endedAt: r.endedAt,
+                observed: r.observed,
+                updated: r.updated,
+                unchanged: r.unchanged,
+                durationMs: r.durationMs,
+                lastError: r.lastError,
+              }
+            : { connector, status: "never_synced" };
+        });
+        this.context.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+        return 0;
+      }
+
+      if (names.length === 0) {
+        this.context.stdout.write("sync status: no connectors enabled.\n");
+        return 0;
+      }
+
+      for (const connector of names) {
+        const r = byConnector.get(connector);
+        if (r === undefined) {
+          this.context.stdout.write(`${connector}: never synced\n`);
+          continue;
+        }
+        const when = r.endedAt ?? `${r.startedAt} (running)`;
+        const counts = `${r.observed} observed, ${r.updated} updated, ${r.unchanged} unchanged`;
+        const dur = r.durationMs !== null ? `, ${r.durationMs}ms` : "";
+        const errNote = r.status === "error" && r.lastError ? ` — ${r.lastError}` : "";
+        this.context.stdout.write(
+          `${connector}: ${r.status} — ${when} (${counts}${dur})${errNote}\n`,
+        );
+      }
+      return 0;
+    } finally {
+      store.close();
+    }
+  }
+}

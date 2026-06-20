@@ -88,6 +88,61 @@ export const ConnectorSyncCompleted = z.object({
   count: z.number().int().nonnegative().default(0),
 });
 
+/** Terminal status of a sync run (ADR-0033). */
+export const SYNC_RUN_STATUSES = ["ok", "partial", "error"] as const;
+export const SyncRunStatus = z.enum(SYNC_RUN_STATUSES);
+export type SyncRunStatus = z.infer<typeof SyncRunStatus>;
+
+/**
+ * A connector sync run started (ADR-0033). Emitted by the shared `syncConnector`
+ * service before the ingest pass begins, so every entry point (CLI single sync /
+ * `suasor sync` bulk / `connector.sync` MCP) records run history identically
+ * (ADR-0007 single code path). `runId` is content-derived (`<connector>:<startedAt>`)
+ * so the matching `SyncRunEnded` can pair to it and replay stays deterministic.
+ *
+ * Distinct from `ConnectorSyncCompleted` (which carries only the resume cursor and
+ * is appended only on a *successful* terminal pass): a run that throws mid-way
+ * still gets a `SyncRunEnded(status=error)`, so failed runs are visible in the
+ * freshness view — something the cursor event alone could never surface.
+ */
+export const SyncRunStarted = z.object({
+  type: z.literal("SyncRunStarted"),
+  ...Envelope,
+  /** Connector that started syncing (e.g. "github"). */
+  connector: z.string().min(1),
+  /** Content-derived run id (`<connector>:<startedAt>`); pairs with SyncRunEnded. */
+  runId: z.string().min(1),
+  /** When the run started (ISO 8601; the service clock). */
+  startedAt: IsoDateTime,
+});
+
+/**
+ * A connector sync run finished — success, partial, or error (ADR-0033). Carries
+ * the per-run counts, duration, and terminal status; folded into the `sync_runs`
+ * projection as the connector's latest run so `suasor sync status` can show the
+ * last sync time / counts / outcome. `error` holds the failure message when
+ * `status = "error"` (a connector threw); omitted otherwise.
+ */
+export const SyncRunEnded = z.object({
+  type: z.literal("SyncRunEnded"),
+  ...Envelope,
+  connector: z.string().min(1),
+  /** Same content-derived id as the matching {@link SyncRunStarted}. */
+  runId: z.string().min(1),
+  /** Terminal status: ok (clean) / partial (sub-unit failed) / error (threw). */
+  status: SyncRunStatus,
+  /** New sources observed this run. */
+  observed: z.number().int().nonnegative().default(0),
+  /** Existing sources whose body changed this run. */
+  updated: z.number().int().nonnegative().default(0),
+  /** Existing sources skipped (fingerprint unchanged) this run. */
+  unchanged: z.number().int().nonnegative().default(0),
+  /** Wall-clock duration of the run in milliseconds. */
+  durationMs: z.number().int().nonnegative().default(0),
+  /** Failure message when status = "error"; omitted on ok / partial. */
+  error: z.string().optional(),
+});
+
 /** Task priority levels (ADR-0028). `null` = unprioritised. */
 export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
 export const TaskPriority = z.enum(TASK_PRIORITIES);
@@ -360,6 +415,8 @@ export const DomainEvent = z.discriminatedUnion("type", [
   SourceBodyUpdated,
   SourceForgotten,
   ConnectorSyncCompleted,
+  SyncRunStarted,
+  SyncRunEnded,
   TaskProposed,
   TaskApplied,
   DecisionRecorded,
@@ -386,6 +443,8 @@ export const EVENT_TYPES = [
   "SourceBodyUpdated",
   "SourceForgotten",
   "ConnectorSyncCompleted",
+  "SyncRunStarted",
+  "SyncRunEnded",
   "TaskProposed",
   "TaskApplied",
   "DecisionRecorded",
@@ -415,6 +474,8 @@ export type NewEvent =
   | Omit<z.input<typeof SourceBodyUpdated>, "id" | "recordedAt">
   | Omit<z.input<typeof SourceForgotten>, "id" | "recordedAt">
   | Omit<z.input<typeof ConnectorSyncCompleted>, "id" | "recordedAt">
+  | Omit<z.input<typeof SyncRunStarted>, "id" | "recordedAt">
+  | Omit<z.input<typeof SyncRunEnded>, "id" | "recordedAt">
   | Omit<z.input<typeof TaskProposed>, "id" | "recordedAt">
   | Omit<z.input<typeof TaskApplied>, "id" | "recordedAt">
   | Omit<z.input<typeof DecisionRecorded>, "id" | "recordedAt">

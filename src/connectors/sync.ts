@@ -231,8 +231,66 @@ export async function syncConnector(
   connector: Connector,
   options: SyncOptions = {},
 ): Promise<SyncOutcome> {
-  const sqlite = store.connection.sqlite;
   const now = options.now ?? (() => new Date());
+
+  // Run-history bookkeeping (ADR-0033): record SyncRunStarted up front and
+  // SyncRunEnded on every exit path (success, partial, throw) so the freshness
+  // view (`sync status`) reflects failed runs too — something the success-only
+  // ConnectorSyncCompleted event can never surface. runId is content-derived from
+  // (connector, startedAt) so the start/end pair is stable and replay-safe.
+  const startedAtDate = now();
+  const startedAt = startedAtDate.toISOString();
+  const runId = `${connector.name}:${startedAt}`;
+  store.record(
+    { type: "SyncRunStarted", connector: connector.name, runId, startedAt },
+    startedAtDate,
+  );
+
+  try {
+    const outcome = await runSyncPass(store, connector, options, now);
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: connector.name,
+        runId,
+        status: outcome.partialFailure ? "partial" : "ok",
+        observed: outcome.observed,
+        updated: outcome.updated,
+        unchanged: outcome.unchanged,
+        durationMs: Math.max(0, now().getTime() - startedAtDate.getTime()),
+      },
+      now(),
+    );
+    return outcome;
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: connector.name,
+        runId,
+        status: "error",
+        durationMs: Math.max(0, now().getTime() - startedAtDate.getTime()),
+        error: message,
+      },
+      now(),
+    );
+    throw cause;
+  }
+}
+
+/**
+ * Execute one ingest pass for a connector (the core delta-detection + recording
+ * loop). Wrapped by {@link syncConnector}, which adds the SyncRunStarted /
+ * SyncRunEnded run-history bookkeeping (ADR-0033) around it.
+ */
+async function runSyncPass(
+  store: Store,
+  connector: Connector,
+  options: SyncOptions,
+  now: () => Date,
+): Promise<SyncOutcome> {
+  const sqlite = store.connection.sqlite;
   const cursor = options.cursor !== undefined ? options.cursor : lastCursor(sqlite, connector.name);
 
   // The service is the single owner of per-record progress: it sees every

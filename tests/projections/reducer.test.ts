@@ -277,3 +277,171 @@ describe("decisions / inbox / reply drafts", () => {
     expect(rows(store, "links")).toHaveLength(1);
   });
 });
+
+describe("SyncRunStarted / SyncRunEnded (ADR-0033)", () => {
+  type SyncRunRow = {
+    connector: string;
+    run_id: string;
+    started_at: string;
+    ended_at: string | null;
+    status: string;
+    observed: number;
+    updated: number;
+    unchanged: number;
+    duration_ms: number | null;
+    last_error: string | null;
+  };
+
+  test("SyncRunStarted inserts a running row with cleared outcome fields", () => {
+    store.record(
+      {
+        type: "SyncRunStarted",
+        connector: "github",
+        runId: "github:2026-06-14T00:00:00.000Z",
+        startedAt: "2026-06-14T00:00:00.000Z",
+      },
+      new Date("2026-06-14T00:00:00.500Z"),
+    );
+    const runs = rows(store, "sync_runs") as SyncRunRow[];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("running");
+    expect(runs[0]?.ended_at).toBeNull();
+    expect(runs[0]?.duration_ms).toBeNull();
+  });
+
+  test("SyncRunEnded confirms status / counts / duration on the connector row", () => {
+    store.record(
+      {
+        type: "SyncRunStarted",
+        connector: "github",
+        runId: "github:r1",
+        startedAt: "2026-06-14T00:00:00.000Z",
+      },
+      new Date("2026-06-14T00:00:00.000Z"),
+    );
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: "github",
+        runId: "github:r1",
+        status: "ok",
+        observed: 3,
+        updated: 1,
+        unchanged: 7,
+        durationMs: 1234,
+      },
+      new Date("2026-06-14T00:00:02.000Z"),
+    );
+    const runs = rows(store, "sync_runs") as SyncRunRow[];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("ok");
+    expect(runs[0]?.observed).toBe(3);
+    expect(runs[0]?.updated).toBe(1);
+    expect(runs[0]?.unchanged).toBe(7);
+    expect(runs[0]?.duration_ms).toBe(1234);
+    expect(runs[0]?.ended_at).toBe("2026-06-14T00:00:02.000Z");
+    expect(runs[0]?.last_error).toBeNull();
+  });
+
+  test("a failed run records status=error and the message", () => {
+    store.record(
+      {
+        type: "SyncRunStarted",
+        connector: "slack",
+        runId: "slack:r1",
+        startedAt: "2026-06-14T00:00:00.000Z",
+      },
+      new Date("2026-06-14T00:00:00.000Z"),
+    );
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: "slack",
+        runId: "slack:r1",
+        status: "error",
+        durationMs: 50,
+        error: "token expired",
+      },
+      new Date("2026-06-14T00:00:00.050Z"),
+    );
+    const runs = rows(store, "sync_runs") as SyncRunRow[];
+    expect(runs[0]?.status).toBe("error");
+    expect(runs[0]?.last_error).toBe("token expired");
+  });
+
+  test("a later run replaces the connector's latest row (1 row per connector)", () => {
+    store.record(
+      {
+        type: "SyncRunStarted",
+        connector: "github",
+        runId: "github:r1",
+        startedAt: "2026-06-14T00:00:00.000Z",
+      },
+      new Date("2026-06-14T00:00:00.000Z"),
+    );
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: "github",
+        runId: "github:r1",
+        status: "error",
+        durationMs: 10,
+        error: "boom",
+      },
+      new Date("2026-06-14T00:00:01.000Z"),
+    );
+    // Second run for the same connector, this time clean.
+    store.record(
+      {
+        type: "SyncRunStarted",
+        connector: "github",
+        runId: "github:r2",
+        startedAt: "2026-06-15T00:00:00.000Z",
+      },
+      new Date("2026-06-15T00:00:00.000Z"),
+    );
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: "github",
+        runId: "github:r2",
+        status: "ok",
+        observed: 2,
+        durationMs: 20,
+      },
+      new Date("2026-06-15T00:00:01.000Z"),
+    );
+    const runs = rows(store, "sync_runs") as SyncRunRow[];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.run_id).toBe("github:r2");
+    expect(runs[0]?.status).toBe("ok");
+    expect(runs[0]?.last_error).toBeNull(); // prior error cleared by the new run
+  });
+
+  test("rebuild replays run events to the same latest-run projection", () => {
+    store.record(
+      {
+        type: "SyncRunStarted",
+        connector: "github",
+        runId: "github:r1",
+        startedAt: "2026-06-14T00:00:00.000Z",
+      },
+      new Date("2026-06-14T00:00:00.000Z"),
+    );
+    store.record(
+      {
+        type: "SyncRunEnded",
+        connector: "github",
+        runId: "github:r1",
+        status: "ok",
+        observed: 5,
+        durationMs: 100,
+      },
+      new Date("2026-06-14T00:00:01.000Z"),
+    );
+    const before = rows(store, "sync_runs");
+    store.rebuild();
+    const after = rows(store, "sync_runs");
+    expect(after).toEqual(before);
+  });
+});

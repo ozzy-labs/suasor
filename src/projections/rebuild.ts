@@ -25,6 +25,7 @@ import { applyEvents } from "./reducer.ts";
 const PROJECTION_TABLES = [
   "sources",
   "tasks",
+  "sync_runs",
   "decisions",
   "inbox",
   "proposals",

@@ -136,6 +136,67 @@ export function getSource(sqlite: Database, externalId: string): SourceRecord | 
   return row ? toSourceRecord(row) : null;
 }
 
+/** Latest sync run for a connector, as exposed to `sync status` (ADR-0033). */
+export interface SyncRunRecord {
+  connector: string;
+  /** Id of the latest run (`<connector>:<startedAt>`). */
+  runId: string;
+  /** When the latest run started (ISO 8601). */
+  startedAt: string;
+  /** When the latest run ended (ISO 8601); null while still running. */
+  endedAt: string | null;
+  /** running / ok / partial / error. */
+  status: string;
+  observed: number;
+  updated: number;
+  unchanged: number;
+  /** Wall-clock duration in ms; null while still running. */
+  durationMs: number | null;
+  /** Failure message when status = error; null otherwise. */
+  lastError: string | null;
+}
+
+interface SyncRunRow {
+  connector: string;
+  run_id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  observed: number;
+  updated: number;
+  unchanged: number;
+  duration_ms: number | null;
+  last_error: string | null;
+}
+
+/**
+ * List the latest sync run per connector (ADR-0033), most recently ended first
+ * (still-running / never-ended rows sort last). Read-only — backs
+ * `suasor sync status`. Returns one row per connector that has ever synced.
+ */
+export function listSyncRuns(sqlite: Database): SyncRunRecord[] {
+  const rows = sqlite
+    .query<SyncRunRow, []>(
+      `SELECT connector, run_id, started_at, ended_at, status,
+              observed, updated, unchanged, duration_ms, last_error
+         FROM sync_runs
+        ORDER BY COALESCE(ended_at, started_at) DESC, connector ASC`,
+    )
+    .all();
+  return rows.map((r) => ({
+    connector: r.connector,
+    runId: r.run_id,
+    startedAt: r.started_at,
+    endedAt: r.ended_at,
+    status: r.status,
+    observed: r.observed,
+    updated: r.updated,
+    unchanged: r.unchanged,
+    durationMs: r.duration_ms,
+    lastError: r.last_error,
+  }));
+}
+
 /** One version of a source's body, reconstructed from the event log. */
 export interface SourceVersion {
   /** When the source was observed at its origin (ISO 8601). */

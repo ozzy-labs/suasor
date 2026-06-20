@@ -155,6 +155,68 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       // No projection row of its own; provenance/cursor live in the event log.
       return;
     }
+    case "SyncRunStarted": {
+      // Begin the connector's latest run (ADR-0033): upsert by connector with the
+      // new run's id / start time and a `running` status, clearing the prior run's
+      // terminal fields (ended_at / duration / last_error) so a still-running row
+      // doesn't show stale outcome data. The matching SyncRunEnded confirms them.
+      sqlite
+        .query(
+          `INSERT INTO sync_runs
+             (connector, run_id, started_at, ended_at, status,
+              observed, updated, unchanged, duration_ms, last_error)
+           VALUES ($conn, $run, $started, NULL, 'running', 0, 0, 0, NULL, NULL)
+           ON CONFLICT(connector) DO UPDATE SET
+             run_id      = excluded.run_id,
+             started_at  = excluded.started_at,
+             ended_at    = NULL,
+             status      = 'running',
+             observed    = 0,
+             updated     = 0,
+             unchanged   = 0,
+             duration_ms = NULL,
+             last_error  = NULL`,
+        )
+        .run({ $conn: event.connector, $run: event.runId, $started: event.startedAt });
+      return;
+    }
+    case "SyncRunEnded": {
+      // Confirm the connector's latest run (ADR-0033). Upsert keyed by connector so
+      // replay is order-stable even if a SyncRunStarted is somehow absent (the row
+      // is created with recordedAt as a best-effort started_at). Only overwrite the
+      // running row when this ended event belongs to its run, OR the row is already
+      // terminal (idempotent re-apply): guarded by matching run_id, else still
+      // record it as the latest (most events arrive started→ended in order).
+      sqlite
+        .query(
+          `INSERT INTO sync_runs
+             (connector, run_id, started_at, ended_at, status,
+              observed, updated, unchanged, duration_ms, last_error)
+           VALUES ($conn, $run, $ended, $ended, $status,
+                   $observed, $updated, $unchanged, $duration, $error)
+           ON CONFLICT(connector) DO UPDATE SET
+             run_id      = excluded.run_id,
+             ended_at    = excluded.ended_at,
+             status      = excluded.status,
+             observed    = excluded.observed,
+             updated     = excluded.updated,
+             unchanged   = excluded.unchanged,
+             duration_ms = excluded.duration_ms,
+             last_error  = excluded.last_error`,
+        )
+        .run({
+          $conn: event.connector,
+          $run: event.runId,
+          $ended: event.recordedAt,
+          $status: event.status,
+          $observed: event.observed,
+          $updated: event.updated,
+          $unchanged: event.unchanged,
+          $duration: event.durationMs,
+          $error: event.error ?? null,
+        });
+      return;
+    }
     case "TaskProposed": {
       // Scheduling fields (ADR-0028): dueDate / priority are folded onto the row
       // (event-payload values, time-independent — safe to store; overdue is the

@@ -77,6 +77,21 @@ export function initSchema(sqlite: Database): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    -- Sync run history (ADR-0033): one row per connector = its latest run, so
+    -- sync status reads freshness with a constant SELECT instead of scanning
+    -- the event log. Folded from SyncRunStarted / SyncRunEnded.
+    CREATE TABLE IF NOT EXISTS sync_runs (
+      connector   TEXT PRIMARY KEY,
+      run_id      TEXT NOT NULL,
+      started_at  TEXT NOT NULL,
+      ended_at    TEXT,
+      status      TEXT NOT NULL,
+      observed    INTEGER NOT NULL DEFAULT 0,
+      updated     INTEGER NOT NULL DEFAULT 0,
+      unchanged   INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER,
+      last_error  TEXT
+    );
     CREATE TABLE IF NOT EXISTS decisions (
       id          TEXT PRIMARY KEY,
       title       TEXT NOT NULL,

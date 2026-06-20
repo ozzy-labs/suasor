@@ -73,3 +73,4 @@ NNNN-kebab-case-title.md
 | 0030 | Connector discovery verbs (generic discovery base + `github repos`) |
 | 0031 | MCP structured errors (code/hint) + startup config readiness |
 | 0032 | Skill frontmatter schema (machine-readable fields) + `skills search` / `skills info` |
+| 0033 | Sync run history & freshness (`SyncRunStarted` / `SyncRunEnded`, `suasor sync status`) |

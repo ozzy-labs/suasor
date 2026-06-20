@@ -10,7 +10,9 @@
   - `SourceObserved` — connector がソース本文を初観測（read 専用取り込み）
   - `SourceBodyUpdated` — 既存ソースの本文変更（fingerprint/cursor で検知）。`SourceObserved` ともに**全文 body を保持**するため、event log から本文版履歴を復元できる（`source.history` read tool、#121）
   - `SourceForgotten` — source のローカル purge（[ADR-0026](../adr/0026-source-forgetting.md)・`externalId` / `reason?` のみで **body なし**）。reducer が `sources`/`sources_fts` を DELETE。あわせて過去の `SourceObserved`/`SourceBodyUpdated` の `body` は **redaction**（空白化）され、event log にも本文を残さない（append-only の明示的例外）
-  - `ConnectorSyncCompleted` — sync 完了（`cursor` / `count` を保持。resume 用）
+  - `ConnectorSyncCompleted` — sync 完了（`cursor` / `count` を保持。resume 用。成功 terminal でのみ append）
+  - `SyncRunStarted` — sync run の開始（`connector` / `runId`（`<connector>:<startedAt>`）/ `startedAt`、[ADR-0033](../adr/0033-sync-run-history.md) / #201）。共有 `syncConnector` が run 開始時に発行
+  - `SyncRunEnded` — sync run の終了（`connector` / `runId` / `status`（ok / partial / error）/ `observed` / `updated` / `unchanged` / `durationMs` / `error?`、[ADR-0033](../adr/0033-sync-run-history.md)）。**成功・失敗いずれでも append**（connector が throw した run も `status=error` で残る）ため、`ConnectorSyncCompleted` だけでは取れない「直近 sync が失敗」を鮮度ビューに表せる
   - `TaskProposed` — task 候補の提案（HITL・未適用。`dueDate?` / `priority?`（low / normal / high）の scheduling fields を持つ、[ADR-0028](../adr/0028-task-scheduling-fields.md) / #147。欠落時は null＝旧 event の replay 互換）
   - `TaskApplied` — 提案 task の承認・適用（`state`: open / in_progress / completed / dropped。`dueDate?` / `priority?` を任意に同時 (re)set。null は既存値を維持＝reducer が COALESCE、[ADR-0028](../adr/0028-task-scheduling-fields.md)）
   - `DecisionRecorded` — 決定の記録（`rationale` + provenance）
@@ -36,6 +38,7 @@
 - 確定テーブル:
   - `sources` — `external_id`(PK) / `source_type` / `body` / `fingerprint` / `observed_at` / `meta`(JSON)
   - `tasks` — `id`(PK) / `title` / `state`（`proposed` → `open` / `in_progress` / `completed` / `dropped`、`task.update` で遷移）/ `due_date` / `priority`（scheduling fields、[ADR-0028](../adr/0028-task-scheduling-fields.md) / #147。null 可。**overdue は焼かない**＝`due_date < now AND state ∈ {open, in_progress}` を `task.list` の read 時に派生）/ `created_at` / `updated_at`
+  - `sync_runs` — `connector`(PK) / `run_id` / `started_at` / `ended_at` / `status`（running / ok / partial / error）/ `observed` / `updated` / `unchanged` / `duration_ms` / `last_error`（connector 別の**最新 sync run** サマリ、[ADR-0033](../adr/0033-sync-run-history.md) / #201。`SyncRunStarted` / `SyncRunEnded` を畳む。`suasor sync status` が読む。**stale 判定は焼かず** read 時に最終 sync からの経過で導く）
   - `decisions` — `id`(PK) / `title` / `rationale` / `recorded_at`
   - `inbox` — `id`(PK) / `source_external_id` / `state` / `updated_at`
   - `proposals` — `candidate_id`(PK) / `mode` / `kind` / `entity_id` / `summary` / `state`（pending / applied / rejected）/ `reason` / `created_at` / `updated_at`（提案 lifecycle ledger、#89。`propose.list` が読む）
