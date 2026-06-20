@@ -63,3 +63,18 @@ opshub（先行実装）はこれらを `slack auth test`（granted scopes + 機
 - **検証は connector ごとの最小 probe**: `auth test` は `src/connectors/<name>/auth.ts` の `fetch`-only round-trip（SDK 非依存・import-clean、ADR-0007）で資格情報の有効性を検証する。github=`GET /user`（`x-oauth-scopes`）/ ms-graph=client-credential token 交換 / google=refresh→access token 交換 / box=`GET /2.0/users/me`。token は error に出さない。
 - **verb は data-driven**: `src/connectors/auth-specs.ts` の `AUTH_SPECS`（connector→secret 名 + probe）を SSOT に CLI 表面を派生する。汎用 connector contract（`sync` のみ）は引き続き太らせない（決定 2 と整合）。
 - **Slack は別物として維持**: Slack は scope readiness（feature→scope の capability model）・マルチ workspace（ADR-0014）を持つため、汎用 verb には寄せず独自の `slack auth set/test` を維持する。汎用 `auth test` の readiness は「scope が報告されたか」程度の自己申告（`READY` / `MISSING` / `N/A`）に留め、過剰主張しない。
+
+## 追補（Issue #194）: per-feature readiness を Slack 以外へ横展開
+
+- Date: 2026-06-20
+- Related: [Issue #194](https://github.com/ozzy-labs/suasor/issues/194)（auth test per-feature readiness 横展開）, [Issue #85](https://github.com/ozzy-labs/suasor/issues/85)（汎用 auth verb）
+
+Issue #85 の汎用 `auth test` は readiness を「scope が報告されたか」の 1 行に留めた（上記）が、これでは「どの resource が実際に使えるか」（github の issue/PR・notifications、ms-graph の mail/calendar/files/teams、google の drive/gmail/calendar）が不明なままだった。Slack の feature→scope capability model（決定 1）を**非 Slack connector にも横展開**し、各 `auth test` に `features:` ブロックを Slack と同じ書式で出す判断を記録する。
+
+- **判定モデルは Slack を一般化**: `src/connectors/auth-specs.ts` に純粋関数 `featureReadiness(spec, scopes)` を置く。Slack の**完全一致**トークンモデルと違い、非 Slack の scope は full URL（Google: `https://www.googleapis.com/auth/drive.readonly`）や粗粒度トークン（GitHub classic: `repo`）と異種なため、feature の `scopeNeedles` の**いずれかが granted scope 文字列の部分一致**なら `READY`、無ければ `MISSING <needles>`。scope 非列挙（`null`）は `N/A (scopes not enumerated)`（live probe で有効性は確認済み）。I/O・config 読み・追加 API なしの scope 層 capability model に留める点は Slack と同型。
+- **connector ごとの feature→scope / resource マップ**:
+  - **github**: granted scope（`x-oauth-scopes`）から `issue / pull request read`（`repo`）を常時、`notifications stream`（`notifications` | `repo`）を `notifications != "off"` の時のみ判定。fine-grained PAT は header を返さず `N/A`。
+  - **ms-graph**: client-credential は `.default` を返し application permission を server 側解決するため**列挙不能**。config の `resources`（mail/calendar/files/teams）ごとに行を出し、各 row は `N/A (scopes not enumerated)`（実権限は Azure app registration で確認）。
+  - **google**: token response が granted scope URL を列挙するため、config の `resources`（drive/gmail/calendar）ごとに scope 部分一致で `READY` / `MISSING`。
+  - **box**: `users/me` は scope を持たないため `Box folder read: READY` の 1 行（scope ゲートなし）。
+- **過剰主張の回避は維持**: `READY` は scope（または resource 設定）の自己申告のみで、resource への実到達（membership / folder 権限）は別レイヤ。Slack の membership footnote と同じ姿勢を保つ。`resources` 未設定の connector は `ingestion: N/A (no resources configured)` の 1 行で「何も取り込まない」状態を明示する。
