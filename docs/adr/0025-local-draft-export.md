@@ -1,12 +1,12 @@
 # 0025. ローカル下書き export（draft.export・送信しない）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-20
 - Deciders: Suasor maintainers
 - Related: [ADR-0003](0003-local-first-and-content-minimization.md)（local-first / content-min）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP+HITL）, [ADR-0002](0002-event-sourced-architecture.md)（event-sourced）, [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0009](0009-multi-agent-neutrality.md)（multi-agent 中立）, [ADR-0023](0023-local-filesystem-connectors.md)（local connector）, [ADR-0006](0006-ml-delegation.md)（ML 委譲）
 - Tracks: #133
 
-> Status: **Proposed**。本 ADR はレビュー用ドラフト。Accepted 後に実装 PR（event+config+tool → skill 連携）へ進む。Office 形式（docx/xlsx/pptx）export は composition サイドカーで段階化（別 Issue）。
+> Status: **Accepted**（2026-06-20 レビュー反映後 承認）。実装は PR 単位（event+config+`draft.export` tool → skill 連携）。Office 形式（docx/xlsx/pptx）export は composition サイドカーで段階化（別 Issue）。
 
 ## Context
 
