@@ -14,4 +14,9 @@ export {
   MarkitdownExtractor,
   type MarkitdownExtractorOptions,
 } from "./extractor.ts";
-export { type ExtractionStatus, extractionStatus } from "./maintenance.ts";
+export {
+  type ExtractionStatus,
+  extractionStatus,
+  listPendingExtractions,
+  type PendingExtraction,
+} from "./maintenance.ts";

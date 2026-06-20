@@ -102,6 +102,7 @@ export class DoctorCommand extends Command {
 
     // 2. database — file exists (do not create it) + core projection tables present.
     const dbPath = config?.storage.dbPath ?? null;
+    let dbReady = false; // gates the maintenance-hint probes below.
     if (config === null) {
       checks.push({ name: "database", status: "error", detail: "skipped (config did not load)" });
     } else if (dbPath === null) {
@@ -124,6 +125,7 @@ export class DoctorCommand extends Command {
           .all() as Array<{ name: string }>;
         const present = new Set(rows.map((r) => r.name));
         const missing = PROJECTION_TABLES.filter((t) => !present.has(t));
+        dbReady = missing.length === 0;
         checks.push(
           missing.length === 0
             ? {
@@ -234,6 +236,72 @@ export class DoctorCommand extends Command {
             `credential stored but not enabled: ${storedNotEnabled.join(", ")} ` +
             "(add a [connectors.<name>] section, or set enabled = true to start syncing)",
         });
+      }
+    }
+
+    // 6. maintenance — actionable backlog hints from the derived substrates
+    //    (Issue #202). Only when the store is migrated (dbReady) and the relevant
+    //    backend is enabled: a disabled backend has no backlog to drain. Read-only
+    //    SELECTs over the existing meta tables; no hint line is emitted when there
+    //    is nothing to do (so a settled store stays quiet).
+    if (config !== null && dbReady && dbPath !== null) {
+      const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+      try {
+        const sqlite = store.connection.sqlite;
+        // Embeddings: pending (no vector) / stale (different model) backlog.
+        if (config.embedding.backend !== "disabled") {
+          const { createEmbedder, embeddingStatus } = await import(
+            "../../retrieval/embedding/index.ts"
+          );
+          const embedder = createEmbedder(config.embedding);
+          const status = embeddingStatus(sqlite, embedder, config.embedding.backend);
+          if (status.totals.pending > 0) {
+            checks.push({
+              name: "maintenance",
+              status: "warn",
+              detail:
+                `pending embeddings: ${status.totals.pending} — ` +
+                "run `suasor embeddings drain` (`embeddings list-failed` to inspect)",
+            });
+          }
+          if (status.totals.stale > 0) {
+            checks.push({
+              name: "maintenance",
+              status: "warn",
+              detail:
+                `stale embeddings: ${status.totals.stale} (model drift) — ` +
+                "run `suasor embeddings rebuild`",
+            });
+          }
+        }
+        // Extraction: version drift (stale) / never-attempted (pending) backlog.
+        if (config.extraction.backend !== "disabled") {
+          const { extractionStatus } = await import("../../extraction/index.ts");
+          const status = extractionStatus(sqlite, {
+            backend: config.extraction.backend,
+            version: config.extraction.version,
+          });
+          if (status.totals.stale > 0) {
+            checks.push({
+              name: "maintenance",
+              status: "warn",
+              detail:
+                `extraction version drift: ${status.totals.stale} source(s) at an older version — ` +
+                "run `suasor local sync` to re-extract",
+            });
+          }
+          if (status.totals.pending > 0) {
+            checks.push({
+              name: "maintenance",
+              status: "warn",
+              detail:
+                `pending extractions: ${status.totals.pending} — ` +
+                "run `suasor local sync` (`extraction list-pending` to inspect)",
+            });
+          }
+        }
+      } finally {
+        store.close();
       }
     }
 

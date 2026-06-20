@@ -62,7 +62,23 @@ suasor extraction status
 ```
 
 - `extracted` 現 version で抽出済み / `stale` 別 version（次 sync で再抽出）/ `pending` extractable だが未試行 / `unsupported` サイドカーが非対応 / `too-large` `maxBytes` 超過
-- `suasor doctor` も backend / version を 1 行で表示する
+- `suasor doctor` も backend / version を 1 行で表示し、`stale` / `pending` が残っていれば保守ヒント（`extraction version drift: N — suasor local sync` / `pending extractions: N — suasor local sync`）を WARN で出す
+
+### どの source が待ちかを見る（drilldown）
+
+`extraction status` は件数の roll-up。実際にどのファイルが待ちかは `extraction list-pending` で:
+
+```bash
+suasor extraction list-pending --limit 20
+# 出力例:
+#   2 source(s) awaiting (re)extraction:
+#     [pending] report.pptx  local:/docs/report.pptx
+#     [stale] spec.docx  local:/docs/spec.docx
+#     run `suasor local sync` to (re)extract these sources
+```
+
+- `pending` は未試行、`stale` は別 version で抽出済み（drift）。いずれも `suasor local sync` で backfill
+- `--json` で `PendingExtraction[]`（`{externalId, name, reason}`）を機械可読出力
 
 ## 制約
 

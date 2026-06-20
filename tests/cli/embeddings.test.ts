@@ -113,3 +113,43 @@ describe("suasor embeddings rebuild/drain/find-duplicates (disabled no-op)", () 
     expect(out).toContain("nothing to do");
   });
 });
+
+describe("suasor embeddings list-failed (Issue #202)", () => {
+  test("lists every source as pending when the backend is disabled", async () => {
+    await seed("gh:1", "alpha");
+    await seed("gh:2", "beta");
+    const { code, out } = await run(["embeddings", "list-failed"]);
+    expect(code).toBe(0);
+    expect(out).toContain("2 source(s) missing a current-model vector");
+    expect(out).toContain("[pending] github_issue  gh:1");
+    expect(out).toContain("nothing to do"); // disabled-backend note
+  });
+
+  test("--json emits the failed-source list", async () => {
+    await seed("gh:1", "alpha");
+    const { code, out } = await run(["embeddings", "list-failed", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out);
+    expect(parsed).toEqual([{ externalId: "gh:1", sourceType: "github_issue", reason: "pending" }]);
+  });
+
+  test("--limit caps the listing", async () => {
+    await seed("gh:1", "alpha");
+    await seed("gh:2", "beta");
+    const { code, out } = await run(["embeddings", "list-failed", "--limit", "1", "--json"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toHaveLength(1);
+  });
+
+  test("rejects a non-positive --limit", async () => {
+    const { code, err } = await run(["embeddings", "list-failed", "--limit", "0"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--limit must be a positive integer");
+  });
+
+  test("a settled (empty) store reports nothing missing", async () => {
+    const { code, out } = await run(["embeddings", "list-failed"]);
+    expect(code).toBe(0);
+    expect(out).toContain("No sources missing a current-model vector.");
+  });
+});

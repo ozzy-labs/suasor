@@ -33,7 +33,7 @@ import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
 import { DoctorCommand } from "./commands/doctor.ts";
 import { embeddingsCommands } from "./commands/embeddings.ts";
-import { ExtractionStatusCommand } from "./commands/extraction.ts";
+import { ExtractionListPendingCommand, ExtractionStatusCommand } from "./commands/extraction.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
 import { McpToolsCommand } from "./commands/mcp-tools.ts";
@@ -55,6 +55,7 @@ import {
   SlackStatusCommand,
 } from "./commands/slack.ts";
 import { SourceForgetCommand, SourceListCommand } from "./commands/source.ts";
+import { StoreInfoCommand } from "./commands/store-info.ts";
 import { SyncAllCommand, SyncStatusCommand } from "./commands/sync-all.ts";
 
 /** Build the configured CLI instance. */
@@ -88,7 +89,9 @@ export function buildCli(): Cli {
   cli.register(ConnectorsListCommand);
   cli.register(ConfigShowCommand);
   cli.register(DoctorCommand);
+  cli.register(StoreInfoCommand);
   cli.register(ExtractionStatusCommand);
+  cli.register(ExtractionListPendingCommand);
   for (const EmbeddingsCommand of embeddingsCommands as CommandClass[]) {
     cli.register(EmbeddingsCommand);
   }

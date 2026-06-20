@@ -12,7 +12,11 @@ import type {
 } from "../../src/connectors/contract.ts";
 import { syncConnector } from "../../src/connectors/index.ts";
 import { Store } from "../../src/db/index.ts";
-import { type Extractor, extractionStatus } from "../../src/extraction/index.ts";
+import {
+  type Extractor,
+  extractionStatus,
+  listPendingExtractions,
+} from "../../src/extraction/index.ts";
 
 let store: Store;
 
@@ -91,6 +95,40 @@ describe("extractionStatus (ADR-0024)", () => {
     });
     expect(status.totals.stale).toBe(1);
     expect(status.totals.extracted).toBe(0);
+  });
+});
+
+describe("listPendingExtractions (Issue #202 drilldown)", () => {
+  test("lists pending (never attempted) and stale (version drift) sources", async () => {
+    // d1 extracted at v1; d3 ingested name-only (no extractor) → pending.
+    await syncConnector(store, fakeConnector([docRecord("d1", "a.docx")]), {
+      extractor: extractor("1", { "a.docx": "alpha" }),
+    });
+    await syncConnector(store, fakeConnector([docRecord("d3", "c.pptx")])); // no extractor
+
+    // Current config is now v2: d1 (recorded v1) is stale, d3 is pending.
+    const rows = listPendingExtractions(store.connection.sqlite, { version: "2" });
+    expect(rows).toHaveLength(2);
+    // pending first, then stale (each group ordered by external_id).
+    expect(rows[0]).toEqual({ externalId: "d3", name: "c.pptx", reason: "pending" });
+    expect(rows[1]).toEqual({ externalId: "d1", name: "a.docx", reason: "stale" });
+  });
+
+  test("settled store at the current version returns nothing", async () => {
+    await syncConnector(store, fakeConnector([docRecord("d1", "a.docx")]), {
+      extractor: extractor("1", { "a.docx": "alpha" }),
+    });
+    expect(listPendingExtractions(store.connection.sqlite, { version: "1" })).toEqual([]);
+  });
+
+  test("limit caps the listing", async () => {
+    await syncConnector(
+      store,
+      fakeConnector([docRecord("d1", "a.docx"), docRecord("d2", "b.pdf")]),
+    ); // both name-only → pending
+    const rows = listPendingExtractions(store.connection.sqlite, { version: "1" }, 1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.externalId).toBe("d1");
   });
 });
 

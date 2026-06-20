@@ -72,6 +72,34 @@ async function writeConfig(toml: string): Promise<void> {
   await Bun.write(join(dir, "config.toml"), toml);
 }
 
+/** Seed a source into the same db the CLI will open (default <dir>/suasor.db). */
+async function seed(externalId: string, body: string): Promise<void> {
+  const { Store } = await import("../../src/db/index.ts");
+  const store = Store.open({ path: join(dir, "suasor.db") });
+  store.record({
+    type: "SourceObserved",
+    externalId,
+    sourceType: "github_issue",
+    body,
+    observedAt: "2026-06-14T00:00:00.000Z",
+    fingerprint: externalId,
+    meta: {},
+  });
+  store.close();
+}
+
+/** Insert an `extraction_meta` row directly to simulate version drift. */
+async function seedExtractionMeta(externalId: string, version: string): Promise<void> {
+  const { Store } = await import("../../src/db/index.ts");
+  const store = Store.open({ path: join(dir, "suasor.db") });
+  store.connection.sqlite
+    .query(
+      "INSERT INTO extraction_meta (external_id, version, state, updated_at) VALUES (?, ?, 'extracted', ?)",
+    )
+    .run(externalId, version, "2026-06-14T00:00:00.000Z");
+  store.close();
+}
+
 type DoctorReport = { ok: boolean; checks: { name: string; status: string; detail: string }[] };
 
 describe("suasor doctor", () => {
@@ -201,5 +229,40 @@ describe("suasor doctor", () => {
     const connectorChecks = report.checks.filter((c) => c.name === "connectors");
     expect(connectorChecks).toHaveLength(1);
     expect(connectorChecks[0]?.status).toBe("info");
+  });
+
+  // Issue #202: maintenance hints surface drainable backlogs from the derived
+  // substrates. They appear only when the backend is enabled AND there is a
+  // backlog — a settled or disabled store stays quiet.
+  test("pending embeddings emit a maintenance hint when the backend is enabled (#202)", async () => {
+    await run(["init"]);
+    await writeConfig('[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\n');
+    await seed("gh:1", "alpha"); // no vector → pending
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const hint = report.checks.find((c) => c.name === "maintenance" && c.status === "warn");
+    expect(hint?.detail).toContain("pending embeddings: 1");
+    expect(hint?.detail).toContain("embeddings drain");
+  });
+
+  test("no maintenance hint when the embedding backend is disabled (#202)", async () => {
+    await run(["init"]); // default: embedding backend disabled
+    await seed("gh:1", "alpha");
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "maintenance")).toBe(false);
+  });
+
+  test("extraction version drift emits a maintenance hint (#202)", async () => {
+    await run(["init"]);
+    await writeConfig('[extraction]\nbackend = "markitdown"\nversion = "2"\n');
+    await seedExtractionMeta("doc:1", "1"); // recorded v1, current v2 → stale
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const hint = report.checks.find(
+      (c) => c.name === "maintenance" && c.detail.includes("version drift"),
+    );
+    expect(hint?.status).toBe("warn");
+    expect(hint?.detail).toContain("local sync");
   });
 });
