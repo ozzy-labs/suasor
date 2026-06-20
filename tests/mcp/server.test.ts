@@ -194,9 +194,16 @@ describe("MCP read surface", () => {
     const parsed = parseResult(res as never) as {
       strategy: string;
       hits: { externalId: string }[];
+      totalHits: number;
+      truncated: boolean;
+      analyzedQuery: string[];
     };
     expect(parsed.strategy).toBe("fts");
     expect(parsed.hits[0]?.externalId).toBe("gh:1");
+    // Transparency fields are returned through the MCP surface (Issue #186).
+    expect(parsed.totalHits).toBe(1);
+    expect(parsed.truncated).toBe(false);
+    expect(parsed.analyzedQuery).toEqual(["rocket"]);
   });
 
   test("recall.search returns empty + embedding_disabled signal when off", async () => {

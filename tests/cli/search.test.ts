@@ -71,11 +71,11 @@ describe("suasor search", () => {
     expect(out).toContain("gh:1");
   });
 
-  test("prints 'No results.' when nothing matches", async () => {
+  test("annotates the strategy when nothing matches", async () => {
     await seed("deploy the rocket");
     const { code, out } = await run(["search", "submarine"]);
     expect(code).toBe(0);
-    expect(out).toContain("No results.");
+    expect(out).toContain("No results [fts].");
   });
 
   test("--json emits machine-readable output with the strategy", async () => {
@@ -85,6 +85,57 @@ describe("suasor search", () => {
     const parsed = JSON.parse(out);
     expect(parsed.strategy).toBe("fts");
     expect(parsed.hits[0].externalId).toBe("gh:1");
+  });
+
+  test("--json includes totalHits / truncated / analyzedQuery", async () => {
+    await seed("deploy the rocket");
+    const { code, out } = await run(["search", "--json", "deploy rocket"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out);
+    expect(parsed.totalHits).toBe(1);
+    expect(parsed.truncated).toBe(false);
+    expect(parsed.analyzedQuery).toEqual(["deploy", "rocket"]);
+  });
+
+  test("human output shows totalHits when --limit truncates the result set", async () => {
+    for (let i = 0; i < 3; i++) await seed(`rocket number ${i}`, `gh:${i}`);
+    const { code, out } = await run(["search", "--limit", "1", "rocket"]);
+    expect(code).toBe(0);
+    expect(out).toContain("1 of 3 result(s) [fts]:");
+  });
+
+  test("--source-type filters the result set", async () => {
+    await seed("deploy the rocket", "gh:1");
+    const { code, out } = await run([
+      "search",
+      "--json",
+      "--source-type",
+      "slack_message",
+      "rocket",
+    ]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out).hits).toHaveLength(0); // seeded source is github_issue
+  });
+
+  test("--observed-after / --observed-before window filters the result set", async () => {
+    await seed("deploy the rocket", "gh:1"); // observedAt 2026-06-14T00:00:00.000Z
+    const { code, out } = await run([
+      "search",
+      "--json",
+      "--observed-after",
+      "2026-06-15T00:00:00.000Z",
+      "rocket",
+    ]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out).hits).toHaveLength(0); // the seeded row is before the lower bound
+  });
+
+  test("help documents the filters and the literal-operator note", async () => {
+    const { out } = await run(["search", "--help"]);
+    expect(out).toContain("--source-type");
+    expect(out).toContain("--observed-after");
+    expect(out).toContain("--observed-before");
+    expect(out).toContain("literal");
   });
 
   test("rejects a non-positive --limit", async () => {
