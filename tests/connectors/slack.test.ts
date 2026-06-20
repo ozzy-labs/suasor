@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { ConfigError } from "../../src/config/error.ts";
 import type { SourceRecord, SyncContext } from "../../src/connectors/contract.ts";
 import {
   createSlackConnector,
   cursorToAliasMap,
+  isSinceParseable,
   parseSinceToTs,
   resolveSelfUserIds,
   type SlackClientLike,
   SlackConnectorConfig,
   serializeCursor,
+  validateSlackSince,
   workspaceSecretName,
 } from "../../src/connectors/slack.ts";
 
@@ -535,6 +538,85 @@ describe("Slack cursor helpers (ADR-0016)", () => {
     );
     expect(serializeCursor({})).toBeNull();
     expect(serializeCursor({ acme: {} })).toBeNull();
+  });
+});
+
+describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
+  test("isSinceParseable: accepts relative units and ISO dates, rejects garbage", () => {
+    // Parseable (clock-independent).
+    for (const ok of ["30d", "4w", "12h", "2026-01-01", "2026-01-01T00:00:00Z"]) {
+      expect(isSinceParseable(ok)).toBe(true);
+    }
+    // Unparseable values that would silently degrade to "no floor".
+    for (const bad of ["3 weeks", "5y", "nonsense", "", "  "]) {
+      expect(isSinceParseable(bad)).toBe(false);
+    }
+  });
+
+  test("validateSlackSince: a valid config (relative + ISO) does not throw", () => {
+    expect(() =>
+      validateSlackSince(
+        SlackConnectorConfig.parse({
+          team: "T1",
+          channels: ["C1", "C2"],
+          since: "30d",
+          channel_since: { C2: "2026-01-01" },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  test("createSlackConnector: a flat invalid `since` fails fast as ConfigError", () => {
+    let thrown: unknown;
+    try {
+      createSlackConnector({ team: "T1", channels: ["C1"], since: "3 weeks" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigError);
+    expect((thrown as ConfigError).message).toContain("connectors.slack.since");
+    expect((thrown as ConfigError).message).toContain("3 weeks");
+  });
+
+  test("createSlackConnector: an invalid `channel_since` entry fails fast", () => {
+    expect(() =>
+      createSlackConnector({ team: "T1", channels: ["C1"], channel_since: { C1: "bogus" } }),
+    ).toThrow(ConfigError);
+  });
+
+  test("createSlackConnector: an invalid per-workspace `since` fails fast", () => {
+    let thrown: unknown;
+    try {
+      createSlackConnector({ workspaces: { acme: { team: "TA", channels: ["C1"], since: "5y" } } });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigError);
+    expect((thrown as ConfigError).message).toContain("connectors.slack.workspaces.acme.since");
+  });
+
+  test("validateSlackSince: collects every offending entry in one error", () => {
+    let thrown: unknown;
+    try {
+      validateSlackSince(
+        SlackConnectorConfig.parse({
+          team: "T1",
+          channels: ["C1"],
+          since: "3 weeks",
+          channel_since: { C1: "bad" },
+        }),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigError);
+    expect((thrown as ConfigError).issues).toHaveLength(2);
+  });
+
+  test("createSlackConnector: a valid `since` builds the connector", () => {
+    expect(() =>
+      createSlackConnector({ team: "T1", channels: ["C1"], since: "30d" }),
+    ).not.toThrow();
   });
 });
 
