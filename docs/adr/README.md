@@ -71,4 +71,5 @@ NNNN-kebab-case-title.md
 | 0028 | Task scheduling fields (`dueDate` / `priority`) & overdue derivation |
 | 0029 | Onboarding wizard (`suasor onboard`) — orchestrate auth/config/sync, non-destructive config append |
 | 0030 | Connector discovery verbs (generic discovery base + `github repos`) |
+| 0031 | MCP structured errors (code/hint) + startup config readiness |
 | 0032 | Skill frontmatter schema (machine-readable fields) + `skills search` / `skills info` |

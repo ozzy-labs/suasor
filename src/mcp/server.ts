@@ -39,7 +39,7 @@ import {
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
 import { createComposer } from "../export/compose.ts";
-import { draftExport } from "../export/draft-export.ts";
+import { DraftExportError, draftExport } from "../export/draft-export.ts";
 import { sourceForget } from "../forget/source-forget.ts";
 import { proposeApply } from "../propose/apply.ts";
 import {
@@ -72,6 +72,7 @@ import {
 import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
 import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import { VERSION } from "../version.ts";
+import { toolError, toToolError } from "./errors.ts";
 import {
   buildBrief,
   DEFAULT_LIST_LIMIT,
@@ -775,11 +776,24 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         annotations: { readOnlyHint: false, openWorldHint: true },
       },
       async ({ connector, cursor }) => {
-        const outcome = await runConnectorSyncTool(
-          { connector, ...(cursor !== undefined ? { cursor } : {}) },
-          { store: write.store, config: write.config },
-        );
-        return jsonResult(outcome);
+        try {
+          const outcome = await runConnectorSyncTool(
+            { connector, ...(cursor !== undefined ? { cursor } : {}) },
+            { store: write.store, config: write.config },
+          );
+          return jsonResult(outcome);
+        } catch (error) {
+          // An unknown connector is a structured input error so the host can
+          // tell "you named a connector that doesn't exist" from a sync failure.
+          if (error instanceof Error && error.message.startsWith("unknown connector")) {
+            return toolError({
+              code: "UNKNOWN_CONNECTOR",
+              message: error.message,
+              hint: "Use one of the known connectors (see `suasor connectors` / the error's `known:` list).",
+            });
+          }
+          return toToolError(error);
+        }
       },
     );
 
@@ -1045,12 +1059,20 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           });
           return jsonResult(result);
         } catch (error) {
-          // Invalid state-machine transitions surface as tool errors (not a crash)
-          // so the host can show the rejection and the user can correct it.
+          // Invalid state-machine transitions surface as structured tool errors
+          // (not a crash) so the host can branch on the code and show the user a
+          // fix. A missing item → MISSING_ENTITY; a non-`open` item → INVALID_STATE.
           if (error instanceof TriageError) {
-            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+            const missing = error.message.includes("not found");
+            return toolError({
+              code: missing ? "MISSING_ENTITY" : "INVALID_STATE",
+              message: error.message,
+              hint: missing
+                ? "Check the inbox id via inbox.list."
+                : "Only an 'open' inbox item can be triaged; list open items via inbox.list.",
+            });
           }
-          throw error;
+          return toToolError(error);
         }
       },
     );
@@ -1086,12 +1108,17 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           const result = linkAdd(write.store, { fromKind, fromId, toKind, toId });
           return jsonResult(result);
         } catch (error) {
-          // A self-loop (or other invalid input) surfaces as a tool error so the
-          // host can show the rejection rather than crash.
+          // A self-loop (or other invalid input) surfaces as a structured tool
+          // error (INVALID_INPUT) so the host can show the rejection rather than
+          // crash, and branch on the code.
           if (error instanceof Error) {
-            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+            return toolError({
+              code: "INVALID_INPUT",
+              message: error.message,
+              hint: "from and to must be distinct entities (no self-loop).",
+            });
           }
-          throw error;
+          return toToolError(error);
         }
       },
     );
@@ -1120,12 +1147,17 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           const result = linkRemove(write.store, { linkId });
           return jsonResult(result);
         } catch (error) {
-          // Removing an absent link surfaces as a tool error (not a crash) so the
-          // host can show the rejection and the user can correct it.
+          // Removing an absent link surfaces as a structured tool error
+          // (MISSING_ENTITY) so the host can branch on the code and the user can
+          // correct it.
           if (error instanceof Error) {
-            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+            return toolError({
+              code: "MISSING_ENTITY",
+              message: error.message,
+              hint: "Only manual links are removable; find the linkId via graph.related (manual_link edges carry it).",
+            });
           }
-          throw error;
+          return toToolError(error);
         }
       },
     );
@@ -1161,10 +1193,19 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           const result = personMerge(write.store, { targetPersonId, sourcePersonId });
           return jsonResult(result);
         } catch (error) {
+          // A self-merge is INVALID_INPUT; an unknown source person is
+          // MISSING_ENTITY — structured so the host can branch + show a fix.
           if (error instanceof Error) {
-            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+            const missing = error.message.includes("unknown source person");
+            return toolError({
+              code: missing ? "MISSING_ENTITY" : "INVALID_INPUT",
+              message: error.message,
+              hint: missing
+                ? "Check both person ids via person.list."
+                : "target and source must be distinct persons (no self-merge).",
+            });
           }
-          throw error;
+          return toToolError(error);
         }
       },
     );
@@ -1203,10 +1244,16 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           });
           return jsonResult(result);
         } catch (error) {
+          // An unknown (connector, handle) identity is MISSING_ENTITY —
+          // structured so the host can branch on the code and show a fix.
           if (error instanceof Error) {
-            return { isError: true, content: [{ type: "text" as const, text: error.message }] };
+            return toolError({
+              code: "MISSING_ENTITY",
+              message: error.message,
+              hint: "Check the (connector, handle) identity via person.list.",
+            });
           }
-          throw error;
+          return toToolError(error);
         }
       },
     );
@@ -1335,20 +1382,40 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       async ({ content, filename, format, sourceExternalId }) => {
         const dir = write.config.export?.dir;
         if (!dir) {
-          throw new Error("export dir is not configured ([export].dir)");
+          // Structured config error (ADR-0031): the host can branch on the code
+          // and tell the user exactly which config to set, instead of a bare
+          // string that reads like an internal crash.
+          return toolError({
+            code: "EXPORT_DIR_NOT_CONFIGURED",
+            message: "export dir is not configured ([export].dir)",
+            hint: "Set [export].dir in your config to a writable sandbox directory (ADR-0025).",
+          });
         }
-        const localRoots = Array.isArray(write.config.connectors.local?.roots)
-          ? (write.config.connectors.local.roots as string[])
-          : [];
-        const composer = write.config.export?.composition
-          ? createComposer(write.config.export.composition)
-          : null;
-        const result = await draftExport(
-          write.store,
-          { content, filename, format, ...(sourceExternalId ? { sourceExternalId } : {}) },
-          { exportDir: dir, localRoots, composer },
-        );
-        return jsonResult(result);
+        try {
+          const localRoots = Array.isArray(write.config.connectors.local?.roots)
+            ? (write.config.connectors.local.roots as string[])
+            : [];
+          const composer = write.config.export?.composition
+            ? createComposer(write.config.export.composition)
+            : null;
+          const result = await draftExport(
+            write.store,
+            { content, filename, format, ...(sourceExternalId ? { sourceExternalId } : {}) },
+            { exportDir: dir, localRoots, composer },
+          );
+          return jsonResult(result);
+        } catch (error) {
+          // Invalid filename / export dir overlapping a local root surfaces as a
+          // structured INVALID_INPUT error rather than tearing down the call.
+          if (error instanceof DraftExportError) {
+            return toolError({
+              code: "INVALID_INPUT",
+              message: error.message,
+              hint: "Use a basename-only filename and keep [export].dir outside any [connectors.local].roots (ADR-0025).",
+            });
+          }
+          return toToolError(error);
+        }
       },
     );
   }
