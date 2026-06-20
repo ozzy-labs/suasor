@@ -31,3 +31,6 @@ build/
 
 # Coverage
 coverage/
+
+# Agent worktrees (isolated; tracked via git worktree metadata, never as a gitlink)
+.claude/worktrees/
