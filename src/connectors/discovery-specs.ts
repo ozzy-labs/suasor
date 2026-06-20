@@ -35,6 +35,13 @@ export interface DiscoveryResult {
   readonly items: readonly DiscoveryItem[];
   /** Paste-ready `[connectors.<name>]` config-block lines (no trailing newline). */
   readonly configBlock: readonly string[];
+  /**
+   * Optional pre-rendered human listing lines (no trailing newline) for
+   * namespaces whose default flat `value (label)` listing is unsuitable — e.g.
+   * box folders render an indented id/name tree. When absent the CLI falls back
+   * to the generic flat listing over {@link items}.
+   */
+  readonly listing?: readonly string[];
 }
 
 /** A connector's discovery spec: which verb it adds + the probe that runs it. */
@@ -48,6 +55,13 @@ export interface ConnectorDiscoverySpec {
   /** Noun for the listing header (e.g. `repository`). */
   readonly itemNoun: string;
   /**
+   * Whether this verb accepts a `--root <id>` option (a starting node for a
+   * tree-shaped namespace, e.g. box folders). When set, the CLI exposes
+   * `--root` and threads it into {@link discover} as `root`. Omitted/false for
+   * flat namespaces (github repos / google calendars).
+   */
+  readonly acceptsRoot?: boolean;
+  /**
    * Run the discovery probe. Resolves secrets + reads config as needed via the
    * injected `secret` resolver and `config` slice, calls the connector's
    * `fetch`-only discovery leaf, and normalizes the result. Throws on failure
@@ -58,6 +72,8 @@ export interface ConnectorDiscoverySpec {
     config: Record<string, unknown>;
     /** Optional filter substring (case-insensitive) over item values. */
     filter?: string;
+    /** Root node id for tree-shaped namespaces (only when `acceptsRoot`). */
+    root?: string;
     /** Best-effort progress tick for a CLI indeterminate spinner. */
     onProgress?: () => void;
   }) => Promise<DiscoveryResult>;
@@ -127,6 +143,29 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
         };
       });
       return { items, configBlock: renderConfigBlock(result) };
+    },
+  },
+  box: {
+    connector: "box",
+    verb: "folders",
+    summary: "List subfolders under a root and print a paste-ready config block.",
+    itemNoun: "folder",
+    acceptsRoot: true,
+    async discover({ secret, filter, root, onProgress }) {
+      const token = await secret("token");
+      if (!token) throw new Error("no box token configured");
+      const { listFolders, renderConfigBlock, renderTree } = await import("./box/folders.ts");
+      const result = await listFolders(token, {
+        ...(root ? { root } : {}),
+        ...(filter ? { filter } : {}),
+        ...(onProgress ? { onProgress } : {}),
+      });
+      const items: DiscoveryItem[] = result.folders.map((f) => ({
+        value: f.id,
+        label: f.name || "(no name)",
+        attrs: { name: f.name, depth: f.depth, parentId: f.parentId },
+      }));
+      return { items, configBlock: renderConfigBlock(result), listing: renderTree(result) };
     },
   },
 };

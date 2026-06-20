@@ -30,6 +30,9 @@ class ConnectorDiscoveryCommand extends Command {
   filter = Option.String("--filter", {
     description: "Filter items by a case-insensitive substring match.",
   });
+  root = Option.String("--root", {
+    description: "Root node id to enumerate under (tree-shaped namespaces only, e.g. box folders).",
+  });
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
   noProgress = Option.Boolean("--no-progress", false, {
     description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
@@ -41,6 +44,13 @@ class ConnectorDiscoveryCommand extends Command {
     const spec: ConnectorDiscoverySpec | undefined = DISCOVERY_SPECS[connector];
     if (!spec) {
       this.context.stderr.write(`error: no discovery spec for connector '${connector}'\n`);
+      return 1;
+    }
+
+    // `--root` only applies to tree-shaped namespaces (e.g. box folders); reject
+    // it for flat ones so a typo never silently does nothing.
+    if (this.root !== undefined && !spec.acceptsRoot) {
+      this.context.stderr.write(`error: \`${connector} ${spec.verb}\` does not accept --root\n`);
       return 1;
     }
 
@@ -68,6 +78,7 @@ class ConnectorDiscoveryCommand extends Command {
         secret,
         config: slice,
         ...(this.filter ? { filter: this.filter } : {}),
+        ...(this.root ? { root: this.root } : {}),
         onProgress: () => progress.tick(),
       });
     } catch (cause) {
@@ -91,8 +102,16 @@ class ConnectorDiscoveryCommand extends Command {
     this.context.stdout.write(
       `${result.items.length} ${spec.itemNoun}(s) visible to this token:\n`,
     );
-    for (const item of result.items) {
-      this.context.stdout.write(`  ${item.value}  (${item.label})\n`);
+    // A tree-shaped namespace (box folders) supplies a pre-rendered indented
+    // listing; flat namespaces fall back to the generic `value (label)` lines.
+    if (result.listing) {
+      for (const line of result.listing) {
+        this.context.stdout.write(`  ${line}\n`);
+      }
+    } else {
+      for (const item of result.items) {
+        this.context.stdout.write(`  ${item.value}  (${item.label})\n`);
+      }
     }
     this.context.stdout.write("\n");
     for (const line of result.configBlock) {
@@ -124,6 +143,14 @@ function makeDiscoveryCommand(spec: ConnectorDiscoverySpec): CommandClass {
       examples: [
         [`List everything visible`, `suasor ${spec.connector} ${spec.verb}`],
         [`Filtered, as JSON`, `suasor ${spec.connector} ${spec.verb} --filter acme --json`],
+        ...(spec.acceptsRoot
+          ? ([
+              [
+                `Enumerate under a specific root`,
+                `suasor ${spec.connector} ${spec.verb} --root 12345`,
+              ],
+            ] as [string, string][])
+          : []),
       ],
     });
   };
