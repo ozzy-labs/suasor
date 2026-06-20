@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.8](https://github.com/ozzy-labs/suasor/compare/v0.1.7...v0.1.8) (2026-06-20)
+
+
+### Features
+
+* **export:** draft.export — local draft export tool (ADR-0025 PR1/2) ([#135](https://github.com/ozzy-labs/suasor/issues/135)) ([2176381](https://github.com/ozzy-labs/suasor/commit/2176381b38b5507cfab597abd58574b2b4ff305f))
+* **export:** Office 形式 export — md→docx/pptx/xlsx composition サイドカー ([#138](https://github.com/ozzy-labs/suasor/issues/138) PR1/2) ([#139](https://github.com/ozzy-labs/suasor/issues/139)) ([4ad1093](https://github.com/ozzy-labs/suasor/commit/4ad1093d13559cc6b5a20bdccf3606e17b22732e))
+* **mcp:** source.forget — local purge + event redaction (ADR-0026) ([#145](https://github.com/ozzy-labs/suasor/issues/145)) ([f334fac](https://github.com/ozzy-labs/suasor/commit/f334facc7714e4e84a620559443d55699b25eea4))
+* **retrieval:** search フィルタ + hybrid (FTS×vec RRF 融合) ([#144](https://github.com/ozzy-labs/suasor/issues/144)) ([a61f99e](https://github.com/ozzy-labs/suasor/commit/a61f99e14284b82db0f853c9d74ddde765eb7f53))
+* **skills:** wire draft.export into draft-producing skills (ADR-0025 PR2/2) ([#137](https://github.com/ozzy-labs/suasor/issues/137)) ([218c350](https://github.com/ozzy-labs/suasor/commit/218c3506c393102ab1c4ad579534c62715942803))
+
 ## [0.1.7](https://github.com/ozzy-labs/suasor/compare/v0.1.6...v0.1.7) (2026-06-20)
 
 
