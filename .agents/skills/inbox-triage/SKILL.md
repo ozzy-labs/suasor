@@ -1,6 +1,19 @@
 ---
 name: inbox-triage
 description: 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」「pending を片付けて」と頼まれたら、Suasor MCP の inbox.list（state=open）で未処理アイテムを集め、propose.generate（mode=inbox_triage）で各アイテムへの action 候補（task 化 / decision 記録）を生成し、ユーザー確認後に propose.apply で承認分のみ保存する。auto-apply 経路は存在しない。
+readOnly: false
+category: triage
+triggers:
+  - 受信箱整理して
+  - inbox 仕分けて
+  - 未処理アイテム捌いて
+  - pending を片付けて
+pairs: []
+mcp_tools_read:
+  - inbox.list
+mcp_tools_write:
+  - propose.generate
+  - propose.apply
 ---
 
 # inbox-triage

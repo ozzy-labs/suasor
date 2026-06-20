@@ -1,6 +1,20 @@
 ---
 name: announcement-draft
 description: 「リリース告知文書いて」「announcement 作って」「アナウンス文章まとめて」「release notes 草案」「お知らせ案ほしい」と頼まれたら、Suasor MCP の recall.search（関連 release / change context）+ decision.list（recorded_after=last_release）+ brief（告知 tone）を読み取り系で組み立て、ホスト LLM が告知文 text を構成して返す。persist しない（text-only）。propose 経路を持たず、ユーザーが手で SaaS に投稿する。
+readOnly: true
+category: draft
+triggers:
+  - リリース告知文書いて
+  - announcement 作って
+  - アナウンス文章まとめて
+  - release notes 草案
+  - お知らせ案ほしい
+pairs: []
+mcp_tools_read:
+  - recall.search
+  - decision.list
+  - brief
+mcp_tools_write: []
 ---
 
 # announcement-draft

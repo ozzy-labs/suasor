@@ -1,6 +1,16 @@
 ---
 name: pr-review
 description: 「この PR レビューして」「#123 確認して」「PR どう思う」と頼まれたら、Suasor MCP の recall.search で関連 source / decision / 過去 review を引き、必要に応じて gh pr diff の出力を組み合わせてレビュー観点を提示する。read 系のみで構成し、PR への comment 投稿は外部送信扱いのため本 skill では行わない。
+readOnly: true
+category: review
+triggers:
+  - この PR レビューして
+  - "#123 確認して"
+  - PR どう思う
+pairs: []
+mcp_tools_read:
+  - recall.search
+mcp_tools_write: []
 ---
 
 # pr-review

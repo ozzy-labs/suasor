@@ -1,6 +1,21 @@
 ---
 name: weekly-review
 description: 「週次レビュー」「棚卸し」「今週の振り返りと残課題」「今週やり残したこと」「週次の整理」と頼まれたら、Suasor MCP の task.list（state∈{open,in_progress} + overdue 抽出）+ commitment.list（双方向）+ inbox.list（state=open 滞留）+ brief（since=7d）を読み取り系で合成し、未完 task / 約束 / 滞留 inbox の棚卸しサマリと落ちている項目を提示する。状態遷移は task-update / inbox-triage / commitment-review skill へ HITL 橋渡しする。read-only / persist なし。
+readOnly: true
+category: task
+triggers:
+  - 週次レビュー
+  - 棚卸し
+  - 今週の振り返りと残課題
+  - 今週やり残したこと
+  - 週次の整理
+pairs: []
+mcp_tools_read:
+  - task.list
+  - commitment.list
+  - inbox.list
+  - brief
+mcp_tools_write: []
 ---
 
 # weekly-review

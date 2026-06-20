@@ -1,6 +1,21 @@
 ---
 name: commitment-chase
 description: 「催促して」「借りてる約束」「相手の約束で期限切れ」「フォローアップしたい約束」「相手に頼んだやつどうなった」と頼まれたら、Suasor MCP の commitment.list（state=open, direction=owed_to_me）で相手が負う約束を引き、期限超過分をホスト側で抽出し、graph.related で各約束の出所 source を辿って「誰に・何を・いつ」を再構成して催促文ドラフトを text-only で提示する。read-only / persist なし / egress なし（ユーザーが手で送る）。pair: commitment-review（受動・自分が負う約束の台帳管理）。
+readOnly: true
+category: commitment
+triggers:
+  - 催促して
+  - 借りてる約束
+  - 相手の約束で期限切れ
+  - フォローアップしたい約束
+  - 相手に頼んだやつどうなった
+pairs:
+  - commitment-review
+mcp_tools_read:
+  - commitment.list
+  - graph.related
+  - source.get
+mcp_tools_write: []
 ---
 
 # commitment-chase

@@ -1,6 +1,20 @@
 ---
 name: research
 description: 「<X> について調べて」「<Y> の経緯」「<Z> に関するすべての情報」「<トピック> を網羅的に教えて」と頼まれたら、Suasor MCP の recall.search（意味検索）+ search（FTS5 全文）+ graph.related（関連 entity 拡張）+ brief（統合要約）を順に叩き、sources 一覧 / 関連 entities / 経緯サマリを組み立てて返す。read-only、persist なし。
+readOnly: true
+category: retrieval
+triggers:
+  - "<X> について調べて"
+  - "<Y> の経緯"
+  - "<Z> に関するすべての情報"
+  - "<トピック> を網羅的に教えて"
+pairs: []
+mcp_tools_read:
+  - recall.search
+  - search
+  - graph.related
+  - brief
+mcp_tools_write: []
 ---
 
 # research

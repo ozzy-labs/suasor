@@ -1,6 +1,20 @@
 ---
 name: catchup
 description: 「前回以降の差分」「久しぶりに確認」「最後に見てから何が変わった」「不在中の動き」と頼まれたら、ホスト側で保持する seen-marker（最終確認時刻）を since として、Suasor MCP の source.list / task.list / decision.list / inbox.list を時間フィルタで合成し、前回以降の差分だけを要約する。専用 MCP tool は使わない。
+readOnly: true
+category: brief
+triggers:
+  - 前回以降の差分
+  - 久しぶりに確認
+  - 最後に見てから何が変わった
+  - 不在中の動き
+pairs: []
+mcp_tools_read:
+  - source.list
+  - task.list
+  - decision.list
+  - inbox.list
+mcp_tools_write: []
 ---
 
 # catchup

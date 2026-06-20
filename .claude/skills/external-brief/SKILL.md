@@ -1,6 +1,21 @@
 ---
 name: external-brief
 description: 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」「マネージャーに送る report」「お客さんに見せる進捗」と頼まれたら、Suasor MCP の task.list（state=completed, updated_after=対象期間開始）と decision.list（recorded_after=対象期間開始）を組み合わせて完了タスク + 意思決定を引き、brief で外向き tone のまとめを返す。persist なし。
+readOnly: true
+category: brief
+triggers:
+  - 上司向け週次報告
+  - クライアント向け進捗まとめ
+  - 外向きステータス
+  - マネージャーに送る report
+  - お客さんに見せる進捗
+pairs:
+  - personal-brief
+mcp_tools_read:
+  - task.list
+  - decision.list
+  - brief
+mcp_tools_write: []
 ---
 
 # external-brief

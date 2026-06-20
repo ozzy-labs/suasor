@@ -1,6 +1,20 @@
 ---
 name: handoff-draft
 description: 「引き継ぎ書作って」「handoff 書く」「後任向け資料まとめて」「業務引継メモほしい」と頼まれたら、Suasor MCP の task.list（state=in_progress）+ decision.list + recall.search + graph.related を読み取り系で組み立て、ホスト LLM が引き継ぎ書 text を構成して返す。persist しない（text-only）。propose 経路を持たず、ユーザーが手で SaaS に貼り付ける。
+readOnly: true
+category: draft
+triggers:
+  - 引き継ぎ書作って
+  - handoff 書く
+  - 後任向け資料まとめて
+  - 業務引継メモほしい
+pairs: []
+mcp_tools_read:
+  - task.list
+  - decision.list
+  - recall.search
+  - graph.related
+mcp_tools_write: []
 ---
 
 # handoff-draft

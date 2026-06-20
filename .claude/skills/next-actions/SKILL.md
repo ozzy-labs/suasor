@@ -1,6 +1,21 @@
 ---
 name: next-actions
 description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」「今日やること」「優先度高いのは?」と聞かれたら、Suasor MCP の task.list と recall.search を使って優先度順の next-actions を組み立てる。新規 task 作成は write tool（task.create）のためホスト側で人確認を促す。
+readOnly: true
+category: task
+triggers:
+  - 次に何をする?
+  - やること教えて
+  - タスク何が残ってる?
+  - 今日やること
+  - 優先度高いのは?
+pairs: []
+mcp_tools_read:
+  - task.list
+  - recall.search
+  - slack.demand.list
+  - commitment.list
+mcp_tools_write: []
 ---
 
 # next-actions

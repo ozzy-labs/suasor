@@ -1,6 +1,25 @@
 ---
 name: commitment-review
 description: 「約束をスキャンして」「誰に何を約束したっけ」「貸し借り確認」「期限が来てる commitment」「この約束は完了」「コミットメント台帳」と頼まれたら、Suasor MCP の propose.generate（mode=commitment_scan）で source から約束候補を抽出し、ユーザー確認後に propose.apply で台帳に open 登録する。既存台帳は commitment.list（state / direction フィルタ）で確認し、commitment.resolve / .dismiss / .reopen で状態遷移する。auto-apply 経路は存在しない。
+readOnly: false
+category: commitment
+triggers:
+  - 約束をスキャンして
+  - 誰に何を約束したっけ
+  - 貸し借り確認
+  - 期限が来てる commitment
+  - この約束は完了
+  - コミットメント台帳
+pairs:
+  - commitment-chase
+mcp_tools_read:
+  - commitment.list
+mcp_tools_write:
+  - propose.generate
+  - propose.apply
+  - commitment.resolve
+  - commitment.dismiss
+  - commitment.reopen
 ---
 
 # commitment-review

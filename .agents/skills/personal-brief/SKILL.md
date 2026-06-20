@@ -1,6 +1,23 @@
 ---
 name: personal-brief
 description: 「今日のまとめ」「今週どうなってる」「最近どう」「自分の状況」「先週の振り返り」と聞かれたら、指定期間（既定は直近 24h）の主要な動きを自分向けにまとめる。Suasor MCP の brief / recall.search / task.list / decision.list / inbox.list を読み取り系で組み合わせて要約する。
+readOnly: true
+category: brief
+triggers:
+  - 今日のまとめ
+  - 今週どうなってる
+  - 最近どう
+  - 自分の状況
+  - 先週の振り返り
+pairs:
+  - external-brief
+mcp_tools_read:
+  - brief
+  - recall.search
+  - task.list
+  - decision.list
+  - inbox.list
+mcp_tools_write: []
 ---
 
 # personal-brief

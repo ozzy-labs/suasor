@@ -70,3 +70,4 @@ NNNN-kebab-case-title.md
 | 0027 | Bulk sync orchestration & scheduling delegation (`suasor sync`; OS scheduler) |
 | 0028 | Task scheduling fields (`dueDate` / `priority`) & overdue derivation |
 | 0029 | Onboarding wizard (`suasor onboard`) — orchestrate auth/config/sync, non-destructive config append |
+| 0032 | Skill frontmatter schema (machine-readable fields) + `skills search` / `skills info` |

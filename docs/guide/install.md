@@ -51,8 +51,8 @@ chmod +x suasor-bun-linux-x64
 >   `@slack/web-api`, `@azure/msal-node`, `@microsoft/microsoft-graph-client`,
 >   `googleapis`, `box-typescript-sdk-gen`, `playwright-core`) — so those
 >   connectors are not available in the standalone binary.
-> - The bundled `docs/skills` directory — so `skills install` / `skills list` are
->   not available in the standalone binary.
+> - The bundled `docs/skills` directory — so `skills install` / `skills list` /
+>   `skills search` / `skills info` are not available in the standalone binary.
 >
 > The GitHub connector and all retrieval/MCP features work in the binary. Use the
 > **npm** package or the **Docker** image for the full connector set, keychain
@@ -64,7 +64,7 @@ keyring failure):
 
 | Command | In the binary | Escape hatch |
 | --- | --- | --- |
-| `skills install` / `skills list` | unavailable (no bundled `docs/skills`) | npm / Docker |
+| `skills install` / `skills list` / `skills search` / `skills info` | unavailable (no bundled `docs/skills`) | npm / Docker |
 | `<connector> sync` for slack / ms-graph / google / box / web | unavailable (SDK external) | npm / Docker |
 | `<connector> auth set` (all connectors) | unavailable (keychain external) | set `SUASOR_CONNECTOR_<NAME>_<SECRET>` directly |
 | `<connector> auth test` for ms-graph / google / box | unavailable (SDK external) | npm / Docker |

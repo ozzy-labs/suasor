@@ -1,6 +1,21 @@
 ---
 name: meeting-prep
 description: 「来週の会議準備」「明日のミーティング前確認」「次の会議の context」「<会議名> の準備して」「打ち合わせ前に状況教えて」と頼まれたら、Suasor MCP の source.list（calendar source）で該当 event を引き、recall.search で過去の関連やりとり、graph.related で関連 decisions / sources を辿り、会議準備サマリ（目的 / 過去文脈 / 関連 decisions / 参考 sources）を組み立てる。read-only、persist なし。
+readOnly: true
+category: meeting
+triggers:
+  - 来週の会議準備
+  - 明日のミーティング前確認
+  - 次の会議の context
+  - "<会議名> の準備して"
+  - 打ち合わせ前に状況教えて
+pairs:
+  - meeting-followup
+mcp_tools_read:
+  - source.list
+  - recall.search
+  - graph.related
+mcp_tools_write: []
 ---
 
 # meeting-prep

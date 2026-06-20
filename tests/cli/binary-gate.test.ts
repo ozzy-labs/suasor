@@ -70,6 +70,8 @@ describe("skills commands — binary gate", () => {
   for (const args of [
     ["skills", "install"],
     ["skills", "list"],
+    ["skills", "search", "brief"],
+    ["skills", "info", "research"],
   ]) {
     test(`${args.join(" ")}: binary build → exit 1 + dedicated error`, async () => {
       const { code, err } = await run(args, { binary: true });
