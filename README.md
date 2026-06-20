@@ -29,7 +29,7 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 
 ## Quickstart (provisional)
 
-> Early development, but every CLI command below is implemented (ingest, retrieval, MCP server, and skills all work). The only not-yet-shipped pieces are the `brief` / `graph.related` MCP tools — see [docs/design/mcp-surface.md](docs/design/mcp-surface.md).
+> Early development, but every CLI command below is implemented (ingest, retrieval, MCP server, and skills all work), and the MCP surface — including `brief` and `graph.related` / `graph.expand` — is shipped. See [docs/design/mcp-surface.md](docs/design/mcp-surface.md).
 
 These commands assume Suasor is **installed** via one of the channels above, so `suasor` is on your `PATH`. Pick the form that matches your install:
 
@@ -56,7 +56,7 @@ suasor onboard --connector github   # interactive on a TTY; --json for a summary
 # Verify config / DB / connector readiness (diagnostic only; creates nothing).
 suasor doctor
 
-# Ingest read-only from a connector (github / slack / ms-graph / google / box / web).
+# Ingest read-only from a connector (github / slack / ms-graph / google / box / web / local).
 suasor github sync
 
 # Or ingest from every enabled connector in one read-only pass (one-shot).
@@ -74,7 +74,7 @@ suasor db migrate            # apply the projection schema (idempotent)
 suasor projections rebuild   # replay the event log into projections
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Audit ingested data and purge a source locally with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Audit ingested data and purge a source locally with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ### From source
 
