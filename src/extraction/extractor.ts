@@ -13,6 +13,13 @@
  */
 import type { ExtractionConfig } from "../config/schema.ts";
 
+/**
+ * File extensions the extraction sidecar handles (ADR-0024 §1). Connectors mark
+ * matching entries `extractable`; the maintenance status counts pending ones by
+ * the same set. Disjoint from text extensions (those are read directly).
+ */
+export const EXTRACTABLE_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
+
 /** A thin extraction client. Delegates to a sidecar — never in-process parsing. */
 export interface Extractor {
   /**
@@ -43,6 +50,8 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 export interface MarkitdownExtractorOptions {
   /** Sidecar base URL (e.g. `http://localhost:8929`). */
   baseUrl: string;
+  /** Extractor version tag recorded in `extraction_meta` for drift detection. */
+  version?: string;
   /** Injectable fetch (defaults to global `fetch`). */
   fetchImpl?: FetchLike;
 }
@@ -63,10 +72,12 @@ interface MarkitdownExtractResponse {
  * malformed body raises `ExtractionError` so the caller degrades to name-only.
  */
 export class MarkitdownExtractor implements Extractor {
+  readonly version: string;
   private readonly endpoint: string;
   private readonly fetchImpl: FetchLike;
 
   constructor(options: MarkitdownExtractorOptions) {
+    this.version = options.version ?? "";
     // Trim a single trailing slash so `baseUrl` with or without one both work.
     this.endpoint = `${options.baseUrl.replace(/\/$/, "")}/extract`;
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -114,12 +125,13 @@ export class MarkitdownExtractor implements Extractor {
  * (ADR-0024) and nothing is sent to a sidecar.
  */
 export function createExtractor(
-  config: Pick<ExtractionConfig, "backend" | "baseUrl">,
+  config: Pick<ExtractionConfig, "backend" | "baseUrl"> & { version?: string },
   fetchImpl?: FetchLike,
 ): Extractor | null {
   if (config.backend === "markitdown") {
     return new MarkitdownExtractor({
       baseUrl: config.baseUrl,
+      ...(config.version !== undefined ? { version: config.version } : {}),
       ...(fetchImpl ? { fetchImpl } : {}),
     });
   }

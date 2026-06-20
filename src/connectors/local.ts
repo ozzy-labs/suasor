@@ -36,6 +36,7 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { z } from "zod";
+import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
   ConnectorConfig,
@@ -90,14 +91,6 @@ export interface LocalFileEntry {
   /** Extracted text content, or `undefined` for name-only ingest. */
   content?: string;
 }
-
-/**
- * Extensions sent to the document-extraction sidecar (ADR-0024) when extraction
- * is enabled. Disjoint from {@link DEFAULT_TEXT_EXTENSIONS} (those are read as
- * text directly); these are binaries the sidecar converts. The sync service
- * only uses this when an extractor is configured — otherwise they stay name-only.
- */
-const EXTRACTABLE_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
 
 /** Stable per-path id component (SHA-1 of the absolute path, hex). */
 function pathId(path: string): string {

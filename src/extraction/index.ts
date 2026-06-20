@@ -7,9 +7,11 @@
  */
 export {
   createExtractor,
+  EXTRACTABLE_EXTENSIONS,
   ExtractionError,
   type Extractor,
   type FetchLike,
   MarkitdownExtractor,
   type MarkitdownExtractorOptions,
 } from "./extractor.ts";
+export { type ExtractionStatus, extractionStatus } from "./maintenance.ts";

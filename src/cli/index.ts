@@ -28,6 +28,7 @@ import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
 import { DoctorCommand } from "./commands/doctor.ts";
 import { embeddingsCommands } from "./commands/embeddings.ts";
+import { ExtractionStatusCommand } from "./commands/extraction.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
 import { McpToolsCommand } from "./commands/mcp-tools.ts";
@@ -65,6 +66,7 @@ export function buildCli(): Cli {
   }
   cli.register(ConnectorsListCommand);
   cli.register(DoctorCommand);
+  cli.register(ExtractionStatusCommand);
   for (const EmbeddingsCommand of embeddingsCommands as CommandClass[]) {
     cli.register(EmbeddingsCommand);
   }
