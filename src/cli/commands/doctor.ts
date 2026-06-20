@@ -174,14 +174,30 @@ export class DoctorCommand extends Command {
     }
 
     // 5. connectors — enabled connectors whose credential is missing are warnings.
+    //    A disabled / unconfigured connector that nonetheless has a stored
+    //    credential is surfaced too: the user ran `auth set` but never enabled
+    //    `[connectors.<name>]`, so a "no connectors enabled" report alone would
+    //    hide that token (#161). Only credential *presence* is probed, never the
+    //    value (NFR-PRV-4).
     if (config !== null) {
       const enabled: string[] = [];
       const missingCred: string[] = [];
+      const storedNotEnabled: string[] = [];
       for (const name of connectorNames()) {
         const slice = config.connectors[name];
-        if (slice === undefined || slice.enabled === false) continue;
-        enabled.push(name);
+        const isEnabled = slice !== undefined && slice.enabled !== false;
         const secrets = connectorSecretNames(name);
+        if (!isEnabled) {
+          // Not enabled: flag it only if a credential is already stored.
+          for (const secret of secrets) {
+            if ((await resolveSecret(name, secret)) !== null) {
+              storedNotEnabled.push(name);
+              break;
+            }
+          }
+          continue;
+        }
+        enabled.push(name);
         if (secrets.length === 0) continue; // needs no auth (e.g. web)
         for (const secret of secrets) {
           if ((await resolveSecret(name, secret)) === null) {
@@ -207,6 +223,15 @@ export class DoctorCommand extends Command {
           name: "connectors",
           status: "ok",
           detail: `${enabled.length} enabled, all credentials configured`,
+        });
+      }
+      if (storedNotEnabled.length > 0) {
+        checks.push({
+          name: "connectors",
+          status: "warn",
+          detail:
+            `credential stored but not enabled: ${storedNotEnabled.join(", ")} ` +
+            "(add a [connectors.<name>] section, or set enabled = true to start syncing)",
         });
       }
     }

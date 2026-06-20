@@ -147,4 +147,59 @@ describe("suasor doctor", () => {
     expect(connectors?.status).toBe("ok");
     expect(connectors?.detail).toContain("1 enabled");
   });
+
+  test("credential stored but connector not enabled is a warning (#161)", async () => {
+    await run(["init"]);
+    // No [connectors.*] section at all → "no connectors enabled" info, but a
+    // token is already in the keychain (here the env override). Doctor must
+    // surface it rather than only saying nothing is enabled.
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test";
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0); // stored-but-not-enabled is warn, not error.
+    const report = JSON.parse(out) as DoctorReport;
+    const connectorChecks = report.checks.filter((c) => c.name === "connectors");
+    // The plain "no connectors enabled" info is still present...
+    expect(connectorChecks.some((c) => c.status === "info")).toBe(true);
+    // ...plus a warning naming the connector with the dangling credential.
+    const stored = connectorChecks.find((c) => c.status === "warn");
+    expect(stored).toBeDefined();
+    expect(stored?.detail).toContain("github");
+    expect(stored?.detail).toContain("not enabled");
+    // Secret value is never disclosed (NFR-PRV-4).
+    expect(stored?.detail).not.toContain("ghp_test");
+  });
+
+  test("explicitly disabled connector with a stored credential is a warning (#161)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nenabled = false\nrepos = []\n");
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test";
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const stored = report.checks.find((c) => c.name === "connectors" && c.status === "warn");
+    expect(stored?.detail).toContain("github");
+    expect(stored?.detail).toContain("not enabled");
+  });
+
+  test("enabled connector with a credential emits no stored-but-not-enabled warning (#161)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const connectorChecks = report.checks.filter((c) => c.name === "connectors");
+    // Exactly one connectors check (the ok line) — no spurious "not enabled".
+    expect(connectorChecks).toHaveLength(1);
+    expect(connectorChecks[0]?.status).toBe("ok");
+    expect(connectorChecks.some((c) => c.detail.includes("not enabled"))).toBe(false);
+  });
+
+  test("no stored credentials and nothing enabled: plain info only (#161)", async () => {
+    await run(["init"]);
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const connectorChecks = report.checks.filter((c) => c.name === "connectors");
+    expect(connectorChecks).toHaveLength(1);
+    expect(connectorChecks[0]?.status).toBe("info");
+  });
 });
