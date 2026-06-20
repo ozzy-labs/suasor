@@ -1,6 +1,20 @@
 ---
 name: person-cleanup
 description: 「同一人物をまとめて」「people を整理」「この handle とこの handle は同じ人」「person を分離」「重複した人物」と頼まれたら、Suasor MCP の person.list で解決済み person と各 connector identity を引き、重複候補をユーザーに提示して確認を取った上で、承認分のみ person.merge で統合する。過剰 merge の訂正は person.split で行う。自動 fuzzy 同定はしない。
+readOnly: false
+category: identity
+triggers:
+  - 同一人物をまとめて
+  - people を整理
+  - この handle とこの handle は同じ人
+  - person を分離
+  - 重複した人物
+pairs: []
+mcp_tools_read:
+  - person.list
+mcp_tools_write:
+  - person.merge
+  - person.split
 ---
 
 # person-cleanup

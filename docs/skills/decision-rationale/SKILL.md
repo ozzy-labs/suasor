@@ -1,6 +1,20 @@
 ---
 name: decision-rationale
 description: 「あの決定はなぜ」「X を選んだ理由」「Y の決定経緯」「なんで A じゃなくて B にしたんだっけ」「この方針の根拠は?」と聞かれたら、Suasor MCP の decision.list（期間 / トピック絞り）+ graph.related（decision から関連 source / 先行 decision へ provenance を辿る）+ recall.search（関連 context の補強）を組み合わせ、決定 + 経緯 + 関連 source + 関連 prior decisions のサマリを返す。read-only。
+readOnly: true
+category: decision
+triggers:
+  - あの決定はなぜ
+  - X を選んだ理由
+  - Y の決定経緯
+  - なんで A じゃなくて B にしたんだっけ
+  - この方針の根拠は?
+pairs: []
+mcp_tools_read:
+  - decision.list
+  - graph.related
+  - recall.search
+mcp_tools_write: []
 ---
 
 # decision-rationale

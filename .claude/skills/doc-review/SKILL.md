@@ -1,6 +1,21 @@
 ---
 name: doc-review
 description: 「この設計書レビューして」「仕様のレビュー」「この PDF/資料を見て」「ドキュメントの抜け漏れ確認」「この提案どう思う」と頼まれたら、Suasor MCP の source.get で対象ドキュメント本文を読み、recall.search / graph.related で関連 decision・先行仕様を引いて、整合性・抜け漏れ・前提・リスクの観点でレビュー所見を返す。read-only、外部投稿しない。
+readOnly: true
+category: review
+triggers:
+  - この設計書レビューして
+  - 仕様のレビュー
+  - この PDF/資料を見て
+  - ドキュメントの抜け漏れ確認
+  - この提案どう思う
+pairs: []
+mcp_tools_read:
+  - source.get
+  - recall.search
+  - graph.related
+  - decision.list
+mcp_tools_write: []
 ---
 
 # doc-review

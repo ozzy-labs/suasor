@@ -1,6 +1,22 @@
 ---
 name: plan-draft
 description: 「これを分解して」「設計のたたき台」「計画に落として」「タスクに分解」「この issue を計画化」「進め方を考えて」と頼まれたら、Suasor MCP の source.get / recall.search で起点（issue・設計メモ・source）の文脈を集め、propose.generate（mode=source_extract）で task / decision 候補に分解し、ユーザー確認後に propose.apply で承認分のみ保存する。計画ドラフト本文は text-only で返し persist しない。auto-apply 経路は存在しない。
+readOnly: false
+category: planning
+triggers:
+  - これを分解して
+  - 設計のたたき台
+  - 計画に落として
+  - タスクに分解
+  - この issue を計画化
+  - 進め方を考えて
+pairs: []
+mcp_tools_read:
+  - source.get
+  - recall.search
+mcp_tools_write:
+  - propose.generate
+  - propose.apply
 ---
 
 # plan-draft

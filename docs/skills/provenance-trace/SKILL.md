@@ -1,6 +1,20 @@
 ---
 name: provenance-trace
 description: 「この task の出どころ」「由来を辿って」「<entity> は何から来た」「この decision の根拠 source」「provenance を遡って」と頼まれたら、Suasor MCP の graph.related（1-hop 隣接）/ graph.expand（depth 付き BFS、direction=in で後方トレース）で links projection 上の provenance を辿り、source.get で本文を補って由来チェーンを組み立てて返す。read-only、persist なし。
+readOnly: true
+category: graph
+triggers:
+  - この task の出どころ
+  - 由来を辿って
+  - "<entity> は何から来た"
+  - この decision の根拠 source
+  - provenance を遡って
+pairs: []
+mcp_tools_read:
+  - graph.related
+  - graph.expand
+  - source.get
+mcp_tools_write: []
 ---
 
 # provenance-trace

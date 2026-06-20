@@ -1,6 +1,19 @@
 ---
 name: source-extract
 description: 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」「このドキュメントから ToDo 拾って」と頼まれたら、Suasor MCP の source.get で対象 source の本文を読み、propose.generate（mode=source_extract）で task / decision / reply_draft 候補を生成し、ユーザー確認後に propose.apply で承認分のみ保存する。auto-apply 経路は存在しない。
+readOnly: false
+category: triage
+triggers:
+  - この資料から task 抽出
+  - これに含まれる decisions 教えて
+  - "<source_id> から候補を"
+  - このドキュメントから ToDo 拾って
+pairs: []
+mcp_tools_read:
+  - source.get
+mcp_tools_write:
+  - propose.generate
+  - propose.apply
 ---
 
 # source-extract

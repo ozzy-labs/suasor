@@ -1,6 +1,22 @@
 ---
 name: meeting-followup
 description: 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「打ち合わせのフォロー」と頼まれたら、Suasor MCP の source.list（calendar source）で直近の会議を集め、source.get で議事録を読み recall.search で関連やりとりを引いた上で、propose.generate（mode=meeting_followup）で task / decision 候補を生成し、ユーザー確認後に propose.apply で承認分のみ保存する。auto-apply 経路は存在しない。
+readOnly: false
+category: meeting
+triggers:
+  - 会議後の action items
+  - ミーティングのフォローアップ
+  - 議事録から task 抽出
+  - 打ち合わせのフォロー
+pairs:
+  - meeting-prep
+mcp_tools_read:
+  - source.list
+  - source.get
+  - recall.search
+mcp_tools_write:
+  - propose.generate
+  - propose.apply
 ---
 
 # meeting-followup

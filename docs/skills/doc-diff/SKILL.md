@@ -1,6 +1,18 @@
 ---
 name: doc-diff
 description: 「前回から何が変わった」「この資料の差分」「<doc> はどこが更新された」「仕様のどこが変わったか」と頼まれたら、Suasor MCP の source.history で対象 source の本文版を event log から引き、直近 2 版（または期間指定の前後版）を突き合わせて変更点を要約する。read-only、persist なし。
+readOnly: true
+category: review
+triggers:
+  - 前回から何が変わった
+  - この資料の差分
+  - "<doc> はどこが更新された"
+  - 仕様のどこが変わったか
+pairs: []
+mcp_tools_read:
+  - source.history
+  - graph.related
+mcp_tools_write: []
 ---
 
 # doc-diff

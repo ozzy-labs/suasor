@@ -1,6 +1,20 @@
 ---
 name: task-update
 description: 「これ終わった」「完了にして」「task を進行中に」「これは見送り」「task を再開」「あのタスク done」と頼まれたら、Suasor MCP の task.list で対象 task を特定し、ユーザー確認後に task.update で lifecycle 状態（open / in_progress / completed / dropped）を遷移させる。auto-apply 経路は存在しない。
+readOnly: false
+category: task
+triggers:
+  - これ終わった
+  - 完了にして
+  - task を進行中に
+  - これは見送り
+  - task を再開
+  - あのタスク done
+pairs: []
+mcp_tools_read:
+  - task.list
+mcp_tools_write:
+  - task.update
 ---
 
 # task-update

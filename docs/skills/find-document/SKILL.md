@@ -1,6 +1,19 @@
 ---
 name: find-document
 description: 「あの資料どこ」「先週共有された PDF」「<キーワード>含むファイル」「あの議事録」「あの Doc」と頼まれたら、Suasor MCP の search（FTS5 全文検索）で本文ベースに横断検索し、connector 取り込み済みの source を返す。意味検索が要るときは recall.search を補助的に併用する。外部 SaaS を直接叩かない。
+readOnly: true
+category: retrieval
+triggers:
+  - あの資料どこ
+  - 先週共有された PDF
+  - "<キーワード>含むファイル"
+  - あの議事録
+  - あの Doc
+pairs: []
+mcp_tools_read:
+  - search
+  - recall.search
+mcp_tools_write: []
 ---
 
 # find-document

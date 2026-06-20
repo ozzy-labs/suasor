@@ -8,7 +8,7 @@
  *   config show ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
- *   skills install/list
+ *   skills install/list/search/info
  * `init` / `db migrate` / `projections rebuild` / `search` / `<connector> sync` /
  * `mcp serve` (MCP read surface, ADR-0004) and `skills install` / `skills list`
  * (assistant-skill catalog, ADR-0008) are live. `<connector> sync` commands are
@@ -37,7 +37,12 @@ import { McpToolsCommand } from "./commands/mcp-tools.ts";
 import { OnboardCommand } from "./commands/onboard.ts";
 import { ProjectionsRebuildCommand } from "./commands/projections-rebuild.ts";
 import { SearchCommand } from "./commands/search.ts";
-import { SkillsInstallCommand, SkillsListCommand } from "./commands/skills.ts";
+import {
+  SkillsInfoCommand,
+  SkillsInstallCommand,
+  SkillsListCommand,
+  SkillsSearchCommand,
+} from "./commands/skills.ts";
 import {
   SlackAuthSetCommand,
   SlackAuthTestCommand,
@@ -87,6 +92,8 @@ export function buildCli(): Cli {
   cli.register(SlackCursorBackfillCommand);
   cli.register(SkillsInstallCommand);
   cli.register(SkillsListCommand);
+  cli.register(SkillsSearchCommand);
+  cli.register(SkillsInfoCommand);
   return cli;
 }
 

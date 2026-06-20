@@ -1,6 +1,18 @@
 ---
 name: reply-draft
 description: 「返信案を考えて」「下書き作って」「これに返信したい」と頼まれたら、Suasor MCP の propose.generate（reply_draft mode、reply_to_source_id 指定）で返信下書きを生成し、ユーザー確認後に propose.apply で承認分のみ保存する。外部 SaaS への送信はせず、ユーザーが下書きを確認して手で送る。HITL（auto-apply なし）。
+readOnly: false
+category: draft
+triggers:
+  - 返信案を考えて
+  - 下書き作って
+  - これに返信したい
+pairs: []
+mcp_tools_read:
+  - source.get
+mcp_tools_write:
+  - propose.generate
+  - propose.apply
 ---
 
 # reply-draft

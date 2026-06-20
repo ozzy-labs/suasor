@@ -1,8 +1,8 @@
 # Assistant Skills
 
-[ADR-0008](../adr/0008-assistant-skills.md)。自然文トリガのアシスタント skill 群。SSOT は `docs/skills/<name>/SKILL.md`、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開する。read 系はエージェント自律 OK、write 系は HITL（auto-apply なし、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+[ADR-0008](../adr/0008-assistant-skills.md)。自然文トリガのアシスタント skill 群。SSOT は `docs/skills/<name>/SKILL.md`、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開する。read 系はエージェント自律 OK、write 系は HITL（auto-apply なし、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。install 後の起動・確認・トラブルシュートは [利用ガイド](../guide/skills.md) を参照。
 
-> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter（`name` / 自然文トリガの `description`）+ 駆動する MCP tool flow を持つ。
+> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
 ## Read 系（自律 OK・17）
 
@@ -53,7 +53,10 @@ suasor skills install --scope agents  # Codex / Copilot / Gemini（.agents/skill
 suasor skills install --host /path/to/project   # 展開先プロジェクトを指定
 suasor skills install --dry-run       # 書き込まず差分だけ確認
 suasor skills list                    # 各 skill の状態（installed / missing / modified）
+suasor skills list --format=detailed  # 状態 + category + read/write 境界を併記
 suasor skills list --json             # 機械可読（SkillStatus[]）
+suasor skills search <kw>             # name / description / category / triggers 横断検索
+suasor skills info <name>             # 単一 skill の category / 境界 / triggers / pairs / MCP tools
 ```
 
 展開は冪等で、内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated` に上書きする。`suasor init` は本コマンドを案内するのみで自動展開はしない。
