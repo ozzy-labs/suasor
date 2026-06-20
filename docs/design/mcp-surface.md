@@ -204,6 +204,7 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `propose.generate` | 返信/タスク/決定/仕分け/commitment の候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage` / `commitment_scan`）。候補を `proposals` ledger に `pending` 記録 | 実装済み（#12 / #89 / #91。下記参照） |
 | `propose.apply` | 承認された候補のみ適用（idempotent）。適用で ledger を `applied` に遷移 | 実装済み（#12 / #89。下記参照） |
 | `propose.reject` | pending 候補を理由付きで却下（ledger を `rejected` に遷移、idempotent） | 実装済み（#89。下記参照） |
+| `propose.batch` | apply / reject を 1 RPC・単一トランザクションで一括処理（atomic、apply/reject ロジック再利用） | 実装済み（#197。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
 | `task.update` | task の lifecycle 状態遷移（open / in_progress / completed / dropped） | 実装済み（下記参照） |
 | `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
@@ -258,12 +259,14 @@ connector の read 専用取り込みを起動する write tool（[connector-con
                       ▼
    ┌──────────────[ pending ]──────────────┐
    │ propose.apply                          │ propose.reject
+   │ （or propose.batch action=apply）       │ （or propose.batch action=reject）
    ▼                                        ▼
 [ applied ]                            [ rejected ]
 （domain entity 永続化済み）          （reason 記録・再 apply 不可）
 ```
 
 - **状態列**: `pending`（生成・人の決定待ち）/ `applied`（人が承認し `propose.apply` で domain entity を永続化）/ `rejected`（人が `propose.reject` で却下、理由付き）。
+- **一括処理**: `propose.batch` は apply / reject を 1 RPC・単一トランザクションで混在処理する（#197）。op ごとの状態遷移・event は `propose.apply` / `propose.reject` と同一で、トランザクション境界だけが 1 つに畳まれる（atomic）。
 - **ledger と domain entity の分離**: `propose.generate` は **候補（ledger 行）のみ**を `pending` で記録し、domain entity（task / decision 等）は書かない。entity が永続化されるのは `propose.apply` のときだけ（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の「提案 → 承認 → 適用」境界を維持）。
 - **状態遷移の駆動**: `applied` 遷移は `propose.apply` が append する entity event（`TaskProposed` 等）を reducer が **`entity_id` 一致**で ledger に反映して起こす（候補 id を entity event に持たせず provenance を保つ）。`rejected` 遷移は `ProposalRejected` event。いずれも replay で同一終状態に収束する（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 - event: `ProposalGenerated`（→ `pending`）/ `ProposalRejected`（→ `rejected`）。`applied` は既存 entity event の副作用。
@@ -332,11 +335,11 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | 引数 | 型 | 説明 |
 |---|---|---|
 | `state` | `enum`（任意） | `pending` / `applied` / `rejected` で絞り込み |
-| `kind` | `enum`（任意） | `task` / `decision` / `reply_draft` / `triage` で絞り込み |
+| `kind` | `enum`（任意） | `task` / `decision` / `reply_draft` / `triage` / `commitment` で絞り込み |
 | `updatedAfter` / `updatedBefore` | ISO 8601（任意） | `updated_at` 時間窓（下限 inclusive / 上限 exclusive） |
 | `limit` | `number`（任意） | 最大行数（既定 50） |
 
-戻り値: `{ "proposals": [{ "candidateId": "cand_...", "mode": "...", "kind": "...", "entityId": "...", "summary": "...", "state": "pending", "reason": "", "createdAt": "...", "updatedAt": "..." }] }`。
+戻り値: `{ "proposals": [{ "candidateId": "cand_...", "mode": "...", "kind": "...", "entityId": "...", "summary": "...", "state": "pending", "reason": "", "createdAt": "...", "updatedAt": "..." }] }`。各行は `reason` を持ち、`state = rejected` の候補では却下理由が入る（`propose.reject` / `propose.batch` で記録された値。それ以外は空文字列）。`state = rejected` で絞れば却下済み候補と理由の一覧になる（#197）。
 
 ### `propose.reject`（確定・write / HITL・idempotent）
 
@@ -347,6 +350,31 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 **状態依存の挙動**: `pending` のときのみ却下（event append）。`applied`（既に適用済み）/ `missing`（該当 ledger 行なし）は遷移させず status で報告し、`rejected` 再呼び出しは `already_rejected`（no-op、idempotent）。却下済み候補は `propose.list` で `pending` として現れなくなるため、ホストは再び承認候補として提示しない。
 
 戻り値: `{ "candidateId": "cand_...", "status": "rejected" | "already_rejected" | "applied" | "missing" }`。
+
+### `propose.batch`（確定・write / HITL・atomic・#197）
+
+承認/却下 HITL ループの `propose.apply` + `propose.reject` を **1 RPC・単一トランザクション**に畳む write tool（実体は `src/propose/batch.ts`）。ホストが「これを適用・あれを却下」と一括決定したとき、2 RPC に分けると chatty かつ非アトミック（途中失敗で ledger が半端に決定される）なので、操作リストを 1 つの `sqlite.transaction()` で commit して all-or-nothing にする。
+
+引数（Zod）: `{ "operations": Operation[] }`。`Operation` は `action` の discriminated union:
+
+- `{ "action": "apply", "candidate": Candidate }` — 承認済みの id 付き候補を適用。apply は domain event を組むため候補ペイロード全体が必要（ledger は summary / entity_id しか持たないので candidateId だけでは不足。`propose.generate` の戻り値の候補をホストが再投入する＝`propose.apply` と同じ契約）。
+- `{ "action": "reject", "candidateId": string, "reason"?: string }` — pending 候補を candidateId で却下。
+
+op ごとのロジック・semantics は `propose.apply` / `propose.reject` をそのまま再利用する（apply は entity 存在で `skipped`・idempotent、reject は pending のときのみ却下し `applied` / `missing` / `already_rejected` は報告のみ）。差分は**トランザクション境界だけ**: バッチ全体を 1 transaction で包むため、いずれかの op が throw（不正な候補等）すると **バッチ全体が rollback** する（部分書き込みなし、[ADR-0002](../adr/0002-event-sourced-architecture.md)）。HITL（`readOnlyHint: false`、auto-apply なし、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+
+戻り値:
+
+```jsonc
+{
+  "results": [
+    { "action": "apply",  "candidateId": "cand_...", "kind": "task", "entityId": "task_...", "status": "applied" },
+    { "action": "reject", "candidateId": "cand_...", "status": "rejected" }
+  ],
+  "applied": 1,   // apply op で append された候補数
+  "skipped": 0,   // apply op で既存により no-op だった候補数
+  "rejected": 1   // reject op で pending → rejected に遷移した候補数
+}
+```
 
 ### `task.create`（確定・write / HITL・#12 追補 D2）
 

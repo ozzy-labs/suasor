@@ -120,6 +120,11 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: false,
     summary: "Reject a pending candidate with a reason (idempotent).",
   },
+  {
+    name: "propose.batch",
+    readOnlyHint: false,
+    summary: "Apply and/or reject candidates in one atomic RPC (single transaction).",
+  },
   { name: "task.create", readOnlyHint: false, summary: "Create a task directly (TaskProposed)." },
   {
     name: "task.update",

@@ -42,6 +42,7 @@ import { createComposer } from "../export/compose.ts";
 import { DraftExportError, draftExport } from "../export/draft-export.ts";
 import { sourceForget } from "../forget/source-forget.ts";
 import { proposeApply } from "../propose/apply.ts";
+import { proposeBatch } from "../propose/batch.ts";
 import {
   CandidateInput as CandidateInputSchema,
   Candidate as CandidateSchema,
@@ -193,7 +194,7 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "(FTS5); `recall.search` adds semantic search only when an embedding backend " +
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
-        "propose.generate, propose.apply, propose.reject, task.create, decision.record, " +
+        "propose.generate, propose.apply, propose.reject, propose.batch, task.create, decision.record, " +
         "inbox.add, inbox.triage, link.add, link.remove, commitment.resolve, " +
         "commitment.dismiss, commitment.reopen, person.merge, person.split) are HITL: " +
         "gate them behind human approval, never auto-apply. propose.list (read) shows the " +
@@ -651,15 +652,17 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       description:
         "List generated HITL proposal candidates most-recently-updated first, " +
         "optionally filtered by state (pending / applied / rejected) and kind " +
-        "(task / decision / reply_draft / triage). Read-only: the visibility half " +
-        "of the propose approve/reject loop (apply/reject are separate write tools).",
+        "(task / decision / reply_draft / triage / commitment). Each row carries " +
+        "its `reason` (populated for rejected candidates). Read-only: the " +
+        "visibility half of the propose approve/reject loop (apply/reject/batch " +
+        "are separate write tools).",
       inputSchema: {
         state: z
           .enum(["pending", "applied", "rejected"])
           .optional()
           .describe("Filter by lifecycle state (default: all)."),
         kind: z
-          .enum(["task", "decision", "reply_draft", "triage"])
+          .enum(["task", "decision", "reply_draft", "triage", "commitment"])
           .optional()
           .describe("Filter by candidate kind (default: all)."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
@@ -881,6 +884,62 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         const result = proposeReject(write.store, {
           candidateId,
           ...(reason !== undefined ? { reason } : {}),
+        });
+        return jsonResult(result);
+      },
+    );
+
+    // --- propose.batch: apply + reject in one atomic RPC (Issue #197). ---
+    // Write tool (HITL): folds the approve/reject loop's two RPCs into one
+    // operation list committed under a single transaction (all-or-nothing). Each
+    // op reuses the same per-op logic/semantics as propose.apply / propose.reject
+    // (idempotent apply, state-dependent reject); apply ops carry the full
+    // candidate (apply needs the payload), reject ops carry just the candidate id.
+    server.registerTool(
+      "propose.batch",
+      {
+        title: "Propose (batch apply/reject)",
+        description:
+          "Apply and/or reject HITL proposal candidates in one RPC, committed " +
+          "under a single transaction (atomic, all-or-nothing). Each operation is " +
+          "{ action: 'apply', candidate } or { action: 'reject', candidateId, " +
+          "reason? }. Reuses propose.apply / propose.reject semantics (idempotent " +
+          "apply skips existing entities; reject acts only on pending candidates). " +
+          "Write tool: requires human approval — no auto-apply (ADR-0004).",
+        inputSchema: {
+          operations: z
+            .array(
+              z.discriminatedUnion("action", [
+                z.object({
+                  action: z.literal("apply"),
+                  candidate: CandidateSchema.describe("Approved, id-stamped candidate to apply."),
+                }),
+                z.object({
+                  action: z.literal("reject"),
+                  candidateId: z.string().min(1).describe("Candidate id from propose.generate."),
+                  reason: z
+                    .string()
+                    .optional()
+                    .describe("Why the candidate is rejected (recorded)."),
+                }),
+              ]),
+            )
+            .min(1)
+            .describe("Mixed apply/reject operations, applied atomically in order."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ operations }) => {
+        const result = proposeBatch(write.store, {
+          operations: operations.map((op) =>
+            op.action === "reject"
+              ? {
+                  action: "reject" as const,
+                  candidateId: op.candidateId,
+                  ...(op.reason !== undefined ? { reason: op.reason } : {}),
+                }
+              : op,
+          ),
         });
         return jsonResult(result);
       },

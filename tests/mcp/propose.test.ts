@@ -228,6 +228,59 @@ describe("MCP propose / task.create write surface (#12, HITL)", () => {
     expect(after.proposals.every((p) => p.state === "rejected")).toBe(true);
   });
 
+  test("propose.batch is a HITL write tool, absent on read-only servers", async () => {
+    const writeClient = await connectWrite();
+    const tool = (await writeClient.listTools()).tools.find((t) => t.name === "propose.batch");
+    expect(tool).toBeDefined();
+    expect(tool?.annotations?.readOnlyHint).toBe(false);
+
+    const readClient = await connectRead();
+    expect((await readClient.listTools()).tools.map((t) => t.name)).not.toContain("propose.batch");
+  });
+
+  test("propose.batch applies and rejects in one RPC over MCP", async () => {
+    const client = await connectWrite();
+    const generated = parseResult(
+      (await client.callTool({
+        name: "propose.generate",
+        arguments: {
+          mode: "source_extract",
+          candidates: [
+            { kind: "task", title: "apply via batch" },
+            { kind: "task", title: "reject via batch" },
+          ],
+        },
+      })) as never,
+    ) as { candidates: { candidateId: string }[] };
+    const [applyCand, rejectCand] = generated.candidates;
+
+    const out = parseResult(
+      (await client.callTool({
+        name: "propose.batch",
+        arguments: {
+          operations: [
+            { action: "apply", candidate: applyCand },
+            { action: "reject", candidateId: rejectCand?.candidateId, reason: "redundant" },
+          ],
+        },
+      })) as never,
+    ) as { applied: number; rejected: number; skipped: number };
+    expect(out.applied).toBe(1);
+    expect(out.rejected).toBe(1);
+    expect(out.skipped).toBe(0);
+
+    const applied = parseResult(
+      (await client.callTool({ name: "propose.list", arguments: { state: "applied" } })) as never,
+    ) as { proposals: { candidateId: string }[] };
+    expect(applied.proposals[0]?.candidateId).toBe(applyCand?.candidateId);
+
+    const rejected = parseResult(
+      (await client.callTool({ name: "propose.list", arguments: { state: "rejected" } })) as never,
+    ) as { proposals: { candidateId: string; reason: string }[] };
+    expect(rejected.proposals[0]?.candidateId).toBe(rejectCand?.candidateId);
+    expect(rejected.proposals[0]?.reason).toBe("redundant");
+  });
+
   test("task.create appends a task and is idempotent", async () => {
     const client = await connectWrite();
     const first = parseResult(

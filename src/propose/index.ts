@@ -18,10 +18,19 @@
  */
 export {
   type AppliedCandidate,
+  applyCandidateStep,
+  candidateToEvent,
+  entityExists,
   ProposeApplyInput,
   type ProposeApplyOutput,
   proposeApply,
 } from "./apply.ts";
+export {
+  type BatchResult,
+  ProposeBatchInput,
+  type ProposeBatchOutput,
+  proposeBatch,
+} from "./batch.ts";
 export {
   CANDIDATE_KINDS,
   Candidate,
@@ -91,6 +100,7 @@ export {
   ProposeRejectInput,
   type ProposeRejectOutput,
   proposeReject,
+  rejectCandidateStep,
 } from "./reject.ts";
 export {
   TaskCreateInput,
