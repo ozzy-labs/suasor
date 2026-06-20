@@ -25,42 +25,68 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 - **npm（Bun ユーザー向け）** — `bunx @ozzylabs/suasor mcp serve`（または `bun add -g @ozzylabs/suasor`）。**Bun ≥ 1.1 が必要**（[Bun 導入](https://bun.sh)。`bun:sqlite` を使うため `npx`/Node 不可。pnpm/npm でも取得可だが実行は Bun）。OIDC publish（provenance 付き）。
 - **MCP registry** — [`server.json`](server.json) で discovery 可能。
 
-> npm / バイナリ / Docker で公開済み。コントリビュータは下記クイックスタートでソースからも実行できます。
+> npm / バイナリ / Docker で公開済み。コントリビュータは [ソースから](#ソースから) も実行できます。
 
 ## クイックスタート（暫定）
 
-> 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。未提供は `brief` / `graph.related` の MCP tool のみ（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。[Bun](https://bun.sh) 1.1+ が必要です。
+> 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。未提供は `brief` / `graph.related` の MCP tool のみ（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。
+
+下記コマンドは、上記いずれかのチャネルで Suasor を**インストール済み**で `suasor` が `PATH` 上にあることを前提としています。インストール形態に合わせて読み替えてください:
+
+| インストールチャネル | CLI の実行形 |
+| --- | --- |
+| 単一バイナリ | `suasor <cmd>` |
+| npm（Bun ユーザー） | `suasor <cmd>`（グローバル導入）または `bunx @ozzylabs/suasor <cmd>` |
+| Docker | `docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest <cmd>` |
+
+以下の例は `suasor <cmd>` 形を使います。clone から動かす場合は [ソースから](#ソースから) を参照してください。
 
 ```bash
-bun install            # 依存インストール
-bun run src/index.ts --version
+suasor --version
 
 # 初回セットアップ: ~/.config/suasor/config.toml とローカル SQLite ストアを作成。
 # 成功時にネクストステップ（doctor -> connector -> sync -> 定期実行 -> skills）を多段案内。
-bun run src/index.ts init
+suasor init
 
 # 設定 / DB / connector の準備状況を確認（診断専用・何も作らない）。
-bun run src/index.ts doctor
+suasor doctor
 
 # コネクタから read 専用で取り込み（github / slack / ms-graph / google / box / web）。
-bun run src/index.ts github sync
+suasor github sync
 
 # あるいは有効な全 connector を 1 回の read 専用パスで一括取り込み（one-shot）。
-bun run src/index.ts sync                   # --connector a,b / --json 利用可
+suasor sync                   # --connector a,b / --json 利用可
 
 # source 本文の全文検索（FTS5。--json / --limit 利用可）。
-bun run src/index.ts search "<query>"
+suasor search "<query>"
 
 # 同梱のアシスタント skill をエージェントホストへ展開。
-bun run src/index.ts skills install        # .claude/skills/ + .agents/skills/
-bun run src/index.ts skills list           # installed / missing / modified
+suasor skills install        # .claude/skills/ + .agents/skills/
+suasor skills list           # installed / missing / modified
 
 # メンテナンス。
-bun run src/index.ts db migrate            # projection schema 適用（idempotent）
-bun run src/index.ts projections rebuild   # event log を replay して projection 再構築
+suasor db migrate            # projection schema 適用（idempotent）
+suasor projections rebuild   # event log を replay して projection 再構築
 ```
 
 設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は github / slack / ms-graph / google / box / web から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
+
+### ソースから
+
+コントリビュータや clone から動かす場合は Bun を直接使います — 上記の各コマンドで `suasor` を `bun run src/index.ts` に置き換えてください。[Bun](https://bun.sh) 1.1+ が必要です。
+
+```bash
+git clone https://github.com/ozzy-labs/suasor.git
+cd suasor
+bun install                          # 依存インストール
+bun run src/index.ts --version
+
+bun run src/index.ts init            # `suasor init` と同じ初回セットアップ
+bun run src/index.ts doctor          # `suasor doctor` と同じ診断
+bun run src/index.ts sync            # `suasor sync` と同じ一括取り込み
+```
+
+`bun run dev` は `bun run src/index.ts` のショートハンドです。開発・検証フロー（`bun test` / `bun run typecheck` / lint）は [AGENTS.md](AGENTS.md) を参照してください。
 
 ### 定期 sync
 
@@ -78,7 +104,8 @@ launchd / systemd timer の例と失敗監視は [docs/guide/scheduling.md](docs
 Suasor は記憶を AI エージェントへ [Model Context Protocol](https://modelcontextprotocol.io)（stdio transport）で公開します。この server がエージェント境界です。**read** tool — `search` / `recall.search` / `source.list`・`source.get` / `task.list`・`decision.list`・`inbox.list` — はいずれも副作用なしで read-only annotation 付き（host が auto-approve 可）。**write** tool — `connector.sync` / `propose.generate` / `propose.apply` / `task.create` — も現在提供していますが、HITL（人の承認）の後ろに置かれます（ADR-0004）。承認なく適用・送信はしません。
 
 ```bash
-bun run src/index.ts mcp serve   # MCP server を stdio で起動
+suasor mcp serve                 # MCP server を stdio で起動
+# ソースから: bun run src/index.ts mcp serve
 ```
 
 MCP host（Claude Code / Claude Desktop / Codex CLI 等）に登録します。Claude Desktop の場合は `claude_desktop_config.json` に以下を追加します（グローバル導入 `bun add -g @ozzylabs/suasor` で `suasor` が PATH 上にあり Bun で解決される前提）:
