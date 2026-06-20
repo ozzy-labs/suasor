@@ -3,7 +3,7 @@
  * is lazy-imported inside `execute` to keep cold start light (NFR-PRF-1).
  *
  * Wired command surface (docs/design/cli.md):
- *   init · db migrate · projections rebuild · search · <connector> sync ·
+ *   init · db migrate · projections rebuild · search · <connector> sync · sync ·
  *   <connector> auth set/test (github/ms-graph/google/box) · connectors list ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
@@ -43,6 +43,7 @@ import {
   SlackCursorResetCommand,
   SlackStatusCommand,
 } from "./commands/slack.ts";
+import { SyncAllCommand } from "./commands/sync-all.ts";
 
 /** Build the configured CLI instance. */
 export function buildCli(): Cli {
@@ -61,6 +62,7 @@ export function buildCli(): Cli {
   for (const ConnectorSync of connectorSyncCommands() as CommandClass[]) {
     cli.register(ConnectorSync);
   }
+  cli.register(SyncAllCommand);
   for (const ConnectorAuth of connectorAuthCommands() as CommandClass[]) {
     cli.register(ConnectorAuth);
   }

@@ -64,6 +64,7 @@ describe("suasor --version / --help", () => {
       "search",
       "brief",
       "doctor",
+      "Ingest from every enabled connector",
       "mcp serve",
     ]) {
       expect(out).toContain(cmd);

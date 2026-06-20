@@ -41,6 +41,9 @@ bun run src/index.ts init
 # Ingest read-only from a connector (github / slack / ms-graph / google / box / web).
 bun run src/index.ts github sync
 
+# Or ingest from every enabled connector in one read-only pass (one-shot).
+bun run src/index.ts sync                   # --connector a,b / --json available
+
 # Full-text search over ingested sources (FTS5; --json / --limit available).
 bun run src/index.ts search "<query>"
 
@@ -54,6 +57,17 @@ bun run src/index.ts projections rebuild   # replay the event log into projectio
 ```
 
 Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+
+### Periodic sync
+
+`suasor sync` ingests from every enabled connector in one short-lived, idempotent pass (read-only, continue-on-error, exit 1 if any connector failed). Suasor runs no daemon — schedule it with your OS scheduler (cron / launchd / systemd timer):
+
+```cron
+# Hourly bulk sync via cron; gate on the exit code, log the JSON output.
+15 * * * * suasor sync --json >> "$HOME/.local/state/suasor/sync.log" 2>&1
+```
+
+See [docs/guide/scheduling.md](docs/guide/scheduling.md) for launchd / systemd timer examples and failure monitoring ([ADR-0027](docs/adr/0027-bulk-sync-orchestration.md)).
 
 ## Connect an agent host (MCP)
 

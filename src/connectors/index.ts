@@ -37,3 +37,11 @@ export {
   type SyncOutcome,
   syncConnector,
 } from "./sync.ts";
+export {
+  type BulkSyncEntry,
+  type BulkSyncOptions,
+  type BulkSyncResult,
+  type ConnectorLoader,
+  runBulkSync,
+  selectEnabledConnectors,
+} from "./sync-all.ts";

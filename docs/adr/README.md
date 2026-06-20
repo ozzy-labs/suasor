@@ -67,4 +67,5 @@ NNNN-kebab-case-title.md
 | 0024 | Document extraction sidecar (Office/PDF → text; local-first, API staged) |
 | 0025 | Local draft export (draft.export; no egress, sandbox, body-less event) |
 | 0026 | Source forgetting (local purge + event redaction; append-only exception) |
+| 0027 | Bulk sync orchestration & scheduling delegation (`suasor sync`; OS scheduler) |
 | 0028 | Task scheduling fields (`dueDate` / `priority`) & overdue derivation |

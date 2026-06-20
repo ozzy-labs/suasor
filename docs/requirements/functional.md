@@ -8,6 +8,8 @@ ID は `FR-<area>-<n>`。MUST/SHOULD/MAY は RFC 2119。
 - **FR-ING-2 (MUST)** 取り込みは event として append され、本文はローカル projection に保持される（[ADR-0002](../adr/0002-event-sourced-architecture.md) / [ADR-0003](../adr/0003-local-first-and-content-minimization.md)）
 - **FR-ING-3 (MUST)** delta API があれば cursor、なければ本文 fingerprint で差分検知
 - **FR-ING-4 (SHOULD)** `suasor <connector> sync` CLI で取り込みを実行できる
+- **FR-ING-5 (SHOULD)** `suasor sync` で有効 connector を一括取り込みできる（短命・冪等な one-shot。定期実行は OS スケジューラへ委譲）（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）
+- **FR-ING-6 (SHOULD)** 一括取り込みで 1 connector の失敗が全体を止めない（continue-on-error）。1 つでも失敗があれば exit 1（`doctor` 終了コード規約に整合）（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）
 
 ## Retrieve（検索・想起）
 
