@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/ozzy-labs/suasor/compare/v0.1.9...v0.1.10) (2026-06-20)
+
+
+### Bug Fixes
+
+* **build:** Docker build の postinstall 失敗を修正（scripts/ を install 前に COPY） ([#183](https://github.com/ozzy-labs/suasor/issues/183)) ([b4e06b4](https://github.com/ozzy-labs/suasor/commit/b4e06b438e7cecbd5f0d2dde4371b2181fdbb03a))
+
 ## [0.1.9](https://github.com/ozzy-labs/suasor/compare/v0.1.8...v0.1.9) (2026-06-20)
 
 
