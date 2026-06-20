@@ -7,6 +7,24 @@ Connector はソースから **read 専用**で取り込む共通実装（[ADR-0
 - CLI: `suasor <connector> sync`
 - MCP write tool: `connector.sync`（HITL。人の承認なしに実行しない。[mcp-surface](../design/mcp-surface.md)）
 
+## まず `suasor onboard`（推奨セットアップ導線）
+
+connector を 1 つずつ手で設定する前に、対話ウィザード **`suasor onboard`** を使うと正しい順序（connector 選択 → token 格納 → `auth test` 疎通 → `[connectors.X]` slice 追記 → 初回 sync → スケジューラ雛形 → MCP 登録）を 1 コマンドで繋げる（[ADR-0029](../adr/0029-onboarding-wizard.md)）。
+
+とりわけ **token を `auth set` で保存しても `[connectors.X] enabled=true` を書き忘れて `suasor sync` が無音で何もしない** という頻発ポイントを構造的に解消する（config slice の追記まで自動化する。既存セクションは非破壊）。
+
+```bash
+suasor onboard --connector github            # 対話（TTY）。token は stdin から
+suasor onboard --connector github,slack --json   # 非対話・機械可読サマリ
+suasor onboard --connector box --skip-auth   # token は env override 前提（headless / binary）
+```
+
+- **非対話端末**（パイプ / CI）では `--connector` が必須（プロンプトを出さない。"no silent wrong answer"）
+- token は keychain に格納し、`config.toml` には書かない（secret は keychain / env override、NFR-PRV-4）
+- config への追記は**末尾 append のみ**で既存の手書きコメント・他セクションを壊さない。既に `[connectors.X]` がある（`enabled = false` を含む）場合は触らない（冪等）
+
+以降の各 connector 節は、ウィザードを使わず手で設定する場合の詳細（token 種別・必須 config キー）を示す。
+
 ## GitHub
 
 GitHub の issue / pull request を取り込む（`octokit`）。

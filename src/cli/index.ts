@@ -3,7 +3,7 @@
  * is lazy-imported inside `execute` to keep cold start light (NFR-PRF-1).
  *
  * Wired command surface (docs/design/cli.md):
- *   init · db migrate · projections rebuild · search · <connector> sync · sync ·
+ *   init · onboard · db migrate · projections rebuild · search · <connector> sync · sync ·
  *   <connector> auth set/test (github/ms-graph/google/box) · connectors list ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
@@ -32,6 +32,7 @@ import { ExtractionStatusCommand } from "./commands/extraction.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
 import { McpToolsCommand } from "./commands/mcp-tools.ts";
+import { OnboardCommand } from "./commands/onboard.ts";
 import { ProjectionsRebuildCommand } from "./commands/projections-rebuild.ts";
 import { SearchCommand } from "./commands/search.ts";
 import { SkillsInstallCommand, SkillsListCommand } from "./commands/skills.ts";
@@ -55,6 +56,7 @@ export function buildCli(): Cli {
   cli.register(Builtins.HelpCommand);
   cli.register(Builtins.VersionCommand);
   cli.register(InitCommand);
+  cli.register(OnboardCommand);
   cli.register(DbMigrateCommand);
   cli.register(ProjectionsRebuildCommand);
   cli.register(SearchCommand);
