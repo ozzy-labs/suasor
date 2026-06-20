@@ -159,4 +159,41 @@ describe("suasor brief", () => {
     expect(out).not.toContain("embedding disabled");
     expect(JSON.parse(out).tasks).toHaveLength(1);
   });
+
+  test("annotates the header with completeness warnings (Issue #189)", async () => {
+    await seed();
+    // Default config: no [connectors.slack] + embedding disabled → both signals.
+    const { code, out } = await run(["brief", "--since", "2020-01-01"]);
+    expect(code).toBe(0);
+    expect(out).toContain("[⚠ slack_not_configured, embedding_disabled]");
+  });
+
+  test("--json includes the warnings array with stable keys (Issue #189)", async () => {
+    await seed();
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
+    expect(code).toBe(0);
+    const keys = JSON.parse(out).warnings.map((w: { key: string }) => w.key);
+    expect(keys).toEqual(["slack_not_configured", "embedding_disabled"]);
+  });
+
+  test("drops embedding_disabled once a backend is enabled (Issue #189)", async () => {
+    await Bun.write(join(dir, "config.toml"), '[embedding]\nbackend = "ollama"\n');
+    await seed();
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
+    expect(code).toBe(0);
+    const keys = JSON.parse(out).warnings.map((w: { key: string }) => w.key);
+    expect(keys).toEqual(["slack_not_configured"]);
+  });
+
+  test("emits no warnings when Slack is configured and embedding is enabled (Issue #189)", async () => {
+    await Bun.write(
+      join(dir, "config.toml"),
+      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_id = "U1"\n',
+    );
+    await seed();
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out).warnings).toEqual([]);
+    expect(out).not.toContain("[⚠");
+  });
 });

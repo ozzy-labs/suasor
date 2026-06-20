@@ -158,6 +158,34 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 merge で空になった person は既定で除外（`identity_count > 0`）。`includeEmpty: true` で tombstone も列挙できる。
 
+### `brief`（[ADR-0017](../adr/0017-brief-period-bundle.md)）
+
+期間バンドルを 1 round-trip で返す read tool（実体は `src/mcp/queries.ts` の `buildBrief`、`readOnlyHint: true`）。各 section は自然な timestamp 列で期間フィルタする（`sources`=observed / `tasks`=updated / `decisions`=recorded）。`inbox` だけは「現在 open」（期間非依存）。既定 window は直近 24h。
+
+戻り値:
+
+```jsonc
+{
+  "window": { "since": "...", "until": "..." },
+  "sources": [/* SourceRecord */],
+  "tasks": [/* TaskRecord */],
+  "decisions": [/* DecisionRecord */],
+  "inbox": [/* InboxRecord（state=open） */],
+  "demand": [/* SlackDemandRecord */],
+  "warnings": [                       // 完全性シグナル（Issue #189）
+    { "key": "slack_not_configured", "message": "Slack connector not configured — ..." },
+    { "key": "embedding_disabled",  "message": "embedding backend off — ..." }
+  ]
+}
+```
+
+`warnings`（完全性シグナル・Issue #189）は、**未設定が理由で空になった category** を区別するための注記。空 section が「本当に何も無い」のか「source 未接続だから空」なのかを host が判別できる。`buildBrief` 自体は純粋（config を知らない）で、呼び出し側（CLI / MCP server）が config から導出して渡す（`deriveBriefWarnings`）。設定済みなら空配列。
+
+- `slack_not_configured`: `[connectors.slack]` が未設定（`self_user_id` の有無とは独立）。`demand` が常に空になる。
+- `embedding_disabled`: `[embedding].backend = "disabled"`。recall 由来の素材が FTS-only に劣化する。
+
+CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json` では同じ `warnings` 配列をバンドルに含める。
+
 ### `catchup` skill のバックエンド方針（レビュー D1 確定）
 
 assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の 26 skill 中、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。

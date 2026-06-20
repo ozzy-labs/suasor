@@ -723,6 +723,55 @@ export function listPersons(sqlite: Database, options: ListPersonsOptions = {}):
   }));
 }
 
+/**
+ * Stable keys for brief completeness signals (Issue #189). Each marks a
+ * category that is empty because its source is *not wired up* — not because the
+ * window is genuinely quiet — so the host can tell "Slack not connected" from
+ * "nothing happened".
+ */
+export type BriefWarningKey = "slack_not_configured" | "embedding_disabled";
+
+/** A single completeness signal: a stable {@link BriefWarningKey} + a human note. */
+export interface BriefWarning {
+  /** Stable, machine-matchable key. */
+  key: BriefWarningKey;
+  /** Human-readable, one-line explanation of the missing category. */
+  message: string;
+}
+
+const BRIEF_WARNING_MESSAGE: Record<BriefWarningKey, string> = {
+  slack_not_configured: "Slack connector not configured — demand (@mention / DM) is always empty",
+  embedding_disabled:
+    "embedding backend off — recall-backed material degrades to FTS-only (docs/guide/embedding.md)",
+};
+
+/** Inputs for {@link deriveBriefWarnings} — the config facts that gate categories. */
+export interface BriefCompleteness {
+  /** Whether at least one Slack workspace/operator id is configured. */
+  slackConfigured: boolean;
+  /** The effective embedding backend (`"disabled"` ⇒ recall degrades to FTS). */
+  embeddingBackend: string;
+}
+
+/**
+ * Derive the brief's completeness {@link BriefWarning}s from config facts
+ * (Issue #189). Shared by the CLI and MCP callers so both surface the same
+ * stable keys. Pure — no DB / config access; the caller resolves the facts.
+ */
+export function deriveBriefWarnings(completeness: BriefCompleteness): BriefWarning[] {
+  const warnings: BriefWarning[] = [];
+  if (!completeness.slackConfigured) {
+    warnings.push({
+      key: "slack_not_configured",
+      message: BRIEF_WARNING_MESSAGE.slack_not_configured,
+    });
+  }
+  if (completeness.embeddingBackend === "disabled") {
+    warnings.push({ key: "embedding_disabled", message: BRIEF_WARNING_MESSAGE.embedding_disabled });
+  }
+  return warnings;
+}
+
 /** A period bundle for host summarization (ADR-0017). */
 export interface Brief {
   /** The window the bundle covers (null when unbounded). */
@@ -737,6 +786,12 @@ export interface Brief {
   inbox: InboxRecord[];
   /** Slack demand (@mention / DM) observed in the window. */
   demand: SlackDemandRecord[];
+  /**
+   * Completeness signals (Issue #189): categories that are empty because their
+   * source is *not configured*, not because the window is quiet. Empty array
+   * when every category is wired up.
+   */
+  warnings: BriefWarning[];
 }
 
 export interface BuildBriefOptions {
@@ -748,15 +803,23 @@ export interface BuildBriefOptions {
   limit?: number;
   /** Operator Slack user ids for demand `<@you>` mentions (ADR-0012). */
   selfUserIds?: string[];
+  /**
+   * Completeness signals (Issue #189). Caller-supplied so `buildBrief` stays
+   * pure (no config knowledge); derive via {@link deriveBriefWarnings}.
+   */
+  warnings?: BriefWarning[];
 }
 
 /**
  * Assemble the period's material (ADR-0017) so the host LLM can compose the
  * summary in one round-trip. Pure composition of the existing read queries with
  * each section's natural time column — no in-process LLM (ADR-0006), no persist.
+ *
+ * Completeness `warnings` (Issue #189) are passed through verbatim from the
+ * caller (which knows the config); empty when omitted.
  */
 export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): Brief {
-  const { since, until, limit, selfUserIds } = options;
+  const { since, until, limit, selfUserIds, warnings } = options;
   const window: TimeRange = { after: since, before: until };
   const cap = limit !== undefined ? { limit } : {};
   return {
@@ -771,6 +834,7 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
       ...(selfUserIds ? { selfUserIds } : {}),
       ...cap,
     }),
+    warnings: warnings ?? [],
   };
 }
 

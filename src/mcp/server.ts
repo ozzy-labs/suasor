@@ -75,6 +75,7 @@ import { VERSION } from "../version.ts";
 import {
   buildBrief,
   DEFAULT_LIST_LIMIT,
+  deriveBriefWarnings,
   expandGraph,
   getSource,
   listCommitments,
@@ -125,6 +126,14 @@ export interface McpServerDeps {
    * demand falls back to DM-only unless the caller passes `selfUserId`.
    */
   slackSelfUserIds?: string[];
+  /**
+   * Whether the Slack connector is configured at all (`[connectors.slack]`
+   * present), independent of whether a `self_user_id` is set (Issue #189). Drives
+   * the `brief` completeness signal `slack_not_configured` so the host can tell
+   * "Slack not connected → demand always empty" from "genuinely quiet". Omitted
+   * defaults to `slackSelfUserIds.length > 0` for back-compat.
+   */
+  slackConfigured?: boolean;
   /**
    * Writable store + connector config for the `connector.sync` write tool
    * (ADR-0007 / Issue #10). When omitted, the server exposes read tools only
@@ -528,6 +537,13 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         until: effUntil,
         ...(limit !== undefined ? { limit } : {}),
         selfUserIds: deps.slackSelfUserIds ?? [],
+        // Completeness signals (Issue #189): mark categories empty because they
+        // are unconfigured (Slack not wired / embedding disabled) so the host
+        // can distinguish "not connected" from "genuinely quiet".
+        warnings: deriveBriefWarnings({
+          slackConfigured: deps.slackConfigured ?? (deps.slackSelfUserIds ?? []).length > 0,
+          embeddingBackend: embeddingConfig.backend,
+        }),
       });
       return jsonResult(brief);
     },

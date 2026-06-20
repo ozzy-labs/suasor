@@ -71,7 +71,7 @@ export class BriefCommand extends Command {
     const [
       { loadConfig },
       { Store },
-      { buildBrief },
+      { buildBrief, deriveBriefWarnings },
       { resolveSelfUserIds },
       { emitEmbeddingDisabledHint },
     ] = await Promise.all([
@@ -121,6 +121,15 @@ export class BriefCommand extends Command {
     // a piped bundle stays clean.
     emitEmbeddingDisabledHint(this.context.stderr, config.embedding.backend, this.json);
 
+    // Completeness signals (Issue #189): mark categories empty because they are
+    // unconfigured, not because the window is quiet, so a consumer can tell
+    // "Slack not connected" from "genuinely nothing". `slackConfigured` keys off
+    // `[connectors.slack]` presence, independent of whether a self_user_id is set.
+    const warnings = deriveBriefWarnings({
+      slackConfigured: config.connectors.slack !== undefined,
+      embeddingBackend: config.embedding.backend,
+    });
+
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const brief = buildBrief(store.connection.sqlite, {
@@ -128,6 +137,7 @@ export class BriefCommand extends Command {
         until,
         ...(limit !== undefined ? { limit } : {}),
         selfUserIds: resolveSelfUserIds(config.connectors.slack ?? {}),
+        warnings,
       });
 
       if (this.json) {
@@ -135,7 +145,10 @@ export class BriefCommand extends Command {
         return 0;
       }
 
-      this.context.stdout.write(`Brief ${since} → ${until}\n`);
+      // Annotate the header with any completeness gaps (e.g. "[⚠ slack_not_configured]").
+      const note =
+        brief.warnings.length > 0 ? ` [⚠ ${brief.warnings.map((w) => w.key).join(", ")}]` : "";
+      this.context.stdout.write(`Brief ${since} → ${until}${note}\n`);
       this.context.stdout.write(
         `  tasks: ${brief.tasks.length}  decisions: ${brief.decisions.length}  ` +
           `sources: ${brief.sources.length}  demand: ${brief.demand.length}  ` +
