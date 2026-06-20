@@ -22,7 +22,7 @@
 | [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | slack.demand.list（→ inbox.add / source-extract へ HITL 橋渡し） |
 | [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
 
-## HITL write 系（人の承認で適用・7）
+## HITL write 系（人の承認で適用・8）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -33,6 +33,7 @@
 | [`commitment-review`](commitment-review/SKILL.md) | 「約束をスキャンして」「貸し借り確認」 | propose.generate(commitment_scan) → propose.apply / commitment.list → resolve / dismiss / reopen |
 | [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject |
 | [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
+| [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
 
 エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）。
 

@@ -12,7 +12,7 @@
 
 スキルは 2 系統に分かれる:
 
-- **アシスタント skill（Suasor 同梱・20 件）** — `personal-brief` / `next-actions` / `find-document` / `research` 等。SSOT は [`docs/skills/`](docs/skills/)（[ADR-0008](docs/adr/0008-assistant-skills.md)）、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開。read 系は自律 OK、write 系は HITL（auto-apply なし）
+- **アシスタント skill（Suasor 同梱・21 件）** — `personal-brief` / `next-actions` / `find-document` / `research` 等。SSOT は [`docs/skills/`](docs/skills/)（[ADR-0008](docs/adr/0008-assistant-skills.md)）、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開。read 系は自律 OK、write 系は HITL（auto-apply なし）
 - **エコシステム共通 dev skill** — `@ozzylabs/skills` 経由で `.claude/skills/` に配布（名前空間 disjoint）:
   - `/implement` — Issue または指示をもとに、ブランチ作成・実装
   - `/lint` — 全リンターを自動修正付きで実行

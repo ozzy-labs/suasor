@@ -55,6 +55,7 @@ import { personMerge } from "../propose/person-merge.ts";
 import { personSplit } from "../propose/person-split.ts";
 import { proposeReject } from "../propose/reject.ts";
 import { taskCreate } from "../propose/task-create.ts";
+import { taskUpdate } from "../propose/task-update.ts";
 import {
   createEmbedder,
   DEFAULT_RECALL_LIMIT,
@@ -755,6 +756,35 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           title,
           ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
         });
+        return jsonResult(result);
+      },
+    );
+
+    // --- task.update: advance a task's lifecycle state (HITL). ---
+    // The transition half of the task lifecycle: task.create opens a task and
+    // task.list reads it, but advancing to in_progress / completed / dropped
+    // had no write surface. Appends TaskApplied → tasks projection. HITL,
+    // idempotent (same-state is a no-op, missing task is reported not thrown).
+    server.registerTool(
+      "task.update",
+      {
+        title: "Update task state",
+        description:
+          "Transition a task's lifecycle state (open / in_progress / completed / " +
+          "dropped) by appending TaskApplied → tasks projection. Write tool: " +
+          "requires human approval — no auto-apply (ADR-0004). Idempotent: a " +
+          "same-state call is a no-op (unchanged); an unknown task is reported " +
+          "missing.",
+        inputSchema: {
+          taskId: z.string().min(1).describe("Id of the task to transition."),
+          state: z
+            .enum(["open", "in_progress", "completed", "dropped"])
+            .describe("Lifecycle state to move the task to."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ taskId, state }) => {
+        const result = taskUpdate(write.store, { taskId, state });
         return jsonResult(result);
       },
     );

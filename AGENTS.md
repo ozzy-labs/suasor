@@ -89,7 +89,7 @@ bun test                   # テスト
 <!-- このブロックは sync-skills.sh が opt-in 後に自動管理する。opt-in していない場合は空のままで問題ない。 -->
 <!-- end: @ozzylabs/skills -->
 
-アシスタント 20 skill（Suasor 同梱・`suasor skills install`）の SSOT は `docs/skills/<name>/SKILL.md`（[ADR-0008]）。エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 経由。
+アシスタント 21 skill（Suasor 同梱・`suasor skills install`）の SSOT は `docs/skills/<name>/SKILL.md`（[ADR-0008]）。エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 経由。
 
 ## Adapter Files
 
