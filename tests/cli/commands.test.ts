@@ -57,7 +57,14 @@ describe("suasor --version / --help", () => {
   test("--help lists the wired command surface", async () => {
     const { code, out } = await run(["--help"]);
     expect(code).toBe(0);
-    for (const cmd of ["init", "db migrate", "projections rebuild", "search", "mcp serve"]) {
+    for (const cmd of [
+      "init",
+      "db migrate",
+      "projections rebuild",
+      "search",
+      "brief",
+      "mcp serve",
+    ]) {
       expect(out).toContain(cmd);
     }
   });

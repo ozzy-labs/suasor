@@ -21,6 +21,7 @@
  */
 import { Builtins, Cli, type CommandClass } from "clipanion";
 import { VERSION } from "../version.ts";
+import { BriefCommand } from "./commands/brief.ts";
 import { connectorAuthCommands } from "./commands/connector-auth.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
@@ -54,6 +55,7 @@ export function buildCli(): Cli {
   cli.register(DbMigrateCommand);
   cli.register(ProjectionsRebuildCommand);
   cli.register(SearchCommand);
+  cli.register(BriefCommand);
   for (const ConnectorSync of connectorSyncCommands() as CommandClass[]) {
     cli.register(ConnectorSync);
   }
