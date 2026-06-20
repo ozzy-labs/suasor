@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { connectorNames, hasConnector, loadConnector } from "../../src/connectors/registry.ts";
+import {
+  connectorNames,
+  hasConnector,
+  hasConnectorConfigSchema,
+  loadConnector,
+  loadConnectorConfigSchema,
+} from "../../src/connectors/registry.ts";
 
 /** Every connector that must resolve from the registry, in sorted order. */
 const EXPECTED = ["box", "github", "google", "local", "ms-graph", "slack", "web"];
@@ -28,5 +34,23 @@ describe("connector registry", () => {
 
   test("loadConnector throws for an unknown connector", async () => {
     await expect(loadConnector("nope", {})).rejects.toThrow(/unknown connector/);
+  });
+
+  test("every registered connector exposes a config-slice schema (Issue #162)", () => {
+    for (const name of EXPECTED) expect(hasConnectorConfigSchema(name)).toBe(true);
+    expect(hasConnectorConfigSchema("does-not-exist")).toBe(false);
+  });
+
+  test("loadConnectorConfigSchema returns a parseable Zod schema for each connector", async () => {
+    for (const name of EXPECTED) {
+      const schema = await loadConnectorConfigSchema(name);
+      expect(schema).not.toBeNull();
+      // The schema parses its own defaults (empty slice) without throwing.
+      expect(() => schema?.parse({})).not.toThrow();
+    }
+  });
+
+  test("loadConnectorConfigSchema returns null for a schema-less / unknown connector", async () => {
+    expect(await loadConnectorConfigSchema("does-not-exist")).toBeNull();
   });
 });

@@ -50,7 +50,7 @@ class ConnectorSyncCommand extends Command {
     }
 
     const [
-      { loadConfig },
+      { ConfigError, loadConfig },
       { Store },
       { loadConnector, syncConnector },
       { createEmbedder },
@@ -63,7 +63,18 @@ class ConnectorSyncCommand extends Command {
       import("../../extraction/index.ts"),
     ]);
 
-    const config = await loadConfig();
+    // `loadConfig` validates each `[connectors.<name>]` slice against the
+    // connector's schema (#162), so a typo / invalid value fails fast here.
+    let config: Awaited<ReturnType<typeof loadConfig>>;
+    try {
+      config = await loadConfig();
+    } catch (cause) {
+      if (cause instanceof ConfigError) {
+        this.context.stderr.write(`error: ${cause.message}\n`);
+        return 1;
+      }
+      throw cause;
+    }
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
       this.context.stderr.write("error: storage.dbPath is not configured\n");

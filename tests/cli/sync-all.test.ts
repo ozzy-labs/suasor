@@ -117,25 +117,28 @@ describe("suasor sync (bulk)", () => {
     expect(parsed.results[0]?.ok).toBe(true);
   });
 
-  test("continue-on-error: one connector failing exits 1 but others still run", async () => {
+  test("invalid connector config fails the whole run at load (before any sync, #162)", async () => {
     await run(["init"]);
-    // github with an invalid repo spec throws at load; web still ingests fine.
+    // An invalid github slice (`repos` entry not `owner/repo`) is now rejected by
+    // the github schema at `loadConfig` (#162), so the bulk run never starts —
+    // web does not ingest and nothing is counted. (Runtime continue-on-error
+    // semantics are covered at the service level: tests/connectors/sync-all.test.ts.)
     await writeConfig('[connectors.github]\nrepos = ["not-a-repo"]\n[connectors.web]\nurls = []\n');
     const { code, out, err } = await run(["sync"]);
     expect(code).toBe(1);
-    expect(err).toContain("github sync failed");
-    expect(out).toContain("web: 0 observed");
-    expect(out).toContain("1 succeeded, 1 failed");
+    expect(err).toContain("error:");
+    expect(err).toContain("connectors.github.repos");
+    expect(out).not.toContain("web: 0 observed");
   });
 
-  test("--no-continue-on-error stops at the first failure (fail-fast)", async () => {
+  test("a typo'd connector key fails the whole run at load (#162)", async () => {
     await run(["init"]);
-    // github (sorted before web) throws at load; fail-fast skips web.
-    await writeConfig('[connectors.github]\nrepos = ["not-a-repo"]\n[connectors.web]\nurls = []\n');
+    // `repo` for `repos` — the silent-no-op typo #162 targets, now caught at load.
+    await writeConfig("[connectors.github]\nrepo = []\n[connectors.web]\nurls = []\n");
     const { code, out, err } = await run(["sync", "--no-continue-on-error"]);
     expect(code).toBe(1);
-    expect(err).toContain("github sync failed");
+    expect(err).toContain("error:");
+    expect(err).toContain("connectors.github");
     expect(out).not.toContain("web: 0 observed");
-    expect(out).toContain("0 succeeded, 1 failed");
   });
 });

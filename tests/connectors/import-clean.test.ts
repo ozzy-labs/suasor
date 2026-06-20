@@ -83,4 +83,34 @@ console.log(JSON.stringify(hit));
       rmSync(probeDir, { recursive: true, force: true });
     }
   });
+
+  test("loading every connector config schema loads no heavy SDK", () => {
+    // `loadConfig` validates each configured `[connectors.<name>]` slice against
+    // the connector's exported `*ConnectorConfig` schema (Issue #162). Importing a
+    // schema must pull only `zod` + contract types — never the connector's heavy
+    // SDK — so config validation stays import-clean (ADR-0007, NFR-PRF-1).
+    const probeDir = mkdtempSync(join(tmpdir(), "suasor-conn-schema-clean-"));
+    try {
+      const probePath = join(probeDir, "probe.ts");
+      writeFileSync(
+        probePath,
+        `import { connectorNames, loadConnectorConfigSchema } from ${JSON.stringify(join(connectorsDir, "registry.ts"))};
+for (const name of connectorNames()) {
+  await loadConnectorConfigSchema(name);
+}
+const reg = globalThis.Loader?.registry;
+const keys = reg ? (reg instanceof Map ? [...reg.keys()] : Object.keys(reg)) : null;
+const heavy = ["octokit", "@slack/web-api", "microsoft-graph", "msal", "googleapis", "box-typescript", "playwright", "keyring"];
+const hit = keys === null ? null : heavy.filter((h) => keys.some((k) => k.includes(h)));
+console.log(JSON.stringify(hit));
+`,
+      );
+      const proc = Bun.spawnSync(["bun", "run", probePath], { env: { ...process.env } });
+      expect(proc.exitCode).toBe(0);
+      const parsed = JSON.parse(proc.stdout.toString().trim()) as string[] | null;
+      if (parsed !== null) expect(parsed).toEqual([]);
+    } finally {
+      rmSync(probeDir, { recursive: true, force: true });
+    }
+  });
 });

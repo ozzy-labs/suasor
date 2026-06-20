@@ -16,9 +16,20 @@
  * default tracks `SUASOR_CONFIG_DIR`.
  */
 import { join } from "node:path";
-import type { z } from "zod";
+import { z } from "zod";
+import { loadConnectorConfigSchema } from "../connectors/registry.ts";
 import { ConfigError } from "./error.ts";
 import { Config } from "./schema.ts";
+
+/**
+ * Control keys recognized on **every** `[connectors.<name>]` slice, independent
+ * of the connector. `enabled = false` opts a configured connector out of bulk
+ * sync / `doctor` / `connectors list` (see `selectEnabledConnectors`); it is a
+ * universal gate rather than a connector-specific field, so each connector's own
+ * `*ConnectorConfig` schema omits it. Strict slice validation merges this in so
+ * `enabled` is accepted while genuine typos still fail (docs/design/config.md).
+ */
+const COMMON_CONNECTOR_KEYS = z.object({ enabled: z.boolean().optional() });
 
 /** A partial, untyped config tree from one layer (file / env / args). */
 type Layer = Record<string, unknown>;
@@ -129,6 +140,54 @@ async function readFileLayer(configDir: string): Promise<Layer> {
 }
 
 /**
+ * Validate each `[connectors.<name>]` slice against the connector's own
+ * config-slice schema (ADR-0007 / docs/design/config.md). The root schema keeps
+ * `connectors` an open record, so without this a typo'd key (`repo` for `repos`)
+ * loads cleanly and only silently no-ops at sync time. Here each *known*
+ * connector's slice is re-validated **strictly** — unknown keys are rejected, not
+ * stripped — so typos and type mismatches fail fast as `ConfigError` at load.
+ *
+ * Lenient by omission: a connector that exposes no slice schema (or a config key
+ * for an unregistered connector) is left untouched, preserving backward
+ * compatibility and allowing staged schema adoption. Validation reads only the
+ * slice; the schema-normalized value is not written back (the open-record value
+ * already carries the user's keys, and connectors re-parse their own slice when
+ * built — `createXConnector` → `XConnectorConfig.parse`).
+ *
+ * The universal `enabled` gate (`COMMON_CONNECTOR_KEYS`) is merged into each
+ * connector's object schema before going strict, so `enabled = false` is accepted
+ * on any slice while genuine typos still fail. Non-object schemas (none today)
+ * are validated as-is.
+ *
+ * Issues from every offending connector are collected into a single
+ * `ConfigError`, each path prefixed `connectors.<name>` so the message points at
+ * the exact field.
+ */
+async function validateConnectorSlices(
+  connectors: Record<string, Record<string, unknown>>,
+): Promise<void> {
+  const issues: string[] = [];
+  for (const [name, slice] of Object.entries(connectors)) {
+    const schema = await loadConnectorConfigSchema(name);
+    if (!schema) continue; // unknown / schema-less connector stays lenient
+    // Merge the universal `enabled` gate, then `.strict()` so unrecognized keys
+    // (typos) are rejected rather than stripped. Connector-specific fields come
+    // from the connector's own schema (mirroring what it reads at build time).
+    const validator =
+      schema instanceof z.ZodObject ? schema.extend(COMMON_CONNECTOR_KEYS.shape).strict() : schema;
+    const result = validator.safeParse(slice);
+    if (result.success) continue;
+    for (const issue of result.error.issues) {
+      const tail = issue.path.length > 0 ? `.${issue.path.join(".")}` : "";
+      issues.push(`connectors.${name}${tail}: ${issue.message}`);
+    }
+  }
+  if (issues.length > 0) {
+    throw new ConfigError("invalid connector configuration", issues);
+  }
+}
+
+/**
  * Load and validate the effective configuration.
  *
  * @throws {ConfigError} when any layer holds an invalid value (fail-fast).
@@ -159,6 +218,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Confi
   }
 
   const config = result.data;
+  // Re-validate each configured connector slice against its own schema so typos
+  // / type errors in `[connectors.<name>]` fail fast (the root schema leaves
+  // `connectors` an open record). Slices for schema-less connectors stay lenient.
+  await validateConnectorSlices(config.connectors);
   if (config.storage.dbPath === null) {
     config.storage.dbPath = join(configDir, "suasor.db");
   }
