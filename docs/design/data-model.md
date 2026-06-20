@@ -33,7 +33,7 @@
 - Drizzle 管理のテーブル（`src/db/schema.ts`）。event を reducer（`src/projections/reducer.ts`）で畳んで生成
 - 確定テーブル:
   - `sources` — `external_id`(PK) / `source_type` / `body` / `fingerprint` / `observed_at` / `meta`(JSON)
-  - `tasks` — `id`(PK) / `title` / `state`（proposed → applied lifecycle）/ `created_at` / `updated_at`
+  - `tasks` — `id`(PK) / `title` / `state`（`proposed` → `open` / `in_progress` / `completed` / `dropped`、`task.update` で遷移）/ `created_at` / `updated_at`
   - `decisions` — `id`(PK) / `title` / `rationale` / `recorded_at`
   - `inbox` — `id`(PK) / `source_external_id` / `state` / `updated_at`
   - `proposals` — `candidate_id`(PK) / `mode` / `kind` / `entity_id` / `summary` / `state`（pending / applied / rejected）/ `reason` / `created_at` / `updated_at`（提案 lifecycle ledger、#89。`propose.list` が読む）

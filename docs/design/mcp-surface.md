@@ -111,7 +111,7 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 
 ### `catchup` skill のバックエンド方針（レビュー D1 確定）
 
-assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の 20 skill 中、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
+assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の 21 skill 中、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
 
 - marker は host（Claude Code 等）側に保持する。server は永続 marker を持たない（local-first / stateless read surface を保つ）。
 - 上記 4 tool が下限 inclusive の時間フィルタを備えているため、`since = last_seen` を各 `*After` に渡すだけで「前回以降の差分」を合成できる。
@@ -128,6 +128,7 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `propose.apply` | 承認された候補のみ適用（idempotent）。適用で ledger を `applied` に遷移 | 実装済み（#12 / #89。下記参照） |
 | `propose.reject` | pending 候補を理由付きで却下（ledger を `rejected` に遷移、idempotent） | 実装済み（#89。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
+| `task.update` | task の lifecycle 状態遷移（open / in_progress / completed / dropped） | 実装済み（下記参照） |
 | `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
 | `inbox.add` | 受信箱項目を捕捉（state `open`） | 実装済み（#88。下記参照） |
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
@@ -277,6 +278,23 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
 
 戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来で、同一内容の再作成は `existing`（no-op、idempotent）。
+
+### `task.update`（確定・write / HITL）
+
+task の lifecycle 状態を遷移させる write tool（`task.create` が task を開き `task.list` が読むのに対し、状態を前進させる経路。`task-update` skill が使う）。実体は `src/propose/task-update.ts`。`TaskApplied` event を append → `tasks` projection（reducer が既存 task の `state` を UPDATE。event/reducer は既存で、本 tool は欠けていた write surface を補う）。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+引数（Zod）:
+
+| 引数 | 型 | 説明 |
+|---|---|---|
+| `taskId` | `string`（min 1） | 遷移対象の task id |
+| `state` | `enum` | 遷移先 `open` / `in_progress` / `completed` / `dropped` |
+
+戻り値: `{ "taskId": "task_...", "status": "updated" \| "unchanged" \| "missing", "state": "completed" \| null }`。
+
+- **idempotent**: 現在 state と同一への遷移は `unchanged`（event を append しない）。`missing`（該当 task なし）は status で報告し throw しない（commitment 遷移群と同じ作法）
+- **禁止遷移なし**: 4 状態は相互に到達可能（`completed` の task を `in_progress` に戻す等も許可）。task lifecycle に invalid 遷移は設けない
+- 新規 task の作成は `task.create`（本 tool は遷移専用で title を持たない）
 
 ### `decision.record`（確定・write / HITL・[Issue #88](https://github.com/ozzy-labs/suasor/issues/88)）
 

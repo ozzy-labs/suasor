@@ -112,6 +112,11 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
   },
   { name: "task.create", readOnlyHint: false, summary: "Create a task directly (TaskProposed)." },
   {
+    name: "task.update",
+    readOnlyHint: false,
+    summary: "Transition a task's lifecycle state (TaskApplied).",
+  },
+  {
     name: "decision.record",
     readOnlyHint: false,
     summary: "Record a decision directly (DecisionRecorded).",

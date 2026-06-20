@@ -162,8 +162,13 @@ describe("real bundled catalog", () => {
     const src = resolveSkillsSource();
     expect(src).not.toBeNull();
     const skills = listBundledSkills(src);
-    expect(skills.length).toBeGreaterThanOrEqual(20);
+    expect(skills.length).toBeGreaterThanOrEqual(21);
     expect(skills.map((s) => s.name)).toContain("personal-brief");
+  });
+
+  test("ships the task-update lifecycle skill", () => {
+    const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
+    expect(names).toContain("task-update");
   });
 
   test("ships the ledger / identity HITL skills (commitment / proposal / person)", () => {
