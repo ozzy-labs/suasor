@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.7](https://github.com/ozzy-labs/suasor/compare/v0.1.6...v0.1.7) (2026-06-20)
+
+
+### Features
+
+* **cli:** suasor brief — period bundle for scheduled / non-interactive use ([#118](https://github.com/ozzy-labs/suasor/issues/118)) ([d0d5826](https://github.com/ozzy-labs/suasor/commit/d0d5826e22062cb0447116a03a36ce61df604f4f))
+* **cli:** suasor doctor — aggregate health check (config/db/embedding/connectors) ([#119](https://github.com/ozzy-labs/suasor/issues/119)) ([9195057](https://github.com/ozzy-labs/suasor/commit/91950579cb26bf6efd8d69d7cf72326bf76e7e0a))
+* **extraction:** [extraction] config + markitdown thin client (ADR-0024 PR1/4) ([#128](https://github.com/ozzy-labs/suasor/issues/128)) ([7c76f10](https://github.com/ozzy-labs/suasor/commit/7c76f1005bbf1b0ede1616f208c469993af82b98))
+* **extraction:** extraction_meta + drift re-extraction + extraction status (ADR-0024 PR3/4) ([#130](https://github.com/ozzy-labs/suasor/issues/130)) ([ff6697f](https://github.com/ozzy-labs/suasor/commit/ff6697fffea2fbcfe935bd0f551cd2bce2678257))
+* **extraction:** sync wiring — extract Office/PDF bodies at ingest (ADR-0024 PR2/4) ([#129](https://github.com/ozzy-labs/suasor/issues/129)) ([33bf35b](https://github.com/ozzy-labs/suasor/commit/33bf35bf48cb77442288ec2ccef228f62a864066))
+* **mcp:** source.history read tool + doc-diff skill ([#121](https://github.com/ozzy-labs/suasor/issues/121)) ([#125](https://github.com/ozzy-labs/suasor/issues/125)) ([4d55794](https://github.com/ozzy-labs/suasor/commit/4d557948ea6e8b9bd4046551291fb7fda73247fc))
+* **mcp:** task.update — task lifecycle state transition + task-update skill ([#117](https://github.com/ozzy-labs/suasor/issues/117)) ([c44841c](https://github.com/ozzy-labs/suasor/commit/c44841c1e528ceb86097630a5a8f0b43121e365b))
+* **skills:** add commitment-review / proposal-review / person-cleanup ([#114](https://github.com/ozzy-labs/suasor/issues/114)) ([2b8f98b](https://github.com/ozzy-labs/suasor/commit/2b8f98b92539cf13cb8864408dfa3fa1c891cd8b))
+* **skills:** add slack-triage / provenance-trace (Tier B) ([#116](https://github.com/ozzy-labs/suasor/issues/116)) ([2161311](https://github.com/ozzy-labs/suasor/commit/21613119e9ffd3beafac40511bcc8e113b2aa6ea))
+* **skills:** doc-review — 仕様/設計書のレビュー skill ([#123](https://github.com/ozzy-labs/suasor/issues/123)) ([#132](https://github.com/ozzy-labs/suasor/issues/132)) ([0b8ef35](https://github.com/ozzy-labs/suasor/commit/0b8ef358b16b6b9861db6fc527dcddbfbc0aa0b8))
+* **skills:** plan-draft — issue/設計の分解・計画 skill ([#122](https://github.com/ozzy-labs/suasor/issues/122)) ([#126](https://github.com/ozzy-labs/suasor/issues/126)) ([467dab3](https://github.com/ozzy-labs/suasor/commit/467dab3f4d23cf02036c4cc4817dbb6cef743c0d))
+
 ## [0.1.6](https://github.com/ozzy-labs/suasor/compare/v0.1.5...v0.1.6) (2026-06-20)
 
 
