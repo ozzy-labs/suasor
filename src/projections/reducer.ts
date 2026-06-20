@@ -218,6 +218,12 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       markProposalApplied(sqlite, event.draftId, event.recordedAt);
       return;
     }
+    case "DraftExported": {
+      // No projection: a body-less audit record that an export happened (ADR-0025).
+      // The exported file is a side effect, not re-created on replay (like
+      // ConnectorSyncCompleted, the provenance lives in the event log alone).
+      return;
+    }
     case "InboxItemTriaged": {
       sqlite
         .query(

@@ -446,6 +446,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "commitment.reopen",
         "person.merge",
         "person.split",
+        "draft.export",
       ].sort(),
     );
   });
@@ -470,6 +471,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "commitment.reopen",
       "person.merge",
       "person.split",
+      "draft.export",
     ];
     for (const name of writeTools) {
       const tool = tools.find((t) => t.name === name);

@@ -113,6 +113,23 @@ export const ReplyDraftProposed = z.object({
   body: z.string(),
 });
 
+/**
+ * A draft was exported to a local file (ADR-0025). Body-less audit event: the
+ * content lives only in the export file (content-minimization) — this records
+ * that an export happened, for provenance. No projection (reducer no-op, like
+ * ConnectorSyncCompleted); replay does not re-write the file.
+ */
+export const DraftExported = z.object({
+  type: z.literal("DraftExported"),
+  ...Envelope,
+  /** Absolute path the draft was written to (inside the export sandbox). */
+  path: z.string().min(1),
+  /** Export format. */
+  format: z.enum(["md", "txt"]),
+  /** Source the draft derives from, when applicable (provenance). */
+  sourceExternalId: z.string().min(1).optional(),
+});
+
 /** An inbox item was triaged into a state (read-side workflow). */
 export const InboxItemTriaged = z.object({
   type: z.literal("InboxItemTriaged"),
@@ -302,6 +319,7 @@ export const DomainEvent = z.discriminatedUnion("type", [
   TaskApplied,
   DecisionRecorded,
   ReplyDraftProposed,
+  DraftExported,
   InboxItemTriaged,
   ProposalGenerated,
   ProposalRejected,
@@ -326,6 +344,7 @@ export const EVENT_TYPES = [
   "TaskApplied",
   "DecisionRecorded",
   "ReplyDraftProposed",
+  "DraftExported",
   "InboxItemTriaged",
   "ProposalGenerated",
   "ProposalRejected",
@@ -353,6 +372,7 @@ export type NewEvent =
   | Omit<z.input<typeof TaskApplied>, "id" | "recordedAt">
   | Omit<z.input<typeof DecisionRecorded>, "id" | "recordedAt">
   | Omit<z.input<typeof ReplyDraftProposed>, "id" | "recordedAt">
+  | Omit<z.input<typeof DraftExported>, "id" | "recordedAt">
   | Omit<z.input<typeof InboxItemTriaged>, "id" | "recordedAt">
   | Omit<z.input<typeof ProposalGenerated>, "id" | "recordedAt">
   | Omit<z.input<typeof ProposalRejected>, "id" | "recordedAt">

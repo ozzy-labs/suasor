@@ -116,6 +116,21 @@ export const ExtractionConfig = z
 export type ExtractionConfig = z.infer<typeof ExtractionConfig>;
 
 /**
+ * `[export]` — local draft export (ADR-0025). `draft.export` writes drafts as
+ * files **under `dir` only** (sandbox; no egress, no source write-back). `dir`
+ * defaults to `<configDir>/exports/` (resolved in the loader, like
+ * `[storage].dbPath`). It must NOT sit under a `[connectors.local].roots` entry,
+ * or exported drafts would be re-ingested (the loader/tool guards this).
+ */
+export const ExportConfig = z
+  .object({
+    /** Export sandbox directory (absolute). `null` → `<configDir>/exports/`. */
+    dir: z.string().min(1).nullable().default(null),
+  })
+  .passthrough();
+export type ExportConfig = z.infer<typeof ExportConfig>;
+
+/**
  * Root config. `connectors` is an open record extended per-connector by
  * #7–#12; values are left lenient at the foundation layer.
  *
@@ -129,6 +144,7 @@ export const Config = z.object({
   embedding: EmbeddingConfig.default(() => EmbeddingConfig.parse({})),
   llm: LlmConfig.default(() => LlmConfig.parse({})),
   extraction: ExtractionConfig.default(() => ExtractionConfig.parse({})),
+  export: ExportConfig.default(() => ExportConfig.parse({})),
   connectors: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 export type Config = z.infer<typeof Config>;

@@ -36,6 +36,10 @@ backend = "disabled"   # disabled | markitdown — Office/PDF body extraction si
 # baseUrl = "http://localhost:8929"   # markitdown sidecar (/extract is appended)
 # maxBytes = 5000000                  # cap on extracted text; larger inputs stay name-only
 # version = "1"                       # extractor version; bump to re-extract on next sync
+
+[export]
+# dir = "/absolute/path/to/exports"  # draft.export sandbox (default: <configDir>/exports);
+                                      # must NOT be under a [connectors.local] root (ADR-0025)
 `;
 
 export class InitCommand extends Command {

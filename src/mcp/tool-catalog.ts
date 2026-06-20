@@ -171,6 +171,11 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: false,
     summary: "Reopen a resolved/dismissed commitment back to open (CommitmentReopened).",
   },
+  {
+    name: "draft.export",
+    readOnlyHint: false,
+    summary: "Write a draft to a local file in the export sandbox (DraftExported).",
+  },
 ];
 
 /**

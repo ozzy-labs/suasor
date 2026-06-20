@@ -5,6 +5,7 @@ export {
   ConnectorSyncCompleted,
   DecisionRecorded,
   DomainEvent,
+  DraftExported,
   EVENT_SCHEMA_VERSION,
   EVENT_TYPES,
   type EventType,
