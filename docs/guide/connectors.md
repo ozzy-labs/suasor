@@ -30,6 +30,20 @@ suasor onboard --connector box --skip-auth   # token は env override 前提（h
 - token は keychain に格納し、`config.toml` には書かない（secret は keychain / env override、NFR-PRV-4）
 - config への追記は**末尾 append のみ**で既存の手書きコメント・他セクションを壊さない。既に `[connectors.X]` がある（`enabled = false` を含む）場合は触らない（冪等）
 
+### discovery 連携（非 Slack connector の id 自動発見、[ADR-0030](../adr/0030-connector-discovery-verbs.md) / #195）
+
+discovery verb を持つ connector（**github** = `repos` / **google** = `calendars` / **box** = `folders`）を onboard すると、ウィザードは `auth test` 後にその discovery probe を実行し、token から見える id を列挙して `[connectors.X]` ブロック（`repos = [...]` 等の id 配列入り）を生成し、そのまま非破壊追記する。`config.toml` に `enabled = true` だけでなく**取り込み対象 id まで**が入るため、id を手探りせず（typo による silent 0 件を回避して）setup が完結する。
+
+- discovery 対応 connector で **token が解決できる**（keychain / env override）場合 → discovery を実行し、発見した id 入りブロックを追記（`--json` の `configSource` は `"discovery"`、`discovered` に件数）
+- discovery 対応でも **token が無い / probe が失敗した**場合 → 最小の雛形 slice（必須キーはコメント雛形）を追記してフォールバックし、理由を stderr に表示（`configSource` は `"template"`）。あとで `suasor <connector> <verb>` を手で実行して貼り替えればよい
+- **discovery 非対応 connector**（slack / ms-graph / web / local）→ 従来どおり雛形コメント付き slice を追記（`configSource` は `"template"`）
+- 既存 slice がある場合は discovery を実行せず非破壊で温存する（`configSource` は `"skipped"`）
+
+```bash
+# token を env override で渡し、github repos を discovery して config に貼る（headless）
+SUASOR_CONNECTOR_GITHUB_TOKEN=ghp_xxx suasor onboard --connector github --skip-auth --json
+```
+
 以降の各 connector 節は、ウィザードを使わず手で設定する場合の詳細（token 種別・必須 config キー）を示す。
 
 ## GitHub

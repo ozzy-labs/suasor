@@ -29,6 +29,8 @@
    6. OS 判定して scheduler 雛形（cron 行 / launchd plist / systemd unit）を出力。`--write-cron` で crontab 追記まで（任意）
    7. MCP 登録スニペット（`claude_desktop_config.json`）を表示
 
+   **discovery 連携（非 Slack connector への拡張、[ADR-0030](0030-connector-discovery-verbs.md) / #195）。** step 4 の config slice 追記は、対象 connector が discovery verb（github `repos` / google `calendars` / box `folders`）を持つ場合、`auth test` 後にその discovery probe を実行し、token から発見した id を含む `[connectors.X]` ブロック（discovery の `renderConnectorConfigBlock` 出力）を生成して**非破壊追記**する（`appendConnectorBlock`）。これにより onboard 1 コマンドで `enabled = true` だけでなく取り込み対象 id まで config に入り、id 手探りによる silent 0 件（[ADR-0007](0007-connector-contract.md)）を回避できる。discovery は best-effort: verb を持たない connector・token 未解決・probe 失敗時は最小雛形 slice（`appendConnectorSlice`）にフォールバックし、理由を stderr に出す。`--json` は追記方法を `configSource`（`discovery` / `template` / `skipped`）+ `discovered` 件数で機械可読出力する。ウィザードは discovery ロジックを持たず `DISCOVERY_SPECS` の probe を呼ぶオーケストレータに留まる（責務境界・import-clean 維持）。
+
 3. **config 自動追記の安全性（既存値を壊さない）。** 純粋関数 `appendConnectorSlice(toml, connector, defaults)` を SSOT とする:
    - 対象 connector の `[connectors.X]` セクションが**既に存在する**場合は**追記しない**（冪等。`enabled = false` を含む既存ユーザー設定を勝手に書き換えない）
    - 存在しない場合のみ、ファイル末尾に最小 slice（`[connectors.X]` + `enabled = true` + connector 既定キーのコメント雛形）を append する

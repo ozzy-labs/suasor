@@ -6,7 +6,7 @@
  * Auth/sync orchestration reuse the same units exercised elsewhere, so these
  * tests focus on the wizard's own glue and its only new side effect.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,6 +173,144 @@ describe("suasor onboard — --json summary", () => {
       );
       const report = JSON.parse(out) as { connectors: { connector: string }[] };
       expect(report.connectors.map((c) => c.connector)).toEqual(["github", "slack"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suasor onboard — discovery → config block (ADR-0030, Issue #195)", () => {
+  const realFetch = globalThis.fetch;
+  const realToken = process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realToken === undefined) delete process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+    else process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = realToken;
+  });
+
+  /** Stub `globalThis.fetch` with a single `GET /user/repos` page (no Link header). */
+  function stubGithubRepos(repos: { full_name: string; visibility?: string }[]): void {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(repos), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+  }
+
+  test("a discovery-capable connector with a token appends the discovered ids", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test_token";
+    stubGithubRepos([
+      { full_name: "acme/api", visibility: "private" },
+      { full_name: "acme/web", visibility: "public" },
+    ]);
+    try {
+      // --skip-auth (no keychain write) but the env override supplies the token,
+      // so discovery still runs and the rendered block lands in config.toml.
+      const { code, out } = await run(
+        ["onboard", "--connector", "github", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      expect(out).toContain("discovered 2 item(s)");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.github]");
+      expect(toml).toContain("enabled = true");
+      expect(toml).toContain('"acme/api"');
+      expect(toml).toContain('"acme/web"');
+      // The discovery block carries the ids array (not just a commented placeholder).
+      expect(toml).toContain("repos = [");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--json reports configSource=discovery with the discovered count", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test_token";
+    stubGithubRepos([{ full_name: "acme/api", visibility: "private" }]);
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "github", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as {
+        connectors: { configSource: string; discovered?: number; configAppended: boolean }[];
+      };
+      expect(report.connectors[0]?.configSource).toBe("discovery");
+      expect(report.connectors[0]?.discovered).toBe(1);
+      expect(report.connectors[0]?.configAppended).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a discovery-capable connector with no token falls back to the placeholder template", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // No env override token, --skip-auth → discovery throws "no github token" and
+    // the wizard writes the minimal placeholder slice instead.
+    delete process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+    try {
+      const { code, out, err } = await run(
+        ["onboard", "--connector", "github", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { configSource: string }[] };
+      expect(report.connectors[0]?.configSource).toBe("template");
+      // The fallback reason is surfaced on stderr (kept out of --json stdout).
+      expect(err).toContain("discovery skipped");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.github]");
+      // The commented placeholder, not a populated repos array.
+      expect(toml).toContain("# repos =");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-discovery connector appends the placeholder template (configSource=template)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // `web` has no discovery verb → always the placeholder template path.
+      const { code, out } = await run(
+        ["onboard", "--connector", "web", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { configSource: string }[] };
+      expect(report.connectors[0]?.configSource).toBe("template");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.web]");
+      expect(toml).toContain("# urls =");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing slice is left untouched even for a discovery-capable connector", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test_token";
+    // Discovery must not run / overwrite when the slice already exists.
+    stubGithubRepos([{ full_name: "acme/api" }]);
+    try {
+      const configPath = join(dir, "config.toml");
+      await Bun.write(configPath, "[connectors.github]\nenabled = false\n");
+      const { code, out } = await run(
+        ["onboard", "--connector", "github", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as {
+        connectors: { configSource: string; configAppended: boolean }[];
+      };
+      expect(report.connectors[0]?.configAppended).toBe(false);
+      expect(report.connectors[0]?.configSource).toBe("skipped");
+      const toml = await Bun.file(configPath).text();
+      expect(toml).toContain("enabled = false");
+      expect(toml).not.toContain('"acme/api"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
