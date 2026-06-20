@@ -33,6 +33,7 @@ interface Check {
 const PROJECTION_TABLES = [
   "sources",
   "tasks",
+  "sync_runs",
   "decisions",
   "inbox",
   "proposals",

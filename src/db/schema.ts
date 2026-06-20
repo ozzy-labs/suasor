@@ -36,6 +36,37 @@ export const tasks = sqliteTable("tasks", {
   updatedAt: text("updated_at").notNull(),
 });
 
+/**
+ * Sync run history projection (ADR-0033). One row per connector holding its
+ * *latest* sync run, so `suasor sync status` can show the last sync time / counts
+ * / outcome without scanning the event log. Folded from `SyncRunStarted` (sets
+ * `startedAt` / `status='running'`) and `SyncRunEnded` (confirms `endedAt` /
+ * `status` / counts / duration / lastError). Rebuildable (ADR-0002): replaying
+ * the run events in order reproduces the latest-run row.
+ */
+export const syncRuns = sqliteTable("sync_runs", {
+  /** Connector name (e.g. "github"); one row per connector (latest run). */
+  connector: text("connector").primaryKey(),
+  /** Id of the latest run observed (content-derived `<connector>:<startedAt>`). */
+  runId: text("run_id").notNull(),
+  /** When the latest run started (ISO 8601). */
+  startedAt: text("started_at").notNull(),
+  /** When the latest run ended (ISO 8601); NULL while still running. */
+  endedAt: text("ended_at"),
+  /** Latest run status: running / ok / partial / error. */
+  status: text("status").notNull(),
+  /** New sources observed in the latest run. */
+  observed: integer("observed").notNull().default(0),
+  /** Existing sources whose body changed in the latest run. */
+  updated: integer("updated").notNull().default(0),
+  /** Existing sources skipped (fingerprint unchanged) in the latest run. */
+  unchanged: integer("unchanged").notNull().default(0),
+  /** Wall-clock duration of the latest run (ms); NULL while still running. */
+  durationMs: integer("duration_ms"),
+  /** Failure message when status = error; NULL otherwise. */
+  lastError: text("last_error"),
+});
+
 /** Decision projection (provenance-tracked, ADR-0002). */
 export const decisions = sqliteTable("decisions", {
   id: text("id").primaryKey(),

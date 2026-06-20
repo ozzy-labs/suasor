@@ -4,7 +4,7 @@
  *
  * Wired command surface (docs/design/cli.md):
  *   init · onboard · db migrate · projections rebuild · search · source list/forget ·
- *   <connector> sync · sync ·
+ *   <connector> sync · sync · sync status ·
  *   <connector> auth set/test (github/ms-graph/google/box) ·
  *   <connector> discovery verbs (github repos; ADR-0030) · connectors list ·
  *   config show ·
@@ -55,7 +55,7 @@ import {
   SlackStatusCommand,
 } from "./commands/slack.ts";
 import { SourceForgetCommand, SourceListCommand } from "./commands/source.ts";
-import { SyncAllCommand } from "./commands/sync-all.ts";
+import { SyncAllCommand, SyncStatusCommand } from "./commands/sync-all.ts";
 
 /** Build the configured CLI instance. */
 export function buildCli(): Cli {
@@ -78,6 +78,7 @@ export function buildCli(): Cli {
     cli.register(ConnectorSync);
   }
   cli.register(SyncAllCommand);
+  cli.register(SyncStatusCommand);
   for (const ConnectorAuth of connectorAuthCommands() as CommandClass[]) {
     cli.register(ConnectorAuth);
   }

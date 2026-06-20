@@ -124,6 +124,17 @@ journalctl --user -u suasor-sync.service          # ログを確認
 
 **部分失敗も exit 1 で検知できる**（[ADR-0014](../adr/0014-slack-multi-workspace.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)）: Slack のマルチ workspace のように 1 connector が内部に複数の取り込み単位（workspace）を持つ場合、**一部の workspace だけが失敗した部分失敗**も connector 失敗として集計され `suasor sync` 全体が exit 1 になる（取り込めた workspace のレコードは保持される）。`slack sync` 単体でも同様に部分失敗で exit 1 となり、末尾に workspace 別サマリ行を出す。これにより「一部 workspace だけ token 切れ / rate limit」を exit code を gate にした cron / CI で取りこぼさない（従来は「全 workspace 失敗時のみ exit 1」で部分失敗が exit 0 に隠れていた）。`--json` では各 connector の `outcome.partialFailure` / `outcome.summaryLines` で機械可読に判別できる。
 
+## 鮮度の確認 `suasor sync status`
+
+スケジューラに定期実行を委譲すると「最後にいつ sync できたか」「直近の run は成功したか」をスケジューラのログ越しに追う必要が出る。`suasor sync status` は connector 別の**最新 sync run**（最終 sync 時刻 / 取り込み件数 / 直近の成否 / 所要時間）を手元から直接確認できる（[ADR-0033](../adr/0033-sync-run-history.md)）。
+
+```bash
+suasor sync status            # connector 別の最終 sync 時刻 / 件数 / 成否を表示
+suasor sync status --json     # 機械可読（cron 監視・ダッシュボード連携向け）
+```
+
+sync の実行履歴は `SyncRunStarted` / `SyncRunEnded` event として追記され、`sync_runs` projection に畳まれる。**connector が throw した失敗 run も `status=error` で残る**ため、`suasor sync` 全体の exit code（前節）に加えて「どの connector の直近 sync が・いつ・なぜ失敗したか」を後追いできる。次回予定（next run）は OS スケジューラ側の責務のため表示しない（鮮度は「最終 sync からの経過」で判断する）。有効だが未 sync の connector は `never synced` と表示される。
+
 ## なぜ常駐デーモンにしないのか
 
 常駐 `--watch` は多重起動ロック・クラッシュ復旧・再起動管理という複雑性を持ち込む。Suasor は single-user / local-first 前提でこの種の調整機構を意図的に持たない（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）。OS スケジューラは既にこれらを解決しているので、定期実行はそちらに委譲する（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）。`brief`（期間ダイジェスト）も同じく cron / CI 前提で設計されており、運用モデルは一貫している（[ADR-0017](../adr/0017-brief-period-bundle.md)）。

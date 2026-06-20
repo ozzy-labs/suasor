@@ -30,7 +30,7 @@ describe("schema init", () => {
   });
 
   test("creates all projection tables", () => {
-    for (const t of ["sources", "tasks", "decisions", "inbox", "links"]) {
+    for (const t of ["sources", "tasks", "sync_runs", "decisions", "inbox", "links"]) {
       expect(tableExists(db, t)).toBe(true);
     }
   });

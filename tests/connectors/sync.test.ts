@@ -144,3 +144,52 @@ describe("syncConnector — secret resolution wiring", () => {
     expect(token).toBe("tok-xyz");
   });
 });
+
+describe("syncConnector — run history (ADR-0033)", () => {
+  type SyncRunRow = {
+    connector: string;
+    status: string;
+    observed: number;
+    updated: number;
+    unchanged: number;
+    last_error: string | null;
+    ended_at: string | null;
+  };
+
+  function syncRun(connector: string): SyncRunRow | null {
+    return store.connection.sqlite
+      .query<SyncRunRow, [string]>("SELECT * FROM sync_runs WHERE connector = ?")
+      .get(connector);
+  }
+
+  test("a successful pass records a SyncRunEnded(status=ok) with counts", async () => {
+    await syncConnector(store, fakeConnector([rec("gh:1", "x"), rec("gh:2", "y")]));
+    const row = syncRun("fake");
+    expect(row?.status).toBe("ok");
+    expect(row?.observed).toBe(2);
+    expect(row?.ended_at).not.toBeNull();
+    // Both SyncRunStarted and SyncRunEnded are appended (1 run = 2 history events).
+    const counts = store.connection.sqlite
+      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM events WHERE type = ?")
+      .get("SyncRunStarted");
+    expect(counts?.n).toBe(1);
+  });
+
+  test("a throwing connector still records SyncRunEnded(status=error) and re-throws", async () => {
+    const boom: Connector = {
+      name: "fake",
+      sourceType: "fake",
+      // biome-ignore lint/correctness/useYield: intentional throw before yielding.
+      async *sync(): AsyncIterable<SourceRecord> {
+        throw new Error("upstream 500");
+      },
+      finalize(): SyncResult {
+        return { cursor: null };
+      },
+    };
+    await expect(syncConnector(store, boom)).rejects.toThrow("upstream 500");
+    const row = syncRun("fake");
+    expect(row?.status).toBe("error");
+    expect(row?.last_error).toBe("upstream 500");
+  });
+});
