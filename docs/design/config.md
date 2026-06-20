@@ -102,3 +102,7 @@ notifications = "off"                     # off | all | repos（既定 off・per
 
 - 不正値は起動時に fail-fast（`ConfigError`。Zod issues を field 単位で保持）
 - レイヤは deep-merge してから Zod で検証（init args > env > file > defaults）
+
+## 実効値の確認
+
+合成後の実効 config（`env override > file > defaults`）は `suasor config show [--effective] [--json]` で確認する（[cli design](cli.md) の `config show`）。secret は**常にマスク**（`***`）され、connector の資格情報は**存在有無のみ**（`set` / `unset`）を出す（NFR-PRV-4）。`doctor`（健全性診断）とは責務分離で、`config show` は「今どの値が効いているか」を出す。
