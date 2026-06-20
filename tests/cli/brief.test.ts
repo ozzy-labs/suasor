@@ -132,4 +132,31 @@ describe("suasor brief", () => {
     expect(code).toBe(1);
     expect(err).toContain("--limit must be a positive integer");
   });
+
+  test("hints on stderr when the embedding backend is disabled (Issue #159)", async () => {
+    await seed();
+    const { code, out, err } = await run(["brief", "--since", "2020-01-01"]);
+    expect(code).toBe(0);
+    expect(err).toContain("embedding disabled");
+    expect(err).toContain("docs/guide/embedding.md");
+    // stdout (the brief summary) must stay clean of the hint.
+    expect(out).not.toContain("embedding disabled");
+  });
+
+  test("emits no hint when the embedding backend is enabled (Issue #159)", async () => {
+    await Bun.write(join(dir, "config.toml"), '[embedding]\nbackend = "ollama"\n');
+    await seed();
+    const { code, err } = await run(["brief", "--since", "2020-01-01"]);
+    expect(code).toBe(0);
+    expect(err).not.toContain("embedding disabled");
+  });
+
+  test("--json suppresses the hint so the piped bundle stays clean (Issue #159)", async () => {
+    await seed();
+    const { code, out, err } = await run(["brief", "--since", "2020-01-01", "--json"]);
+    expect(code).toBe(0);
+    expect(err).not.toContain("embedding disabled");
+    expect(out).not.toContain("embedding disabled");
+    expect(JSON.parse(out).tasks).toHaveLength(1);
+  });
 });

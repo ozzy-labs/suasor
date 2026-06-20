@@ -36,10 +36,16 @@ export class SearchCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { Store }, { searchSources, DEFAULT_SEARCH_LIMIT }] = await Promise.all([
+    const [
+      { loadConfig },
+      { Store },
+      { searchSources, DEFAULT_SEARCH_LIMIT },
+      { emitEmbeddingDisabledHint },
+    ] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
       import("../../retrieval/index.ts"),
+      import("../embedding-hint.ts"),
     ]);
 
     let limit = DEFAULT_SEARCH_LIMIT;
@@ -58,6 +64,11 @@ export class SearchCommand extends Command {
       this.context.stderr.write("error: storage.dbPath is not configured\n");
       return 1;
     }
+
+    // FTS-first retrieval works without embeddings, but when the backend is
+    // disabled semantic recall is off — surface that on stderr so a thin result
+    // set has a visible cause (Issue #159). Suppressed under --json (pipe-clean).
+    emitEmbeddingDisabledHint(this.context.stderr, config.embedding.backend, this.json);
 
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
