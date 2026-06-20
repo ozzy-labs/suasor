@@ -74,7 +74,7 @@ suasor db migrate            # apply the projection schema (idempotent)
 suasor projections rebuild   # replay the event log into projections
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Audit ingested data and purge a source locally with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ### From source
 
