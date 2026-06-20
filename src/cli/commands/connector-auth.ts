@@ -20,6 +20,9 @@
  */
 import { Command, type CommandClass, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
+import { connectorBundledInBinary } from "../../connectors/registry.ts";
+import { secretEnvName } from "../../connectors/secrets.ts";
+import { standaloneGate } from "../build-target.ts";
 
 /** Base class for `<connector> auth set` — stores the connector secret in the keychain. */
 class ConnectorAuthSetCommand extends Command {
@@ -33,6 +36,22 @@ class ConnectorAuthSetCommand extends Command {
     const spec = AUTH_SPECS[connector];
     if (!spec) {
       this.context.stderr.write(`error: no auth spec for connector '${connector}'\n`);
+      return 1;
+    }
+
+    // `auth set` writes to the OS keychain (@napi-rs/keyring), which is external
+    // to the standalone binary (ADR-0010). In the binary, secrets must come from
+    // the env override instead — so gate keychain writes and point there.
+    const setGate = standaloneGate(
+      `'${connector} auth set' (the OS keychain is not available in the binary)`,
+      {
+        hint:
+          `set the secret via the env override instead: ` +
+          `${secretEnvName(connector, spec.secretName)}=<value>`,
+      },
+    );
+    if (!setGate.ok) {
+      this.context.stderr.write(setGate.message);
       return 1;
     }
 
@@ -71,6 +90,21 @@ class ConnectorAuthTestCommand extends Command {
     if (!spec) {
       this.context.stderr.write(`error: no auth spec for connector '${connector}'\n`);
       return 1;
+    }
+
+    // `auth test` runs the connector's live probe, which needs its SDK. For the
+    // connectors kept external to the binary (ms-graph / google / box) the probe
+    // can't load there; gate them. The keychain is also external, but `auth test`
+    // resolves env-override secrets first, so the bundled-SDK connectors (github)
+    // still verify in the binary via SUASOR_CONNECTOR_<NAME>_<SECRET>.
+    if (!connectorBundledInBinary(connector)) {
+      const testGate = standaloneGate(
+        `'${connector} auth test' (the ${connector} connector SDK is not shipped in the binary)`,
+      );
+      if (!testGate.ok) {
+        this.context.stderr.write(testGate.message);
+        return 1;
+      }
     }
 
     const [{ loadConfig }, { makeSecretResolver }] = await Promise.all([

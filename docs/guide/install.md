@@ -38,6 +38,8 @@ chmod +x suasor-bun-linux-x64
 ./suasor-bun-linux-x64 --version
 ```
 
+### Binary scope {#binary-scope}
+
 > **Caveat (binary scope).** The binary bundles the Suasor core plus the one
 > native piece it needs (`sqlite-vec`). Kept **external** (not in the binary) to
 > keep it light:
@@ -55,6 +57,19 @@ chmod +x suasor-bun-linux-x64
 > The GitHub connector and all retrieval/MCP features work in the binary. Use the
 > **npm** package or the **Docker** image for the full connector set, keychain
 > secrets, and the assistant skills.
+
+Commands that depend on the external pieces fail fast in the binary with a
+human-readable error pointing here (instead of an opaque `Cannot find module` /
+keyring failure):
+
+| Command | In the binary | Escape hatch |
+| --- | --- | --- |
+| `skills install` / `skills list` | unavailable (no bundled `docs/skills`) | npm / Docker |
+| `<connector> sync` for slack / ms-graph / google / box / web | unavailable (SDK external) | npm / Docker |
+| `<connector> auth set` (all connectors) | unavailable (keychain external) | set `SUASOR_CONNECTOR_<NAME>_<SECRET>` directly |
+| `<connector> auth test` for ms-graph / google / box | unavailable (SDK external) | npm / Docker |
+| `github sync` / `github auth test`, `local sync` | **available** | env-override secret for `github` |
+| `suasor sync` (bulk) | runs the bundled connectors; skips the external ones with a warning | npm / Docker for the rest |
 
 ## 2. Docker — batteries-included (+ Ollama)
 
