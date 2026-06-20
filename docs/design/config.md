@@ -53,6 +53,17 @@ backend = "disabled"   # disabled（既定）| markitdown
 - 初期スコープは **`local` connector 限定**（box/drive(API) は内容 fetch + 内容 fingerprint を要する後続 Issue で段階化）
 - `baseUrl` / `maxBytes` / `version` は markitdown backend に適用。`version` を bump すると `extraction_meta` の記録と差分（drift）し、既存 source が次の `sync` で自動再抽出される（ADR-0024 §6・`suasor extraction status` で可視化）。未知キーは保持（`passthrough`）
 
+### `[export]`（確定・ADR-0025）
+
+```toml
+[export]
+# dir = "/absolute/path/to/exports"  # draft.export の sandbox（既定 <configDir>/exports）
+```
+
+- `draft.export`（[ADR-0025](../adr/0025-local-draft-export.md)）が下書きを書き出すローカル sandbox。**送信しない・source に書き戻さない**（local-first / no-egress）
+- `dir` 既定は `<configDir>/exports/`（loader が解決、`[storage].dbPath` と同様）。書き込みは `dir` 配下のみ（filename は basename・traversal 拒否）
+- **`[connectors.local].roots` の配下/一致は不可**（書き出した下書きが再取り込みされるループ防止）。`draft.export` が realpath 解決して拒否する
+
 ### 他セクション（後続 Issue が拡張）
 
 ```toml

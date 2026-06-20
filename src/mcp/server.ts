@@ -37,6 +37,7 @@ import {
 } from "../config/schema.ts";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
+import { draftExport } from "../export/draft-export.ts";
 import { proposeApply } from "../propose/apply.ts";
 import {
   CandidateInput as CandidateInputSchema,
@@ -137,6 +138,8 @@ export interface McpServerDeps {
       embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
       /** `[extraction]` section; enables Office/PDF body extraction at ingest (ADR-0024). */
       extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
+      /** `[export]` section; `draft.export` writes into `dir` (ADR-0025). */
+      export?: { dir: string | null };
     };
   };
 }
@@ -1139,6 +1142,48 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       },
       async ({ commitmentId }) => {
         const result = commitmentReopen(write.store, { commitmentId });
+        return jsonResult(result);
+      },
+    );
+
+    // --- draft.export: write a draft to a local file (ADR-0025). ---
+    // Local-only (no egress, no source write-back), sandboxed to [export].dir,
+    // body-less DraftExported audit event. HITL.
+    server.registerTool(
+      "draft.export",
+      {
+        title: "Export draft to file",
+        description:
+          "Write a draft (reply/handoff/announcement/plan text) to a local file " +
+          "under the export sandbox ([export].dir). Local-only: never sends and " +
+          "never writes back to a source (ADR-0025). Write tool: requires human " +
+          "approval — no auto-apply (ADR-0004). filename is a basename; collisions " +
+          "get a numeric suffix.",
+        inputSchema: {
+          content: z.string().describe("Draft text to write."),
+          filename: z.string().min(1).describe("Target filename (basename only)."),
+          format: z.enum(["md", "txt"]).describe("Export format."),
+          sourceExternalId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Source the draft derives from (provenance)."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ content, filename, format, sourceExternalId }) => {
+        const dir = write.config.export?.dir;
+        if (!dir) {
+          throw new Error("export dir is not configured ([export].dir)");
+        }
+        const localRoots = Array.isArray(write.config.connectors.local?.roots)
+          ? (write.config.connectors.local.roots as string[])
+          : [];
+        const result = draftExport(
+          write.store,
+          { content, filename, format, ...(sourceExternalId ? { sourceExternalId } : {}) },
+          { exportDir: dir, localRoots },
+        );
         return jsonResult(result);
       },
     );

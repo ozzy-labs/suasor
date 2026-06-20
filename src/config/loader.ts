@@ -162,5 +162,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Confi
   if (config.storage.dbPath === null) {
     config.storage.dbPath = join(configDir, "suasor.db");
   }
+  if (config.export.dir === null) {
+    config.export.dir = join(configDir, "exports");
+  }
   return config;
 }

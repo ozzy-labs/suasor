@@ -14,6 +14,7 @@
   - `TaskApplied` — 提案 task の承認・適用（`state`: open / in_progress / completed / dropped）
   - `DecisionRecorded` — 決定の記録（`rationale` + provenance）
   - `ReplyDraftProposed` — 返信下書きの提案（HITL・送信はユーザー手動）
+  - `DraftExported` — 下書きをローカルファイルに書き出した監査記録（[ADR-0025](../adr/0025-local-draft-export.md)・`path` / `format` / `sourceExternalId?` のみで **body は持たない**。projection なし＝reducer no-op、replay でファイル再生成しない）
   - `InboxItemTriaged` — inbox item の仕分け（`state`: open / snoozed / done / dismissed）
   - `ProposalGenerated` — 提案候補の生成（`proposals` ledger に `pending` 記録、#89）
   - `ProposalRejected` — pending 候補の却下（`reason` 付き、#89）
