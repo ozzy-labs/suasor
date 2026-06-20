@@ -288,6 +288,12 @@ export class SlackConversationsCommand extends Command {
       // the raw ts); "-" stays when there is no recorded self-post (#84).
       const { formatSlackTs } = await import("../slack-time.ts");
       this.context.stdout.write(`${conversations.length} conversation(s) visible to this token:\n`);
+      // Label the columns ID / Name so it is unambiguous that the first column
+      // is the value to copy into `channels` (config wants ids, not names —
+      // Issue #158). The header is omitted when there is nothing to label.
+      if (conversations.length > 0) {
+        this.context.stdout.write("  ID / Name\n");
+      }
       for (const c of conversations) {
         const archived = c.isArchived ? " (archived)" : "";
         let engagement = "";

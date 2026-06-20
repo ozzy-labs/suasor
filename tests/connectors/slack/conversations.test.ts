@@ -184,6 +184,16 @@ describe("conversations — renderConfigBlock", () => {
     const block = renderConfigBlock("T1", { conversations: [], missingScopes: {} });
     expect(block).toContain("channels = []");
   });
+
+  test("notes that channels are ids (not names) so a pasted name is not a footgun (#158)", async () => {
+    const { transport } = fakeConvos({
+      public_channel: [{ id: "C1", name: "general" }],
+    });
+    const result = await listConversations("xoxb", { types: ["public"], transport });
+    const block = renderConfigBlock("T1", result).join("\n");
+    expect(block).toContain("channels are ids");
+    expect(block).toContain("not names");
+  });
 });
 
 describe("conversations — onProgress (#84)", () => {

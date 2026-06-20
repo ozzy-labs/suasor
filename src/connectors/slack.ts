@@ -228,6 +228,24 @@ function higherTs(a: string | undefined, b: string | undefined): string | undefi
   return Number.parseFloat(a) >= Number.parseFloat(b) ? a : b;
 }
 
+/**
+ * Slack conversation ids start with `C` (public channel), `G` (private channel
+ * / group-DM), or `D` (DM). A configured `channels` value that does not — most
+ * commonly a channel **name** like `#general` — is almost certainly a
+ * misconfiguration: `conversations.history` keys off the id, so a name silently
+ * ingests zero messages (ADR-0007 "no silent wrong answer", Issue #158).
+ *
+ * We warn rather than fail: Slack's id prefixes are not contractually frozen,
+ * so a hard reject could lock out a future-valid id. `slack conversations`
+ * surfaces the right ids to copy.
+ */
+const SLACK_CHANNEL_ID_PREFIX = /^[CDG]/;
+
+/** Whether a configured `channels` value looks like a Slack conversation id. */
+export function looksLikeSlackChannelId(channel: string): boolean {
+  return SLACK_CHANNEL_ID_PREFIX.test(channel.trim());
+}
+
 /** Shape of the message items we read (subset of the Slack response). */
 interface SlackMessageItem {
   ts: string;
@@ -383,6 +401,22 @@ class SlackConnector implements Connector {
     let resolvedCount = 0; // workspaces that had a token
     let failedCount = 0; // workspaces that errored mid-fetch
     let lastError: unknown;
+
+    // Surface non-id channel values (e.g. a `#general` name) before any fetch:
+    // `conversations.history` keys off the id, so a name silently ingests zero
+    // messages. Warn (don't fail) so a future-valid id prefix is never locked
+    // out (ADR-0007 "no silent wrong answer", Issue #158).
+    for (const ws of workspaces) {
+      for (const channel of ws.channels) {
+        if (!looksLikeSlackChannelId(channel)) {
+          ctx.onWarn?.(
+            `workspace '${ws.alias}' channel '${channel}' does not look like a Slack id ` +
+              "(ids start with C/D/G) — channels must be ids, not names; run " +
+              "`suasor slack conversations` to find the id",
+          );
+        }
+      }
+    }
 
     for (const ws of workspaces) {
       const token = await ctx.secret(ws.secretName);

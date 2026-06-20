@@ -100,7 +100,7 @@ channel メッセージを取り込む（`@slack/web-api`）。
 ```toml
 [connectors.slack]
 team = "T0123ABCD"            # id prefix（rename しても安定）
-channels = ["C0123ABCD"]      # 取り込み対象 channel id（空なら何もしない）
+channels = ["C0123ABCD"]      # 取り込み対象 channel **id**（名前不可・空なら何もしない）。id は `suasor slack conversations` で取得
 since = "30d"                 # cold-start 下限（任意、ADR-0016）。相対 30d / 4w / 12h または ISO 日付 2026-01-01。不正値はロード時に ConfigError で fail-fast（#157）
 self_user_id = "U0SELF"       # 自分の Slack user id（任意、ADR-0012）。slack.demand.list の @mention 検出用
 [connectors.slack.channel_since]
@@ -135,7 +135,9 @@ suasor slack sync                      # （= <connector> sync）取り込み
 
   `auth test` は scope ごとに `public channel sync` / `private channel sync` / `DM sync` / `group-DM (mpim) sync` / `engagement axis` の readiness（`READY` / `READY (degraded: +users:read …)` / `MISSING <scope>` / `N/A (User Token only)`）を出す。READY は scope の保証のみで、未参加 channel は `not_in_channel` のまま（membership は別レイヤ）
 
-  `conversations` の表示は **type 内で a-z ソート**され、**DM は相手の表示名を `users.info` で解決**して `dm:<name>` で出す（`users:read` 必要、未解決時は `dm:<userId>` にフォールバック）。DM の逐次 `users.info` 解決と `--sort=last_self_post` の `search.messages` ページングは長くなりがちなので **stderr に進捗（処理件数）を表示**する（`sync` と同じ `createProgress`・TTY 限定・`--no-progress` で無効化、#84）。
+  `conversations` の表示は先頭に `ID / Name` ラベル行を付け、**1 列目（id）こそ `channels` に貼る値**だと明示する（[#158](https://github.com/ozzy-labs/suasor/issues/158)）。**type 内で a-z ソート**され、**DM は相手の表示名を `users.info` で解決**して `dm:<name>` で出す（`users:read` 必要、未解決時は `dm:<userId>` にフォールバック）。出力する `[connectors.slack]` ブロックの `channels` も id（`#` コメントは表示名ラベルのみ）。DM の逐次 `users.info` 解決と `--sort=last_self_post` の `search.messages` ページングは長くなりがちなので **stderr に進捗（処理件数）を表示**する（`sync` と同じ `createProgress`・TTY 限定・`--no-progress` で無効化、#84）。
+
+  > **channels は id（名前不可）。** `channels` には会話 **id**（`C…` public / `G…` private・group-DM / `D…` DM）を指定する。`#general` のような channel **名**を貼ると `conversations.history` が id を引けず**無音でゼロ件取り込み**になるため、`sync` 時に `C/D/G` で始まらない値は warning を出す（ハード強制はしない＝将来 id プレフィックスが増えてもロックしない、[ADR-0007](../adr/0007-connector-contract.md) / [#158](https://github.com/ozzy-labs/suasor/issues/158)）。id は `suasor slack conversations` で取得する。
 
 - **demand signal**（[ADR-0012](../adr/0012-slack-demand-digest.md)）: 取り込み済み `slack_message` から @mention（`self_user_id` 設定時）/ DM を MCP `slack.demand.list` で「読むべきが未処理」signal として取得（query 導出・追加 fetch なし）。`next-actions` / `personal-brief` skill が priority 上位に組み込む。
 - **engagement axis**（[ADR-0013](../adr/0013-slack-engagement-axis.md)）: `suasor slack conversations --sort=last_self_post` で「自分が最後に投稿した時刻」順に会話を並べる。`search.messages`（`from:me`）を使うため **User Token（`xoxp-`）専用**で、Bot Token では `N/A` に degrade（通常順で列挙）。値は Slack 全文 index の遅延により概算。表の `last_self_post` 列は人間可読時刻（`YYYY-MM-DD HH:MM (<相対時刻>)`）で出す（`--json` は raw ts 維持、#84）。
