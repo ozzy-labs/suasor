@@ -77,8 +77,6 @@ export function initSchema(sqlite: Database): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-    -- task.list filters overdue tasks by due_date (ADR-0028); index it.
-    CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
     CREATE TABLE IF NOT EXISTS decisions (
       id          TEXT PRIMARY KEY,
       title       TEXT NOT NULL,
@@ -171,6 +169,10 @@ export function initSchema(sqlite: Database): void {
   // non-destructive (the event log is the source of truth — ADR-0002).
   ensureColumn(sqlite, "tasks", "due_date", "TEXT");
   ensureColumn(sqlite, "tasks", "priority", "TEXT");
+
+  // task.list filters overdue tasks by due_date (ADR-0028); index it. Created
+  // after ensureColumn so the column exists on legacy tables too.
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);");
 
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English
   // substrings without a CJK word segmenter (ADR-0005, docs/design/retrieval.md).
