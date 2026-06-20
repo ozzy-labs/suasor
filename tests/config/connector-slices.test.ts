@@ -7,13 +7,30 @@
  * no-op'ing at sync time. Connectors without a slice schema, and config keys for
  * unregistered connectors, stay lenient (backward compatible).
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ConfigError, loadConfig } from "../../src/config/index.ts";
 
 /** Load a config with only a `[connectors]` layer (no disk / env). */
 function loadWithConnectors(connectors: Record<string, unknown>) {
   return loadConfig({ env: {}, configDir: "/cfg", fileLayer: { connectors } });
 }
+
+/**
+ * A real, readable directory the `local` connector's load-time root validation
+ * (Issue #188) can pass. `local`'s slice schema verifies each `roots` entry
+ * exists and is a readable directory at load time, so valid-slice tests must
+ * point at a path that actually exists on disk.
+ */
+let realRoot: string;
+beforeAll(() => {
+  realRoot = mkdtempSync(join(tmpdir(), "suasor-cfg-slice-"));
+});
+afterAll(() => {
+  rmSync(realRoot, { recursive: true, force: true });
+});
 
 describe("loadConfig — connector slice validation (valid slices pass)", () => {
   test("github: a correct slice loads unchanged", async () => {
@@ -35,9 +52,9 @@ describe("loadConfig — connector slice validation (valid slices pass)", () => 
     });
   });
 
-  test("local: a correct roots/extensions slice passes", async () => {
-    const cfg = await loadWithConnectors({ local: { roots: ["/data"], maxBytes: 2048 } });
-    expect(cfg.connectors.local).toEqual({ roots: ["/data"], maxBytes: 2048 });
+  test("local: a correct roots/extensions slice (existing root) passes", async () => {
+    const cfg = await loadWithConnectors({ local: { roots: [realRoot], maxBytes: 2048 } });
+    expect(cfg.connectors.local).toEqual({ roots: [realRoot], maxBytes: 2048 });
   });
 
   test("an empty slice (all defaults) passes for every connector", async () => {
@@ -118,6 +135,52 @@ describe("loadConfig — connector slice validation (type mismatches fail fast)"
     await expect(loadWithConnectors({ web: { urls: ["not a url"] } })).rejects.toBeInstanceOf(
       ConfigError,
     );
+  });
+});
+
+describe("loadConfig — local roots path validation (Issue #188)", () => {
+  test("a non-existent root rejects with a roots-pointed ConfigError", async () => {
+    const missing = join(realRoot, "does-not-exist-typo");
+    try {
+      await loadWithConnectors({ local: { roots: [missing] } });
+      throw new Error("expected ConfigError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      const err = e as ConfigError;
+      expect(err.issues.some((i) => i.startsWith("connectors.local.roots"))).toBe(true);
+      expect(err.issues.some((i) => i.includes(missing))).toBe(true);
+    }
+  });
+
+  test("a root that is a file (not a directory) rejects", async () => {
+    const filePath = join(realRoot, "a-file.txt");
+    writeFileSync(filePath, "x");
+    await expect(loadWithConnectors({ local: { roots: [filePath] } })).rejects.toBeInstanceOf(
+      ConfigError,
+    );
+  });
+
+  test("an existing readable directory root passes", async () => {
+    const cfg = await loadWithConnectors({ local: { roots: [realRoot] } });
+    expect(cfg.connectors.local).toEqual({ roots: [realRoot] });
+  });
+
+  test("empty roots (no targets) passes — nothing to validate", async () => {
+    const cfg = await loadWithConnectors({ local: { roots: [] } });
+    expect(cfg.connectors.local).toEqual({ roots: [] });
+  });
+
+  test("the offending root index is pinpointed when only one of several is bad", async () => {
+    const missing = join(realRoot, "nope");
+    try {
+      await loadWithConnectors({ local: { roots: [realRoot, missing] } });
+      throw new Error("expected ConfigError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      const err = e as ConfigError;
+      // index 1 is the bad one; the issue path points at roots.1.
+      expect(err.issues.some((i) => i.startsWith("connectors.local.roots.1"))).toBe(true);
+    }
   });
 });
 
