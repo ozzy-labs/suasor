@@ -35,10 +35,25 @@ const HEAVY = [
   "drizzle-orm",
 ];
 
+/**
+ * All connector source `.ts` files: the top-level modules **and** their leaf
+ * subdirectories (e.g. `github/repos.ts`, `slack/conversations.ts`,
+ * `onboard/config-block.ts`). The discovery leaves (ADR-0030) must stay
+ * `fetch`-only just like the top-level modules, so the static guard recurses.
+ */
 function connectorSources(): string[] {
-  return readdirSync(connectorsDir)
-    .filter((n) => n.endsWith(".ts"))
-    .map((n) => join(connectorsDir, n));
+  const out: string[] = [];
+  for (const entry of readdirSync(connectorsDir, { withFileTypes: true })) {
+    const full = join(connectorsDir, entry.name);
+    if (entry.isDirectory()) {
+      for (const leaf of readdirSync(full)) {
+        if (leaf.endsWith(".ts")) out.push(join(full, leaf));
+      }
+    } else if (entry.name.endsWith(".ts")) {
+      out.push(full);
+    }
+  }
+  return out;
 }
 
 describe("connector import-clean discipline", () => {
