@@ -7,10 +7,29 @@
  * Adding a connector = one entry here pointing at a `() => import("./<name>.ts")`
  * loader. This module imports only the contract types at the top level.
  */
+import type { z } from "zod";
 import type { ConnectorConfig, ConnectorFactory } from "./contract.ts";
 
 /** Lazy loader returning a connector's factory (SDK imported inside the factory). */
 type FactoryLoader = () => Promise<ConnectorFactory>;
+
+/**
+ * A connector's `[connectors.<name>]` config slice schema. Validates the slice
+ * at `loadConfig` time so typos (e.g. `repo` for `repos`) fail fast instead of
+ * silently no-op'ing at sync time (ADR-0007 / docs/design/config.md). Typed as a
+ * loose `ZodType` so the registry stays connector-agnostic.
+ */
+type ConfigSchema = z.ZodType<Record<string, unknown>, ConnectorConfig>;
+
+/**
+ * Lazy loader returning a connector's config-slice schema. Lazy (not a direct
+ * `import`) so that loading a *schema* still loads only the one connector module
+ * being validated — and never every connector — preserving import-clean
+ * registration (NFR-PRF-1). Connector modules are themselves import-clean at the
+ * top level (only `zod` + contract types), so importing one for its schema pulls
+ * no heavy SDK; the SDK stays behind the lazy `import` inside `sync`.
+ */
+type SchemaLoader = () => Promise<ConfigSchema>;
 
 /** Registered connectors, by name → lazy factory loader. */
 const REGISTRY: Record<string, FactoryLoader> = {
@@ -42,6 +61,26 @@ const REGISTRY: Record<string, FactoryLoader> = {
     const { createLocalConnector } = await import("./local.ts");
     return (config: ConnectorConfig) => createLocalConnector(config);
   },
+};
+
+/**
+ * Per-connector config-slice schemas, by name → lazy schema loader. Each entry
+ * lazy-imports its connector module's exported `*ConnectorConfig` Zod schema so
+ * that `loadConfig` can validate `[connectors.<name>]` against the connector's
+ * own contract (ADR-0007). A connector that does not yet expose a slice schema
+ * is simply absent here and stays lenient (the root schema keeps it as an open
+ * record), so adoption can be staged without breaking existing configs.
+ *
+ * Adding a connector schema = one entry here pointing at its `*ConnectorConfig`.
+ */
+const CONFIG_SCHEMAS: Record<string, SchemaLoader> = {
+  github: async () => (await import("./github.ts")).GithubConnectorConfig,
+  slack: async () => (await import("./slack.ts")).SlackConnectorConfig,
+  "ms-graph": async () => (await import("./ms-graph.ts")).MsGraphConnectorConfig,
+  google: async () => (await import("./google.ts")).GoogleConnectorConfig,
+  box: async () => (await import("./box.ts")).BoxConnectorConfig,
+  web: async () => (await import("./web.ts")).WebConnectorConfig,
+  local: async () => (await import("./local.ts")).LocalConnectorConfig,
 };
 
 /**
@@ -104,6 +143,24 @@ export function connectorSecretNames(name: string): readonly string[] {
 /** Whether a connector name is registered. */
 export function hasConnector(name: string): boolean {
   return name in REGISTRY;
+}
+
+/** Whether a connector exposes a config-slice schema for `loadConfig` validation. */
+export function hasConnectorConfigSchema(name: string): boolean {
+  return name in CONFIG_SCHEMAS;
+}
+
+/**
+ * Lazy-load a connector's `[connectors.<name>]` config-slice schema, or `null`
+ * when the connector exposes none (it then stays lenient — an open record at the
+ * root). Importing the schema pulls only the one connector module (import-clean;
+ * no heavy SDK), so the config loader can validate a single configured slice
+ * without registering every connector.
+ */
+export async function loadConnectorConfigSchema(name: string): Promise<ConfigSchema | null> {
+  const loader = CONFIG_SCHEMAS[name];
+  if (!loader) return null;
+  return loader();
 }
 
 /**

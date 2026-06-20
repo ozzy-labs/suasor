@@ -57,6 +57,8 @@ run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。ap
 
 `src/connectors/registry.ts` が name → **lazy factory loader** を保持する。connector の登録・一覧は SDK を読み込まない（import-clean）。connector 追加 = `() => import("./<name>.ts")` の 1 エントリ追加。
 
+registry は併せて name → **lazy config-slice schema loader** を保持し、`loadConnectorConfigSchema(name)` で connector の `*ConnectorConfig` Zod スキーマ（`[connectors.<name>]` slice 用）を遅延取得する。`loadConfig` がこれを使って各 slice を **load 時に strict 検証**し、typo（`repos`→`repo` 等）・型不一致を `ConfigError` で fail-fast する（[config](config.md)）。connector モジュール自身は top-level が import-clean（`zod` + contract 型のみ）なので、スキーマ参照で重い SDK は pull しない。スキーマ未登録の connector は lenient（root の open record のまま）で段階導入できる。
+
 ## 規約
 
 - **read 専用** — ソースに書き戻さない（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）

@@ -85,7 +85,11 @@ notifications = "off"                     # off | all | repos（既定 off・per
 ```
 
 - `[embedding]` は確定（上記）。`[llm]` は未知キーを保持（`passthrough`）し、backend 固有項目を後続 Issue が確定する
-- `[connectors.<name>]` は open record（foundation では値を緩く保持）。各 connector が自身の slice を Zod 検証する（例: `[connectors.github]`）
+- `[connectors.<name>]` の root は open record だが、`loadConfig` が**各 connector の per-connector スキーマ（`src/connectors/<name>.ts` の `*ConnectorConfig`）で load 時に slice を検証**する（registry 経由・[ADR-0007](../adr/0007-connector-contract.md)）。検証は **strict**（未知キー拒否）で、`repos` を `repo` と打つ等の typo・型不一致は load 時に `ConfigError` として fail-fast する（従来は sync 時に黙って空振り）
+  - **未知キーは拒否**（strict）。connector 固有の追加項目は connector スキーマ側で受理を宣言する（root の `passthrough` には頼らない）
+  - 例外として `enabled`（任意の boolean）は**全 connector slice 共通の制御キー**として常に受理される（`enabled = false` で sync 対象から除外。`connectors list` / `doctor` / `sync` と同一規約）。connector 固有スキーマには含めず loader が一律にマージする
+  - **スキーマ未提供 connector / 未登録 connector のキーは lenient**（緩く保持・段階導入可）。後方互換のため、既存の正しい config はそのまま通る
+  - スキーマ参照は registry の lazy import で行い、設定された slice の connector モジュールのみを読む（import-clean を維持・重い SDK を eager import しない、NFR-PRF-1）
 
 ## env
 

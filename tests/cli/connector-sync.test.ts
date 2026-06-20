@@ -82,11 +82,24 @@ describe("suasor github sync", () => {
     expect(parsed.observed).toBe(0);
   });
 
-  test("invalid connector config fails fast with exit 1", async () => {
+  test("invalid connector config fails fast with exit 1 (load-time slice validation, #162)", async () => {
     await run(["init"]);
+    // A malformed `owner/repo` entry is rejected by the github slice schema at
+    // load (`loadConfig`), before the connector is built — fail-fast (#162).
     await writeConfig('[connectors.github]\nrepos = ["not-a-repo"]\n');
     const { code, err } = await run(["github", "sync"]);
     expect(code).toBe(1);
     expect(err).toContain("error:");
+    expect(err).toContain("connectors.github.repos");
+  });
+
+  test("a typo'd connector key fails fast with exit 1 (#162)", async () => {
+    await run(["init"]);
+    // `repo` for `repos` — the exact silent-no-op typo #162 targets.
+    await writeConfig('[connectors.github]\nrepo = ["owner/repo"]\n');
+    const { code, err } = await run(["github", "sync"]);
+    expect(code).toBe(1);
+    expect(err).toContain("error:");
+    expect(err).toContain("connectors.github");
   });
 });
