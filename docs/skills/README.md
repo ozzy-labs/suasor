@@ -4,7 +4,7 @@
 
 > 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter（`name` / 自然文トリガの `description`）+ 駆動する MCP tool flow を持つ。
 
-## Read 系（自律 OK・15）
+## Read 系（自律 OK・17）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -23,6 +23,8 @@
 | [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
 | [`doc-diff`](doc-diff/SKILL.md) | 「前回から何が変わった」「この資料の差分」 | source.history（event log の本文版）+ graph.related |
 | [`doc-review`](doc-review/SKILL.md) | 「この設計書レビューして」「仕様のレビュー」 | source.get + recall.search / decision.list / graph.related |
+| [`commitment-chase`](commitment-chase/SKILL.md) | 「催促して」「相手の約束で期限切れ」 | commitment.list(owed_to_me) + graph.related / source.get（text-only・persist なし） |
+| [`weekly-review`](weekly-review/SKILL.md) | 「週次レビュー」「棚卸し」 | task.list(overdue) / commitment.list / inbox.list / brief |
 
 ## HITL write 系（人の承認で適用・9）
 

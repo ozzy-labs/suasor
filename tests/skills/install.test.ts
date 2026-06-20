@@ -162,7 +162,7 @@ describe("real bundled catalog", () => {
     const src = resolveSkillsSource();
     expect(src).not.toBeNull();
     const skills = listBundledSkills(src);
-    expect(skills.length).toBeGreaterThanOrEqual(24);
+    expect(skills.length).toBeGreaterThanOrEqual(26);
     expect(skills.map((s) => s.name)).toContain("personal-brief");
   });
 
@@ -189,6 +189,12 @@ describe("real bundled catalog", () => {
     const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
     expect(names).toContain("slack-triage");
     expect(names).toContain("provenance-trace");
+  });
+
+  test("ships the active-surface read skills (commitment-chase / weekly-review)", () => {
+    const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
+    expect(names).toContain("commitment-chase");
+    expect(names).toContain("weekly-review");
   });
 
   test("every bundled skill has frontmatter whose name matches its directory", () => {
