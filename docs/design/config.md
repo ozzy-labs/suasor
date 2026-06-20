@@ -58,6 +58,10 @@ backend = "disabled"   # disabled（既定）| markitdown
 ```toml
 [export]
 # dir = "/absolute/path/to/exports"  # draft.export の sandbox（既定 <configDir>/exports）
+
+[export.composition]
+backend = "disabled"   # disabled（既定）| pandoc — md→Office 変換サイドカー（#138）
+# baseUrl = "http://localhost:8930"   # pandoc サイドカー（/compose を付加）
 ```
 
 - `draft.export`（[ADR-0025](../adr/0025-local-draft-export.md)）が下書きを書き出すローカル sandbox。**送信しない・source に書き戻さない**（local-first / no-egress）

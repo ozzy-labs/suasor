@@ -34,6 +34,10 @@ export type LlmBackend = z.infer<typeof LlmBackend>;
 export const ExtractionBackend = z.enum(["disabled", "markitdown"]);
 export type ExtractionBackend = z.infer<typeof ExtractionBackend>;
 
+/** Document-composition backends (#138, md→Office). `pandoc` is the implemented sidecar. */
+export const CompositionBackend = z.enum(["disabled", "pandoc"]);
+export type CompositionBackend = z.infer<typeof CompositionBackend>;
+
 /** Default Ollama sidecar base URL (`/api/embed` is appended by the client). */
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 /** Default multilingual embedding model (JA↔EN, 1024-dim) for Ollama. */
@@ -48,6 +52,9 @@ const DEFAULT_EMBEDDING_DIM = 1024;
 export const DEFAULT_MARKITDOWN_BASE_URL = "http://localhost:8929";
 /** Default cap on extracted text bytes (ADR-0024 §5; large PDFs degrade to name-only). */
 const DEFAULT_EXTRACTION_MAX_BYTES = 5_000_000;
+
+/** Default pandoc composition sidecar base URL (`/compose` appended by the client). */
+export const DEFAULT_PANDOC_BASE_URL = "http://localhost:8930";
 
 /**
  * `[embedding]` — optional sidecar (ADR-0005/0006). Default disabled so the
@@ -126,6 +133,20 @@ export const ExportConfig = z
   .object({
     /** Export sandbox directory (absolute). `null` → `<configDir>/exports/`. */
     dir: z.string().min(1).nullable().default(null),
+    /**
+     * Office-format composition sidecar (#138, md→docx/pptx/xlsx). Default
+     * disabled: `draft.export` then only supports `md`/`txt` (no heavy converter).
+     * `pandoc` is the implemented backend (md→Office via a pandoc-style sidecar,
+     * ADR-0006 ML delegation). md/txt never need it.
+     */
+    composition: z
+      .object({
+        backend: CompositionBackend.default("disabled"),
+        /** Sidecar base URL (pandoc). `/compose` is appended by the client. */
+        baseUrl: z.string().url().default(DEFAULT_PANDOC_BASE_URL),
+      })
+      .passthrough()
+      .default(() => ({ backend: "disabled" as const, baseUrl: DEFAULT_PANDOC_BASE_URL })),
   })
   .passthrough();
 export type ExportConfig = z.infer<typeof ExportConfig>;

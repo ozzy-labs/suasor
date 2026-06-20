@@ -19,14 +19,18 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Store } from "../db/index.ts";
+import type { Composer } from "./compose.ts";
+
+/** Formats `draft.export` accepts. md/txt are written directly; the rest need a composer. */
+export type DraftExportFormat = "md" | "txt" | "docx" | "pptx" | "xlsx";
 
 export interface DraftExportInput {
-  /** Draft text to write. */
+  /** Draft text (Markdown for Office formats). */
   content: string;
   /** Target filename (basename only; an extension is added if missing). */
   filename: string;
   /** Export format. */
-  format: "md" | "txt";
+  format: DraftExportFormat;
   /** Source the draft derives from, for provenance (optional). */
   sourceExternalId?: string;
 }
@@ -36,6 +40,11 @@ export interface DraftExportDeps {
   exportDir: string;
   /** `[connectors.local].roots` — the export dir must not nest under any. */
   localRoots?: string[];
+  /**
+   * Composer for Office formats (#138, md→docx/pptx/xlsx). `null`/omitted → only
+   * md/txt are allowed; an Office format then raises `DraftExportError`.
+   */
+  composer?: Composer | null;
 }
 
 export interface DraftExportOutput {
@@ -64,12 +73,12 @@ function isInside(dir: string, root: string): boolean {
  * gates this behind human approval (HITL). Throws `DraftExportError` on a bad
  * filename or a sandbox that overlaps a local connector root.
  */
-export function draftExport(
+export async function draftExport(
   store: Store,
   input: DraftExportInput,
   deps: DraftExportDeps,
   now: Date = new Date(),
-): DraftExportOutput {
+): Promise<DraftExportOutput> {
   const { content, filename, format, sourceExternalId } = input;
 
   // Filename must be a plain basename — reject path separators / traversal / abs.
@@ -97,6 +106,18 @@ export function draftExport(
   const name =
     extname(filename).toLowerCase() === `.${format}` ? filename : `${filename}.${format}`;
 
+  // Office formats are composed by the sidecar (#138); md/txt are written as-is.
+  // Compose before any filesystem work so a sidecar failure leaves nothing behind.
+  let payload: string | Uint8Array = content;
+  if (format !== "md" && format !== "txt") {
+    if (!deps.composer) {
+      throw new DraftExportError(
+        `format ${format} needs the composition sidecar ([export].composition.backend)`,
+      );
+    }
+    payload = await deps.composer.compose(content, format);
+  }
+
   mkdirSync(deps.exportDir, { recursive: true });
 
   // Non-destructive: suffix on collision (name.md → name-1.md → name-2.md …).
@@ -107,7 +128,7 @@ export function draftExport(
   }
 
   // Write first; only on success record the body-less audit event (ADR-0025 §5).
-  writeFileSync(target, content, "utf8");
+  writeFileSync(target, payload);
   store.record(
     {
       type: "DraftExported",
