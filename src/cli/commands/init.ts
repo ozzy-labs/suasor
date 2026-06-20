@@ -7,6 +7,10 @@
  * 2. Opens the configured database, which creates the event store, projection
  *    tables, and FTS5 index (ADR-0002 / ADR-0005).
  *
+ * On success it prints a multi-step next-steps guide (doctor -> connector
+ * setup -> first `sync` -> periodic scheduling -> optional skills) so users can
+ * follow the primary journey without reading the docs first.
+ *
  * Assistant-skill installation is a separate, explicit step
  * (`suasor skills install`, ADR-0008); `init` points at it rather than running
  * it implicitly.
@@ -57,6 +61,9 @@ export class InitCommand extends Command {
       initializes the local SQLite store (event log + projections + FTS index).
       Safe to re-run: existing config is preserved and schema DDL is idempotent.
 
+      On success it prints a multi-step next-steps guide (doctor -> connector
+      setup -> first sync -> periodic scheduling -> optional skills).
+
       Assistant skills are installed separately with \`suasor skills install\`
       (ADR-0008); this command points at that step rather than running it.
     `,
@@ -102,7 +109,20 @@ export class InitCommand extends Command {
     db.close();
     this.context.stdout.write(`Initialized database: ${dbPath}\n`);
 
-    this.context.stdout.write("Next: install assistant skills with `suasor skills install`.\n");
+    // Point users at the real first-run journey rather than a single skills hint:
+    // verify -> configure a connector -> first ingest -> schedule -> optional skills.
+    this.context.stdout.write(
+      [
+        "",
+        "Next steps:",
+        "  1. suasor doctor                  # verify config / DB / connector readiness",
+        "  2. configure a connector          # docs/guide/connectors.md (github / slack / google / …)",
+        "  3. suasor sync                    # first read-only ingest from enabled connectors",
+        "  4. schedule periodic sync         # cron / launchd / systemd — docs/guide/scheduling.md",
+        "  5. suasor skills install          # optional: assistant skills + MCP host registration",
+        "",
+      ].join("\n"),
+    );
     return 0;
   }
 }
