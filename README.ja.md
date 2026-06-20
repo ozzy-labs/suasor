@@ -36,7 +36,11 @@ bun install            # 依存インストール
 bun run src/index.ts --version
 
 # 初回セットアップ: ~/.config/suasor/config.toml とローカル SQLite ストアを作成。
+# 成功時にネクストステップ（doctor -> connector -> sync -> 定期実行 -> skills）を多段案内。
 bun run src/index.ts init
+
+# 設定 / DB / connector の準備状況を確認（診断専用・何も作らない）。
+bun run src/index.ts doctor
 
 # コネクタから read 専用で取り込み（github / slack / ms-graph / google / box / web）。
 bun run src/index.ts github sync

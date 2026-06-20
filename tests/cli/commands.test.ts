@@ -87,6 +87,16 @@ describe("suasor init", () => {
     expect(second.out).toContain("Config already exists");
   });
 
+  test("prints a multi-step next-steps guide", async () => {
+    const { code, out } = await run(["init"]);
+    expect(code).toBe(0);
+    expect(out).toContain("Next steps:");
+    // Surface the primary journey: verify -> connector -> sync -> schedule -> skills.
+    for (const step of ["doctor", "connector", "sync", "scheduling", "skills install"]) {
+      expect(out).toContain(step);
+    }
+  });
+
   test("--force overwrites the existing config", async () => {
     await run(["init"]);
     const forced = await run(["init", "--force"]);

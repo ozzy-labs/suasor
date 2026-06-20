@@ -36,7 +36,11 @@ bun install            # install dependencies
 bun run src/index.ts --version
 
 # First-run setup: writes ~/.config/suasor/config.toml and the local SQLite store.
+# Prints a multi-step next-steps guide (doctor -> connector -> sync -> schedule -> skills).
 bun run src/index.ts init
+
+# Verify config / DB / connector readiness (diagnostic only; creates nothing).
+bun run src/index.ts doctor
 
 # Ingest read-only from a connector (github / slack / ms-graph / google / box / web).
 bun run src/index.ts github sync
