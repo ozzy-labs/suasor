@@ -181,6 +181,11 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: false,
     summary: "Write a draft to a local file in the export sandbox (DraftExported).",
   },
+  {
+    name: "source.forget",
+    readOnlyHint: false,
+    summary: "Purge an ingested source locally — redact + delete (SourceForgotten).",
+  },
 ];
 
 /**

@@ -141,6 +141,16 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       }
       return;
     }
+    case "SourceForgotten": {
+      // Forget (ADR-0026): delete the event-derived projection rows so a
+      // `projections rebuild` (truncate + replay) keeps the source absent —
+      // the redacted SourceObserved re-inserts an empty row, then this DELETE
+      // removes it again (replay-stable). The non-event sidecar substrate
+      // (vec0 / *_meta) is purged imperatively by the source.forget service.
+      sqlite.query("DELETE FROM sources WHERE external_id = ?").run(event.externalId);
+      sqlite.query("DELETE FROM sources_fts WHERE external_id = ?").run(event.externalId);
+      return;
+    }
     case "ConnectorSyncCompleted": {
       // No projection row of its own; provenance/cursor live in the event log.
       return;

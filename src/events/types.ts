@@ -62,6 +62,21 @@ export const SourceBodyUpdated = z.object({
   meta: z.record(z.string(), z.unknown()).default({}),
 });
 
+/**
+ * A source was forgotten — purged locally (ADR-0026). Body-less audit record:
+ * the content is redacted from the historical SourceObserved/SourceBodyUpdated
+ * payloads and this event's reducer DELETEs the projection row (so a
+ * `projections rebuild` keeps it absent — replay-stable). Keeps an audit trail
+ * of *that* a source was forgotten without retaining its content.
+ */
+export const SourceForgotten = z.object({
+  type: z.literal("SourceForgotten"),
+  ...Envelope,
+  externalId: z.string().min(1),
+  /** Optional human reason (audit only). */
+  reason: z.string().optional(),
+});
+
 /** A connector sync run finished; carries the cursor to resume next time. */
 export const ConnectorSyncCompleted = z.object({
   type: z.literal("ConnectorSyncCompleted"),
@@ -314,6 +329,7 @@ export const CommitmentReopened = z.object({
 export const DomainEvent = z.discriminatedUnion("type", [
   SourceObserved,
   SourceBodyUpdated,
+  SourceForgotten,
   ConnectorSyncCompleted,
   TaskProposed,
   TaskApplied,
@@ -339,6 +355,7 @@ export type DomainEvent = z.infer<typeof DomainEvent>;
 export const EVENT_TYPES = [
   "SourceObserved",
   "SourceBodyUpdated",
+  "SourceForgotten",
   "ConnectorSyncCompleted",
   "TaskProposed",
   "TaskApplied",
@@ -367,6 +384,7 @@ export type EventType = (typeof EVENT_TYPES)[number];
 export type NewEvent =
   | Omit<z.input<typeof SourceObserved>, "id" | "recordedAt">
   | Omit<z.input<typeof SourceBodyUpdated>, "id" | "recordedAt">
+  | Omit<z.input<typeof SourceForgotten>, "id" | "recordedAt">
   | Omit<z.input<typeof ConnectorSyncCompleted>, "id" | "recordedAt">
   | Omit<z.input<typeof TaskProposed>, "id" | "recordedAt">
   | Omit<z.input<typeof TaskApplied>, "id" | "recordedAt">

@@ -13,6 +13,7 @@ export {
   type NewEvent,
   ReplyDraftProposed,
   SourceBodyUpdated,
+  SourceForgotten,
   SourceObserved,
   TaskApplied,
   TaskProposed,
