@@ -145,6 +145,17 @@ export function initSchema(sqlite: Database): void {
     );
     -- person.list groups identities by person; index the FK for the grouping.
     CREATE INDEX IF NOT EXISTS idx_person_identities_person ON person_identities(person_id);
+    -- Document-extraction provenance sidecar (ADR-0024). Derived substrate (not
+    -- events, ADR-0002): records which extractor version produced a source's
+    -- extracted body, so a later extractor upgrade (version bump) or a newly
+    -- enabled backend is detected as drift and re-extracted on the next sync.
+    -- state is the per-source outcome (extracted / unsupported / too_large).
+    CREATE TABLE IF NOT EXISTS extraction_meta (
+      external_id  TEXT PRIMARY KEY,
+      version      TEXT NOT NULL,
+      state        TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
   `);
 
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English

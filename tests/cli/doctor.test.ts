@@ -118,6 +118,7 @@ describe("suasor doctor", () => {
       "config",
       "database",
       "embedding",
+      "extraction",
       "connectors",
     ]);
   });

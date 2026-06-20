@@ -155,7 +155,25 @@ export class DoctorCommand extends Command {
       );
     }
 
-    // 4. connectors — enabled connectors whose credential is missing are warnings.
+    // 4. extraction — report the configured backend; disabled is informational.
+    if (config !== null) {
+      const { backend, version } = config.extraction;
+      checks.push(
+        backend === "disabled"
+          ? {
+              name: "extraction",
+              status: "info",
+              detail: "backend disabled (Office/PDF stay name-only; see docs/guide/extraction.md)",
+            }
+          : {
+              name: "extraction",
+              status: "ok",
+              detail: `backend=${backend} version=${version} (run \`suasor extraction status\` for coverage)`,
+            },
+      );
+    }
+
+    // 5. connectors — enabled connectors whose credential is missing are warnings.
     if (config !== null) {
       const enabled: string[] = [];
       const missingCred: string[] = [];

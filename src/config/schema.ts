@@ -104,6 +104,13 @@ export const ExtractionConfig = z
     baseUrl: z.string().url().default(DEFAULT_MARKITDOWN_BASE_URL),
     /** Max extracted-text bytes; larger inputs degrade to name-only. */
     maxBytes: z.number().int().positive().default(DEFAULT_EXTRACTION_MAX_BYTES),
+    /**
+     * Extractor version tag (ADR-0024 §6). Recorded per source in
+     * `extraction_meta`; bump it after upgrading the sidecar to re-extract drifted
+     * sources on the next sync. Newly enabling extraction also drifts (no prior
+     * meta), so existing name-only files backfill automatically.
+     */
+    version: z.string().min(1).default("1"),
   })
   .passthrough();
 export type ExtractionConfig = z.infer<typeof ExtractionConfig>;

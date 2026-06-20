@@ -95,32 +95,77 @@ export interface SyncOptions {
 const DEFAULT_EXTRACTION_MAX_BYTES = 5_000_000;
 
 /**
- * Resolve the effective body for a new/changed record: the sidecar-extracted
- * text when extraction applies, else the connector's body (name-only). Pure
- * best-effort — every failure path returns the original body so ingest proceeds.
+ * Per-source extraction outcome recorded in `extraction_meta` (ADR-0024 §6).
+ * `null` ⇒ no meta written (extractor absent, record not extractable, or a
+ * transient failure that should be retried next sync).
+ */
+type ExtractionState = "extracted" | "unsupported" | "too_large" | null;
+
+/**
+ * Resolve the effective body for a record: the sidecar-extracted text when
+ * extraction applies, else the connector's body (name-only). Best-effort — every
+ * failure path returns the original body so ingest proceeds. `state` drives the
+ * `extraction_meta` upsert (drift detection); `null` leaves meta untouched.
  */
 async function extractBody(
   record: SourceRecord,
   options: SyncOptions,
-): Promise<{ body: string; extracted: boolean }> {
+): Promise<{ body: string; extracted: boolean; state: ExtractionState }> {
   const extractor = options.extractor;
-  if (!extractor || !record.extractable) return { body: record.body, extracted: false };
+  if (!extractor || !record.extractable)
+    return { body: record.body, extracted: false, state: null };
   const maxBytes = options.extractionMaxBytes ?? DEFAULT_EXTRACTION_MAX_BYTES;
   const { filename, byteSize, readBytes } = record.extractable;
   if (byteSize > maxBytes) {
     options.onWarn?.(`extraction skipped (${byteSize} > ${maxBytes} bytes): ${filename}`);
-    return { body: record.body, extracted: false };
+    return { body: record.body, extracted: false, state: "too_large" };
   }
   try {
     const text = await extractor.extract(await readBytes(), filename);
-    if (text === null) return { body: record.body, extracted: false }; // unsupported
+    if (text === null) return { body: record.body, extracted: false, state: "unsupported" };
     const capped = text.length > maxBytes ? text.slice(0, maxBytes) : text;
     // Keep name discoverability (parity with text-file bodies: name + content).
-    return { body: `${filename}\n\n${capped}`, extracted: true };
+    return { body: `${filename}\n\n${capped}`, extracted: true, state: "extracted" };
   } catch (cause) {
     options.onExtractError?.(cause instanceof Error ? cause : new Error(String(cause)));
-    return { body: record.body, extracted: false };
+    return { body: record.body, extracted: false, state: null }; // transient → retry
   }
+}
+
+/** Current `extraction_meta` version for a source, or `null` when never recorded. */
+function extractionMetaVersion(sqlite: Database, externalId: string): string | null {
+  const row = sqlite
+    .query<{ version: string }, [string]>(
+      "SELECT version FROM extraction_meta WHERE external_id = ?",
+    )
+    .get(externalId);
+  return row ? row.version : null;
+}
+
+/** Upsert the extraction provenance for a source (derived substrate, ADR-0002). */
+function upsertExtractionMeta(
+  sqlite: Database,
+  externalId: string,
+  version: string,
+  state: string,
+  at: string,
+): void {
+  sqlite
+    .query(
+      `INSERT INTO extraction_meta (external_id, version, state, updated_at)
+       VALUES ($id, $version, $state, $at)
+       ON CONFLICT(external_id) DO UPDATE SET
+         version = excluded.version, state = excluded.state, updated_at = excluded.updated_at`,
+    )
+    .run({ $id: externalId, $version: version, $state: state, $at: at });
+}
+
+/** Current stored body for a source, or `null` when absent. */
+function existingBody(sqlite: Database, externalId: string): string | null {
+  const row = sqlite
+    .query<{ body: string }, [string]>("SELECT body FROM sources WHERE external_id = ?")
+    .get(externalId);
+  return row ? row.body : null;
 }
 
 /** Hex SHA-256 of a string (default fingerprint when a connector omits one). */
@@ -216,17 +261,36 @@ export async function syncConnector(
       }
     }
 
-    if (prior === fingerprint) {
+    // Extraction drift (ADR-0024 §6): the file is unchanged (fingerprint match)
+    // but it is extractable and the recorded extractor version differs (newly
+    // enabled → no meta; or sidecar upgraded → version bump), so re-extract.
+    const drifted =
+      !!options.extractor &&
+      record.extractable !== undefined &&
+      extractionMetaVersion(sqlite, record.externalId) !== (options.extractor.version ?? "");
+
+    if (prior === fingerprint && !drifted) {
       unchanged += 1;
       options.onProgress?.(record);
       continue;
     }
 
-    // New or changed: run extraction (best-effort, before recording the event so
-    // the stored body + embedding use the extracted text). fingerprint is the
-    // file-entity hash above, unaffected by extraction (ADR-0024 §3/§6).
-    const { body, extracted: didExtract } = await extractBody(record, options);
+    // New / changed / drifted: run extraction (best-effort, before recording the
+    // event so the stored body + embedding use the extracted text). fingerprint is
+    // the file-entity hash above, unaffected by extraction (ADR-0024 §3/§6).
+    const { body, extracted: didExtract, state } = await extractBody(record, options);
     if (didExtract) extracted += 1;
+    // Record extraction provenance (drift detection) for deterministic outcomes;
+    // a transient failure (state null) leaves meta absent so it retries next sync.
+    if (state !== null && options.extractor) {
+      upsertExtractionMeta(
+        sqlite,
+        record.externalId,
+        options.extractor.version ?? "",
+        state,
+        now().toISOString(),
+      );
+    }
 
     if (prior === null) {
       store.record(
@@ -242,7 +306,8 @@ export async function syncConnector(
         now(),
       );
       observed += 1;
-    } else {
+      toEmbed.push({ externalId: record.externalId, body });
+    } else if (prior !== fingerprint) {
       store.record(
         {
           type: "SourceBodyUpdated",
@@ -255,8 +320,25 @@ export async function syncConnector(
         now(),
       );
       updated += 1;
+      toEmbed.push({ externalId: record.externalId, body });
+    } else if (body !== existingBody(sqlite, record.externalId)) {
+      // Drift-only (file unchanged) and the re-extracted body actually differs:
+      // append a body update so search reflects it. If identical, the meta upsert
+      // above is enough (no redundant event).
+      store.record(
+        {
+          type: "SourceBodyUpdated",
+          externalId: record.externalId,
+          body,
+          observedAt: record.observedAt,
+          fingerprint,
+          meta: record.meta,
+        },
+        now(),
+      );
+      updated += 1;
+      toEmbed.push({ externalId: record.externalId, body });
     }
-    toEmbed.push({ externalId: record.externalId, body });
 
     options.onProgress?.(record);
   }
