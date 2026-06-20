@@ -141,4 +141,18 @@ describe("suasor sync (bulk)", () => {
     expect(err).toContain("connectors.github");
     expect(out).not.toContain("web: 0 observed");
   });
+
+  test("no-op connector configs warn (stderr) but the aggregate still succeeds (#187)", async () => {
+    await run(["init"]);
+    // Both connectors are enabled but have no ingest target (github: no repos +
+    // notifications off; web: no urls). The bulk run still succeeds (0 observed
+    // each) but a pre-sync no-op warning surfaces for each connector.
+    await writeConfig("[connectors.github]\nrepos = []\n[connectors.web]\nurls = []\n");
+    const { code, out, err } = await run(["sync"]);
+    expect(code).toBe(0);
+    expect(out).toContain("2 succeeded, 0 failed");
+    expect(err).toContain("warning: github:");
+    expect(err).toContain("warning: web:");
+    expect(err).toContain("取り込み対象なし");
+  });
 });

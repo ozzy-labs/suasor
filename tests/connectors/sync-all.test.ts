@@ -216,4 +216,34 @@ describe("runBulkSync", () => {
     });
     expect(started).toEqual(["a", "b"]);
   });
+
+  test("emits a no-op advisory via onWarn for empty connector slices (#187)", async () => {
+    // Real connector names so the no-op detectors apply: github with no repos +
+    // notifications off, web with no urls → both warn before sync. The run still
+    // succeeds (fakeConnector yields nothing); the warning is the only signal.
+    const warnings: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["github", "web"],
+      connectors: { github: { repos: [] }, web: { urls: [] } },
+      loadConnector: async (name) => fakeConnector(name, []),
+      syncOptions: { onWarn: (m) => warnings.push(m) },
+    });
+    expect(result.succeeded).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(warnings.some((w) => w.startsWith("github:") && w.includes("取り込み対象なし"))).toBe(
+      true,
+    );
+    expect(warnings.some((w) => w.startsWith("web:") && w.includes("取り込み対象なし"))).toBe(true);
+  });
+
+  test("does not warn for a connector slice with an ingest target (#187)", async () => {
+    const warnings: string[] = [];
+    await runBulkSync(store, {
+      names: ["github", "web"],
+      connectors: { github: { repos: ["owner/repo"] }, web: { urls: ["https://example.com"] } },
+      loadConnector: async (name) => fakeConnector(name, []),
+      syncOptions: { onWarn: (m) => warnings.push(m) },
+    });
+    expect(warnings).toEqual([]);
+  });
 });

@@ -7,6 +7,13 @@ Connector はソースから **read 専用**で取り込む共通実装（[ADR-0
 - CLI: `suasor <connector> sync`
 - MCP write tool: `connector.sync`（HITL。人の承認なしに実行しない。[mcp-surface](../design/mcp-surface.md)）
 
+## 空構成（no-op config）は sync 前に warn される
+
+connector が **有効**（`[connectors.X]` があり `enabled = false` でない）でも、取り込み対象が空（github が `repos` 未設定かつ `notifications = "off"`、box が `folders` 未設定、local が `roots` 未設定、web が `urls` 未設定、google / ms-graph が `resources` 空、slack がどの workspace も `channels` 未設定）だと sync は黙って 0 件で終わり、DB を覗くまで気づけない（[#187](https://github.com/ozzy-labs/suasor/issues/187)）。これを防ぐため、sync は実行前に空構成を検出して stderr に warning を出す（例: `warning: github: repos 未設定かつ notifications=off — 取り込み対象なし（config の repos を設定するか notifications を all/repos に）`）。
+
+- 単体 sync（`suasor <connector> sync`）と一括 sync（`suasor sync`、[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）の両経路で同じ warning が出る
+- **warn 止まり**で exit code は変えない（空構成は失敗ではない。`0 observed` で正常終了する）
+
 ## まず `suasor onboard`（推奨セットアップ導線）
 
 connector を 1 つずつ手で設定する前に、対話ウィザード **`suasor onboard`** を使うと正しい順序（connector 選択 → token 格納 → `auth test` 疎通 → `[connectors.X]` slice 追記 → 初回 sync → スケジューラ雛形 → MCP 登録）を 1 コマンドで繋げる（[ADR-0029](../adr/0029-onboarding-wizard.md)）。

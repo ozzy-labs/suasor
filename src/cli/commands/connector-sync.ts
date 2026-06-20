@@ -82,6 +82,18 @@ class ConnectorSyncCommand extends Command {
     }
 
     const slice = config.connectors[name] ?? {};
+
+    // Pre-sync no-op advisory (Issue #187): an enabled connector whose scope is
+    // empty (e.g. github with no repos + notifications=off) ingests nothing and
+    // otherwise just reports `0 observed`, leaving the user to inspect the DB to
+    // realize the config never had a target. Warn (stderr) without changing the
+    // exit code — the run still succeeds with 0 observed.
+    const { noopWarning } = await import("../../connectors/noop-check.ts");
+    const noop = noopWarning(name, slice);
+    if (noop !== null) {
+      this.context.stderr.write(`warning: ${name}: ${noop}\n`);
+    }
+
     let connector: Awaited<ReturnType<typeof loadConnector>>;
     try {
       connector = await loadConnector(name, slice);
