@@ -9,6 +9,7 @@
 - 確定 event 型（`schemaVersion = 1`）:
   - `SourceObserved` — connector がソース本文を初観測（read 専用取り込み）
   - `SourceBodyUpdated` — 既存ソースの本文変更（fingerprint/cursor で検知）。`SourceObserved` ともに**全文 body を保持**するため、event log から本文版履歴を復元できる（`source.history` read tool、#121）
+  - `SourceForgotten` — source のローカル purge（[ADR-0026](../adr/0026-source-forgetting.md)・`externalId` / `reason?` のみで **body なし**）。reducer が `sources`/`sources_fts` を DELETE。あわせて過去の `SourceObserved`/`SourceBodyUpdated` の `body` は **redaction**（空白化）され、event log にも本文を残さない（append-only の明示的例外）
   - `ConnectorSyncCompleted` — sync 完了（`cursor` / `count` を保持。resume 用）
   - `TaskProposed` — task 候補の提案（HITL・未適用）
   - `TaskApplied` — 提案 task の承認・適用（`state`: open / in_progress / completed / dropped）

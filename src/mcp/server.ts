@@ -40,6 +40,7 @@ import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
 import { createComposer } from "../export/compose.ts";
 import { draftExport } from "../export/draft-export.ts";
+import { sourceForget } from "../forget/source-forget.ts";
 import { proposeApply } from "../propose/apply.ts";
 import {
   CandidateInput as CandidateInputSchema,
@@ -1226,6 +1227,33 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       },
       async ({ commitmentId }) => {
         const result = commitmentReopen(write.store, { commitmentId });
+        return jsonResult(result);
+      },
+    );
+
+    // --- source.forget: purge an ingested source locally (ADR-0026). ---
+    // Redacts the body from the event log + purges projection/sidecar. HITL.
+    server.registerTool(
+      "source.forget",
+      {
+        title: "Forget source",
+        description:
+          "Purge an ingested source locally (ADR-0026): redact its body from the " +
+          "event log and delete it from the projection / FTS / vectors. Keeps a " +
+          "body-less audit record. Write tool: requires human approval — no " +
+          "auto-apply (ADR-0004). Idempotent: re-forgetting is a no-op; an " +
+          "unknown source is reported missing.",
+        inputSchema: {
+          externalId: z.string().min(1).describe("Source id to forget."),
+          reason: z.string().min(1).optional().describe("Optional audit reason."),
+        },
+        annotations: { readOnlyHint: false, openWorldHint: false },
+      },
+      async ({ externalId, reason }) => {
+        const result = sourceForget(write.store, {
+          externalId,
+          ...(reason !== undefined ? { reason } : {}),
+        });
         return jsonResult(result);
       },
     );
