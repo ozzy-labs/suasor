@@ -22,7 +22,7 @@
 
 > **MCP tool 注記:** 上表の `brief` / `graph.related` は計画中で未提供（[mcp-surface.md](../design/mcp-surface.md) の「後続 Issue」）。該当 skill は当面、提供済みの read tool（`recall.search` / `search` / `*.list`）を組み合わせて動作する。
 
-## HITL write 系（人の承認で適用・4）
+## HITL write 系（人の承認で適用・7）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -30,6 +30,9 @@
 | [`inbox-triage`](inbox-triage/SKILL.md) | 「受信箱整理して」「未処理捌いて」 | inbox.list → propose.generate(inbox_triage) → task.create / propose.apply |
 | [`source-extract`](source-extract/SKILL.md) | 「この資料からタスク抽出」 | source.get → propose.generate(source_extract) → propose.apply |
 | [`meeting-followup`](meeting-followup/SKILL.md) | 「会議後のaction items」「議事録からタスク」 | source.list(calendar) → propose.generate(meeting_followup) → propose.apply |
+| [`commitment-review`](commitment-review/SKILL.md) | 「約束をスキャンして」「貸し借り確認」 | propose.generate(commitment_scan) → propose.apply / commitment.list → resolve / dismiss / reopen |
+| [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject |
+| [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
 
 エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）。
 
