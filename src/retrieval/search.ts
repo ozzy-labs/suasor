@@ -55,9 +55,55 @@ export interface SearchResult {
   strategy: SearchStrategy;
 }
 
-export interface SearchOptions {
+/**
+ * Optional metadata filters applied to both retrieval paths (FTS + LIKE
+ * fallback). They narrow the candidate `sources` rows by joining the FTS hits
+ * back to the projection; the ranking within the narrowed set is unchanged.
+ *
+ * The time window matches the projection read-tool convention (queries.ts /
+ * docs/skills): the lower bound is inclusive (`>=`) and the upper bound is
+ * exclusive (`<`), so adjacent windows don't double-count. Bounds compare ISO
+ * 8601 strings lexicographically (valid for zero-padded UTC timestamps).
+ */
+export interface SearchFilters {
+  /** Restrict to a single `source_type` (e.g. "github_issue"). */
+  sourceType?: string;
+  /** Inclusive lower bound on `observed_at` (ISO 8601). */
+  observedAfter?: string;
+  /** Exclusive upper bound on `observed_at` (ISO 8601). */
+  observedBefore?: string;
+}
+
+export interface SearchOptions extends SearchFilters {
   /** Maximum hits to return (default {@link DEFAULT_SEARCH_LIMIT}). */
   limit?: number;
+}
+
+/**
+ * Build the `source_type` / `observed_at` filter clauses (qualified by the given
+ * table alias) plus their bound params, in a stable order so callers can splice
+ * them into either query path. Inclusive lower bound (`>=`), exclusive upper
+ * bound (`<`) — the projection time-filter convention (queries.ts).
+ */
+function buildFilterClauses(
+  filters: SearchFilters,
+  alias: string,
+): { clauses: string[]; params: string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (filters.sourceType !== undefined) {
+    clauses.push(`${alias}.source_type = ?`);
+    params.push(filters.sourceType);
+  }
+  if (filters.observedAfter !== undefined) {
+    clauses.push(`${alias}.observed_at >= ?`);
+    params.push(filters.observedAfter);
+  }
+  if (filters.observedBefore !== undefined) {
+    clauses.push(`${alias}.observed_at < ?`);
+    params.push(filters.observedBefore);
+  }
+  return { clauses, params };
 }
 
 /** Count Unicode code points (so CJK chars count as 1, not their byte length). */
@@ -97,10 +143,19 @@ interface FtsRow {
 }
 
 /** FTS5 path: trigram MATCH over `sources_fts`, ranked by bm25 (best-first). */
-function searchFts(sqlite: Database, query: string, limit: number): SearchHit[] {
+function searchFts(
+  sqlite: Database,
+  query: string,
+  limit: number,
+  filters: SearchFilters,
+): SearchHit[] {
   const match = buildFtsMatch(query);
+  // Metadata filters apply to the joined `sources` row (alias `s`), so they
+  // narrow both paths uniformly without touching ranking.
+  const { clauses, params } = buildFilterClauses(filters, "s");
+  const where = ["sources_fts MATCH ?", ...clauses].join(" AND ");
   const rows = sqlite
-    .query<FtsRow, [string, number]>(
+    .query<FtsRow, (string | number)[]>(
       `SELECT s.external_id   AS external_id,
               s.source_type   AS source_type,
               s.observed_at   AS observed_at,
@@ -108,11 +163,11 @@ function searchFts(sqlite: Database, query: string, limit: number): SearchHit[] 
               bm25(sources_fts) AS rank
          FROM sources_fts
          JOIN sources s ON s.external_id = sources_fts.external_id
-        WHERE sources_fts MATCH ?
+        WHERE ${where}
         ORDER BY rank ASC
         LIMIT ?`,
     )
-    .all(match, limit);
+    .all(match, ...params, limit);
   return rows.map((r) => ({
     externalId: r.external_id,
     sourceType: r.source_type,
@@ -136,17 +191,26 @@ interface LikeRow {
  * signal, so hits are ordered by recency (most recently observed first) and
  * carry a sentinel score of 0.
  */
-function searchLikeFallback(sqlite: Database, query: string, limit: number): SearchHit[] {
+function searchLikeFallback(
+  sqlite: Database,
+  query: string,
+  limit: number,
+  filters: SearchFilters,
+): SearchHit[] {
   const pattern = `%${escapeLike(query.trim())}%`;
+  // No alias here (single-table scan), so qualify the filter columns with the
+  // table name to keep the generated SQL unambiguous and consistent.
+  const { clauses, params } = buildFilterClauses(filters, "sources");
+  const where = ["body LIKE ? ESCAPE '\\'", ...clauses].join(" AND ");
   const rows = sqlite
-    .query<LikeRow, [string, number]>(
+    .query<LikeRow, (string | number)[]>(
       `SELECT external_id, source_type, observed_at, body
          FROM sources
-        WHERE body LIKE ? ESCAPE '\\'
+        WHERE ${where}
         ORDER BY observed_at DESC
         LIMIT ?`,
     )
-    .all(pattern, limit);
+    .all(pattern, ...params, limit);
   return rows.map((r) => ({
     externalId: r.external_id,
     sourceType: r.source_type,
@@ -176,6 +240,11 @@ export function searchSources(
   options: SearchOptions = {},
 ): SearchResult {
   const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
+  const filters: SearchFilters = {
+    ...(options.sourceType !== undefined ? { sourceType: options.sourceType } : {}),
+    ...(options.observedAfter !== undefined ? { observedAfter: options.observedAfter } : {}),
+    ...(options.observedBefore !== undefined ? { observedBefore: options.observedBefore } : {}),
+  };
   const trimmed = query.trim();
   if (trimmed.length === 0) {
     return { hits: [], strategy: "fts" };
@@ -188,8 +257,8 @@ export function searchSources(
     .split(/\s+/)
     .reduce((max, t) => Math.max(max, codePointLength(t)), 0);
   if (longestToken < TRIGRAM_LENGTH) {
-    return { hits: searchLikeFallback(sqlite, trimmed, limit), strategy: "like-fallback" };
+    return { hits: searchLikeFallback(sqlite, trimmed, limit, filters), strategy: "like-fallback" };
   }
 
-  return { hits: searchFts(sqlite, trimmed, limit), strategy: "fts" };
+  return { hits: searchFts(sqlite, trimmed, limit, filters), strategy: "fts" };
 }

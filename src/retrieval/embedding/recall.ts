@@ -15,11 +15,19 @@
  */
 import type { Database } from "bun:sqlite";
 import { DEFAULT_VEC_TABLE, VEC_META_TABLE } from "../../db/connection.ts";
-import type { SearchHit } from "../search.ts";
+import type { SearchFilters, SearchHit } from "../search.ts";
 import { type Embedder, EmbeddingError } from "./embedder.ts";
 
 /** Default number of nearest neighbours to retrieve. */
 export const DEFAULT_RECALL_LIMIT = 20;
+
+/**
+ * When metadata filters are present, how many times `limit` neighbours to pull
+ * from the KNN index before post-filtering on the joined `sources` row. The
+ * over-fetch keeps `limit` matching hits reachable even if several nearest
+ * neighbours are discarded by the filter.
+ */
+export const RECALL_FILTER_OVERFETCH = 4;
 
 /** Signal returned when recall has no embedding backend (graceful degrade). */
 export const EMBEDDING_DISABLED_SIGNAL = "embedding_disabled";
@@ -37,7 +45,7 @@ export interface RecallResult {
   reason: RecallReason;
 }
 
-export interface RecallOptions {
+export interface RecallOptions extends SearchFilters {
   /** Max neighbours to return (default {@link DEFAULT_RECALL_LIMIT}). */
   limit?: number;
 }
@@ -176,8 +184,34 @@ export async function recallSearch(
     throw new EmbeddingError("embedder returned no vector for the query");
   }
 
+  // Metadata filters (sourceType / observed window) are applied as a post-filter
+  // on the joined `sources` row. sqlite-vec's KNN needs `k = ?` on the vec table
+  // (it can't push arbitrary predicates into the index), so we over-fetch
+  // neighbours and discard non-matching rows after the join, then trim to
+  // `limit`. The over-fetch factor keeps `limit` matching rows reachable even
+  // when several nearest neighbours are filtered out. Window bounds follow the
+  // projection convention: inclusive lower (`>=`), exclusive upper (`<`).
+  const filterClauses: string[] = [];
+  const filterParams: string[] = [];
+  if (options.sourceType !== undefined) {
+    filterClauses.push("s.source_type = ?");
+    filterParams.push(options.sourceType);
+  }
+  if (options.observedAfter !== undefined) {
+    filterClauses.push("s.observed_at >= ?");
+    filterParams.push(options.observedAfter);
+  }
+  if (options.observedBefore !== undefined) {
+    filterClauses.push("s.observed_at < ?");
+    filterParams.push(options.observedBefore);
+  }
+  const hasFilter = filterClauses.length > 0;
+  // Over-fetch when filtering so post-filtering can still reach `limit` hits.
+  const k = hasFilter ? limit * RECALL_FILTER_OVERFETCH : limit;
+  const postFilter = hasFilter ? ` AND ${filterClauses.join(" AND ")}` : "";
+
   const rows = sqlite
-    .query<VecRow, [Uint8Array, number]>(
+    .query<VecRow, (Uint8Array | string | number)[]>(
       `SELECT v.external_id   AS external_id,
               s.source_type   AS source_type,
               s.observed_at   AS observed_at,
@@ -185,10 +219,11 @@ export async function recallSearch(
               v.distance      AS distance
          FROM ${DEFAULT_VEC_TABLE} v
          JOIN sources s ON s.external_id = v.external_id
-        WHERE v.embedding MATCH ? AND k = ?
-        ORDER BY v.distance ASC`,
+        WHERE v.embedding MATCH ? AND k = ?${postFilter}
+        ORDER BY v.distance ASC
+        LIMIT ?`,
     )
-    .all(toVectorBlob(vector), limit);
+    .all(toVectorBlob(vector), k, ...filterParams, limit);
 
   const hits: SearchHit[] = rows.map((r) => ({
     externalId: r.external_id,

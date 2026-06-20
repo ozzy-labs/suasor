@@ -212,3 +212,78 @@ describe("searchSources — limit & FTS maintenance", () => {
     expect(ids(result)).toEqual(["a"]);
   });
 });
+
+describe("searchSources — filters (FTS path)", () => {
+  test("sourceType narrows the FTS result set", () => {
+    seed("gh", "deploy the rocket", "2026-06-14T00:00:00.000Z", "github_issue");
+    seed("sl", "deploy the rocket", "2026-06-14T00:01:00.000Z", "slack_message");
+
+    const result = searchSources(store.connection.sqlite, "rocket", {
+      sourceType: "slack_message",
+    });
+    expect(result.strategy).toBe("fts");
+    expect(ids(result)).toEqual(["sl"]);
+  });
+
+  test("observedAfter is inclusive on the lower bound", () => {
+    seed("before", "rocket alpha", "2026-06-13T23:59:59.000Z");
+    seed("at", "rocket bravo", "2026-06-14T00:00:00.000Z");
+
+    const result = searchSources(store.connection.sqlite, "rocket", {
+      observedAfter: "2026-06-14T00:00:00.000Z",
+    });
+    expect(ids(result)).toEqual(["at"]); // the boundary row is included
+  });
+
+  test("observedBefore is exclusive on the upper bound", () => {
+    seed("in", "rocket alpha", "2026-06-13T00:00:00.000Z");
+    seed("at", "rocket bravo", "2026-06-14T00:00:00.000Z");
+
+    const result = searchSources(store.connection.sqlite, "rocket", {
+      observedBefore: "2026-06-14T00:00:00.000Z",
+    });
+    expect(ids(result)).toEqual(["in"]); // the boundary row is excluded
+  });
+
+  test("an observed window combines both bounds", () => {
+    seed("low", "rocket a", "2026-06-13T00:00:00.000Z");
+    seed("mid", "rocket b", "2026-06-14T00:00:00.000Z");
+    seed("high", "rocket c", "2026-06-15T00:00:00.000Z");
+
+    const result = searchSources(store.connection.sqlite, "rocket", {
+      observedAfter: "2026-06-14T00:00:00.000Z",
+      observedBefore: "2026-06-15T00:00:00.000Z",
+    });
+    expect(ids(result)).toEqual(["mid"]);
+  });
+
+  test("no filters returns the same result as before (additive)", () => {
+    seed("a", "rocket science", "2026-06-14T00:00:00.000Z");
+    seed("b", "lunch menu", "2026-06-14T00:01:00.000Z");
+    expect(ids(searchSources(store.connection.sqlite, "rocket"))).toEqual(["a"]);
+  });
+});
+
+describe("searchSources — filters (LIKE fallback path)", () => {
+  test("sourceType narrows the short-query fallback result set", () => {
+    seed("gh", "go now", "2026-06-14T00:00:00.000Z", "github_issue");
+    seed("sl", "go now", "2026-06-14T00:01:00.000Z", "slack_message");
+
+    const result = searchSources(store.connection.sqlite, "go", { sourceType: "slack_message" });
+    expect(result.strategy).toBe("like-fallback");
+    expect(ids(result)).toEqual(["sl"]);
+  });
+
+  test("an observed window applies on the fallback path too", () => {
+    seed("low", "go a", "2026-06-13T00:00:00.000Z");
+    seed("mid", "go b", "2026-06-14T00:00:00.000Z");
+    seed("high", "go c", "2026-06-15T00:00:00.000Z");
+
+    const result = searchSources(store.connection.sqlite, "go", {
+      observedAfter: "2026-06-14T00:00:00.000Z",
+      observedBefore: "2026-06-15T00:00:00.000Z",
+    });
+    expect(result.strategy).toBe("like-fallback");
+    expect(ids(result)).toEqual(["mid"]);
+  });
+});

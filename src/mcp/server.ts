@@ -68,6 +68,7 @@ import {
   EmbeddingError,
   recallSearch,
 } from "../retrieval/embedding/index.ts";
+import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
 import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import { VERSION } from "../version.ts";
 import {
@@ -199,15 +200,25 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       description:
         "Full-text search over ingested source bodies (SQLite FTS5, FTS-first). " +
         "Handles Japanese and English uniformly; short queries fall back to a " +
-        "substring scan. Returns ranked hits best-first.",
+        "substring scan. Optionally filter by source_type and an " +
+        "observed_after/observed_before window (lower bound inclusive, upper " +
+        "exclusive). Returns ranked hits best-first.",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
+        sourceType: z.string().min(1).optional().describe("Filter by source_type."),
+        observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
+        observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max hits (default ${DEFAULT_SEARCH_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ query, limit }) => {
-      const result = searchSources(sqlite, query, { limit: limit ?? DEFAULT_SEARCH_LIMIT });
+    async ({ query, sourceType, observedAfter, observedBefore, limit }) => {
+      const result = searchSources(sqlite, query, {
+        limit: limit ?? DEFAULT_SEARCH_LIMIT,
+        ...(sourceType !== undefined ? { sourceType } : {}),
+        ...(observedAfter !== undefined ? { observedAfter } : {}),
+        ...(observedBefore !== undefined ? { observedBefore } : {}),
+      });
       return jsonResult(result);
     },
   );
@@ -221,14 +232,19 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "Semantic (embedding) search over ingested sources (vec0 KNN). Crosses the " +
         "wall FTS cannot (JA↔EN, vocabulary mismatch). When no embedding backend is " +
         "enabled — or the sidecar is unreachable — it returns empty results with an " +
-        "`embedding_disabled` signal so the host can fall back to `search` (ADR-0005).",
+        "`embedding_disabled` signal so the host can fall back to `search` (ADR-0005). " +
+        "Optionally filter by source_type and an observed_after/observed_before " +
+        "window (lower bound inclusive, upper exclusive; applied as a post-filter).",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
+        sourceType: z.string().min(1).optional().describe("Filter by source_type."),
+        observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
+        observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max hits (default ${DEFAULT_RECALL_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ query, limit }) => {
+    async ({ query, sourceType, observedAfter, observedBefore, limit }) => {
       // No embedder (backend disabled or unimplemented) → embedding_disabled.
       if (embedder === null) {
         return jsonResult({
@@ -240,6 +256,9 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       try {
         const result = await recallSearch(sqlite, embedder, query, {
           limit: limit ?? DEFAULT_RECALL_LIMIT,
+          ...(sourceType !== undefined ? { sourceType } : {}),
+          ...(observedAfter !== undefined ? { observedAfter } : {}),
+          ...(observedBefore !== undefined ? { observedBefore } : {}),
         });
         return jsonResult(result);
       } catch (error) {
@@ -254,6 +273,69 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         }
         throw error;
       }
+    },
+  );
+
+  // --- search.hybrid: RRF fusion of FTS + semantic hits (ADR-0005 range). ---
+  // Read tool: runs `search` (FTS) and `recall.search` (vec) and fuses the two
+  // ranked lists with Reciprocal Rank Fusion (src/retrieval/hybrid.ts), so each
+  // path covers the other's blind spot. When no embedding backend is available
+  // — or the sidecar is unreachable — it gracefully degrades to FTS-only and
+  // reports the `embedding_disabled` signal (same contract as recall.search).
+  server.registerTool(
+    "search.hybrid",
+    {
+      title: "Hybrid search (FTS × semantic RRF)",
+      description:
+        "Hybrid retrieval: fuse FTS (`search`) and semantic (`recall.search`) hits " +
+        "with Reciprocal Rank Fusion, so lexical and semantic matches reinforce each " +
+        "other (best of both). Filters (source_type + observed window) and limit apply " +
+        "to both paths. When no embedding backend is enabled — or the sidecar is " +
+        "unreachable — it degrades to FTS-only and returns the `embedding_disabled` " +
+        "signal (ADR-0005). Hits carry an `rrfScore` (higher = better, best-first).",
+      inputSchema: {
+        query: z.string().min(1).describe("Free-text query."),
+        sourceType: z.string().min(1).optional().describe("Filter by source_type."),
+        observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
+        observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
+        limit: limitShape.describe(`Max fused hits (default ${DEFAULT_SEARCH_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ query, sourceType, observedAfter, observedBefore, limit }) => {
+      const effLimit = limit ?? DEFAULT_SEARCH_LIMIT;
+      const filters = {
+        ...(sourceType !== undefined ? { sourceType } : {}),
+        ...(observedAfter !== undefined ? { observedAfter } : {}),
+        ...(observedBefore !== undefined ? { observedBefore } : {}),
+      };
+      const fts = searchSources(sqlite, query, { limit: effLimit, ...filters });
+
+      // Resolve the vec side, degrading to FTS-only on no/failed backend so the
+      // tool always returns fused (here: FTS) results rather than erroring.
+      let vecHits = [] as Awaited<ReturnType<typeof recallSearch>>["hits"];
+      let signal: typeof EMBEDDING_DISABLED_SIGNAL | undefined;
+      if (embedder === null) {
+        signal = EMBEDDING_DISABLED_SIGNAL;
+      } else {
+        try {
+          const recall = await recallSearch(sqlite, embedder, query, {
+            limit: effLimit,
+            ...filters,
+          });
+          vecHits = recall.hits;
+          signal = recall.signal;
+        } catch (error) {
+          if (error instanceof EmbeddingError) {
+            signal = EMBEDDING_DISABLED_SIGNAL;
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      const hits = fuseRrf(fts.hits, vecHits, { k: DEFAULT_RRF_K, limit: effLimit });
+      return jsonResult({ hits, ...(signal ? { signal } : {}) });
     },
   );
 

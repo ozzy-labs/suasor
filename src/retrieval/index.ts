@@ -31,8 +31,15 @@ export {
   type VectorProvenance,
 } from "./embedding/index.ts";
 export {
+  DEFAULT_RRF_K,
+  type FuseOptions,
+  fuseRrf,
+  type HybridHit,
+} from "./hybrid.ts";
+export {
   buildFtsMatch,
   DEFAULT_SEARCH_LIMIT,
+  type SearchFilters,
   type SearchHit,
   type SearchOptions,
   type SearchResult,

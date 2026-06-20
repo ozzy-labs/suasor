@@ -21,13 +21,17 @@ afterEach(() => {
 });
 
 /** Seed a source through the event store so the `sources` projection exists. */
-function seed(externalId: string, body: string) {
+function seed(
+  externalId: string,
+  body: string,
+  opts: { sourceType?: string; observedAt?: string } = {},
+) {
   store.record({
     type: "SourceObserved",
     externalId,
-    sourceType: "github_issue",
+    sourceType: opts.sourceType ?? "github_issue",
     body,
-    observedAt: "2026-06-14T00:00:00.000Z",
+    observedAt: opts.observedAt ?? "2026-06-14T00:00:00.000Z",
     fingerprint: externalId,
     meta: {},
   });
@@ -192,6 +196,44 @@ describe("recallSearch", () => {
     const embedder = fakeEmbedder({ q: [1, 0, 0] });
     const result = await recallSearch(store.connection.sqlite, embedder, "q");
     expect(result.hits).toEqual([]);
+  });
+});
+
+describe("recallSearch — metadata filters (post-filter on the join)", () => {
+  test("sourceType narrows the KNN result set", async () => {
+    seed("gh:1", "kubernetes deployment", { sourceType: "github_issue" });
+    seed("sl:1", "kubernetes deployment", { sourceType: "slack_message" });
+    const embedder = fakeEmbedder({
+      "kubernetes deployment": [1, 0, 0],
+      "deploy cluster": [1, 0, 0],
+    });
+    await embedSources(store.connection.sqlite, embedder, [
+      { externalId: "gh:1", body: "kubernetes deployment" },
+      { externalId: "sl:1", body: "kubernetes deployment" },
+    ]);
+
+    const result = await recallSearch(store.connection.sqlite, embedder, "deploy cluster", {
+      sourceType: "slack_message",
+    });
+    expect(result.hits.map((h) => h.externalId)).toEqual(["sl:1"]);
+  });
+
+  test("an observed window filters by inclusive-lower / exclusive-upper bounds", async () => {
+    seed("low", "alpha", { observedAt: "2026-06-13T00:00:00.000Z" });
+    seed("mid", "alpha", { observedAt: "2026-06-14T00:00:00.000Z" });
+    seed("high", "alpha", { observedAt: "2026-06-15T00:00:00.000Z" });
+    const embedder = fakeEmbedder({ alpha: [1, 0, 0], q: [1, 0, 0] });
+    await embedSources(
+      store.connection.sqlite,
+      embedder,
+      ["low", "mid", "high"].map((id) => ({ externalId: id, body: "alpha" })),
+    );
+
+    const result = await recallSearch(store.connection.sqlite, embedder, "q", {
+      observedAfter: "2026-06-14T00:00:00.000Z",
+      observedBefore: "2026-06-15T00:00:00.000Z",
+    });
+    expect(result.hits.map((h) => h.externalId)).toEqual(["mid"]);
   });
 });
 
