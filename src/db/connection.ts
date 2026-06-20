@@ -70,9 +70,15 @@ export function initSchema(sqlite: Database): void {
       id         TEXT PRIMARY KEY,
       title      TEXT NOT NULL,
       state      TEXT NOT NULL DEFAULT 'proposed',
+      -- Scheduling fields (ADR-0028); NULL when the task carries none. overdue is
+      -- NOT stored — it is derived at read time (dueDate < now AND open/in_progress).
+      due_date   TEXT,
+      priority   TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    -- task.list filters overdue tasks by due_date (ADR-0028); index it.
+    CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
     CREATE TABLE IF NOT EXISTS decisions (
       id          TEXT PRIMARY KEY,
       title       TEXT NOT NULL,
@@ -158,6 +164,14 @@ export function initSchema(sqlite: Database): void {
     );
   `);
 
+  // Additive column migrations for pre-existing databases (ADR-0028). The
+  // `CREATE TABLE IF NOT EXISTS` above only applies to a fresh `tasks` table; an
+  // existing one needs ADD COLUMN to gain `due_date` / `priority`. SQLite has no
+  // `ADD COLUMN IF NOT EXISTS`, so we gate on PRAGMA table_info. Idempotent and
+  // non-destructive (the event log is the source of truth — ADR-0002).
+  ensureColumn(sqlite, "tasks", "due_date", "TEXT");
+  ensureColumn(sqlite, "tasks", "priority", "TEXT");
+
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English
   // substrings without a CJK word segmenter (ADR-0005, docs/design/retrieval.md).
   // `content=''` makes it a contentless (external-content-free) index we
@@ -169,6 +183,17 @@ export function initSchema(sqlite: Database): void {
       tokenize = 'trigram'
     );
   `);
+}
+
+/**
+ * Idempotently add a nullable column to an existing table (additive migration,
+ * ADR-0028). No-op when the column already exists; SQLite lacks
+ * `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so we inspect PRAGMA table_info.
+ */
+function ensureColumn(sqlite: Database, table: string, column: string, type: string): void {
+  const cols = sqlite.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  if (cols.some((c) => c.name === column)) return;
+  sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
 }
 
 /** Sidecar table recording which model produced each stored vector (ADR-0006). */

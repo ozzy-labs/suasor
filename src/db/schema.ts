@@ -28,6 +28,10 @@ export const tasks = sqliteTable("tasks", {
   title: text("title").notNull(),
   /** "proposed" until a human applies it; then the applied lifecycle state. */
   state: text("state").notNull().default("proposed"),
+  /** Optional due date (ISO 8601); NULL when the task has none (ADR-0028). */
+  dueDate: text("due_date"),
+  /** Optional priority (low/normal/high); NULL when unprioritised (ADR-0028). */
+  priority: text("priority"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

@@ -88,24 +88,53 @@ export const ConnectorSyncCompleted = z.object({
   count: z.number().int().nonnegative().default(0),
 });
 
-/** A task candidate was proposed (HITL — not yet applied, ADR-0004). */
+/** Task priority levels (ADR-0028). `null` = unprioritised. */
+export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
+export const TaskPriority = z.enum(TASK_PRIORITIES);
+export type TaskPriority = z.infer<typeof TaskPriority>;
+
+/**
+ * A task candidate was proposed (HITL — not yet applied, ADR-0004).
+ *
+ * `dueDate` / `priority` are scheduling fields (ADR-0028, mirroring commitment's
+ * `dueDate`): both default to `null`, so an *old* event without them parses to
+ * `null` (backward-compatible replay — ADR-0002, no schemaVersion bump since the
+ * change is purely additive). `overdue` is NOT stored — it is derived at read
+ * time from `dueDate < now AND state ∈ {open,in_progress}` (current-time state
+ * must not be folded into a replay-stable projection).
+ */
 export const TaskProposed = z.object({
   type: z.literal("TaskProposed"),
   ...Envelope,
   /** Stable id for the task this proposal targets. */
   taskId: z.string().min(1),
   title: z.string().min(1),
+  /** Optional due date (ISO 8601), when the task carries one (ADR-0028). */
+  dueDate: IsoDateTime.nullable().default(null),
+  /** Optional priority (low / normal / high); null when unprioritised (ADR-0028). */
+  priority: TaskPriority.nullable().default(null),
   /** Source(s) this proposal derives from (provenance, links projection). */
   sourceExternalIds: z.array(z.string().min(1)).default([]),
 });
 
-/** A proposed task was approved & applied by a human (HITL, ADR-0004). */
+/**
+ * A proposed task was approved & applied by a human (HITL, ADR-0004).
+ *
+ * Carries the optional scheduling fields (ADR-0028) so applying a task can also
+ * (re)set its `dueDate` / `priority`. Both default to `null` for backward-
+ * compatible replay of pre-ADR-0028 events; a `null` value on apply leaves the
+ * proposed value untouched (the reducer only overwrites a non-null update).
+ */
 export const TaskApplied = z.object({
   type: z.literal("TaskApplied"),
   ...Envelope,
   taskId: z.string().min(1),
   /** Lifecycle state after application. */
   state: z.enum(["open", "in_progress", "completed", "dropped"]).default("open"),
+  /** Optional due date (ISO 8601) to (re)set on apply; null leaves it untouched. */
+  dueDate: IsoDateTime.nullable().default(null),
+  /** Optional priority to (re)set on apply; null leaves it untouched (ADR-0028). */
+  priority: TaskPriority.nullable().default(null),
 });
 
 /** A decision was recorded (provenance-tracked, ADR-0002). */

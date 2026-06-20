@@ -121,6 +121,90 @@ describe("listTasks", () => {
   });
 });
 
+describe("listTasks scheduling / overdue (ADR-0028)", () => {
+  // A fixed reference 'now' makes the overdue boundary deterministic (ADR-0028).
+  const NOW = "2026-06-20T00:00:00.000Z";
+
+  beforeEach(() => {
+    // open + past due → overdue
+    store.record({
+      type: "TaskProposed",
+      taskId: "past",
+      title: "past due",
+      dueDate: "2026-06-10T00:00:00.000Z",
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "past", state: "open" });
+    // open + future due → not overdue
+    store.record({
+      type: "TaskProposed",
+      taskId: "future",
+      title: "future due",
+      dueDate: "2026-06-30T00:00:00.000Z",
+      priority: "high",
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "future", state: "open" });
+    // completed + past due → NOT overdue (not actionable)
+    store.record({
+      type: "TaskProposed",
+      taskId: "done",
+      title: "done past due",
+      dueDate: "2026-06-01T00:00:00.000Z",
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "done", state: "completed" });
+    // open + no due date → never overdue
+    store.record({ type: "TaskProposed", taskId: "nodue", title: "no due", sourceExternalIds: [] });
+    store.record({ type: "TaskApplied", taskId: "nodue", state: "open" });
+  });
+
+  test("derives overdue at read time: past due AND open/in_progress only", () => {
+    const all = listTasks(sqlite(), { now: NOW });
+    const byId = new Map(all.map((t) => [t.id, t.overdue]));
+    expect(byId.get("past")).toBe(true);
+    expect(byId.get("future")).toBe(false);
+    expect(byId.get("done")).toBe(false); // completed → not actionable
+    expect(byId.get("nodue")).toBe(false); // no due date
+  });
+
+  test("overdue filter keeps only overdue tasks", () => {
+    const overdue = listTasks(sqlite(), { overdue: true, now: NOW });
+    expect(overdue.map((t) => t.id)).toEqual(["past"]);
+  });
+
+  test("a legacy task (dueDate=null) is never overdue", () => {
+    const nodue = listTasks(sqlite(), { now: NOW }).find((t) => t.id === "nodue");
+    expect(nodue?.dueDate).toBeNull();
+    expect(nodue?.overdue).toBe(false);
+  });
+
+  test("dueBefore filters by due_date and excludes null due dates", () => {
+    const before = listTasks(sqlite(), { dueBefore: "2026-06-15T00:00:00.000Z", now: NOW });
+    // past (06-10) and done (06-01) are < 06-15; future / nodue excluded.
+    expect(before.map((t) => t.id).sort()).toEqual(["done", "past"]);
+  });
+
+  test("exposes dueDate / priority on the record", () => {
+    const future = listTasks(sqlite(), { now: NOW }).find((t) => t.id === "future");
+    expect(future?.dueDate).toBe("2026-06-30T00:00:00.000Z");
+    expect(future?.priority).toBe("high");
+  });
+
+  test("overdue boundary is exclusive: a task due exactly at now is not overdue", () => {
+    store.record({
+      type: "TaskProposed",
+      taskId: "exact",
+      title: "due exactly now",
+      dueDate: NOW,
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "exact", state: "open" });
+    const exact = listTasks(sqlite(), { now: NOW }).find((t) => t.id === "exact");
+    expect(exact?.overdue).toBe(false);
+  });
+});
+
 describe("listDecisions", () => {
   test("lists decisions newest-recorded first", () => {
     store.record({ type: "DecisionRecorded", decisionId: "d1", title: "A", rationale: "" });

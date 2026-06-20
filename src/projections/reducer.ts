@@ -156,15 +156,27 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       return;
     }
     case "TaskProposed": {
+      // Scheduling fields (ADR-0028): dueDate / priority are folded onto the row
+      // (event-payload values, time-independent — safe to store; overdue is the
+      // only current-time-dependent bit and is derived at read time, not here).
+      // On re-proposal they refresh alongside the title.
       sqlite
         .query(
-          `INSERT INTO tasks (id, title, state, created_at, updated_at)
-           VALUES ($id, $title, 'proposed', $ts, $ts)
+          `INSERT INTO tasks (id, title, state, due_date, priority, created_at, updated_at)
+           VALUES ($id, $title, 'proposed', $due, $priority, $ts, $ts)
            ON CONFLICT(id) DO UPDATE SET
              title = excluded.title,
+             due_date = excluded.due_date,
+             priority = excluded.priority,
              updated_at = excluded.updated_at`,
         )
-        .run({ $id: event.taskId, $title: event.title, $ts: event.recordedAt });
+        .run({
+          $id: event.taskId,
+          $title: event.title,
+          $due: event.dueDate,
+          $priority: event.priority,
+          $ts: event.recordedAt,
+        });
       for (const sourceId of event.sourceExternalIds) {
         upsertLink(sqlite, {
           fromKind: "task",
@@ -182,9 +194,27 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       // SourceBodyUpdated, it must NOT fabricate a row (a titleless task) when no
       // prior TaskProposed exists — so a TaskApplied with no matching task is a
       // no-op under replay rather than inserting an empty-title placeholder.
+      //
+      // Scheduling fields (ADR-0028): a non-null dueDate / priority on apply
+      // (re)sets the column; a null value leaves the proposed value untouched
+      // (COALESCE keeps the existing column when the update carries null). This
+      // lets task.update advance state without clobbering an existing due date.
       sqlite
-        .query("UPDATE tasks SET state = $state, updated_at = $ts WHERE id = $id")
-        .run({ $id: event.taskId, $state: event.state, $ts: event.recordedAt });
+        .query(
+          `UPDATE tasks SET
+             state = $state,
+             due_date = COALESCE($due, due_date),
+             priority = COALESCE($priority, priority),
+             updated_at = $ts
+           WHERE id = $id`,
+        )
+        .run({
+          $id: event.taskId,
+          $state: event.state,
+          $due: event.dueDate,
+          $priority: event.priority,
+          $ts: event.recordedAt,
+        });
       return;
     }
     case "DecisionRecorded": {

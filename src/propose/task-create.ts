@@ -15,11 +15,19 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { TaskPriority } from "../events/types.ts";
 import { entityId } from "./id.ts";
+
+/** ISO 8601 timestamp (matches the event payload's `dueDate`). */
+const IsoDateTime = z.iso.datetime({ offset: true });
 
 /** Input to `task.create`. */
 export const TaskCreateInput = z.object({
   title: z.string().min(1),
+  /** Optional due date (ISO 8601), when the task carries one (ADR-0028). */
+  dueDate: IsoDateTime.nullable().default(null),
+  /** Optional priority (low/normal/high); null when unprioritised (ADR-0028). */
+  priority: TaskPriority.nullable().default(null),
   /** Source(s) this task derives from (provenance → `links`). */
   sourceExternalIds: z.array(z.string().min(1)).default([]),
 });
@@ -34,13 +42,18 @@ export interface TaskCreateOutput {
 /**
  * Create a task (append `TaskProposed`). The host must have human approval first.
  * Idempotent on content: an existing task with the derived id is a no-op.
+ *
+ * `dueDate` / `priority` (ADR-0028) are NOT part of the derived id (so changing a
+ * task's due date does not split it into a new task — id stays title + provenance);
+ * they are carried on the `TaskProposed` event and folded onto a freshly-created
+ * task. Re-creating an existing task is `existing` (no event), unchanged behaviour.
  */
 export function taskCreate(
   store: Store,
   input: TaskCreateInput,
   now: Date = new Date(),
 ): TaskCreateOutput {
-  const { title, sourceExternalIds } = TaskCreateInput.parse(input);
+  const { title, dueDate, priority, sourceExternalIds } = TaskCreateInput.parse(input);
   const taskId = entityId({
     kind: "task",
     candidateId: "task.create",
@@ -53,6 +66,6 @@ export function taskCreate(
     return { taskId, status: "existing" };
   }
 
-  store.record({ type: "TaskProposed", taskId, title, sourceExternalIds }, now);
+  store.record({ type: "TaskProposed", taskId, title, dueDate, priority, sourceExternalIds }, now);
   return { taskId, status: "created" };
 }

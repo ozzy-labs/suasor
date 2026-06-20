@@ -411,20 +411,30 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     {
       title: "List tasks",
       description:
-        "List tasks most-recently-updated first, optionally filtered by state and " +
-        "an updated_after/updated_before time window.",
+        "List tasks most-recently-updated first, optionally filtered by state, an " +
+        "updated_after/updated_before time window, dueBefore, or overdue. Each task " +
+        "carries dueDate / priority and a read-time-derived overdue flag (ADR-0028).",
       inputSchema: {
         state: z.string().min(1).optional().describe("Filter by lifecycle state."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
         updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
+        dueBefore: isoDateTime
+          .optional()
+          .describe("Keep only tasks with a due date before this (ISO 8601, ADR-0028)."),
+        overdue: z
+          .boolean()
+          .optional()
+          .describe("Keep only overdue tasks (past due AND open/in_progress, ADR-0028)."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ state, updatedAfter, updatedBefore, limit }) => {
+    async ({ state, updatedAfter, updatedBefore, dueBefore, overdue, limit }) => {
       const tasks = listTasks(sqlite, {
         state,
         updated: { after: updatedAfter, before: updatedBefore },
+        dueBefore,
+        overdue,
         limit,
       });
       return jsonResult({ tasks });
@@ -856,9 +866,15 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         description:
           "Create a task directly (appends TaskProposed → tasks projection). " +
           "Write tool: requires human approval — no auto-apply (ADR-0004). " +
-          "Idempotent: re-creating the same task (title + provenance) is a no-op.",
+          "Idempotent: re-creating the same task (title + provenance) is a no-op. " +
+          "Optional dueDate / priority scheduling fields (ADR-0028).",
         inputSchema: {
           title: z.string().min(1).describe("Task title."),
+          dueDate: isoDateTime.optional().describe("Optional due date (ISO 8601, ADR-0028)."),
+          priority: z
+            .enum(["low", "normal", "high"])
+            .optional()
+            .describe("Optional priority (low/normal/high, ADR-0028)."),
           sourceExternalIds: z
             .array(z.string().min(1))
             .optional()
@@ -866,9 +882,11 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         },
         annotations: { readOnlyHint: false, openWorldHint: false },
       },
-      async ({ title, sourceExternalIds }) => {
+      async ({ title, dueDate, priority, sourceExternalIds }) => {
         const result = taskCreate(write.store, {
           title,
+          ...(dueDate !== undefined ? { dueDate } : {}),
+          ...(priority !== undefined ? { priority } : {}),
           ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
         });
         return jsonResult(result);
@@ -886,20 +904,33 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         title: "Update task state",
         description:
           "Transition a task's lifecycle state (open / in_progress / completed / " +
-          "dropped) by appending TaskApplied → tasks projection. Write tool: " +
-          "requires human approval — no auto-apply (ADR-0004). Idempotent: a " +
-          "same-state call is a no-op (unchanged); an unknown task is reported " +
-          "missing.",
+          "dropped) by appending TaskApplied → tasks projection. Optionally (re)set " +
+          "dueDate / priority on the same call (ADR-0028). Write tool: requires " +
+          "human approval — no auto-apply (ADR-0004). Idempotent: a same-state call " +
+          "with no scheduling update is a no-op (unchanged); an unknown task is " +
+          "reported missing.",
         inputSchema: {
           taskId: z.string().min(1).describe("Id of the task to transition."),
           state: z
             .enum(["open", "in_progress", "completed", "dropped"])
             .describe("Lifecycle state to move the task to."),
+          dueDate: isoDateTime
+            .optional()
+            .describe("Optional due date to (re)set (ISO 8601, ADR-0028)."),
+          priority: z
+            .enum(["low", "normal", "high"])
+            .optional()
+            .describe("Optional priority to (re)set (low/normal/high, ADR-0028)."),
         },
         annotations: { readOnlyHint: false, openWorldHint: false },
       },
-      async ({ taskId, state }) => {
-        const result = taskUpdate(write.store, { taskId, state });
+      async ({ taskId, state, dueDate, priority }) => {
+        const result = taskUpdate(write.store, {
+          taskId,
+          state,
+          ...(dueDate !== undefined ? { dueDate } : {}),
+          ...(priority !== undefined ? { priority } : {}),
+        });
         return jsonResult(result);
       },
     );
