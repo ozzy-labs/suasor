@@ -5,6 +5,7 @@
  * Wired command surface (docs/design/cli.md):
  *   init · onboard · db migrate · projections rebuild · search · <connector> sync · sync ·
  *   <connector> auth set/test (github/ms-graph/google/box) · connectors list ·
+ *   config show ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
  *   skills install/list
@@ -22,6 +23,7 @@
 import { Builtins, Cli, type CommandClass } from "clipanion";
 import { VERSION } from "../version.ts";
 import { BriefCommand } from "./commands/brief.ts";
+import { ConfigShowCommand } from "./commands/config-show.ts";
 import { connectorAuthCommands } from "./commands/connector-auth.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
@@ -69,6 +71,7 @@ export function buildCli(): Cli {
     cli.register(ConnectorAuth);
   }
   cli.register(ConnectorsListCommand);
+  cli.register(ConfigShowCommand);
   cli.register(DoctorCommand);
   cli.register(ExtractionStatusCommand);
   for (const EmbeddingsCommand of embeddingsCommands as CommandClass[]) {
