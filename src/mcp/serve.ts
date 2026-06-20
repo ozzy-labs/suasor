@@ -62,6 +62,10 @@ function defaultBuildServer({ store, config }: { store: ServeStore; config: Conf
     embedding: config.embedding,
     // Operator user ids for slack.demand.list @mention detection (ADR-0012).
     slackSelfUserIds: resolveSelfUserIds(config.connectors.slack ?? {}),
+    // Whether [connectors.slack] is configured at all — drives the brief
+    // `slack_not_configured` completeness signal (Issue #189), independent of
+    // whether a self_user_id is set.
+    slackConfigured: config.connectors.slack !== undefined,
     // Enable the `connector.sync` write tool (HITL) over the same store
     // (ADR-0007 / Issue #10 D5). The `[embedding]` config in `config` also lets
     // ingest (re)populate vec0. Hosts gate the write via `readOnlyHint: false`.

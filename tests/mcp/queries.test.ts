@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import {
   buildBrief,
+  deriveBriefWarnings,
   expandGraph,
   getSource,
   listDecisions,
@@ -365,6 +366,41 @@ describe("buildBrief (ADR-0017)", () => {
     source("c", "2026-06-13T02:00:00.000Z");
     const b = buildBrief(sqlite(), { since: W1, until: W2, limit: 2 });
     expect(b.sources).toHaveLength(2);
+  });
+
+  test("warnings default to an empty array when none are supplied (Issue #189)", () => {
+    const b = buildBrief(sqlite(), { since: W1, until: W2 });
+    expect(b.warnings).toEqual([]);
+  });
+
+  test("supplied completeness warnings pass through verbatim (Issue #189)", () => {
+    const warnings = deriveBriefWarnings({ slackConfigured: false, embeddingBackend: "disabled" });
+    const b = buildBrief(sqlite(), { since: W1, until: W2, warnings });
+    expect(b.warnings).toEqual(warnings);
+  });
+});
+
+describe("deriveBriefWarnings (Issue #189)", () => {
+  test("flags neither when Slack is configured and embedding is enabled", () => {
+    const w = deriveBriefWarnings({ slackConfigured: true, embeddingBackend: "ollama" });
+    expect(w).toEqual([]);
+  });
+
+  test("flags slack_not_configured when no Slack connector is configured", () => {
+    const w = deriveBriefWarnings({ slackConfigured: false, embeddingBackend: "ollama" });
+    expect(w.map((x) => x.key)).toEqual(["slack_not_configured"]);
+    expect(w[0]?.message).toContain("Slack");
+  });
+
+  test("flags embedding_disabled when the backend is disabled", () => {
+    const w = deriveBriefWarnings({ slackConfigured: true, embeddingBackend: "disabled" });
+    expect(w.map((x) => x.key)).toEqual(["embedding_disabled"]);
+    expect(w[0]?.message).toContain("embedding");
+  });
+
+  test("flags both when Slack is unconfigured and embedding is disabled", () => {
+    const w = deriveBriefWarnings({ slackConfigured: false, embeddingBackend: "disabled" });
+    expect(w.map((x) => x.key)).toEqual(["slack_not_configured", "embedding_disabled"]);
   });
 });
 

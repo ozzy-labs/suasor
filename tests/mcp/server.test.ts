@@ -126,10 +126,34 @@ describe("MCP read surface", () => {
       decisions: { id: string }[];
       inbox: unknown[];
       demand: unknown[];
+      warnings: { key: string }[];
     };
     expect(brief.window.since).toBe("2026-06-13T00:00:00.000Z");
     expect(brief.sources.map((s) => s.externalId)).toContain("s1");
     expect(brief.decisions.map((d) => d.id)).toEqual(["dec1"]);
+  });
+
+  test("brief flags unconfigured categories via warnings (Issue #189)", async () => {
+    // Default connect(): embedding disabled + Slack unconfigured → both signals.
+    const client = await connect();
+    const res = await client.callTool({ name: "brief", arguments: {} });
+    const { warnings } = parseResult(res as never) as { warnings: { key: string }[] };
+    expect(warnings.map((w) => w.key)).toEqual(["slack_not_configured", "embedding_disabled"]);
+  });
+
+  test("brief omits warnings when Slack + embedding are configured (Issue #189)", async () => {
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "ollama",
+      slackConfigured: true,
+      slackSelfUserIds: ["U1"],
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const res = await client.callTool({ name: "brief", arguments: {} });
+    const { warnings } = parseResult(res as never) as { warnings: unknown[] };
+    expect(warnings).toEqual([]);
   });
 
   test("graph.related / graph.expand traverse the links projection (ADR-0018)", async () => {
