@@ -51,6 +51,16 @@ function parseResult(res: { content: { type: string; text?: string }[] }): unkno
   return JSON.parse(block?.text ?? "");
 }
 
+/** Parse a structured tool error body `{ code, message, hint }` (ADR-0031). */
+function parseError(res: { isError?: boolean; content: { type: string; text?: string }[] }): {
+  code: string;
+  message: string;
+  hint?: string;
+} {
+  expect(res.isError).toBe(true);
+  return parseResult(res) as { code: string; message: string; hint?: string };
+}
+
 describe("MCP read surface", () => {
   test("exposes exactly the #8 read tools", async () => {
     const client = await connect();
@@ -817,5 +827,111 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       (await client.callTool({ name: "commitment.list", arguments: { state: "open" } })) as never,
     ) as { commitments: unknown[] };
     expect(stillOpen.commitments).toHaveLength(0);
+  });
+});
+
+describe("MCP structured errors (code/hint — ADR-0031 / #196)", () => {
+  /** Connect a writable server (no [export] slice → draft.export errors). */
+  async function connectWrite(connectors: Record<string, Record<string, unknown>> = {}) {
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "disabled",
+      write: { store, config: { connectors } },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    return client;
+  }
+
+  test("connector.sync → UNKNOWN_CONNECTOR with a hint", async () => {
+    const client = await connectWrite();
+    const body = parseError(
+      (await client.callTool({
+        name: "connector.sync",
+        arguments: { connector: "nope" },
+      })) as never,
+    );
+    expect(body.code).toBe("UNKNOWN_CONNECTOR");
+    expect(body.message).toContain("unknown connector");
+    expect(body.hint).toBeTruthy();
+  });
+
+  test("inbox.triage on a missing item → MISSING_ENTITY with a hint", async () => {
+    const client = await connectWrite();
+    const body = parseError(
+      (await client.callTool({
+        name: "inbox.triage",
+        arguments: { inboxId: "inbox_missing", action: "discard" },
+      })) as never,
+    );
+    expect(body.code).toBe("MISSING_ENTITY");
+    expect(body.hint).toBeTruthy();
+  });
+
+  test("inbox.triage of a non-open item → INVALID_STATE", async () => {
+    const client = await connectWrite();
+    seedSource("gh:triage");
+    // Capture, then triage to done, then re-triage the now-done item.
+    const add = parseResult(
+      (await client.callTool({
+        name: "inbox.add",
+        arguments: { sourceExternalId: "gh:triage" },
+      })) as never,
+    ) as { inboxId: string };
+    await client.callTool({
+      name: "inbox.triage",
+      arguments: { inboxId: add.inboxId, action: "discard" },
+    });
+    const body = parseError(
+      (await client.callTool({
+        name: "inbox.triage",
+        arguments: { inboxId: add.inboxId, action: "discard" },
+      })) as never,
+    );
+    expect(body.code).toBe("INVALID_STATE");
+  });
+
+  test("link.add self-loop → INVALID_INPUT; link.remove unknown → MISSING_ENTITY", async () => {
+    const client = await connectWrite();
+    const selfLoop = parseError(
+      (await client.callTool({
+        name: "link.add",
+        arguments: { fromKind: "task", fromId: "t1", toKind: "task", toId: "t1" },
+      })) as never,
+    );
+    expect(selfLoop.code).toBe("INVALID_INPUT");
+    expect(selfLoop.message).toContain("itself");
+
+    const missing = parseError(
+      (await client.callTool({
+        name: "link.remove",
+        arguments: { linkId: "link_missing" },
+      })) as never,
+    );
+    expect(missing.code).toBe("MISSING_ENTITY");
+  });
+
+  test("person.merge self-merge → INVALID_INPUT", async () => {
+    const client = await connectWrite();
+    const body = parseError(
+      (await client.callTool({
+        name: "person.merge",
+        arguments: { targetPersonId: "p1", sourcePersonId: "p1" },
+      })) as never,
+    );
+    expect(body.code).toBe("INVALID_INPUT");
+  });
+
+  test("draft.export without [export].dir → EXPORT_DIR_NOT_CONFIGURED with a hint", async () => {
+    const client = await connectWrite(); // no [export] slice
+    const body = parseError(
+      (await client.callTool({
+        name: "draft.export",
+        arguments: { content: "hi", filename: "note.md", format: "md" },
+      })) as never,
+    );
+    expect(body.code).toBe("EXPORT_DIR_NOT_CONFIGURED");
+    expect(body.hint).toContain("[export].dir");
   });
 });

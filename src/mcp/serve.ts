@@ -11,6 +11,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Config, loadConfig } from "../config/index.ts";
 import { resolveSelfUserIds } from "../connectors/slack.ts";
 import { Store } from "../db/index.ts";
+import { McpToolError, verifyReadiness } from "./errors.ts";
 import { buildMcpServer } from "./server.ts";
 
 /** Minimal store contract `serveMcp` relies on (connection handle + close). */
@@ -88,11 +89,28 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
   const buildServer = options.buildServer ?? defaultBuildServer;
 
   const config = await load();
-  const dbPath = config.storage.dbPath;
-  if (dbPath === null) {
-    throw new Error("storage.dbPath is not configured");
+
+  // Startup readiness: validate critical config (DB path) before opening
+  // anything, so a fatal mis-config fails fast with a structured code/hint
+  // instead of crashing deep inside a later tool call (ADR-0031, Issue #196).
+  const issues = verifyReadiness(config);
+  if (issues.length > 0) {
+    // Surface every issue on stderr (diagnostics, never the JSON-RPC stream),
+    // then throw the first as a structured error so the host gets code + hint.
+    for (const issue of issues) {
+      log(`suasor mcp serve: readiness check failed [${issue.code}]: ${issue.message}`);
+      log(`  hint: ${issue.hint}`);
+    }
+    const first = issues[0];
+    if (first === undefined) {
+      // Unreachable (length > 0), but keeps the type honest without a cast.
+      throw new McpToolError("CONFIG_INVALID", "readiness check failed");
+    }
+    throw new McpToolError(first.code, first.message, first.hint);
   }
 
+  // verifyReadiness guarantees dbPath is non-null here; assert for the type.
+  const dbPath = config.storage.dbPath as string;
   const store = openStore({ path: dbPath, embeddingDim: config.embedding.dim });
   const server = buildServer({ store, config });
   const transport = options.transport ?? new StdioServerTransport();

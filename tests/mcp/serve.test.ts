@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Config } from "../../src/config/index.ts";
+import { McpToolError } from "../../src/mcp/errors.ts";
 import {
   type ServeOptions,
   type ServeServer,
@@ -77,6 +78,28 @@ describe("serveMcp boot glue", () => {
     ).rejects.toThrow("storage.dbPath is not configured");
     // The guard runs before opening the store — no store handle is created.
     expect(openedStore).toBe(false);
+  });
+
+  test("readiness failure throws a structured CONFIG_INVALID error with a hint (ADR-0031)", async () => {
+    const logs: string[] = [];
+    let error: unknown;
+    try {
+      await serveMcp({
+        ...options({ dbPath: null }),
+        log: (m) => logs.push(m),
+      });
+    } catch (e) {
+      error = e;
+    }
+    // The fatal mis-config surfaces as a structured McpToolError (code + hint),
+    // not a bare Error, so the host can branch and show the fix.
+    expect(error).toBeInstanceOf(McpToolError);
+    const mcpError = error as McpToolError;
+    expect(mcpError.code).toBe("CONFIG_INVALID");
+    expect(mcpError.hint).toBeTruthy();
+    // The issue + its hint are also written to the diagnostics channel (stderr).
+    expect(logs.some((l) => l.includes("CONFIG_INVALID"))).toBe(true);
+    expect(logs.some((l) => l.toLowerCase().includes("hint"))).toBe(true);
   });
 
   test("transport.onclose closes the store exactly once (idempotent close)", async () => {
