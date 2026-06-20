@@ -490,6 +490,90 @@ describe("MCP read surface", () => {
     expect(parsed.tasks.map((t) => t.id)).toEqual(["t1"]);
   });
 
+  test("task.list filters by dueWithinDays (due soon)", async () => {
+    // Soon: 1 day out. Later: far beyond any reasonable window.
+    const soon = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const later = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    store.record({
+      type: "TaskProposed",
+      taskId: "soon",
+      title: "due soon",
+      dueDate: soon,
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "soon", state: "open" });
+    store.record({
+      type: "TaskProposed",
+      taskId: "later",
+      title: "due later",
+      dueDate: later,
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "later", state: "open" });
+    const client = await connect();
+    const res = await client.callTool({ name: "task.list", arguments: { dueWithinDays: 7 } });
+    const parsed = parseResult(res as never) as { tasks: { id: string }[] };
+    expect(parsed.tasks.map((t) => t.id)).toEqual(["soon"]);
+  });
+
+  test("inbox.list filters by sourceType", async () => {
+    seedSource("gh:1");
+    store.record({
+      type: "SourceObserved",
+      externalId: "sl:1",
+      sourceType: "slack_message",
+      body: "ping",
+      observedAt: "2026-06-11T00:00:00.000Z",
+      fingerprint: "sl:1",
+      meta: {},
+    });
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "ig",
+      sourceExternalId: "gh:1",
+      state: "open",
+    });
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "is",
+      sourceExternalId: "sl:1",
+      state: "open",
+    });
+    const client = await connect();
+    const res = await client.callTool({
+      name: "inbox.list",
+      arguments: { sourceType: "slack_message" },
+    });
+    const parsed = parseResult(res as never) as { items: { id: string }[] };
+    expect(parsed.items.map((i) => i.id)).toEqual(["is"]);
+  });
+
+  test("commitment.list filters by person", async () => {
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: "c1",
+      title: "owe Alice the deck",
+      direction: "owed_by_me",
+      person: "Alice",
+      sourceExternalIds: [],
+    });
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: "c2",
+      title: "Bob owes a review",
+      direction: "owed_to_me",
+      person: "Bob",
+      sourceExternalIds: [],
+    });
+    const client = await connect();
+    const res = await client.callTool({
+      name: "commitment.list",
+      arguments: { person: "Alice" },
+    });
+    const parsed = parseResult(res as never) as { commitments: { id: string }[] };
+    expect(parsed.commitments.map((c) => c.id)).toEqual(["c1"]);
+  });
+
   test("read tools have no side effects (event/projection counts unchanged)", async () => {
     seedSource("gh:1");
     const sqlite = store.connection.sqlite;

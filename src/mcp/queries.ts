@@ -236,6 +236,14 @@ export interface ListTasksOptions {
   updated?: TimeRange;
   /** Keep only tasks with `due_date < dueBefore` (ISO 8601, ADR-0028). */
   dueBefore?: string;
+  /**
+   * Keep only tasks due within the next N days of `now` (`due_date < now + N
+   * days`, ADR-0028). The "今日/今週の優先" surface: `dueWithinDays: 7` is the
+   * coming week. Like `dueBefore`, null-due tasks are excluded. The boundary is
+   * derived from the same injectable `now` as `overdue`, so it is deterministic
+   * under test. Combine with `state: "open"` to scope to actionable work.
+   */
+  dueWithinDays?: number;
   /** Keep only overdue tasks (read-time derived: past due AND active, ADR-0028). */
   overdue?: boolean;
   /**
@@ -265,6 +273,15 @@ export function listTasks(sqlite: Database, options: ListTasksOptions = {}): Tas
   if (options.dueBefore !== undefined) {
     clauses.push("due_date IS NOT NULL AND due_date < ?");
     params.push(options.dueBefore);
+  }
+  if (options.dueWithinDays !== undefined) {
+    // Derive the upper bound from the same `now` as overdue so the "due soon"
+    // window is deterministic under test (ADR-0028). Null-due tasks are excluded.
+    const horizon = new Date(
+      new Date(now).getTime() + options.dueWithinDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    clauses.push("due_date IS NOT NULL AND due_date < ?");
+    params.push(horizon);
   }
   pushTimeRange(clauses, params, "updated_at", options.updated);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -363,6 +380,12 @@ interface InboxRow {
 export interface ListInboxOptions {
   /** Restrict to a triage state (open/snoozed/done/dismissed). */
   state?: string;
+  /**
+   * Restrict to items whose underlying source has this `source_type` (e.g.
+   * "slack_message"). The inbox projection stores only `source_external_id`, so
+   * this joins against `sources` to resolve the type — "only Slack in my inbox".
+   */
+  sourceType?: string;
   /** Window over `updated_at`. */
   updated?: TimeRange;
   limit?: number;
@@ -373,18 +396,28 @@ export function listInbox(sqlite: Database, options: ListInboxOptions = {}): Inb
   const clauses: string[] = [];
   const params: (string | number)[] = [];
   if (options.state !== undefined) {
-    clauses.push("state = ?");
+    clauses.push("inbox.state = ?");
     params.push(options.state);
   }
-  pushTimeRange(clauses, params, "updated_at", options.updated);
+  // The inbox table has no source_type column; join sources to filter by it.
+  const join =
+    options.sourceType !== undefined
+      ? "JOIN sources ON sources.external_id = inbox.source_external_id"
+      : "";
+  if (options.sourceType !== undefined) {
+    clauses.push("sources.source_type = ?");
+    params.push(options.sourceType);
+  }
+  pushTimeRange(clauses, params, "inbox.updated_at", options.updated);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(options.limit ?? DEFAULT_LIST_LIMIT);
   const rows = sqlite
     .query<InboxRow, (string | number)[]>(
-      `SELECT id, source_external_id, state, updated_at
+      `SELECT inbox.id, inbox.source_external_id, inbox.state, inbox.updated_at
          FROM inbox
+         ${join}
          ${where}
-        ORDER BY updated_at DESC
+        ORDER BY inbox.updated_at DESC
         LIMIT ?`,
     )
     .all(...params);
@@ -509,6 +542,8 @@ export interface ListCommitmentsOptions {
   state?: string;
   /** Restrict to a direction (owed_by_me / owed_to_me). */
   direction?: string;
+  /** Restrict to a related person (exact match on the stored `person`, ADR-0021). */
+  person?: string;
   /** Window over `updated_at`. */
   updated?: TimeRange;
   limit?: number;
@@ -516,7 +551,9 @@ export interface ListCommitmentsOptions {
 
 /**
  * List commitments most-recently-updated first, optionally filtered by lifecycle
- * state (open/resolved/dismissed) and direction (owed_by_me/owed_to_me). Backs
+ * state (open/resolved/dismissed), direction (owed_by_me/owed_to_me), and the
+ * related `person` (exact match — "誰との約束か" for chasing a specific person).
+ * Backs
  * `commitment.list` — the read half of the commitment ledger (ADR-0021), so
  * `brief` / `next-actions` skills can surface "やるべきこと" alongside demand.
  * Pure SELECT.
@@ -534,6 +571,10 @@ export function listCommitments(
   if (options.direction !== undefined) {
     clauses.push("direction = ?");
     params.push(options.direction);
+  }
+  if (options.person !== undefined) {
+    clauses.push("person = ?");
+    params.push(options.person);
   }
   pushTimeRange(clauses, params, "updated_at", options.updated);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";

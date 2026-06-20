@@ -423,8 +423,9 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       title: "List tasks",
       description:
         "List tasks most-recently-updated first, optionally filtered by state, an " +
-        "updated_after/updated_before time window, dueBefore, or overdue. Each task " +
-        "carries dueDate / priority and a read-time-derived overdue flag (ADR-0028).",
+        "updated_after/updated_before time window, dueBefore, dueWithinDays (today/this " +
+        "week's priority), or overdue. Each task carries dueDate / priority and a " +
+        "read-time-derived overdue flag (ADR-0028).",
       inputSchema: {
         state: z.string().min(1).optional().describe("Filter by lifecycle state."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
@@ -432,6 +433,14 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         dueBefore: isoDateTime
           .optional()
           .describe("Keep only tasks with a due date before this (ISO 8601, ADR-0028)."),
+        dueWithinDays: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Keep only tasks due within the next N days of now (due soon; 7 = the week, ADR-0028).",
+          ),
         overdue: z
           .boolean()
           .optional()
@@ -440,11 +449,12 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ state, updatedAfter, updatedBefore, dueBefore, overdue, limit }) => {
+    async ({ state, updatedAfter, updatedBefore, dueBefore, dueWithinDays, overdue, limit }) => {
       const tasks = listTasks(sqlite, {
         state,
         updated: { after: updatedAfter, before: updatedBefore },
         dueBefore,
+        ...(dueWithinDays !== undefined ? { dueWithinDays } : {}),
         overdue,
         limit,
       });
@@ -621,19 +631,26 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     {
       title: "List inbox items",
       description:
-        "List inbox items most-recently-updated first, optionally filtered by state " +
-        "and an updated_after/updated_before time window.",
+        "List inbox items most-recently-updated first, optionally filtered by state, " +
+        "the underlying source's sourceType (e.g. slack_message), and an " +
+        "updated_after/updated_before time window.",
       inputSchema: {
         state: z.string().min(1).optional().describe("Filter by triage state."),
+        sourceType: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filter by the underlying source's source_type (e.g. slack_message)."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
         updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ state, updatedAfter, updatedBefore, limit }) => {
+    async ({ state, sourceType, updatedAfter, updatedBefore, limit }) => {
       const items = listInbox(sqlite, {
         state,
+        ...(sourceType !== undefined ? { sourceType } : {}),
         updated: { after: updatedAfter, before: updatedBefore },
         limit,
       });
@@ -692,8 +709,9 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       title: "List commitments",
       description:
         "List commitments most-recently-updated first, optionally filtered by " +
-        "state (open / resolved / dismissed) and direction (owed_by_me / " +
-        "owed_to_me). Read-only: the visibility half of the commitment ledger " +
+        "state (open / resolved / dismissed), direction (owed_by_me / " +
+        "owed_to_me), and the related person (exact match — chase a specific " +
+        "person). Read-only: the visibility half of the commitment ledger " +
         "(ADR-0021). Use as a priority signal in next-actions / personal-brief; " +
         "the resolve/dismiss/reopen lifecycle lives in separate write tools.",
       inputSchema: {
@@ -705,16 +723,22 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
           .enum(["owed_by_me", "owed_to_me"])
           .optional()
           .describe("Filter by direction (default: both)."),
+        person: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filter by related person (exact match, default: any)."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
         updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ state, direction, updatedAfter, updatedBefore, limit }) => {
+    async ({ state, direction, person, updatedAfter, updatedBefore, limit }) => {
       const commitments = listCommitments(sqlite, {
         ...(state ? { state } : {}),
         ...(direction ? { direction } : {}),
+        ...(person !== undefined ? { person } : {}),
         updated: { after: updatedAfter, before: updatedBefore },
         ...(limit !== undefined ? { limit } : {}),
       });
