@@ -4,7 +4,8 @@
  *
  * Wired command surface (docs/design/cli.md):
  *   init · onboard · db migrate · projections rebuild · search · <connector> sync · sync ·
- *   <connector> auth set/test (github/ms-graph/google/box) · connectors list ·
+ *   <connector> auth set/test (github/ms-graph/google/box) ·
+ *   <connector> discovery verbs (github repos; ADR-0030) · connectors list ·
  *   config show ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
@@ -25,6 +26,7 @@ import { VERSION } from "../version.ts";
 import { BriefCommand } from "./commands/brief.ts";
 import { ConfigShowCommand } from "./commands/config-show.ts";
 import { connectorAuthCommands } from "./commands/connector-auth.ts";
+import { connectorDiscoveryCommands } from "./commands/connector-discovery.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
@@ -69,6 +71,9 @@ export function buildCli(): Cli {
   cli.register(SyncAllCommand);
   for (const ConnectorAuth of connectorAuthCommands() as CommandClass[]) {
     cli.register(ConnectorAuth);
+  }
+  for (const ConnectorDiscovery of connectorDiscoveryCommands() as CommandClass[]) {
+    cli.register(ConnectorDiscovery);
   }
   cli.register(ConnectorsListCommand);
   cli.register(ConfigShowCommand);
