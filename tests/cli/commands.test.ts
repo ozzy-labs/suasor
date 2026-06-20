@@ -62,6 +62,8 @@ describe("suasor --version / --help", () => {
       "db migrate",
       "projections rebuild",
       "search",
+      "source list",
+      "source forget",
       "brief",
       "doctor",
       "Ingest from every enabled connector",

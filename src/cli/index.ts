@@ -3,7 +3,8 @@
  * is lazy-imported inside `execute` to keep cold start light (NFR-PRF-1).
  *
  * Wired command surface (docs/design/cli.md):
- *   init · onboard · db migrate · projections rebuild · search · <connector> sync · sync ·
+ *   init · onboard · db migrate · projections rebuild · search · source list/forget ·
+ *   <connector> sync · sync ·
  *   <connector> auth set/test (github/ms-graph/google/box) ·
  *   <connector> discovery verbs (github repos; ADR-0030) · connectors list ·
  *   config show ·
@@ -53,6 +54,7 @@ import {
   SlackCursorResetCommand,
   SlackStatusCommand,
 } from "./commands/slack.ts";
+import { SourceForgetCommand, SourceListCommand } from "./commands/source.ts";
 import { SyncAllCommand } from "./commands/sync-all.ts";
 
 /** Build the configured CLI instance. */
@@ -69,6 +71,8 @@ export function buildCli(): Cli {
   cli.register(DbMigrateCommand);
   cli.register(ProjectionsRebuildCommand);
   cli.register(SearchCommand);
+  cli.register(SourceListCommand);
+  cli.register(SourceForgetCommand);
   cli.register(BriefCommand);
   for (const ConnectorSync of connectorSyncCommands() as CommandClass[]) {
     cli.register(ConnectorSync);
