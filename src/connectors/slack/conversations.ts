@@ -264,6 +264,10 @@ export function renderConfigBlock(teamId: string, result: ConversationsResult): 
     lines.push("channels = []");
     return lines;
   }
+  // `channels` carries conversation *ids*, not names — a name silently ingests
+  // zero messages (Issue #158). The trailing comment is the display name for
+  // readability only; the quoted value is the id to keep.
+  lines.push("# channels are ids (C…/G…/D…), not names — the # comment is just a label");
   lines.push("channels = [");
   for (const c of result.conversations) {
     lines.push(`  "${c.id}",  # ${c.displayName}`);

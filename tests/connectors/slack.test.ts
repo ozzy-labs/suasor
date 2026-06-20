@@ -5,6 +5,7 @@ import {
   createSlackConnector,
   cursorToAliasMap,
   isSinceParseable,
+  looksLikeSlackChannelId,
   parseSinceToTs,
   resolveSelfUserIds,
   type SlackClientLike,
@@ -199,6 +200,45 @@ describe("Slack connector — guards", () => {
     );
     expect(await collect(connector.sync(ctx()))).toEqual([]);
     expect(built).toBe(false);
+  });
+});
+
+describe("Slack connector — non-id channel warn (#158)", () => {
+  test("looksLikeSlackChannelId accepts C/D/G ids and rejects names", () => {
+    expect(looksLikeSlackChannelId("C0123ABCD")).toBe(true);
+    expect(looksLikeSlackChannelId("D0123ABCD")).toBe(true);
+    expect(looksLikeSlackChannelId("G0123ABCD")).toBe(true);
+    expect(looksLikeSlackChannelId("  C0123ABCD  ")).toBe(true); // trimmed
+    expect(looksLikeSlackChannelId("#general")).toBe(false);
+    expect(looksLikeSlackChannelId("general")).toBe(false);
+  });
+
+  test("warns once per non-id channel value but still syncs the configured channels", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
+    const warns: string[] = [];
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["#general"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
+    // The value is passed through to the API (no silent drop), and a single
+    // actionable warning is surfaced (ADR-0007, hard-fail avoided).
+    expect(records).toHaveLength(1);
+    const idWarns = warns.filter((m) => m.includes("does not look like a Slack id"));
+    expect(idWarns).toHaveLength(1);
+    expect(idWarns[0]).toContain("#general");
+    expect(idWarns[0]).toContain("slack conversations");
+  });
+
+  test("does not warn for valid ids", async () => {
+    const { client } = fakeSlack([{ messages: [] }]);
+    const warns: string[] = [];
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C0123ABCD"] },
+      { clientFactory: () => client },
+    );
+    await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
+    expect(warns.filter((m) => m.includes("does not look like a Slack id"))).toHaveLength(0);
   });
 });
 
