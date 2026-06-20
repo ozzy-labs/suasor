@@ -40,6 +40,10 @@ backend = "disabled"   # disabled | markitdown — Office/PDF body extraction si
 [export]
 # dir = "/absolute/path/to/exports"  # draft.export sandbox (default: <configDir>/exports);
                                       # must NOT be under a [connectors.local] root (ADR-0025)
+
+[export.composition]
+backend = "disabled"   # disabled | pandoc — md->Office (docx/pptx/xlsx) sidecar (#138)
+# baseUrl = "http://localhost:8930"   # pandoc sidecar (/compose is appended)
 `;
 
 export class InitCommand extends Command {

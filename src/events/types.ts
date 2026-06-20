@@ -124,8 +124,8 @@ export const DraftExported = z.object({
   ...Envelope,
   /** Absolute path the draft was written to (inside the export sandbox). */
   path: z.string().min(1),
-  /** Export format. */
-  format: z.enum(["md", "txt"]),
+  /** Export format (md/txt direct; docx/pptx/xlsx via composition sidecar, #138). */
+  format: z.enum(["md", "txt", "docx", "pptx", "xlsx"]),
   /** Source the draft derives from, when applicable (provenance). */
   sourceExternalId: z.string().min(1).optional(),
 });

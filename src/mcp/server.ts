@@ -33,10 +33,12 @@ import {
   DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_OLLAMA_MODEL,
   type EmbeddingConfig,
+  type ExportConfig,
   type ExtractionConfig,
 } from "../config/schema.ts";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
+import { createComposer } from "../export/compose.ts";
 import { draftExport } from "../export/draft-export.ts";
 import { proposeApply } from "../propose/apply.ts";
 import {
@@ -138,8 +140,8 @@ export interface McpServerDeps {
       embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
       /** `[extraction]` section; enables Office/PDF body extraction at ingest (ADR-0024). */
       extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
-      /** `[export]` section; `draft.export` writes into `dir` (ADR-0025). */
-      export?: { dir: string | null };
+      /** `[export]` section; `draft.export` writes into `dir` (ADR-0025) + composition (#138). */
+      export?: Pick<ExportConfig, "dir" | "composition">;
     };
   };
 }
@@ -1162,7 +1164,9 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         inputSchema: {
           content: z.string().describe("Draft text to write."),
           filename: z.string().min(1).describe("Target filename (basename only)."),
-          format: z.enum(["md", "txt"]).describe("Export format."),
+          format: z
+            .enum(["md", "txt", "docx", "pptx", "xlsx"])
+            .describe("Export format (docx/pptx/xlsx need [export].composition)."),
           sourceExternalId: z
             .string()
             .min(1)
@@ -1179,10 +1183,13 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         const localRoots = Array.isArray(write.config.connectors.local?.roots)
           ? (write.config.connectors.local.roots as string[])
           : [];
-        const result = draftExport(
+        const composer = write.config.export?.composition
+          ? createComposer(write.config.export.composition)
+          : null;
+        const result = await draftExport(
           write.store,
           { content, filename, format, ...(sourceExternalId ? { sourceExternalId } : {}) },
-          { exportDir: dir, localRoots },
+          { exportDir: dir, localRoots, composer },
         );
         return jsonResult(result);
       },
