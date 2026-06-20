@@ -4,7 +4,7 @@
 
 > 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter（`name` / 自然文トリガの `description`）+ 駆動する MCP tool flow を持つ。
 
-## Read 系（自律 OK・11）
+## Read 系（自律 OK・13）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -19,8 +19,8 @@
 | [`pr-review`](pr-review/SKILL.md) | 「PR #N レビューして」 | recall.search (+ gh diff) |
 | [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / recall.search（text-only・persist なし） |
 | [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | recall.search / decision.list / brief（text-only・persist なし） |
-
-> **MCP tool 注記:** 上表の `brief` / `graph.related` は計画中で未提供（[mcp-surface.md](../design/mcp-surface.md) の「後続 Issue」）。該当 skill は当面、提供済みの read tool（`recall.search` / `search` / `*.list`）を組み合わせて動作する。
+| [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | slack.demand.list（→ inbox.add / source-extract へ HITL 橋渡し） |
+| [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
 
 ## HITL write 系（人の承認で適用・7）
 
