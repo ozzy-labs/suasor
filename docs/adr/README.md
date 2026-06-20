@@ -69,3 +69,4 @@ NNNN-kebab-case-title.md
 | 0026 | Source forgetting (local purge + event redaction; append-only exception) |
 | 0027 | Bulk sync orchestration & scheduling delegation (`suasor sync`; OS scheduler) |
 | 0028 | Task scheduling fields (`dueDate` / `priority`) & overdue derivation |
+| 0029 | Onboarding wizard (`suasor onboard`) — orchestrate auth/config/sync, non-destructive config append |

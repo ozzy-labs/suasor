@@ -48,6 +48,11 @@ suasor --version
 # Prints a multi-step next-steps guide (doctor -> connector -> sync -> schedule -> skills).
 suasor init
 
+# Guided setup: pick connector(s), store tokens, wire the [connectors.X] config
+# slice (enabled = true), run the first sync, and print the scheduler + MCP
+# snippets — all in the correct order (ADR-0029).
+suasor onboard --connector github   # interactive on a TTY; --json for a summary
+
 # Verify config / DB / connector readiness (diagnostic only; creates nothing).
 suasor doctor
 

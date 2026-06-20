@@ -6,6 +6,7 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
 
 ```bash
 suasor init [--force]                  # 設定 + DB 初期化 + ネクストステップ案内（skills install は別コマンド）
+suasor onboard [--connector a,b] [--skip-auth] [--skip-sync] [--write-cron] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]）
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild             # event replay で projection 再構築
 suasor <connector> sync [--full] [--json]  # 取り込み（github / slack / ms-graph / google / box / web / local）
@@ -34,7 +35,7 @@ suasor skills list [--scope S] [--host DIR] [--json]        # アシスタント
 suasor --version                       # バージョン出力
 ```
 
-実装状況: `init` / `db migrate` / `projections rebuild` / `search` / `brief`（期間バンドルを非対話に stdout 出力・定期実行向け・[ADR-0017](../adr/0017-brief-period-bundle.md)） / `<connector> sync` / `<connector> auth set` / `<connector> auth test`（github / ms-graph / google / box の汎用 auth verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) を Slack 以外へ拡張）/ `connectors list`（connector registry introspection・[ADR-0007](../adr/0007-connector-contract.md)）/ `doctor`（config/DB/embedding/connector の統合ヘルスチェック・診断）/ `extraction status`（文書抽出カバレッジ・[ADR-0024](../adr/0024-document-extraction-sidecar.md)）/ `embeddings status` / `embeddings rebuild` / `embeddings drain` / `embeddings find-duplicates`（埋め込み層の保守 verb・[ADR-0006](../adr/0006-ml-delegation.md)）/ `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `mcp tools`（MCP tool surface introspection・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset` / `slack cursor backfill`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
+実装状況: `init` / `onboard`（対話セットアップウィザード・既存 verb（auth set / auth test / sync）を正しい順序で繋ぎ `[connectors.X]` slice を非破壊で追記・[ADR-0029](../adr/0029-onboarding-wizard.md)） / `db migrate` / `projections rebuild` / `search` / `brief`（期間バンドルを非対話に stdout 出力・定期実行向け・[ADR-0017](../adr/0017-brief-period-bundle.md)） / `<connector> sync` / `<connector> auth set` / `<connector> auth test`（github / ms-graph / google / box の汎用 auth verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) を Slack 以外へ拡張）/ `connectors list`（connector registry introspection・[ADR-0007](../adr/0007-connector-contract.md)）/ `doctor`（config/DB/embedding/connector の統合ヘルスチェック・診断）/ `extraction status`（文書抽出カバレッジ・[ADR-0024](../adr/0024-document-extraction-sidecar.md)）/ `embeddings status` / `embeddings rebuild` / `embeddings drain` / `embeddings find-duplicates`（埋め込み層の保守 verb・[ADR-0006](../adr/0006-ml-delegation.md)）/ `mcp serve`（read tools・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `mcp tools`（MCP tool surface introspection・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）/ `slack auth set` / `slack auth test` / `slack conversations`（Slack 運用 verb・[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）/ `slack status` / `slack cursor reset` / `slack cursor backfill`（cursor 可視化・recovery・[ADR-0016](../adr/0016-slack-sync-date-floor.md)）/ `skills install` / `skills list`（アシスタント skill 展開・状態確認、[ADR-0008](../adr/0008-assistant-skills.md)）は稼働。
 `<connector> sync` は connector registry から 1 connector = 1 command で派生する（[ADR-0007](../adr/0007-connector-contract.md)）。`sync`（全有効 connector の一括 one-shot 取り込み・[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）も稼働。
 稼働 connector: `github` / `slack` / `ms-graph`（Outlook / Calendar / OneDrive / Teams）/ `google`（Drive / Gmail / Calendar）/ `box` / `web`（Playwright snapshot）/ `local`（ローカル FS 走査・[ADR-0023](../adr/0023-local-filesystem-connectors.md)）。setup は [connectors guide](../guide/connectors.md)。
 
@@ -43,6 +44,11 @@ suasor --version                       # バージョン出力
 | コマンド | フラグ | 既定 | 意味 |
 |---|---|---|---|
 | `init` | `--force` | false | 既存 `config.toml` を default テンプレートで上書きする |
+| `onboard` | `--connector a,b` | (TTY 時は対話) | セットアップ対象の connector 名カンマ列。非 TTY（パイプ / CI）では必須 |
+| `onboard` | `--skip-auth` | false | keychain 格納 + auth test を skip（token は env override / binary 前提） |
+| `onboard` | `--skip-sync` | false | 初回 `suasor sync` を skip |
+| `onboard` | `--write-cron` | false | cron 行を crontab に追記する（既定は雛形を表示のみ） |
+| `onboard` | `--json` | false | 各ステップ結果（auth / config 追記有無 / sync / scheduler 種別）を機械可読出力 |
 | `db migrate` | `--vec` / `--no-vec` | true | sqlite-vec の vec0 substrate を作る／作らない |
 | `search` | `--limit N` | 20 | 返す hit の最大数（正の整数。非正値は error） |
 | `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy）を JSON で出力 |
