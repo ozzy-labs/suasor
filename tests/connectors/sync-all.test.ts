@@ -1,0 +1,158 @@
+/**
+ * Bulk sync orchestration service (ADR-0027, FR-ING-5/6).
+ *
+ * Exercises `selectEnabledConnectors` (enabled-set rule) and `runBulkSync`
+ * (series run, continue-on-error, aggregate counts) with fake connectors against
+ * a real on-disk-equivalent in-memory store — no network, no SDK.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { Connector, SourceRecord, SyncResult } from "../../src/connectors/contract.ts";
+import { runBulkSync, selectEnabledConnectors } from "../../src/connectors/sync-all.ts";
+import { Store } from "../../src/db/index.ts";
+
+let store: Store;
+
+beforeEach(() => {
+  store = Store.open({ path: ":memory:" });
+});
+
+afterEach(() => {
+  store.close();
+});
+
+/** A fake connector emitting a fixed set of records under a given name. */
+function fakeConnector(name: string, records: SourceRecord[]): Connector {
+  return {
+    name,
+    sourceType: name,
+    async *sync(): AsyncIterable<SourceRecord> {
+      for (const r of records) yield r;
+    },
+    finalize(): SyncResult {
+      return { cursor: null };
+    },
+  };
+}
+
+const rec = (id: string, body: string): SourceRecord => ({
+  externalId: id,
+  sourceType: "github_issue",
+  body,
+  observedAt: "2026-06-14T00:00:00.000Z",
+  meta: {},
+});
+
+function sourceCount(): number {
+  const row = store.connection.sqlite
+    .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sources")
+    .get();
+  return row?.n ?? 0;
+}
+
+describe("selectEnabledConnectors", () => {
+  const registered = ["box", "github", "slack", "web"];
+
+  test("includes connectors with a slice that is not enabled = false", () => {
+    const enabled = selectEnabledConnectors(registered, {
+      github: { repos: [] },
+      slack: { enabled: true },
+    });
+    expect(enabled).toEqual(["github", "slack"]);
+  });
+
+  test("excludes connectors with enabled = false and absent slices", () => {
+    const enabled = selectEnabledConnectors(registered, {
+      github: { enabled: false },
+      web: {},
+    });
+    expect(enabled).toEqual(["web"]);
+  });
+
+  test("preserves the registry order passed in", () => {
+    const enabled = selectEnabledConnectors(registered, {
+      slack: {},
+      box: {},
+      github: {},
+    });
+    expect(enabled).toEqual(["box", "github", "slack"]);
+  });
+
+  test("empty when no slice is enabled", () => {
+    expect(selectEnabledConnectors(registered, {})).toEqual([]);
+  });
+});
+
+describe("runBulkSync", () => {
+  test("runs every named connector in series and aggregates outcomes", async () => {
+    const connectors: Record<string, Connector> = {
+      a: fakeConnector("a", [rec("a:1", "alpha")]),
+      b: fakeConnector("b", [rec("b:1", "beta"), rec("b:2", "gamma")]),
+    };
+    const result = await runBulkSync(store, {
+      names: ["a", "b"],
+      connectors: { a: {}, b: {} },
+      loadConnector: async (name) => connectors[name] as Connector,
+    });
+
+    expect(result.succeeded).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(result.results.map((r) => r.connector)).toEqual(["a", "b"]);
+    expect(result.results[0]?.outcome?.observed).toBe(1);
+    expect(result.results[1]?.outcome?.observed).toBe(2);
+    expect(sourceCount()).toBe(3);
+  });
+
+  test("continue-on-error: a failing connector does not stop the rest", async () => {
+    const errors: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["good", "bad", "good2"],
+      connectors: { good: {}, bad: {}, good2: {} },
+      loadConnector: async (name) => {
+        if (name === "bad") throw new Error("boom: no token");
+        return fakeConnector(name, [rec(`${name}:1`, "body")]);
+      },
+      onConnectorError: (connector, error) => errors.push(`${connector}: ${error.message}`),
+    });
+
+    expect(result.succeeded).toBe(2);
+    expect(result.failed).toBe(1);
+    const bad = result.results.find((r) => r.connector === "bad");
+    expect(bad?.ok).toBe(false);
+    expect(bad?.error).toContain("boom: no token");
+    // The two good connectors still ingested.
+    expect(sourceCount()).toBe(2);
+    expect(errors).toEqual(["bad: boom: no token"]);
+  });
+
+  test("idempotent: re-running the same data appends no duplicate events", async () => {
+    const opts = {
+      names: ["a"],
+      connectors: { a: {} },
+      loadConnector: async () => fakeConnector("a", [rec("a:1", "stable")]),
+    };
+    await runBulkSync(store, opts);
+    const before = store.connection.sqlite
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE type = 'SourceObserved'")
+      .get();
+    const second = await runBulkSync(store, opts);
+    const after = store.connection.sqlite
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE type = 'SourceObserved'")
+      .get();
+
+    expect(second.results[0]?.outcome?.unchanged).toBe(1);
+    expect(second.results[0]?.outcome?.observed).toBe(0);
+    expect(after?.n).toBe(before?.n); // no duplicate SourceObserved
+    expect(sourceCount()).toBe(1);
+  });
+
+  test("onConnectorStart fires once per connector before its pass", async () => {
+    const started: string[] = [];
+    await runBulkSync(store, {
+      names: ["a", "b"],
+      connectors: { a: {}, b: {} },
+      loadConnector: async (name) => fakeConnector(name, []),
+      onConnectorStart: (name) => started.push(name),
+    });
+    expect(started).toEqual(["a", "b"]);
+  });
+});
