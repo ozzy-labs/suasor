@@ -112,6 +112,27 @@ token を持つ connector（github / ms-graph / google / box）は、汎用の `
 
 channel メッセージを取り込む（`@slack/web-api`）。
 
+### Slack App を作って token を発行する（3 ステップ）
+
+Slack の token は **Slack App をインストールして発行**する。必要 scope を取りこぼすと `sync` が無音でゼロ件取り込みになりやすいので、同梱の **App manifest** から作るのが確実（manifest が必要 scope を全部含む）。
+
+同梱の manifest: [`slack-app-manifest.yaml`](slack-app-manifest.yaml)（scope SSOT は [`src/connectors/slack/scopes.ts`](../../src/connectors/slack/scopes.ts) の `FEATURE_SCOPES`。drift は `tests/connectors/slack/manifest.test.ts` が検証＝scopes.ts に feature scope を足すと manifest 更新まで test が落ちる。二重 SSOT を作らない）。
+
+1. **manifest を貼って App を作る** — [api.slack.com/apps](https://api.slack.com/apps) →「Create New App」→「From an app manifest」で対象 workspace を選び、[`slack-app-manifest.yaml`](slack-app-manifest.yaml) の中身を貼って作成 →「Install to Workspace」で承認する。
+2. **Bot Token をコピーする** — App の「OAuth & Permissions」ページで **Bot User OAuth Token**（`xoxb-…`）をコピーする。engagement axis（`search:read`・User Token 専用）も使うなら **User OAuth Token**（`xoxp-…`）を併せてコピーする（manifest の `oauth_config.scopes.user` を残した場合のみ表示される）。
+3. **`suasor slack auth set` で保存する** — コピーした token を keychain に保存して疎通を確認する:
+
+```bash
+suasor slack auth set    # token を stdin / --token で keychain に保存
+suasor slack auth test   # 検証 + granted scopes + feature readiness を表示
+```
+
+`auth test` の readiness が `READY` 系なら scope は揃っている（`MISSING <scope>` が出たら manifest を貼り直して App を再インストールする）。multi-workspace（後述）では `--workspace <alias>` で alias ごとに token を保存・検証する。
+
+> **User Token は任意。** Bot Token だけで public / private / DM / group-DM の sync は揃う。`search:read`（User Token 専用）が要るのは `slack conversations --sort=last_self_post` の engagement axis のみ（後述）。要らなければ manifest の `oauth_config.scopes.user` ブロックごと削ってよい。
+
+### token / config
+
 - **token**: Bot Token（`channels:history` / `groups:history` の read scope）。env override `SUASOR_CONNECTOR_SLACK_TOKEN`、keychain account `connector:slack:token`
 - **config（単一 workspace / 後方互換）**:
 
