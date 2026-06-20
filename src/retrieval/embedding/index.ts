@@ -24,7 +24,9 @@ export {
   embeddingDrain,
   embeddingRebuild,
   embeddingStatus,
+  type FailedEmbedding,
   findDuplicates,
+  listFailedEmbeddings,
 } from "./maintenance.ts";
 export {
   DEFAULT_RECALL_LIMIT,

@@ -274,10 +274,82 @@ export class EmbeddingsFindDuplicatesCommand extends Command {
   }
 }
 
+export class EmbeddingsListFailedCommand extends Command {
+  static override paths = [["embeddings", "list-failed"]];
+
+  static override usage = Command.Usage({
+    category: "Maintenance",
+    description: "List sources missing a current-model vector (pending / stale).",
+    details: `
+      Drilldown behind the pending / stale roll-ups of \`embeddings status\`
+      (Issue #202): lists the actual sources with no current-model vector so you
+      know *which* ones to fix. \`pending\` rows have no vector at all (run
+      \`embeddings drain\`); \`stale\` rows were embedded under a different model
+      (run \`embeddings rebuild\`). When the backend is disabled every source is
+      pending. Use --limit to cap the listing (default 50).
+    `,
+    examples: [
+      ["List failed embeddings", "suasor embeddings list-failed"],
+      ["Cap the listing", "suasor embeddings list-failed --limit 10"],
+      ["Machine-readable", "suasor embeddings list-failed --json"],
+    ],
+  });
+
+  limit = Option.String("--limit", {
+    description: "Maximum sources to list (positive integer; default 50).",
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the failed-source list as JSON.",
+  });
+
+  override async execute(): Promise<number> {
+    let limit = 50;
+    if (this.limit !== undefined) {
+      const parsed = Number(this.limit);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        this.context.stderr.write("error: --limit must be a positive integer\n");
+        return 1;
+      }
+      limit = parsed;
+    }
+    const ctx = await openEmbeddingContext(this.context);
+    if (ctx === null) return 1;
+    try {
+      const { listFailedEmbeddings } = await import("../../retrieval/embedding/index.ts");
+      const rows = listFailedEmbeddings(
+        ctx.store.connection.sqlite,
+        ctx.embedder?.model ?? null,
+        ctx.embedder?.modelVersion ?? "",
+        limit,
+      );
+      if (this.json) {
+        this.context.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+        return 0;
+      }
+      if (rows.length === 0) {
+        this.context.stdout.write("No sources missing a current-model vector.\n");
+        return 0;
+      }
+      this.context.stdout.write(`${rows.length} source(s) missing a current-model vector:\n`);
+      for (const r of rows) {
+        this.context.stdout.write(`  [${r.reason}] ${r.sourceType}  ${r.externalId}\n`);
+      }
+      if (!ctx.embedder) {
+        this.context.stdout.write(`${DISABLED_MESSAGE}\n`);
+      }
+      return 0;
+    } finally {
+      ctx.store.close();
+    }
+  }
+}
+
 /** All embeddings maintenance subcommands, for registration in the CLI. */
 export const embeddingsCommands = [
   EmbeddingsStatusCommand,
   EmbeddingsRebuildCommand,
   EmbeddingsDrainCommand,
   EmbeddingsFindDuplicatesCommand,
+  EmbeddingsListFailedCommand,
 ];

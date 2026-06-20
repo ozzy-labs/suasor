@@ -25,6 +25,12 @@ export {
 } from "./connection.ts";
 export { countEventRows, createEventsTable, readAllEventRows } from "./events-table.ts";
 export * as schema from "./schema.ts";
+export {
+  formatBytes,
+  type ProjectionCount,
+  type StoreInfo,
+  storeInfo,
+} from "./store-info.ts";
 
 /** Service binding an open database to event append + projection maintenance. */
 export class Store {

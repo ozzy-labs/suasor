@@ -9,6 +9,7 @@ import {
   embeddingStatus,
   embedSources,
   findDuplicates,
+  listFailedEmbeddings,
   upsertSourceVector,
 } from "../../src/retrieval/embedding/index.ts";
 
@@ -98,6 +99,45 @@ describe("embeddingStatus", () => {
     const status = embeddingStatus(store.connection.sqlite, v2, "ollama");
     expect(status.totals.stale).toBe(1);
     expect(status.totals.embedded).toBe(0);
+  });
+});
+
+describe("listFailedEmbeddings (Issue #202 drilldown)", () => {
+  test("lists pending (no vector) and stale (different model) sources", async () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "beta"); // never embedded → pending
+    const oldModel = fakeEmbedder({ alpha: [1, 0, 0] }, "old-model");
+    await embedSources(store.connection.sqlite, oldModel, [{ externalId: "gh:1", body: "alpha" }]);
+
+    // Active model differs → gh:1 stale, gh:2 pending.
+    const rows = listFailedEmbeddings(store.connection.sqlite, "new-model", "");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({ externalId: "gh:2", sourceType: "github_issue", reason: "pending" });
+    expect(rows[1]).toEqual({ externalId: "gh:1", sourceType: "github_issue", reason: "stale" });
+  });
+
+  test("disabled backend (null model): every source is pending", () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "beta");
+    const rows = listFailedEmbeddings(store.connection.sqlite, null, "");
+    expect(rows.map((r) => r.reason)).toEqual(["pending", "pending"]);
+  });
+
+  test("settled store returns nothing", async () => {
+    seed("gh:1", "alpha");
+    const embedder = fakeEmbedder({ alpha: [1, 0, 0] });
+    await embedSources(store.connection.sqlite, embedder, [{ externalId: "gh:1", body: "alpha" }]);
+    expect(
+      listFailedEmbeddings(store.connection.sqlite, embedder.model, embedder.modelVersion ?? ""),
+    ).toEqual([]);
+  });
+
+  test("limit caps the listing", () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "beta");
+    const rows = listFailedEmbeddings(store.connection.sqlite, "m", "", 1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.externalId).toBe("gh:1");
   });
 });
 

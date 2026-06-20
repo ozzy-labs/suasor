@@ -86,3 +86,61 @@ export function extractionStatus(
     totals: { extracted, unsupported, tooLarge, stale, pending },
   };
 }
+
+/** A source awaiting extraction (drilldown for `extraction status`). */
+export interface PendingExtraction {
+  /** Source external id. */
+  externalId: string;
+  /** File name (`sources.meta.$.name`), used to classify extractability. */
+  name: string;
+  /**
+   * Why the source is awaiting (re)extraction:
+   * - `pending` — extractable but never attempted (no `extraction_meta` row).
+   * - `stale`   — extracted under a different version (re-extracted next sync).
+   */
+  reason: "pending" | "stale";
+}
+
+/**
+ * List sources awaiting (re)extraction — the drilldown behind the `pending` /
+ * `stale` roll-ups in {@link extractionStatus} (Issue #202).
+ *
+ * `pending` rows are `local_file` sources whose extension is extractable but
+ * which have no `extraction_meta` row (the backfill the next sync picks up);
+ * `stale` rows were extracted under a different `version` (drift → re-extracted
+ * next sync). Returns at most `limit` rows (default 50), pending first then
+ * stale, each group ordered by `external_id`. Read-only (SELECTs only).
+ */
+export function listPendingExtractions(
+  sqlite: Database,
+  config: { version: string },
+  limit = 50,
+): PendingExtraction[] {
+  const attempted = new Map(
+    sqlite
+      .query<{ external_id: string; version: string }, []>(
+        "SELECT external_id, version FROM extraction_meta",
+      )
+      .all()
+      .map((r) => [r.external_id, r.version] as const),
+  );
+  const candidates = sqlite
+    .query<{ external_id: string; name: string | null }, []>(
+      "SELECT external_id, json_extract(meta, '$.name') AS name FROM sources WHERE source_type = 'local_file' ORDER BY external_id ASC",
+    )
+    .all();
+
+  const pending: PendingExtraction[] = [];
+  const stale: PendingExtraction[] = [];
+  for (const row of candidates) {
+    if (row.name === null) continue;
+    if (!EXTRACTABLE_EXTENSIONS.has(extname(row.name).toLowerCase())) continue;
+    const recorded = attempted.get(row.external_id);
+    if (recorded === undefined) {
+      pending.push({ externalId: row.external_id, name: row.name, reason: "pending" });
+    } else if (recorded !== config.version) {
+      stale.push({ externalId: row.external_id, name: row.name, reason: "stale" });
+    }
+  }
+  return [...pending, ...stale].slice(0, limit);
+}
