@@ -30,6 +30,7 @@ export {
   DEFAULT_RECALL_LIMIT,
   EMBEDDING_DISABLED_SIGNAL,
   embedSources,
+  RECALL_FILTER_OVERFETCH,
   type RecallOptions,
   type RecallReason,
   type RecallResult,

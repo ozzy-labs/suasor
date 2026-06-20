@@ -67,6 +67,7 @@ describe("MCP read surface", () => {
         "propose.list",
         "recall.search",
         "search",
+        "search.hybrid",
         "slack.demand.list",
         "source.get",
         "source.history",
@@ -289,6 +290,101 @@ describe("MCP read surface", () => {
     }
   });
 
+  test("search honours the sourceType + observed window filter args", async () => {
+    store.record({
+      type: "SourceObserved",
+      externalId: "gh:1",
+      sourceType: "github_issue",
+      body: "deploy the rocket",
+      observedAt: "2026-06-14T00:00:00.000Z",
+      fingerprint: "gh:1",
+      meta: {},
+    });
+    store.record({
+      type: "SourceObserved",
+      externalId: "sl:1",
+      sourceType: "slack_message",
+      body: "deploy the rocket",
+      observedAt: "2026-06-14T00:00:00.000Z",
+      fingerprint: "sl:1",
+      meta: {},
+    });
+    const client = await connect();
+    const res = await client.callTool({
+      name: "search",
+      arguments: { query: "rocket", sourceType: "slack_message" },
+    });
+    const parsed = parseResult(res as never) as { hits: { externalId: string }[] };
+    expect(parsed.hits.map((h) => h.externalId)).toEqual(["sl:1"]);
+  });
+
+  test("search.hybrid degrades to FTS-only with embedding_disabled when off", async () => {
+    seedSource();
+    const client = await connect("disabled");
+    const res = await client.callTool({ name: "search.hybrid", arguments: { query: "rocket" } });
+    const parsed = parseResult(res as never) as {
+      hits: { externalId: string; rrfScore: number }[];
+      signal?: string;
+    };
+    expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
+    expect(parsed.hits[0]?.externalId).toBe("gh:1");
+    expect(parsed.hits[0]?.rrfScore).toBeGreaterThan(0);
+  });
+
+  test("search.hybrid fuses FTS + vec hits (RRF) when an embedder is enabled", async () => {
+    const knnStore = Store.open({ path: ":memory:", embeddingDim: 3 });
+    try {
+      const seed = (id: string, body: string) =>
+        knnStore.record({
+          type: "SourceObserved",
+          externalId: id,
+          sourceType: "github_issue",
+          body,
+          observedAt: "2026-06-14T00:00:00.000Z",
+          fingerprint: id,
+          meta: {},
+        });
+      // gh:1 is the lexical match for "rocket"; gh:2 is only a semantic neighbour.
+      seed("gh:1", "rocket launch plan");
+      seed("gh:2", "spacecraft trajectory notes");
+      const vectors: Record<string, number[]> = {
+        "rocket launch plan": [0, 1, 0],
+        "spacecraft trajectory notes": [1, 0, 0],
+        rocket: [1, 0, 0], // query vector closest to gh:2
+      };
+      const fake: Embedder = {
+        model: "fake-3d",
+        embed: (texts) => Promise.resolve(texts.map((t) => vectors[t] ?? [0, 0, 1])),
+      };
+      const { embedSources } = await import("../../src/retrieval/embedding/index.ts");
+      await embedSources(knnStore.connection.sqlite, fake, [
+        { externalId: "gh:1", body: "rocket launch plan" },
+        { externalId: "gh:2", body: "spacecraft trajectory notes" },
+      ]);
+
+      const server = buildMcpServer({
+        sqlite: knnStore.connection.sqlite,
+        embedding: "ollama",
+        embedder: fake,
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test", version: "0.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+      const res = await client.callTool({ name: "search.hybrid", arguments: { query: "rocket" } });
+      const parsed = parseResult(res as never) as {
+        hits: { externalId: string; rrfScore: number }[];
+        signal?: string;
+      };
+      expect(parsed.signal).toBeUndefined();
+      // Both paths contribute: gh:1 (FTS) and gh:2 (vec) both appear, deduped.
+      expect(parsed.hits.map((h) => h.externalId).sort()).toEqual(["gh:1", "gh:2"]);
+      expect(parsed.hits.every((h) => h.rrfScore > 0)).toBe(true);
+    } finally {
+      knnStore.close();
+    }
+  });
+
   test("source.list returns ingested sources; source.get fetches a body", async () => {
     seedSource("gh:1", "first source");
     seedSource("gh:2", "second source");
@@ -424,6 +520,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "propose.list",
         "recall.search",
         "search",
+        "search.hybrid",
         "slack.demand.list",
         "source.get",
         "source.history",
