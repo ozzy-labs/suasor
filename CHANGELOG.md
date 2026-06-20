@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.1.9](https://github.com/ozzy-labs/suasor/compare/v0.1.8...v0.1.9) (2026-06-20)
+
+
+### Features
+
+* **cli:** `search` / `brief` 実行時に embedding disabled のインラインヒント ([#168](https://github.com/ozzy-labs/suasor/issues/168)) ([adf7461](https://github.com/ozzy-labs/suasor/commit/adf74619da3b7cc067bc0031e0c0c1dc04bd230c))
+* **cli:** `suasor config show --effective`（実効設定の確認、secret マスク） ([#179](https://github.com/ozzy-labs/suasor/issues/179)) ([ccbd50f](https://github.com/ozzy-labs/suasor/commit/ccbd50fffc1ef70c10b3ea822442f35ed7ae289a))
+* **cli:** doctor に「token 保存済みだが connector 未有効」検出を追加 ([#172](https://github.com/ozzy-labs/suasor/issues/172)) ([557da32](https://github.com/ozzy-labs/suasor/commit/557da326c3d8d0ac24988a004db39ac0dcbc0ece))
+* **cli:** init 出力をネクストステップ多段化 ([#169](https://github.com/ozzy-labs/suasor/issues/169)) ([2bf5e93](https://github.com/ozzy-labs/suasor/commit/2bf5e931e1878bb3f87f2c8a8cc87737670eacab))
+* **cli:** suasor onboard 対話セットアップウィザード (ADR-0029) ([#176](https://github.com/ozzy-labs/suasor/issues/176)) ([6eba077](https://github.com/ozzy-labs/suasor/commit/6eba077fb9ba786cb8055c73a93c72b19d4ca910))
+* **cli:** suasor sync — 全 connector 一括 one-shot + 定期実行委譲 ※ADR 先行 ([#149](https://github.com/ozzy-labs/suasor/issues/149)) ([3384ccf](https://github.com/ozzy-labs/suasor/commit/3384ccf934b1f69a115e97074495cf4b4cdfbc8a))
+* **connectors:** slack not_in_channel per-channel warn + conversations joined mark ([#180](https://github.com/ozzy-labs/suasor/issues/180)) ([aa2a8d5](https://github.com/ozzy-labs/suasor/commit/aa2a8d54e326b3b97b32905302f9b2ea2c953e49))
+* **mcp:** task due date / priority + overdue surfacing (ADR-0028) ([#151](https://github.com/ozzy-labs/suasor/issues/151)) ([ba78f26](https://github.com/ozzy-labs/suasor/commit/ba78f26c432717c80f77920f8c30c834fef7f6b0))
+* **skills:** weekly-review / commitment-chase — active surface skills ([#152](https://github.com/ozzy-labs/suasor/issues/152)) ([fd5f329](https://github.com/ozzy-labs/suasor/commit/fd5f3299e8111b9848a5cdb777ac80e4e70536d5))
+
+
+### Bug Fixes
+
+* **cli:** standalone binary 非対応コマンドの専用エラー化 ([#175](https://github.com/ozzy-labs/suasor/issues/175)) ([35f0e41](https://github.com/ozzy-labs/suasor/commit/35f0e417b711ff08f8a002f8dbac9fcdc955fddf))
+* **config:** per-connector スキーマを loadConfig 検証へ配線 ([#177](https://github.com/ozzy-labs/suasor/issues/177)) ([836bcef](https://github.com/ozzy-labs/suasor/commit/836bceff1449b60a2e4d4617ee61edbb56736386))
+* **connectors:** Slack `since` を config ロード時に検証（無音 no-floor を解消） ([#170](https://github.com/ozzy-labs/suasor/issues/170)) ([e056d9a](https://github.com/ozzy-labs/suasor/commit/e056d9ac9d85894a2d2692582dcf80e0e6c3a220))
+* **connectors:** Slack channel 非 ID 値を warn + `slack conversations` に ID/Name 列 ([#174](https://github.com/ozzy-labs/suasor/issues/174)) ([dcf83c4](https://github.com/ozzy-labs/suasor/commit/dcf83c440fd0dca18630516cb37488442872d392))
+* **connectors:** slack multi-ws partial failure summary + exit 1 ([#181](https://github.com/ozzy-labs/suasor/issues/181)) ([7c2d978](https://github.com/ozzy-labs/suasor/commit/7c2d97888284ceec12732efd90ac51562b1e9d78))
+
 ## [0.1.8](https://github.com/ozzy-labs/suasor/compare/v0.1.7...v0.1.8) (2026-06-20)
 
 
