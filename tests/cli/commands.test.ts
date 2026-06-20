@@ -63,6 +63,7 @@ describe("suasor --version / --help", () => {
       "projections rebuild",
       "search",
       "brief",
+      "doctor",
       "mcp serve",
     ]) {
       expect(out).toContain(cmd);
