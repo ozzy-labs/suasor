@@ -1,12 +1,12 @@
 # 0024. ドキュメント本文抽出 sidecar（Office/PDF → text）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-20
 - Deciders: Suasor maintainers
 - Related: [ADR-0006](0006-ml-delegation.md)（ML 委譲）, [ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md)（FTS-first / embedding sidecar）, [ADR-0003](0003-local-first-and-content-minimization.md)（local-first / content minimization）, [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0023](0023-local-filesystem-connectors.md)（local connector）
 - Tracks: #120 / epic #124
 
-> Status: **Proposed**。本 ADR はレビュー用ドラフト。Accepted 後に実装 PR（config/client → sync 配線 → guide）へ進む。
+> Status: **Accepted**（2026-06-20 レビュー反映後 承認）。初期スコープは **`local` connector 限定**。実装は PR 単位（config/client → sync 配線 → guide）で進める。box/drive(API) は後続 Issue で段階化。
 
 ## Context
 

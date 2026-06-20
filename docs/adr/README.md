@@ -64,4 +64,4 @@ NNNN-kebab-case-title.md
 | 0021 | Commitment ledger (extraction + HITL lifecycle) |
 | 0022 | Person identity resolution (handle dedup, HITL merge/split) |
 | 0023 | Local-filesystem connectors (generic `local`, box-drive/onedrive-drive) |
-| 0024 | Document extraction sidecar (Office/PDF → text, Proposed) |
+| 0024 | Document extraction sidecar (Office/PDF → text; local-first, API staged) |
