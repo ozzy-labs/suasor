@@ -23,7 +23,7 @@
 | [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
 | [`doc-diff`](doc-diff/SKILL.md) | 「前回から何が変わった」「この資料の差分」 | source.history（event log の本文版）+ graph.related |
 
-## HITL write 系（人の承認で適用・8）
+## HITL write 系（人の承認で適用・9）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -35,6 +35,7 @@
 | [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject |
 | [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
 | [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
+| [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply |
 
 エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）。
 
