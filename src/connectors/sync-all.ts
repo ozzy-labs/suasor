@@ -25,11 +25,24 @@ import { type SyncOptions, type SyncOutcome, syncConnector } from "./sync.ts";
 export interface BulkSyncEntry {
   /** Connector name / CLI verb (e.g. "github"). */
   connector: string;
-  /** Whether this connector's pass completed without throwing. */
+  /**
+   * Whether this connector's pass counts as a success for the run's exit code.
+   * `false` when the connector threw **or** reported a partial failure (e.g. one
+   * Slack workspace failed while others synced, ADR-0014 / #166) — the latter
+   * keeps `outcome` (records were collected) but still fails the run so cron / CI
+   * can gate on it (ADR-0027 exit-code parity).
+   */
   ok: boolean;
-  /** The per-run counters when `ok`; omitted on failure. */
+  /**
+   * The per-run counters. Present on a clean success **and** on a partial failure
+   * (records were collected); omitted only when the connector threw outright.
+   */
   outcome?: SyncOutcome;
-  /** Human-readable error message when `!ok`; omitted on success. */
+  /**
+   * Human-readable error message when `!ok`; omitted on a clean success. On a
+   * partial failure this summarizes which sub-units failed (the connector still
+   * collected records, so `outcome` is also present).
+   */
   error?: string;
 }
 
@@ -128,8 +141,21 @@ export async function runBulkSync(store: Store, options: BulkSyncOptions): Promi
       const outcome = await syncConnector(store, connector, {
         ...(options.syncOptions ?? {}),
       });
-      results.push({ connector: name, ok: true, outcome });
-      succeeded += 1;
+      if (outcome.partialFailure) {
+        // The connector collected records but reported an internal partial
+        // failure (e.g. one Slack workspace failed, ADR-0014). Keep the outcome
+        // (counts are real) but mark the entry failed so the run exits 1 and the
+        // failure is surfaced to cron / CI (ADR-0027 exit-code parity, #166).
+        const summary = outcome.summaryLines?.join("; ") ?? "partial failure";
+        const error = new Error(`partial failure (${summary})`);
+        results.push({ connector: name, ok: false, outcome, error: error.message });
+        failed += 1;
+        options.onConnectorError?.(name, error);
+        if (!continueOnError) break; // fail-fast: stop at the first failure
+      } else {
+        results.push({ connector: name, ok: true, outcome });
+        succeeded += 1;
+      }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
       results.push({ connector: name, ok: false, error: error.message });

@@ -47,6 +47,14 @@ export const ConnectorSyncOutput = z.object({
   embedded: z.number().int().nonnegative(),
   /** Sources whose body was replaced with extracted text; 0 when disabled (ADR-0024). */
   extracted: z.number().int().nonnegative(),
+  /**
+   * Whether the connector reported a partial failure — some internal sub-unit
+   * (e.g. one Slack workspace, ADR-0014) failed while the rest synced. The
+   * collected records are kept; the caller treats it as a non-clean run (#166).
+   */
+  partialFailure: z.boolean(),
+  /** Per-sub-unit summary lines (e.g. one per Slack workspace); omitted when none. */
+  summaryLines: z.array(z.string()).optional(),
 });
 export type ConnectorSyncOutput = z.infer<typeof ConnectorSyncOutput>;
 

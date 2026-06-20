@@ -124,6 +124,46 @@ describe("runBulkSync", () => {
     expect(errors).toEqual(["bad: boom: no token"]);
   });
 
+  test("partial failure marks the entry failed but keeps the outcome (ADR-0014, #166)", async () => {
+    // A connector that collects a record but reports an internal partial failure
+    // (e.g. one Slack workspace failed): the outcome is real, but the run must
+    // count it failed so `suasor sync` exits 1 (ADR-0027 exit-code parity).
+    const partialConnector: Connector = {
+      name: "slack",
+      sourceType: "slack",
+      async *sync(): AsyncIterable<SourceRecord> {
+        yield rec("slack:1", "from the ok workspace");
+      },
+      finalize(): SyncResult {
+        return {
+          cursor: null,
+          partialFailure: true,
+          summaryLines: ["workspaces: acme=ok, beta=failed (cursor preserved)"],
+        };
+      },
+    };
+    const errors: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["slack", "good"],
+      connectors: { slack: {}, good: {} },
+      loadConnector: async (name) =>
+        name === "slack" ? partialConnector : fakeConnector(name, [rec("good:1", "b")]),
+      onConnectorError: (connector, error) => errors.push(`${connector}: ${error.message}`),
+    });
+
+    expect(result.succeeded).toBe(1); // good
+    expect(result.failed).toBe(1); // slack (partial)
+    const slack = result.results.find((r) => r.connector === "slack");
+    expect(slack?.ok).toBe(false);
+    expect(slack?.outcome?.observed).toBe(1); // record was kept
+    expect(slack?.outcome?.partialFailure).toBe(true);
+    expect(slack?.error).toContain("partial failure");
+    expect(slack?.error).toContain("beta=failed");
+    expect(errors[0]).toContain("partial failure");
+    // Both the ok-workspace record and the good connector's record persisted.
+    expect(sourceCount()).toBe(2);
+  });
+
   test("fail-fast (continueOnError: false) stops at the first failure", async () => {
     const ran: string[] = [];
     const result = await runBulkSync(store, {
