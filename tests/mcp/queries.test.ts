@@ -8,6 +8,7 @@ import {
   listInbox,
   listLinks,
   listSlackDemand,
+  listSourceHistory,
   listSources,
   listTasks,
 } from "../../src/mcp/queries.ts";
@@ -384,5 +385,63 @@ describe("graph traversal: listLinks / expandGraph (ADR-0018)", () => {
       sourceExternalIds: ["s1", "s2", "s3"],
     });
     expect(expandGraph(sqlite(), "task", "t1", { depth: 2, limit: 2 }).nodes).toHaveLength(2);
+  });
+});
+
+describe("listSourceHistory", () => {
+  test("returns every body version newest-first from the event log", () => {
+    store.record({
+      type: "SourceObserved",
+      externalId: "gh:1",
+      sourceType: "github_issue",
+      body: "v1 body",
+      observedAt: "2026-06-01T00:00:00.000Z",
+      fingerprint: "fp1",
+      meta: {},
+    });
+    store.record({
+      type: "SourceBodyUpdated",
+      externalId: "gh:1",
+      body: "v2 body",
+      observedAt: "2026-06-02T00:00:00.000Z",
+      fingerprint: "fp2",
+      meta: {},
+    });
+
+    const history = listSourceHistory(sqlite(), "gh:1");
+    expect(history).toHaveLength(2);
+    // Newest first: the projection keeps only v2, but the log retains both.
+    expect(history[0]?.body).toBe("v2 body");
+    expect(history[0]?.fingerprint).toBe("fp2");
+    expect(history[1]?.body).toBe("v1 body");
+    // The current projection body matches the latest version.
+    expect(getSource(sqlite(), "gh:1")?.body).toBe("v2 body");
+  });
+
+  test("returns an empty array for an unknown source", () => {
+    expect(listSourceHistory(sqlite(), "nope:1")).toEqual([]);
+  });
+
+  test("honours the limit (newest versions first)", () => {
+    store.record({
+      type: "SourceObserved",
+      externalId: "gh:2",
+      sourceType: "github_issue",
+      body: "first",
+      observedAt: "2026-06-01T00:00:00.000Z",
+      fingerprint: "a",
+      meta: {},
+    });
+    store.record({
+      type: "SourceBodyUpdated",
+      externalId: "gh:2",
+      body: "second",
+      observedAt: "2026-06-02T00:00:00.000Z",
+      fingerprint: "b",
+      meta: {},
+    });
+    const limited = listSourceHistory(sqlite(), "gh:2", { limit: 1 });
+    expect(limited).toHaveLength(1);
+    expect(limited[0]?.body).toBe("second");
   });
 });

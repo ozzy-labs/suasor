@@ -69,6 +69,7 @@ describe("MCP read surface", () => {
         "search",
         "slack.demand.list",
         "source.get",
+        "source.history",
         "source.list",
         "task.list",
       ].sort(),
@@ -425,6 +426,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "search",
         "slack.demand.list",
         "source.get",
+        "source.history",
         "source.list",
         "task.list",
         // write (HITL)
