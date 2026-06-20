@@ -29,7 +29,7 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 
 ## クイックスタート（暫定）
 
-> 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。未提供は `brief` / `graph.related` の MCP tool のみ（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。
+> 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。MCP surface も `brief` / `graph.related`・`graph.expand` を含めて提供済みです（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。
 
 下記コマンドは、上記いずれかのチャネルで Suasor を**インストール済み**で `suasor` が `PATH` 上にあることを前提としています。インストール形態に合わせて読み替えてください:
 
@@ -51,7 +51,7 @@ suasor init
 # 設定 / DB / connector の準備状況を確認（診断専用・何も作らない）。
 suasor doctor
 
-# コネクタから read 専用で取り込み（github / slack / ms-graph / google / box / web）。
+# コネクタから read 専用で取り込み（github / slack / ms-graph / google / box / web / local）。
 suasor github sync
 
 # あるいは有効な全 connector を 1 回の read 専用パスで一括取り込み（one-shot）。
@@ -69,7 +69,7 @@ suasor db migrate            # projection schema 適用（idempotent）
 suasor projections rebuild   # event log を replay して projection 再構築
 ```
 
-設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は github / slack / ms-graph / google / box / web から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
+設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は github / slack / ms-graph / google / box / web / local から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
 
 ### ソースから
 

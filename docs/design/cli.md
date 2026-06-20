@@ -28,7 +28,7 @@ suasor embeddings rebuild [--full] [--json]  # 現行 model と異なる/欠落 
 suasor embeddings drain [--json]       # pending（ベクトル未生成）の catch-up 再埋め込み
 suasor embeddings list-failed [--limit N] [--json]  # 現行 model ベクトルを欠く source の drilldown（pending / stale）
 suasor embeddings find-duplicates [--threshold T] [--json]  # cosine 類似度が閾値超の near-dup ペア列挙
-suasor search [--limit N] [--json] <query>  # FTS 検索
+suasor search [--limit N] [--source-type T] [--observed-after ISO] [--observed-before ISO] [--json] <query>  # FTS 検索
 suasor source list [--type T] [--limit N] [--since ISO] [--until ISO] [--json]  # 取り込み済み source の監査一覧（本文・secret 非表示・ADR-0026）
 suasor source forget <externalId> [--reason R] [--yes]  # source をローカル purge（本文 redaction + projection 削除・破壊的・--yes で適用・ADR-0026）
 suasor brief [--since D] [--until ISO] [--limit N] [--json]  # 期間ダイジェスト（brief バンドル）を stdout 出力
