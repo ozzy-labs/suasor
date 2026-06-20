@@ -26,6 +26,7 @@ import { connectorAuthCommands } from "./commands/connector-auth.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
+import { DoctorCommand } from "./commands/doctor.ts";
 import { embeddingsCommands } from "./commands/embeddings.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
@@ -63,6 +64,7 @@ export function buildCli(): Cli {
     cli.register(ConnectorAuth);
   }
   cli.register(ConnectorsListCommand);
+  cli.register(DoctorCommand);
   for (const EmbeddingsCommand of embeddingsCommands as CommandClass[]) {
     cli.register(EmbeddingsCommand);
   }
