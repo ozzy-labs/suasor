@@ -133,6 +133,22 @@ export async function runBulkSync(store: Store, options: BulkSyncOptions): Promi
   let succeeded = 0;
   let failed = 0;
 
+  // Pre-sync no-op advisory (Issue #187): an enabled connector whose scope is
+  // empty (e.g. github with no repos + notifications=off, box with no folders)
+  // ingests nothing and otherwise just reports `0 observed`. Warn via the shared
+  // `onWarn` sink (the CLI prefixes it `warning: <name>: …`) without changing the
+  // aggregate exit code — a no-op slice is not a failure. Lazy-imported to keep
+  // this module's top level import-clean (the schemas pull no heavy SDK, but the
+  // lazy import mirrors the connector lazy-load discipline).
+  const onWarn = options.syncOptions?.onWarn;
+  if (onWarn) {
+    const { noopWarning } = await import("./noop-check.ts");
+    for (const name of options.names) {
+      const noop = noopWarning(name, options.connectors[name] ?? {});
+      if (noop !== null) onWarn(`${name}: ${noop}`);
+    }
+  }
+
   for (const name of options.names) {
     options.onConnectorStart?.(name);
     const slice = options.connectors[name] ?? {};

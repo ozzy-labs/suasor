@@ -102,4 +102,26 @@ describe("suasor github sync", () => {
     expect(err).toContain("error:");
     expect(err).toContain("connectors.github");
   });
+
+  test("warns (stderr, exit 0) when repos empty and notifications=off (#187)", async () => {
+    await run(["init"]);
+    // Enabled but no ingest target: no repos and notifications off. The run still
+    // succeeds (0 observed) but a pre-sync warning surfaces the no-op config.
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    const { code, out, err } = await run(["github", "sync"]);
+    expect(code).toBe(0);
+    expect(out).toContain("0 observed");
+    expect(err).toContain("warning: github:");
+    expect(err).toContain("notifications=off");
+  });
+
+  test("does NOT warn when notifications stream is enabled (#187)", async () => {
+    await run(["init"]);
+    // repos empty but notifications=all → the per-token notification stream is a
+    // valid ingest target, so no no-op warning. (The sync itself then fails on the
+    // missing token, but the no-op advisory must not fire — that is what we assert.)
+    await writeConfig('[connectors.github]\nrepos = []\nnotifications = "all"\n');
+    const { err } = await run(["github", "sync"]);
+    expect(err).not.toContain("取り込み対象なし");
+  });
 });
