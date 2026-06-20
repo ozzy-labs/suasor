@@ -1,0 +1,40 @@
+# Suasor — Slack App manifest (ADR-0011 / Issue #164)
+#
+# Paste this into https://api.slack.com/apps → "Create New App" → "From an app
+# manifest" to create a Slack App pre-wired with every OAuth scope Suasor's
+# Slack ingestion features need. After creating the app, install it to your
+# workspace and copy the token(s) for `suasor slack auth set` (see
+# docs/guide/connectors.md → Slack).
+#
+# Scope SSOT: src/connectors/slack/scopes.ts (FEATURE_SCOPES). The
+# manifest-vs-SSOT drift guard lives in
+# tests/connectors/slack/manifest.test.ts — if you add a feature scope to
+# scopes.ts, that test fails until this manifest is updated (no second SSOT).
+#
+# Bot vs User token:
+#   - Bot Token (xoxb-): public/private/DM/group-DM sync. This covers the
+#     common case. Install the app and copy the "Bot User OAuth Token".
+#   - User Token (xoxp-): additionally enables the engagement axis
+#     (`search:read`, User-Token-only — a Bot Token structurally cannot hold
+#     it). Only needed for `slack conversations --sort=last_self_post`; drop the
+#     `oauth_config.scopes.user` block below if you do not want it.
+display_information:
+  name: Suasor
+  description: Read-only ingestion of Slack messages into your local Suasor index.
+  background_color: "#1a1a1a"
+oauth_config:
+  scopes:
+    # Bot Token scopes — every non-User-Token-only feature in FEATURE_SCOPES.
+    bot:
+      - channels:history # public channel sync
+      - groups:history # private channel sync
+      - im:history # DM sync
+      - mpim:history # group-DM (mpim) sync
+      - users:read # resolve author / DM display names (recommended)
+    # User Token scopes — User-Token-only features in FEATURE_SCOPES.
+    user:
+      - search:read # engagement axis (search.messages from:me)
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
