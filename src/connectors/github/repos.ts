@@ -8,13 +8,18 @@
  * Renders a paste-ready `[connectors.github]` block via the shared config-block
  * helper (ADR-0030).
  *
- * Import-clean (ADR-0007): no `octokit`. The default transport uses the global
- * `fetch` (same pattern as `src/connectors/github/auth.ts`), so building the
- * connector / CLI registry never pulls the SDK. The resolved token is never
- * echoed in thrown errors.
+ * Import-clean (ADR-0007): no `octokit`. The default transport uses the shared
+ * `githubFetch` helper (global `fetch`, same pattern as
+ * `src/connectors/github/auth.ts`), so building the connector / CLI registry
+ * never pulls the SDK. The resolved token is never echoed in thrown errors.
+ *
+ * Rate limits (Issue #224): the default transport routes through `githubFetch`,
+ * which retries 429 / secondary-limit 403 honouring `Retry-After` (ADR-0019
+ * generalised to the non-Slack fetch surface).
  */
 
 import { type ConfigBlockEntry, renderConnectorConfigBlock } from "../onboard/config-block.ts";
+import { githubFetch } from "./_fetch.ts";
 
 /** One repository surfaced for the discovery CLI. */
 export interface GithubRepo {
@@ -57,24 +62,15 @@ export type GithubReposTransport = (options: { token: string; url: string }) => 
 /** Per-page ceiling (GitHub's max for `per_page`). */
 const PAGE_LIMIT = 100;
 
-/** Default transport: a `GET /user/repos` page reading the `Link` header. */
+/**
+ * Default transport: a `GET /user/repos` page reading the `Link` header, with
+ * 429 / secondary-limit retry via the shared `githubFetch` helper (the API
+ * version pin lives there, `GITHUB_API_VERSION`).
+ */
 const defaultTransport: GithubReposTransport = async ({ token, url }) => {
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  let body: unknown = [];
-  try {
-    body = await res.json();
-  } catch {
-    // Non-JSON error body (e.g. an HTML 5xx) → leave body empty; status drives it.
-    body = [];
-  }
-  return { status: res.status, linkHeader: res.headers.get("link"), body };
+  const { status, headers, body } = await githubFetch(url, { token });
+  // A non-JSON / empty body (e.g. an HTML 5xx) → [] so the parser below is safe.
+  return { status, linkHeader: headers.get("link"), body: body ?? [] };
 };
 
 interface RawRepo {

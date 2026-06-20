@@ -50,3 +50,7 @@ opshub は `_retry.py` の共有ヘルパー `retry_on_rate_limit`（3 回・`Re
 - **全経路を `@slack/web-api` に寄せて SDK retry に統一** — 却下。運用 verb は import-clean のため意図的に SDK を使わず `fetch` のみ（ADR-0011）。SDK を operational 経路に持ち込むとコールドスタント/設計方針が崩れる。
 - **transport（body 返し）を包む** — 却下。429 の `Retry-After` は HTTP header にあり、body だけ返す transport の外側からは見えない。fetch 層で包むのが正しい層。
 - **無制限リトライ / 固定 sleep** — 却下。上限なしは hang リスク、固定 sleep は Retry-After 無視。opshub 準拠（3 回・Retry-After 優先・指数 backoff）が妥当。
+
+## Update (Issue #224): 非 Slack fetch パスへの一般化
+
+本 ADR の retry ポリシー（3 試行・`Retry-After` 尊重・指数 backoff）は GitHub の fetch-only パス（`GET /user`・`GET /user/repos`、import-clean のため `octokit` 非依存）にも同型で適用する。GitHub 専用ヘルパ `src/connectors/github/_fetch.ts`（`githubFetch`）を新設し、`auth.ts` / `repos.ts` の default transport がこれを経由する。差分は GitHub 固有の二次レート制限（`403` + `Retry-After`）も retry 対象に含める点と、API version pin（`X-GitHub-Api-Version`）を `GITHUB_API_VERSION` 定数に集約して現行安定版へ更新した点。SDK（octokit）経路は既定 retry 済みのため変更しない。

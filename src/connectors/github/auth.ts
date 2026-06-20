@@ -8,10 +8,18 @@
  * token do"). A single round-trip yields validity + identity + scopes; the
  * readiness verdict is derived from that with no extra call.
  *
- * Import-clean (ADR-0007): no `octokit`. The default transport uses the global
- * `fetch` (no SDK) — building the connector / CLI registry never pulls octokit.
- * The resolved token is never echoed in thrown errors.
+ * Import-clean (ADR-0007): no `octokit`. The default transport uses the shared
+ * `githubFetch` helper (global `fetch`, no SDK) — building the connector / CLI
+ * registry never pulls octokit. The resolved token is never echoed in thrown
+ * errors.
+ *
+ * Rate limits (Issue #224): the default transport routes through `githubFetch`,
+ * which retries 429 / secondary-limit 403 honouring `Retry-After` (ADR-0019
+ * generalised to the non-Slack fetch surface). The SDK path is untouched
+ * (octokit retries by default).
  */
+
+import { githubFetch } from "./_fetch.ts";
 
 /** Identity + granted scopes resolved from a successful `GET /user`. */
 export interface GithubAuthResult {
@@ -27,24 +35,17 @@ export type GithubAuthTransport = (options: {
   baseUrl?: string;
 }) => Promise<{ status: number; scopesHeader: string | null; body: Record<string, unknown> }>;
 
-/** Default transport: a `GET /user` reading the `x-oauth-scopes` header. */
+/**
+ * Default transport: a `GET /user` reading the `x-oauth-scopes` header, with
+ * 429 / secondary-limit retry via the shared `githubFetch` helper (the API
+ * version pin lives there, `GITHUB_API_VERSION`).
+ */
 const defaultTransport: GithubAuthTransport = async ({ token, baseUrl }) => {
   const root = (baseUrl ?? "https://api.github.com").replace(/\/$/, "");
-  const res = await fetch(`${root}/user`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  let body: Record<string, unknown> = {};
-  try {
-    body = (await res.json()) as Record<string, unknown>;
-  } catch {
-    // Non-JSON error body (e.g. an HTML 5xx) → leave body empty; status drives it.
-  }
-  return { status: res.status, scopesHeader: res.headers.get("x-oauth-scopes"), body };
+  const { status, headers, body } = await githubFetch(`${root}/user`, { token });
+  const record: Record<string, unknown> =
+    body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  return { status, scopesHeader: headers.get("x-oauth-scopes"), body: record };
 };
 
 function asString(value: unknown): string {
