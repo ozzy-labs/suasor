@@ -24,4 +24,5 @@ write tool は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../..
 
 - HITL。人の承認なしに `propose.apply` を呼ばない。auto-apply しない。`propose.list` は read（候補確認）、`propose.reject` は却下の記録
 - 外部 SaaS への送信は行わない。ユーザーが下書きを確認して手で送る
+- 下書きをファイルで欲しい場合は `draft.export`（HITL write）で `.md` / `.txt` にローカル書き出しできる（送信はしない・[ADR-0025](../../adr/0025-local-draft-export.md)）
 - 本 skill は手順書のみで実処理を持たない
