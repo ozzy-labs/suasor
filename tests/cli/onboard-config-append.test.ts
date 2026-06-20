@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  appendConnectorBlock,
   appendConnectorSlice,
   connectorSliceTemplate,
   hasConnectorSlice,
@@ -70,6 +71,38 @@ describe("appendConnectorSlice — non-destructive + idempotent", () => {
     const base = "# [connectors.github]\n";
     const { appended } = appendConnectorSlice(base, "github");
     expect(appended).toBe(true);
+  });
+});
+
+describe("appendConnectorBlock — discovery-rendered block (ADR-0030, Issue #195)", () => {
+  const block = [
+    "[connectors.github]",
+    "enabled = true",
+    "repos = [",
+    '  "acme/api",  # private',
+    "]",
+  ];
+
+  test("appends a pre-rendered block verbatim to an empty file", () => {
+    const { toml, appended } = appendConnectorBlock("", "github", block);
+    expect(appended).toBe(true);
+    expect(toml).toContain("[connectors.github]");
+    expect(toml).toContain('"acme/api"');
+    expect(toml).toContain("repos = [");
+    expect(toml.endsWith("\n")).toBe(true);
+  });
+
+  test("separates the block from prior content with a single blank line", () => {
+    const { toml } = appendConnectorBlock("[storage]\n", "github", block);
+    expect(toml).toContain("\n\n[connectors.github]");
+  });
+
+  test("is non-destructive: an existing slice is left untouched", () => {
+    const base = "[connectors.github]\nenabled = false\n";
+    const { toml, appended } = appendConnectorBlock(base, "github", block);
+    expect(appended).toBe(false);
+    expect(toml).toBe(base);
+    expect(toml).not.toContain('"acme/api"');
   });
 });
 

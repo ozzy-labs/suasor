@@ -34,6 +34,31 @@ interface ConnectorReport {
   authTest: "ok" | "failed" | "skipped";
   authTestDetail?: string;
   configAppended: boolean;
+  /**
+   * How the appended `[connectors.X]` slice was produced (ADR-0030, Issue #195):
+   * - `"discovery"` — a discovery verb (github repos / google calendars / box
+   *   folders) enumerated ids and the rendered block was appended.
+   * - `"template"` — the minimal placeholder slice (discovery unavailable: the
+   *   connector has no discovery verb, or the probe was skipped / failed).
+   * - `"skipped"` — nothing appended (the slice already existed).
+   */
+  configSource: "discovery" | "template" | "skipped";
+  /** Count of ids discovered when `configSource === "discovery"`. */
+  discovered?: number;
+}
+
+/** Outcome of the per-connector config-slice append (discovery vs template). */
+interface ConfigAppendOutcome {
+  /** Whether a new slice was written (false = already present). */
+  appended: boolean;
+  /** How the slice was produced. */
+  source: "discovery" | "template" | "skipped";
+  /** Discovered id count (only when `source === "discovery"`). */
+  discovered?: number;
+  /** Probe error message when a discovery verb existed but the probe failed. */
+  discoveryError?: string;
+  /** The discovery verb name (for the fallback hint), when a probe failed. */
+  discoveryVerb?: string;
 }
 
 /** The full `--json` report. */
@@ -139,6 +164,7 @@ export class OnboardCommand extends Command {
         authStored: false,
         authTest: "skipped",
         configAppended: false,
+        configSource: "skipped",
       };
 
       if (!this.skipAuth) {
@@ -172,13 +198,36 @@ export class OnboardCommand extends Command {
       }
 
       // Config slice append (the structural fix — runs regardless of --skip-auth).
-      const appended = await this.appendConfigSlice(connector);
-      report.configAppended = appended;
+      // For a discovery-capable connector (github repos / google calendars / box
+      // folders, ADR-0030) the wizard runs the discovery probe and appends the
+      // rendered block (the discovered ids), so onboard lands more than a bare
+      // `enabled = true`. Discovery is best-effort: a missing verb / no token /
+      // probe failure falls back to the minimal placeholder template (Issue #195).
+      const append = await this.appendConfigSlice(connector);
+      report.configAppended = append.appended;
+      report.configSource = append.appended ? append.source : "skipped";
+      if (append.source === "discovery") report.discovered = append.discovered;
       if (!this.json) {
-        stdout.write(
-          appended
-            ? `${connector}: appended [connectors.${connector}] (enabled = true) to config.toml.\n`
-            : `${connector}: [connectors.${connector}] already in config.toml (left untouched).\n`,
+        if (!append.appended) {
+          stdout.write(
+            `${connector}: [connectors.${connector}] already in config.toml (left untouched).\n`,
+          );
+        } else if (append.source === "discovery") {
+          stdout.write(
+            `${connector}: discovered ${append.discovered} item(s); appended [connectors.${connector}] to config.toml.\n`,
+          );
+        } else {
+          stdout.write(
+            `${connector}: appended [connectors.${connector}] (enabled = true) to config.toml.\n`,
+          );
+        }
+      }
+      // The discovery-fallback reason goes to stderr regardless of --json (it is
+      // not part of the machine-readable stdout summary, but the operator should
+      // know discovery did not run so the placeholder needs hand-editing).
+      if (append.discoveryError) {
+        stderr.write(
+          `${connector}: discovery skipped (${append.discoveryError}); wrote the placeholder slice — edit it by hand or re-run \`suasor ${connector} ${append.discoveryVerb}\`.\n`,
         );
       }
 
@@ -296,9 +345,17 @@ export class OnboardCommand extends Command {
     }
   }
 
-  /** Append the connector slice to config.toml (non-destructive). Returns whether it changed. */
-  private async appendConfigSlice(connector: string): Promise<boolean> {
-    const [{ resolveConfigDir }, { appendConnectorSlice }, { join }] = await Promise.all([
+  /**
+   * Append the connector slice to config.toml (non-destructive).
+   *
+   * When the connector exposes a discovery verb (ADR-0030) the wizard runs the
+   * probe and appends the rendered block (the discovered ids); otherwise — or
+   * when the probe is unavailable / fails — it appends the minimal placeholder
+   * template. The append itself is always non-destructive (an existing
+   * `[connectors.X]`, including `enabled = false`, is never rewritten).
+   */
+  private async appendConfigSlice(connector: string): Promise<ConfigAppendOutcome> {
+    const [{ resolveConfigDir }, configAppend, { join }] = await Promise.all([
       import("../../config/index.ts"),
       import("../onboard/config-append.ts"),
       import("node:path"),
@@ -306,9 +363,63 @@ export class OnboardCommand extends Command {
     const configPath = join(resolveConfigDir(process.env), "config.toml");
     const file = Bun.file(configPath);
     const current = (await file.exists()) ? await file.text() : "";
-    const result = appendConnectorSlice(current, connector);
+
+    // Already present → leave it untouched (no discovery probe needed).
+    if (configAppend.hasConnectorSlice(current, connector)) {
+      return { appended: false, source: "skipped" };
+    }
+
+    // Discovery-capable connector → run the probe and append the rendered block.
+    const discovery = await this.discoverConfigBlock(connector);
+    if (discovery && "configBlock" in discovery) {
+      const result = configAppend.appendConnectorBlock(current, connector, discovery.configBlock);
+      if (result.appended) await Bun.write(configPath, result.toml);
+      return { appended: result.appended, source: "discovery", discovered: discovery.count };
+    }
+
+    // No discovery verb (or the probe failed) → minimal placeholder template.
+    const result = configAppend.appendConnectorSlice(current, connector);
     if (result.appended) await Bun.write(configPath, result.toml);
-    return result.appended;
+    return {
+      appended: result.appended,
+      source: "template",
+      ...(discovery?.error
+        ? { discoveryError: discovery.error, discoveryVerb: discovery.verb }
+        : {}),
+    };
+  }
+
+  /**
+   * Run the connector's discovery probe (ADR-0030) and return the rendered
+   * `[connectors.X]` block + item count. Returns `null` when the connector has
+   * no discovery verb, or `{ error, verb }` when the probe failed (so the caller
+   * falls back to the placeholder template and surfaces the reason). Best-effort
+   * and read-only; the credential is never echoed.
+   */
+  private async discoverConfigBlock(
+    connector: string,
+  ): Promise<
+    { configBlock: readonly string[]; count: number } | { error: string; verb: string } | null
+  > {
+    const { DISCOVERY_SPECS } = await import("../../connectors/discovery-specs.ts");
+    const spec = DISCOVERY_SPECS[connector];
+    if (!spec) return null;
+
+    const [{ loadConfig }, { makeSecretResolver }] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../connectors/secrets.ts"),
+    ]);
+    const config = await loadConfig();
+    const slice = (config.connectors[connector] ?? {}) as Record<string, unknown>;
+    try {
+      const result = await spec.discover({
+        secret: makeSecretResolver(connector),
+        config: slice,
+      });
+      return { configBlock: result.configBlock, count: result.items.length };
+    } catch (cause) {
+      return { error: cause instanceof Error ? cause.message : String(cause), verb: spec.verb };
+    }
   }
 
   /** Run the first `suasor sync` over the selected connectors via the shared service. */

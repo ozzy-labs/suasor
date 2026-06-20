@@ -110,8 +110,40 @@ export function appendConnectorSlice(toml: string, connector: string): AppendRes
 
   const template = connectorSliceTemplate(connector);
   const sliceLines = [`[connectors.${connector}]`, ...template.body];
-  const slice = sliceLines.join("\n");
+  return appendBlock(toml, sliceLines);
+}
 
+/**
+ * Append a **pre-rendered** `[connectors.<name>]` block to `toml` if (and only
+ * if) a slice for `connector` is absent — the discovery path's counterpart to
+ * {@link appendConnectorSlice} (ADR-0030 / ADR-0029, Issue #195).
+ *
+ * Where {@link appendConnectorSlice} synthesizes a minimal placeholder slice,
+ * this appends a block already rendered from discovery (`renderConnectorConfigBlock`
+ * via a connector's `discover()` probe), so an `onboard` of a discovery-capable
+ * connector lands the discovered ids — not just `enabled = true` — into the
+ * config. Same non-destructive guarantee: an existing `[connectors.<name>]`
+ * (including a user's `enabled = false`) is left untouched (`appended: false`).
+ *
+ * `blockLines` must be a self-contained slice whose first line is the
+ * `[connectors.<name>]` header (the shape `renderConnectorConfigBlock` returns);
+ * it is appended verbatim, separated by a single blank line, ending on one
+ * trailing newline.
+ */
+export function appendConnectorBlock(
+  toml: string,
+  connector: string,
+  blockLines: readonly string[],
+): AppendResult {
+  if (hasConnectorSlice(toml, connector)) {
+    return { toml, appended: false };
+  }
+  return appendBlock(toml, blockLines);
+}
+
+/** Append `lines` as a block, normalizing surrounding whitespace. */
+function appendBlock(toml: string, lines: readonly string[]): AppendResult {
+  const slice = lines.join("\n");
   // Normalize the existing trailing whitespace so we always insert exactly one
   // blank line before the new slice and end on a single newline.
   const base = toml.replace(/\s*$/, "");
