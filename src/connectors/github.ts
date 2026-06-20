@@ -37,6 +37,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** `[connectors.github]` config (docs/design/config.md). */
 export const GithubConnectorConfig = z.object({
@@ -199,6 +200,17 @@ class GithubConnector implements Connector {
   private maxIssueUpdatedAt: string | null = null;
   /** Highest notification `updated_at` observed this run → next-run token cursor. */
   private maxNotificationUpdatedAt: string | null = null;
+  /** Per-repo isolation outcome (set when `syncRepos` ran) → finalize summary. */
+  private repoIsolation: IsolationResult | null = null;
+  /**
+   * Per-repo high-water marks observed this run, keyed by `owner/repo`. The repo
+   * delta axis is a *single shared* `since` cursor (the most recent `updated_at`
+   * across repos), so a repo that fails mid-fetch must not drag the shared floor
+   * forward past its last good item and silently skip the repo's gap next run.
+   * `finalize` derives the next shared cursor from only the repos that fully
+   * succeeded, mirroring Slack's "failed sub-unit keeps its prior cursor".
+   */
+  private repoMaxUpdatedAt: Record<string, string> = {};
 
   constructor(
     private readonly config: GithubConnectorConfig,
@@ -226,43 +238,81 @@ class GithubConnector implements Connector {
     const cursor = parseCursor(ctx.cursor);
     this.maxIssueUpdatedAt = cursor.issues;
     this.maxNotificationUpdatedAt = cursor.notifications;
+    this.repoIsolation = null;
+    this.repoMaxUpdatedAt = {};
 
-    yield* this.syncRepos(octokit, cursor.issues);
+    yield* this.syncRepos(octokit, cursor.issues, ctx);
     if (wantsNotifications) {
       yield* this.syncNotifications(octokit, cursor.notifications);
     }
   }
 
-  /** Stream issues/PRs for every configured repo (repo delta axis). */
+  /**
+   * Stream issues/PRs for every configured repo (repo delta axis) with
+   * per-repo error isolation (ADR-0014 generalized, Issue #193): one repo's
+   * failure (e.g. a `403`) records a warn and skips that repo, the rest keep
+   * streaming, and only an all-repos failure throws. A failed repo's items do
+   * not advance the shared `since` cursor (cursor preserved), so its gap is not
+   * silently skipped next run.
+   */
   private async *syncRepos(
     octokit: OctokitLike,
     since: string | null,
+    ctx: SyncContext,
   ): AsyncIterable<SourceRecord> {
-    for (const repo of this.config.repos) {
-      const [owner, name] = repo.split("/");
-      const params: Record<string, unknown> = {
-        owner,
-        repo: name,
-        state: this.config.state,
-        per_page: 100,
-        sort: "updated",
-        direction: "asc",
-      };
-      // `since` is the issues delta cursor: only items updated at/after it.
-      if (since) params.since = since;
+    const fetchRepo = (repo: string): AsyncIterable<SourceRecord> => {
+      const self = this;
+      return (async function* () {
+        const [owner, name] = repo.split("/");
+        const params: Record<string, unknown> = {
+          owner,
+          repo: name,
+          state: self.config.state,
+          per_page: 100,
+          sort: "updated",
+          direction: "asc",
+        };
+        // `since` is the issues delta cursor: only items updated at/after it.
+        if (since) params.since = since;
 
-      for await (const page of octokit.paginate.iterator(
-        "GET /repos/{owner}/{repo}/issues",
-        params,
-      )) {
-        for (const item of page.data as GithubIssueItem[]) {
-          if (this.maxIssueUpdatedAt === null || item.updated_at > this.maxIssueUpdatedAt) {
-            this.maxIssueUpdatedAt = item.updated_at;
+        for await (const page of octokit.paginate.iterator(
+          "GET /repos/{owner}/{repo}/issues",
+          params,
+        )) {
+          for (const item of page.data as GithubIssueItem[]) {
+            // Track this repo's own high-water mark; the shared `since` cursor
+            // is derived in `finalize` from only the repos that fully succeeded
+            // so a mid-fetch failure never advances the floor past its gap.
+            const seen = self.repoMaxUpdatedAt[repo];
+            if (seen === undefined || item.updated_at > seen) {
+              self.repoMaxUpdatedAt[repo] = item.updated_at;
+            }
+            yield toRecord(repo, item);
           }
-          yield toRecord(repo, item);
         }
-      }
-    }
+      })();
+    };
+
+    yield* syncResourcesIsolated(
+      this.config.repos,
+      ctx,
+      (repo) => repo,
+      "repo",
+      fetchRepo,
+      (result) => {
+        this.repoIsolation = result;
+        // Derive the next shared `since` cursor from only the repos that fully
+        // succeeded (a failed repo keeps its prior cursor — its items are
+        // dropped from the floor so its gap is re-scanned next run).
+        const failed = new Set(result.failures.map((f) => f.resource));
+        for (const [repo, ts] of Object.entries(this.repoMaxUpdatedAt)) {
+          if (failed.has(repo)) continue;
+          if (this.maxIssueUpdatedAt === null || ts > this.maxIssueUpdatedAt) {
+            this.maxIssueUpdatedAt = ts;
+          }
+        }
+      },
+    );
   }
 
   /**
@@ -311,11 +361,21 @@ class GithubConnector implements Connector {
       issues: this.maxIssueUpdatedAt,
       notifications: this.maxNotificationUpdatedAt,
     };
+    // A partial repo failure (some repos failed, some succeeded) is surfaced so
+    // the CLI exits non-zero without discarding the collected records (ADR-0027,
+    // Issue #193). A `summaryLines` entry names each repo's outcome.
+    const iso = this.repoIsolation;
+    const extra = iso?.partialFailure
+      ? {
+          partialFailure: true,
+          ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
+        }
+      : {};
     // Persist nothing when both axes are empty (first run, no items).
     if (cursor.issues === null && cursor.notifications === null) {
-      return { cursor: null };
+      return { cursor: null, ...extra };
     }
-    return { cursor: JSON.stringify(cursor) };
+    return { cursor: JSON.stringify(cursor), ...extra };
   }
 }
 

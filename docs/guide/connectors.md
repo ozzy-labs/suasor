@@ -135,6 +135,16 @@ MCP 経由では `search` read tool で同じ検索ができる（[retrieval](..
 
 すべての connector で取り込み・検索・delta 検知・secret 経路（env override > keychain）の挙動は同一。以下は各 connector 固有の token / config slice のみ記す。token は **config.toml には書かない**（env override か keychain）。
 
+## per-resource エラー分離（github / google / box / ms-graph）
+
+複数リソース（github=repo / google=resource family / box=folder / ms-graph=resource family）を 1 pass で走査する connector は、**1 リソースの失敗が他リソースの取り込みを巻き添えにしない**（[ADR-0014](../adr/0014-slack-multi-workspace.md) の per-workspace エラー分離を Slack 以外へ一般化、[#193](https://github.com/ozzy-labs/suasor/issues/193)）。従来は 1 repo の `403` が同 pass の他 repo の取り込みも止めていた。
+
+- **失敗リソースは skip して continue**：fetch 途中で失敗したリソースは warning に集約し、残りのリソースの取り込みは止めない。
+- **warn は 1 本に集約**：`github: 2 repo OK, 1 failed (cursor preserved) — owner/x (403)` の形式で、どのリソースがなぜ失敗したかを明示する（kind は connector ごとに `repo` / `resource` / `folder`）。
+- **cursor 非リセット**：失敗リソースの prior cursor は保持する（reset しない）。github は **共有 `since` cursor を失敗 repo の最新 `updated_at` まで前進させない**ため、失敗 repo の gap が次回 silent に skip されない（成功 repo のみが共有 floor を前進させる）。google / box / ms-graph は fingerprint ベース（cursor `null`）なので前進そのものが無く、次回再走査で復旧する。
+- **全リソース失敗時のみ throw**：すべてのリソースが失敗した pass は「無音の空成功」ではなく **error** として終了する（最後のエラーを再 throw）。
+- **部分失敗の exit code + サマリ**：一部だけ失敗した部分失敗は `partialFailure` を立て、sync 末尾に **リソース別サマリ行**（例: `repos: owner/a=ok, owner/b=failed (cursor preserved)`）を 1 本出し、cron / CI が exit code を gate に検知できるよう **exit 1** で終了する（取り込めたリソースのレコードは保持される、[ADR-0027](../adr/0027-bulk-sync-orchestration.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)）。Slack の per-workspace 分離と同じセマンティクス。
+
 token を持つ connector（github / ms-graph / google / box）は、汎用の `auth set` / `auth test` verb で keychain への保存と検証ができる（Issue #85）。`suasor <connector> auth set`（stdin / `--token` で primary secret を keychain に保存）/ `suasor <connector> auth test`（資格情報の有効性を read-only round-trip で検証し identity・granted scopes・readiness を出力）。各 connector が読む primary secret は github=`token` / ms-graph=`clientSecret` / google=`refreshToken` / box=`token`。Slack は scope readiness とマルチ workspace を持つ独自の `slack auth set/test`（後述）を維持する。
 
 ## Slack

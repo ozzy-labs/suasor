@@ -27,6 +27,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** Graph resource families this connector can ingest. */
 export const MsGraphResource = z.enum(["mail", "calendar", "files", "teams"]);
@@ -179,6 +180,9 @@ class MsGraphConnector implements Connector {
   readonly name = MS_GRAPH_CONNECTOR_NAME;
   readonly sourceType = "ms365";
 
+  /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
+  private isolation: IsolationResult | null = null;
+
   constructor(
     private readonly config: MsGraphConnectorConfig,
     private readonly clientFactory: MsGraphClientFactory,
@@ -203,21 +207,48 @@ class MsGraphConnector implements Connector {
       clientId: this.config.clientId,
       clientSecret,
     });
+    this.isolation = null;
 
-    for (const resource of this.config.resources) {
-      let path: string | undefined = RESOURCE_SPEC[resource].path(this.config.user);
-      while (path) {
-        const page: GraphPage = await client.getPage(path);
-        for (const item of page.value ?? []) {
-          yield toRecord(resource, item);
+    // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
+    // resource family failing (e.g. mail 403) records a warn and is skipped
+    // while the rest stream; only an all-resources failure throws.
+    const user = this.config.user;
+    const fetchResource = (resource: MsGraphResource): AsyncIterable<SourceRecord> =>
+      (async function* () {
+        let path: string | undefined = RESOURCE_SPEC[resource].path(user);
+        while (path) {
+          const page: GraphPage = await client.getPage(path);
+          for (const item of page.value ?? []) {
+            yield toRecord(resource, item);
+          }
+          path = page["@odata.nextLink"];
         }
-        path = page["@odata.nextLink"];
-      }
-    }
+      })();
+
+    yield* syncResourcesIsolated(
+      this.config.resources,
+      ctx,
+      (resource) => resource,
+      "resource",
+      fetchResource,
+      (result) => {
+        this.isolation = result;
+      },
+    );
   }
 
   finalize(): SyncResult {
-    // Fingerprint-based change detection; no per-run cursor to persist.
+    // Fingerprint-based change detection; no per-run cursor to persist. A
+    // partial resource failure is surfaced so the CLI exits non-zero without
+    // discarding the collected records (ADR-0027, Issue #193).
+    const iso = this.isolation;
+    if (iso?.partialFailure) {
+      return {
+        cursor: null,
+        partialFailure: true,
+        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
+      };
+    }
     return { cursor: null };
   }
 }

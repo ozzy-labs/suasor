@@ -284,7 +284,7 @@ describe("GitHub connector — notifications (Issue #93)", () => {
     });
   });
 
-  test("mode=repos still advances the cursor over filtered-out threads", async () => {
+  test("mode=repos still advances the cursor over filtered-out threads (per-resource isolation epilogue follows)", async () => {
     const { octokit } = fakeRoutedOctokit({
       // Only the other-repo notification (06-16) is present; it is filtered out
       // of output but must still advance the notifications high-water mark so it
@@ -299,5 +299,117 @@ describe("GitHub connector — notifications (Issue #93)", () => {
     expect(records.filter((r) => r.sourceType === "github_notification")).toHaveLength(0);
     const result = await connector.finalize?.();
     expect(JSON.parse(result?.cursor ?? "{}").notifications).toBe("2026-06-16T00:00:00Z");
+  });
+});
+
+/**
+ * Build a fake Octokit whose issues route yields per-repo pages and can throw
+ * for a designated repo, exercising per-resource error isolation (Issue #193).
+ * The repo is read from the route params (`owner`/`repo`).
+ */
+function fakeFailingOctokit(opts: {
+  pagesByRepo: Record<string, Array<{ data: unknown[] }>>;
+  failRepos: Record<string, Error>;
+}): OctokitLike {
+  return {
+    paginate: {
+      iterator(route, params) {
+        const owner = params.owner as string;
+        const name = params.repo as string;
+        const repo = `${owner}/${name}`;
+        return (async function* () {
+          if (route !== "GET /notifications" && opts.failRepos[repo]) {
+            throw opts.failRepos[repo];
+          }
+          for (const page of opts.pagesByRepo[repo] ?? []) yield page;
+        })();
+      },
+    },
+  };
+}
+
+describe("GitHub connector — per-resource error isolation (Issue #193)", () => {
+  const issueA = { ...issue, html_url: "https://github.com/o/a/issues/1" };
+  const issueB = { ...issue, number: 9, updated_at: "2026-06-20T00:00:00Z" };
+
+  test("one repo's failure does not abort the others; failures are aggregated to one warn", async () => {
+    const octokit = fakeFailingOctokit({
+      pagesByRepo: { "o/a": [{ data: [issueA] }], "o/c": [{ data: [issueB] }] },
+      failRepos: { "o/b": new Error("403 Forbidden") },
+    });
+    const warns: string[] = [];
+    const connector = createGithubConnector(
+      { repos: ["o/a", "o/b", "o/c"] },
+      { octokitFactory: () => octokit },
+    );
+    const records = await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
+    // o/a and o/c succeed; o/b is skipped.
+    expect(records).toHaveLength(2);
+    expect(records.map((r) => r.meta.repo).sort()).toEqual(["o/a", "o/c"]);
+    // One aggregated warn names the failed repo and its error.
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("2 repo OK, 1 failed (cursor preserved)");
+    expect(warns[0]).toContain("o/b (403 Forbidden)");
+  });
+
+  test("partial failure sets partialFailure + a per-repo summary line in finalize", async () => {
+    const octokit = fakeFailingOctokit({
+      pagesByRepo: { "o/a": [{ data: [issueA] }] },
+      failRepos: { "o/b": new Error("boom") },
+    });
+    const connector = createGithubConnector(
+      { repos: ["o/a", "o/b"] },
+      { octokitFactory: () => octokit },
+    );
+    await collect(connector.sync(ctx({ onWarn: () => {} })));
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines?.[0]).toBe("repos: o/a=ok, o/b=failed (cursor preserved)");
+  });
+
+  test("a failed repo's items never advance the shared `since` cursor (gap preserved)", async () => {
+    // o/b would carry the most recent updated_at (06-20) but it fails, so the
+    // shared cursor must stay at o/a's high-water mark (06-10), not jump past
+    // o/b's gap.
+    const octokit = fakeFailingOctokit({
+      pagesByRepo: {
+        "o/a": [{ data: [{ ...issueA, updated_at: "2026-06-10T00:00:00Z" }] }],
+      },
+      failRepos: { "o/b": new Error("403") },
+    });
+    const connector = createGithubConnector(
+      { repos: ["o/a", "o/b"] },
+      { octokitFactory: () => octokit },
+    );
+    await collect(connector.sync(ctx({ onWarn: () => {} })));
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}").issues).toBe("2026-06-10T00:00:00Z");
+  });
+
+  test("all repos failing throws (a total failure is a real error)", async () => {
+    const octokit = fakeFailingOctokit({
+      pagesByRepo: {},
+      failRepos: { "o/a": new Error("403"), "o/b": new Error("404") },
+    });
+    const connector = createGithubConnector(
+      { repos: ["o/a", "o/b"] },
+      { octokitFactory: () => octokit },
+    );
+    await expect(collect(connector.sync(ctx({ onWarn: () => {} })))).rejects.toThrow(/40[34]/);
+  });
+
+  test("a clean run sets no partialFailure and no summary line", async () => {
+    const octokit = fakeFailingOctokit({
+      pagesByRepo: { "o/a": [{ data: [issueA] }], "o/b": [{ data: [issueB] }] },
+      failRepos: {},
+    });
+    const connector = createGithubConnector(
+      { repos: ["o/a", "o/b"] },
+      { octokitFactory: () => octokit },
+    );
+    await collect(connector.sync(ctx()));
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBeUndefined();
+    expect(result?.summaryLines).toBeUndefined();
   });
 });

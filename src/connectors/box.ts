@@ -30,6 +30,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** `[connectors.box]` config (docs/design/config.md). */
 export const BoxConnectorConfig = z.object({
@@ -133,6 +134,9 @@ class BoxConnector implements Connector {
   readonly name = BOX_CONNECTOR_NAME;
   readonly sourceType = "box";
 
+  /** Per-folder isolation outcome (set when `sync` ran) → finalize summary. */
+  private isolation: IsolationResult | null = null;
+
   constructor(
     private readonly config: BoxConnectorConfig,
     private readonly clientFactory: BoxClientFactory,
@@ -150,21 +154,47 @@ class BoxConnector implements Connector {
     }
 
     const client = await this.clientFactory(token);
+    this.isolation = null;
 
-    for (const folder of this.config.folders) {
-      let marker: string | undefined;
-      do {
-        const page = await client.listFolder(folder, marker);
-        for (const item of page.files) {
-          yield toRecord(item);
-        }
-        marker = page.nextMarker;
-      } while (marker);
-    }
+    // Per-folder error isolation (ADR-0014 generalized, Issue #193): one folder
+    // failing (e.g. a 403 / not-found) records a warn and is skipped while the
+    // rest stream; only an all-folders failure throws.
+    const fetchFolder = (folder: string): AsyncIterable<SourceRecord> =>
+      (async function* () {
+        let marker: string | undefined;
+        do {
+          const page = await client.listFolder(folder, marker);
+          for (const item of page.files) {
+            yield toRecord(item);
+          }
+          marker = page.nextMarker;
+        } while (marker);
+      })();
+
+    yield* syncResourcesIsolated(
+      this.config.folders,
+      ctx,
+      (folder) => folder,
+      "folder",
+      fetchFolder,
+      (result) => {
+        this.isolation = result;
+      },
+    );
   }
 
   finalize(): SyncResult {
-    // Fingerprint-based change detection; no per-run cursor to persist.
+    // Fingerprint-based change detection; no per-run cursor to persist. A
+    // partial folder failure is surfaced so the CLI exits non-zero without
+    // discarding the collected records (ADR-0027, Issue #193).
+    const iso = this.isolation;
+    if (iso?.partialFailure) {
+      return {
+        cursor: null,
+        partialFailure: true,
+        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
+      };
+    }
     return { cursor: null };
   }
 }
