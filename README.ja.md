@@ -41,6 +41,9 @@ bun run src/index.ts init
 # コネクタから read 専用で取り込み（github / slack / ms-graph / google / box / web）。
 bun run src/index.ts github sync
 
+# あるいは有効な全 connector を 1 回の read 専用パスで一括取り込み（one-shot）。
+bun run src/index.ts sync                   # --connector a,b / --json 利用可
+
 # source 本文の全文検索（FTS5。--json / --limit 利用可）。
 bun run src/index.ts search "<query>"
 
@@ -54,6 +57,17 @@ bun run src/index.ts projections rebuild   # event log を replay して project
 ```
 
 設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`<connector> sync` は github / slack / ms-graph / google / box / web から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
+
+### 定期 sync
+
+`suasor sync` は有効な全 connector を 1 回の短命・冪等なパスで取り込みます（read 専用・continue-on-error・1 つでも失敗すれば exit 1）。Suasor は常駐デーモンを持たないため、定期実行は OS のスケジューラ（cron / launchd / systemd timer）で組みます:
+
+```cron
+# cron で毎時一括 sync。終了コードで成否を判定し、JSON 出力をログに残す。
+15 * * * * suasor sync --json >> "$HOME/.local/state/suasor/sync.log" 2>&1
+```
+
+launchd / systemd timer の例と失敗監視は [docs/guide/scheduling.md](docs/guide/scheduling.md)（[ADR-0027](docs/adr/0027-bulk-sync-orchestration.md)）を参照してください。
 
 ## エージェントホストと接続する（MCP）
 
