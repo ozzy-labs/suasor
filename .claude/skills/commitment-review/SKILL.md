@@ -20,7 +20,7 @@ read で集めて、write は HITL。**auto-apply 経路は存在しない**（[
 ### A. 抽出（scan）
 
 1. `propose.generate`（mode=`commitment_scan`）で source から `commitment` 候補を生成する。各候補は `title` / `direction`（`owed_by_me` / `owed_to_me`）/ `dueDate?` / `person?` / `sourceExternalIds[]`。重い推論はホスト側で行う（[ADR-0006](../../adr/0006-ml-delegation.md)）
-2. `propose.list`（`state=pending`、`kind` で絞り可）で生成済み候補を一覧し、**ユーザーに提示して確認を取る**
+2. `propose.list`（`state=pending`）で生成済み候補を一覧し、**ユーザーに提示して確認を取る**（`commitment` 候補は `propose.list` の `kind` フィルタ対象外なので、`mode` / `summary` で見分ける）
 3. ユーザーが承認した候補のみ `propose.apply` で適用する（`CommitmentOpened` を append → 台帳に `open` 登録、idempotent）。**不要な候補は `propose.reject`（任意で理由）で却下する**
 
 ### B. 確認（list）
