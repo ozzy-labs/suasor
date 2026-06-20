@@ -26,9 +26,11 @@ Suasor は下書き**テキスト**を作る（`reply-draft`＝`ReplyDraftPropos
 
 1. **local export のみ** — 外部 SaaS 送信・connector source への書き戻しはしない（[ADR-0003](0003-local-first-and-content-minimization.md) §2/§3・[ADR-0007](0007-connector-contract.md) を維持）。egress なし。
 2. **`draft.export`（write / HITL）** — `{ content, filename, format: "md" | "txt", sourceExternalId? }` を受け、`[export].dir` 配下に書き出して path を返す。`readOnlyHint: false`、auto-apply なし（[ADR-0004](0004-mcp-agent-boundary-and-hitl.md)）。Markdown / プレーンテキスト先行。
-3. **sandbox 制約** — `[export].dir`（既定 `<configDir>/exports/`）配下のみに書く。**path traversal（`..` / 絶対パス脱出）を拒否**。任意パスへの書き込みは不可（NFR-PRV）。
-4. **`local` connector root と重複させない** — `[export].dir` が `[connectors.local].roots` 配下だと、書き出した下書きが次の sync で**再取り込みされるフィードバックループ**になる（[ADR-0023](0023-local-filesystem-connectors.md)）。重複を tool error で拒否し、既定も roots と被らない場所にする。
-5. **body-less 監査 event `DraftExported`**（[ADR-0002](0002-event-sourced-architecture.md)） — `{ path, sourceExternalId?, format, exportedAt }` を append（**body は持たない**）。これで「write tool = event を append」の規律と content-minimization（event に本文を残さない・本文は export ファイルにのみ存在）を両立。projection は持たない（監査ログのみ）。**replay 時はファイルを再生成しない**（副作用は再実行せず provenance だけ畳む。`ConnectorSyncCompleted` と同じ扱い）。
+3. **sandbox 制約** — `[export].dir`（既定 `<configDir>/exports/`）配下のみに書く。`filename` は **basename 扱い**で `[export].dir` 直下に限定し、`/`・`\`・`..`・絶対パスは拒否（path traversal 不可、NFR-PRV）。比較は realpath（絶対パス解決）後に containment 判定する。`[export].dir` が無ければ tool が sandbox 内に作成（mkdir -p 相当）。任意パスへの書き込みは不可。
+4. **`local` connector root と重複させない** — `[export].dir` が `[connectors.local].roots` の**配下または一致**だと、書き出した下書きが次の sync で**再取り込みされるフィードバックループ**になる（[ADR-0023](0023-local-filesystem-connectors.md)）。両者を realpath 解決して containment を判定し、重複時は tool error で拒否。既定も roots と被らない場所にする。
+5. **body-less 監査 event `DraftExported`**（[ADR-0002](0002-event-sourced-architecture.md)） — `{ path, sourceExternalId?, format, exportedAt }` を append（**body は持たない**）。これで「write tool = event を append」の規律と content-minimization（event に本文を残さない・本文は export ファイルにのみ存在）を両立。projection は持たない（監査ログのみ。reducer は no-op = `ConnectorSyncCompleted` と同じ先例、`src/projections/reducer.ts`）。
+   - **順序**: まず**ファイル書き込み → 成功時のみ `DraftExported` を append**（write 失敗時は tool error・event を残さない＝監査の嘘を作らない。append が落ちても orphan ファイルが残るだけで実害最小）。
+   - **replay**: 副作用（ファイル書き込み）は再実行せず、reducer の no-op に畳むだけ（`projections rebuild` 後も drift なし）。既存ファイルとの衝突は連番付与（`name.md` → `name-1.md`）で非破壊を既定とする。
 6. **Office 形式は段階化** — docx/xlsx/pptx は md→Office の composition サイドカー（markitdown 抽出 [ADR-0024](0024-document-extraction-sidecar.md) の逆方向・thin client・import-clean・[ADR-0006](0006-ml-delegation.md)）で別 Issue。本 ADR の初期スコープは md/txt。
 
 ## Consequences
