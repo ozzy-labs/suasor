@@ -314,6 +314,7 @@ resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
 folder 配下のファイルを取り込む（`box-typescript-sdk-gen`）。
 
 - **token**: Developer / OAuth access token（対象 folder の read scope）。env override `SUASOR_CONNECTOR_BOX_TOKEN`、keychain account `connector:box:token`
+  - **token 期限の注意**: Box の **developer token は 1 時間で失効する**（手元の検証・小規模 sync 向け）。大規模 sync や定期実行では失効のたびに `auth set` で token を取り直すか、失効しない **OAuth2 / JWT（server auth）token** を使うことを推奨する。
 - **config**:
 
 ```toml

@@ -5,10 +5,13 @@
  *
  * - **read-only** — only Graph `GET` collection endpoints are called; nothing is
  *   written back (ADR-0003).
- * - **delta** — Graph collections are paged via `@odata.nextLink`. The connector
- *   walks every page each run and relies on the body fingerprint (sync service
+ * - **pagination + fingerprint** — Graph collections are paged via
+ *   `@odata.nextLink` (the `/delta` endpoint is *not* used). The connector walks
+ *   every page each run and relies on the body fingerprint (sync service
  *   SHA-256) for change detection (FR-ING-3); no per-run cursor is stored, so
  *   `finalize` returns `cursor: null` like other fingerprint-based connectors.
+ *   Transient `429` responses are retried by the SDK's default RetryHandler
+ *   (`initWithMiddleware`), so the connector does not add its own retry loop.
  * - **identity** — `msgraph:<resource>:<id>` (cross-source-unique, resource-
  *   prefixed, ADR-0007). `source_type` is one of `ms365_mail`, `ms365_calendar`,
  *   `ms365_file`, `ms365_teams_message`.
