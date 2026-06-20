@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SourceRecord, SyncContext } from "../../src/connectors/contract.ts";
 import {
+  classifyRootIssue,
   createLocalConnector,
   LocalConnectorConfig,
+  LocalConnectorConfigSchema,
   type LocalFileEntry,
   type LocalWalkerLike,
 } from "../../src/connectors/local.ts";
@@ -40,6 +42,52 @@ describe("LocalConnectorConfig", () => {
   });
   test("rejects non-positive maxBytes", () => {
     expect(() => LocalConnectorConfig.parse({ maxBytes: 0 })).toThrow();
+  });
+  test("the structural schema does NOT touch the filesystem (synthetic roots ok)", () => {
+    // createLocalConnector / unit tests pass injected, non-existent paths; only
+    // the load-time schema variant validates the filesystem (Issue #188).
+    const c = LocalConnectorConfig.parse({ roots: ["/does/not/exist/anywhere"] });
+    expect(c.roots).toEqual(["/does/not/exist/anywhere"]);
+  });
+});
+
+describe("LocalConnectorConfig — load-time root validation (Issue #188)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "suasor-roots-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("classifyRootIssue: existing readable directory → null", () => {
+    expect(classifyRootIssue(dir)).toBeNull();
+  });
+  test("classifyRootIssue: non-existent path → issue message with the abs path", () => {
+    const missing = join(dir, "missing");
+    const issue = classifyRootIssue(missing);
+    expect(issue).not.toBeNull();
+    expect(issue).toContain(missing);
+  });
+  test("classifyRootIssue: a file (not a directory) → 'not a directory'", () => {
+    const file = join(dir, "f.txt");
+    writeFileSync(file, "x");
+    expect(classifyRootIssue(file)).toContain("not a directory");
+  });
+
+  test("LocalConnectorConfigSchema: existing root passes", () => {
+    const r = LocalConnectorConfigSchema.safeParse({ roots: [dir] });
+    expect(r.success).toBe(true);
+  });
+  test("LocalConnectorConfigSchema: non-existent root fails with a roots-pointed issue", () => {
+    const r = LocalConnectorConfigSchema.safeParse({ roots: [join(dir, "nope")] });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path[0] === "roots")).toBe(true);
+    }
+  });
+  test("LocalConnectorConfigSchema: empty roots passes (nothing to validate)", () => {
+    expect(LocalConnectorConfigSchema.safeParse({ roots: [] }).success).toBe(true);
   });
 });
 

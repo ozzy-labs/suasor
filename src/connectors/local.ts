@@ -32,7 +32,7 @@
  * collapse into one source automatically.
  */
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
+import { accessSync, type Dirent, constants as fsConstants, statSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { z } from "zod";
@@ -75,6 +75,63 @@ export const LocalConnectorConfig = z.object({
   maxBytes: z.number().int().positive().default(1_000_000),
 });
 export type LocalConnectorConfig = z.infer<typeof LocalConnectorConfig>;
+
+/**
+ * Classify why a configured root is unusable at load time, or `null` when it is
+ * an existing, readable directory. Uses **sync** `node:fs` so it composes with
+ * the config loader's synchronous `safeParse` slice validation (Issue #162 wiring
+ * in `validateConnectorSlices`). Mirrors the runtime walker guard
+ * (`defaultLocalWalkerFactory.walk`) but fails fast at config-load instead of
+ * silently warn+skip at sync time, so a typo'd path (`/Users/me/OnDrive`) surfaces
+ * immediately (Issue #188, ADR-0007 "no silent wrong answer").
+ *
+ * Symlinks are intentionally not special-cased here: the existing connector
+ * policy is to not follow symlinks during the walk, and `statSync` follows the
+ * link to validate the *target* is a readable directory — consistent with the
+ * load-time question "is this a usable root", separate from the walk-time
+ * "do not traverse symlinks" rule.
+ */
+export function classifyRootIssue(root: string): string | null {
+  const abs = resolve(root);
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(abs);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    return `root does not exist or is unreadable: ${abs} (${reason})`;
+  }
+  if (!st.isDirectory()) {
+    return `root is not a directory: ${abs}`;
+  }
+  try {
+    accessSync(abs, fsConstants.R_OK);
+  } catch {
+    return `root is not readable: ${abs}`;
+  }
+  return null;
+}
+
+/**
+ * Load-time variant of {@link LocalConnectorConfig} that additionally verifies
+ * each configured `roots` entry exists and is a readable directory, attaching a
+ * field-pointed issue per offending path. Registered as the connector's config
+ * slice schema (`registry.CONFIG_SCHEMAS`), so `loadConfig` rejects a bad root as
+ * `ConfigError` at startup instead of warn+skipping mid-sync (Issue #188).
+ *
+ * Kept separate from {@link LocalConnectorConfig} (the structural schema
+ * `createLocalConnector` parses) so connector construction and unit tests can use
+ * synthetic / injected paths without hitting the real filesystem — the
+ * filesystem precondition is a config-load concern, not a build-time one (parity
+ * with Slack's `validateSlackSince` living outside the structural schema).
+ */
+export const LocalConnectorConfigSchema = LocalConnectorConfig.superRefine((value, ctx) => {
+  value.roots.forEach((root, index) => {
+    const issue = classifyRootIssue(root);
+    if (issue !== null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["roots", index] });
+    }
+  });
+});
 
 export const LOCAL_CONNECTOR_NAME = "local";
 

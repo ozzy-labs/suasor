@@ -80,7 +80,11 @@ const CONFIG_SCHEMAS: Record<string, SchemaLoader> = {
   google: async () => (await import("./google.ts")).GoogleConnectorConfig,
   box: async () => (await import("./box.ts")).BoxConnectorConfig,
   web: async () => (await import("./web.ts")).WebConnectorConfig,
-  local: async () => (await import("./local.ts")).LocalConnectorConfig,
+  // Uses the load-time variant so each configured root is verified to exist and
+  // be a readable directory at `loadConfig` time (Issue #188), not warn+skipped
+  // mid-sync. The structural `LocalConnectorConfig` (no FS check) is what the
+  // connector itself parses at build time.
+  local: async () => (await import("./local.ts")).LocalConnectorConfigSchema,
 };
 
 /**
