@@ -168,6 +168,44 @@ describe("conversations — listConversations", () => {
   });
 });
 
+describe("conversations — joined mark / isMember (ADR-0011, #165)", () => {
+  test("channels report is_member; absent → false; DMs/MPIMs always true", async () => {
+    const { transport, usersTransport } = fakeConvos(
+      {
+        public_channel: [
+          { id: "C1", name: "joined", is_member: true },
+          { id: "C2", name: "not-joined", is_member: false },
+          { id: "C3", name: "unknown" }, // is_member absent → conservative false
+        ],
+        private_channel: [{ id: "G1", name: "secret", is_member: true }],
+        im: [{ id: "D1", user: "U9" }], // DM → always joined
+        mpim: [{ id: "G2", name: "mpdm-a--b--c" }], // MPIM → always joined
+      },
+      {},
+      { U9: { profile: { display_name: "Alice" } } },
+    );
+    const result = await listConversations("xoxb", { transport, usersTransport });
+    const byId = Object.fromEntries(result.conversations.map((c) => [c.id, c]));
+    expect(byId.C1?.isMember).toBe(true);
+    expect(byId.C2?.isMember).toBe(false);
+    expect(byId.C3?.isMember).toBe(false); // absent is_member is not joined
+    expect(byId.G1?.isMember).toBe(true);
+    expect(byId.D1?.isMember).toBe(true); // DM
+    expect(byId.G2?.isMember).toBe(true); // MPIM
+  });
+
+  test("DM name resolution preserves isMember", async () => {
+    const { transport, usersTransport } = fakeConvos(
+      { im: [{ id: "D1", user: "U9" }] },
+      {},
+      { U9: { profile: { display_name: "Alice" } } },
+    );
+    const result = await listConversations("xoxb", { transport, usersTransport });
+    expect(result.conversations[0]?.displayName).toBe("dm:Alice");
+    expect(result.conversations[0]?.isMember).toBe(true);
+  });
+});
+
 describe("conversations — renderConfigBlock", () => {
   test("emits a paste-ready [connectors.slack] block with id comments", async () => {
     const { transport } = fakeConvos({

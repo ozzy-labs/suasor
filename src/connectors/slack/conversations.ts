@@ -45,6 +45,15 @@ export interface SlackConversation {
   /** Best-effort human label (`#general`, `dm:U123`, the mpim's generated name). */
   readonly displayName: string;
   readonly isArchived: boolean;
+  /**
+   * Whether the token's principal is a member of this conversation (ADR-0011).
+   * Slack returns `is_member` for channels; DMs/MPIMs are always joined (they only
+   * exist for their participants). When `is_member` is absent on a channel we
+   * conservatively report `false` so the CLI never marks an unreachable channel as
+   * reachable — a channel the bot has not joined returns `not_in_channel` at sync
+   * time. Surfaced as a join mark so reachability is visible before configuring.
+   */
+  readonly isMember: boolean;
 }
 
 /** Result of a discovery sweep: rows plus any per-type listing-scope gaps. */
@@ -154,6 +163,7 @@ interface RawChannel {
   id?: string;
   name?: string;
   is_archived?: boolean;
+  is_member?: boolean;
   user?: string;
 }
 
@@ -164,7 +174,17 @@ function toConversation(type: ConversationType, raw: RawChannel): SlackConversat
   if (type === "im") displayName = `dm:${typeof raw.user === "string" ? raw.user : raw.id}`;
   else if (type === "mpim") displayName = name ?? "group-dm";
   else displayName = name ? `#${name}` : raw.id;
-  return { id: raw.id, type, name, displayName, isArchived: raw.is_archived === true };
+  // DMs / MPIMs only exist for their participants → always joined. For channels,
+  // trust Slack's `is_member`; absent → conservatively `false` (ADR-0011).
+  const isMember = type === "im" || type === "mpim" ? true : raw.is_member === true;
+  return {
+    id: raw.id,
+    type,
+    name,
+    displayName,
+    isArchived: raw.is_archived === true,
+    isMember,
+  };
 }
 
 /**
