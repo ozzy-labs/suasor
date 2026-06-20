@@ -101,10 +101,10 @@ channel メッセージを取り込む（`@slack/web-api`）。
 [connectors.slack]
 team = "T0123ABCD"            # id prefix（rename しても安定）
 channels = ["C0123ABCD"]      # 取り込み対象 channel id（空なら何もしない）
-since = "30d"                 # cold-start 下限（任意、ADR-0016）。30d / 4w / 12h / 2026-01-01
+since = "30d"                 # cold-start 下限（任意、ADR-0016）。相対 30d / 4w / 12h または ISO 日付 2026-01-01。不正値はロード時に ConfigError で fail-fast（#157）
 self_user_id = "U0SELF"       # 自分の Slack user id（任意、ADR-0012）。slack.demand.list の @mention 検出用
 [connectors.slack.channel_since]
-C0123ABCD = "90d"             # per-channel の since 上書き（任意、#57）。未指定 channel は since にフォールバック
+C0123ABCD = "90d"             # per-channel の since 上書き（任意、#57）。未指定 channel は since にフォールバック。許容フォーマットは since と同じ（不正値はロード時 ConfigError、#157）
 ```
 
 - **config（マルチ workspace、[ADR-0014](../adr/0014-slack-multi-workspace.md)）**: `[connectors.slack.workspaces.<alias>]` を並べると 1 install で N workspace を取り込む。flat な `[connectors.slack]`（上）は `default` alias として後方互換に読む。
@@ -140,7 +140,7 @@ suasor slack sync                      # （= <connector> sync）取り込み
 - **demand signal**（[ADR-0012](../adr/0012-slack-demand-digest.md)）: 取り込み済み `slack_message` から @mention（`self_user_id` 設定時）/ DM を MCP `slack.demand.list` で「読むべきが未処理」signal として取得（query 導出・追加 fetch なし）。`next-actions` / `personal-brief` skill が priority 上位に組み込む。
 - **engagement axis**（[ADR-0013](../adr/0013-slack-engagement-axis.md)）: `suasor slack conversations --sort=last_self_post` で「自分が最後に投稿した時刻」順に会話を並べる。`search.messages`（`from:me`）を使うため **User Token（`xoxp-`）専用**で、Bot Token では `N/A` に degrade（通常順で列挙）。値は Slack 全文 index の遅延により概算。表の `last_self_post` 列は人間可読時刻（`YYYY-MM-DD HH:MM (<相対時刻>)`）で出す（`--json` は raw ts 維持、#84）。
 - **rate-limit retry**（[ADR-0019](../adr/0019-slack-fetch-rate-limit-retry.md)）: 運用/discovery/auth/search の fetch 経路（`users.conversations` / `users.info` / `auth.test` / `search.messages`）は 429 で即死せず、`Retry-After` を尊重（無ければ 1s/2s/4s backoff・既定 3 試行）して回復する（共有 `slackFetch`）。sync hot path（`conversations.history` / `replies`）は `@slack/web-api` の既定 retry に委譲（二重に持たない）。
-- **date floor / recovery**（[ADR-0016](../adr/0016-slack-sync-date-floor.md)）: `since`（per-workspace 可）で cold-start の下限を設ける。下限は saved cursor が無い channel にのみ適用され、resume 済み channel は cursor を優先する。運用 verb:
+- **date floor / recovery**（[ADR-0016](../adr/0016-slack-sync-date-floor.md)）: `since`（per-workspace 可）で cold-start の下限を設ける。下限は saved cursor が無い channel にのみ適用され、resume 済み channel は cursor を優先する。`since` / `channel_since` の値は **config ロード時に解析可否を検証**し、相対（`30d` / `4w` / `12h`）にも ISO 日付（`2026-01-01`）にも解せない値（例: `"3 weeks"`）は `ConfigError` で fail-fast する（無音で「floor 無し」に化けて全履歴 backfill が暴発するのを防ぐ、[ADR-0007](../adr/0007-connector-contract.md) / #157）。運用 verb:
   - `suasor slack status [--json]` — 保存中の cursor（workspace / channel ごとの resume ts）を表示。resume ts は人間可読時刻（`YYYY-MM-DD HH:MM (<相対時刻>)`）で出し、「どの channel をいつまで取り込んだか」が一目で分かる（`--json` は raw ts 維持、#84）
   - `suasor slack cursor reset --channel C1,C2 | --all [--workspace A] [--yes]` — cursor を消し、次回 sync で `since` floor から取り直す（`--yes` 無しは preview のみ）
   - `suasor slack cursor backfill --channel C1 --since 180d [--workspace A] [--yes]` — 指定 channel の cursor を `--since` floor（現在位置より過去）へ下げ、次回 sync で未取得 window を取り直す（floor より古い backfill 用、#57）

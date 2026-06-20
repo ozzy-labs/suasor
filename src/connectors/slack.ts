@@ -21,6 +21,7 @@
  *   override, NFR-PRV-4); it is never read from config.
  */
 import { z } from "zod";
+import { ConfigError } from "../config/error.ts";
 import type {
   Connector,
   ConnectorConfig,
@@ -170,6 +171,54 @@ export function parseSinceToTs(since: string, nowMs: number): string | null {
   const parsed = Date.parse(since.trim());
   if (Number.isNaN(parsed)) return null;
   return `${Math.floor(parsed / 1000)}.000000`;
+}
+
+/**
+ * Whether a `since` floor (ADR-0016) is parseable — a relative `30d` / `4w` /
+ * `12h` or an ISO date / datetime. Time-independent: parseability does not
+ * depend on the current clock, so a fixed `0` epoch is passed to
+ * {@link parseSinceToTs}. Used by config-load validation to fail fast on values
+ * that would otherwise silently degrade to "no floor" (ADR-0007).
+ */
+export function isSinceParseable(since: string): boolean {
+  return parseSinceToTs(since, 0) !== null;
+}
+
+/**
+ * Validate every `since` / `channel_since` value in a parsed Slack config so an
+ * unparseable floor fails fast at config-load time instead of silently becoming
+ * "no floor" mid-sync (ADR-0007 "no silent wrong answer", Issue #157). Collects
+ * all offending entries and throws a single {@link ConfigError}; a valid config
+ * returns without throwing.
+ */
+export function validateSlackSince(config: SlackConnectorConfig): void {
+  const issues: string[] = [];
+
+  const checkSince = (value: string | undefined, label: string): void => {
+    if (value !== undefined && !isSinceParseable(value)) {
+      issues.push(
+        `${label}: invalid since '${value}' (expected relative '30d'/'4w'/'12h' or ISO date '2026-01-01')`,
+      );
+    }
+  };
+  const checkChannelSince = (map: Record<string, string> | undefined, label: string): void => {
+    for (const [channel, value] of Object.entries(map ?? {})) {
+      checkSince(value, `${label}.${channel}`);
+    }
+  };
+
+  // Flat / default workspace.
+  checkSince(config.since, "connectors.slack.since");
+  checkChannelSince(config.channel_since, "connectors.slack.channel_since");
+  // Named workspaces.
+  for (const [alias, ws] of Object.entries(config.workspaces ?? {})) {
+    checkSince(ws.since, `connectors.slack.workspaces.${alias}.since`);
+    checkChannelSince(ws.channel_since, `connectors.slack.workspaces.${alias}.channel_since`);
+  }
+
+  if (issues.length > 0) {
+    throw new ConfigError("invalid Slack connector configuration", issues);
+  }
 }
 
 /** The more recent (numerically larger) of two optional ts floors. */
@@ -489,6 +538,9 @@ export function createSlackConnector(
   options: SlackConnectorOptions = {},
 ): Connector {
   const parsed = SlackConnectorConfig.parse(config ?? {});
+  // Fail fast on an unparseable `since` / `channel_since` floor rather than
+  // letting it silently degrade to "no floor" mid-sync (ADR-0007, Issue #157).
+  validateSlackSince(parsed);
   return new SlackConnector(
     parsed,
     options.clientFactory ?? defaultSlackClientFactory,
