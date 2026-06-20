@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.11](https://github.com/ozzy-labs/suasor/compare/v0.1.10...v0.1.11) (2026-06-20)
+
+
+### Features
+
+* **cli:** `store info` + embeddings/extraction drilldown + doctor 保守ヒント ([#221](https://github.com/ozzy-labs/suasor/issues/221)) ([3d3eac0](https://github.com/ozzy-labs/suasor/commit/3d3eac0b4941857f6e7583c70c57dfef6fba1190))
+* **cli:** onboard を非 Slack connector に拡張（discovery→config block） ([#220](https://github.com/ozzy-labs/suasor/issues/220)) ([e86d703](https://github.com/ozzy-labs/suasor/commit/e86d703460948380f0368904c14a99e573b95c80))
+* **cli:** source list / source forget CLI 公開 ([#216](https://github.com/ozzy-labs/suasor/issues/216)) ([a0f0e47](https://github.com/ozzy-labs/suasor/commit/a0f0e4796648b3798100c478b8422bb36d744a84))
+* **cli:** sync run イベント + `sync status`（freshness）※ADR 先行 ([#219](https://github.com/ozzy-labs/suasor/issues/219)) ([adc8716](https://github.com/ozzy-labs/suasor/commit/adc8716e4f09e73faf468df345172d5bbbf85c77))
+* **connectors:** `auth test` per-feature readiness 横展開 ([#205](https://github.com/ozzy-labs/suasor/issues/205)) ([b5b8833](https://github.com/ozzy-labs/suasor/commit/b5b8833f830e8a5ac75784b02244533f14075908))
+* **connectors:** `google calendars` discovery (ADR-0030) ([#211](https://github.com/ozzy-labs/suasor/issues/211)) ([5bd689e](https://github.com/ozzy-labs/suasor/commit/5bd689e31f06d1115947887173688b4a20bca830))
+* **connectors:** box folders discovery (ADR-0030) ([#214](https://github.com/ozzy-labs/suasor/issues/214)) ([39dba59](https://github.com/ozzy-labs/suasor/commit/39dba598bf05e7b3ae183325946235d03c87a30a))
+* **connectors:** generic discovery base + `github repos` (ADR-0030) ([#209](https://github.com/ozzy-labs/suasor/issues/209)) ([dd0f6dd](https://github.com/ozzy-labs/suasor/commit/dd0f6dd85ae3bcb44dcf6f4024e23b573bc75e5b))
+* **mcp:** brief 完全性シグナル（未設定カテゴリの warnings） ([#212](https://github.com/ozzy-labs/suasor/issues/212)) ([7dc6272](https://github.com/ozzy-labs/suasor/commit/7dc62727da9e2019355fcecf1834693ddaf2d328))
+* **mcp:** propose.batch — atomic apply/reject + rejected listing ([#217](https://github.com/ozzy-labs/suasor/issues/217)) ([51ec140](https://github.com/ozzy-labs/suasor/commit/51ec140475a375c3f58eadc112b7f7c9cc72e918))
+* **mcp:** structured errors (code/hint) + startup config readiness (ADR-0031) ([#215](https://github.com/ozzy-labs/suasor/issues/215)) ([50f84d3](https://github.com/ozzy-labs/suasor/commit/50f84d36b876e00dccdbd35aeb4e6c447d64719f))
+* **mcp:** task/commitment/inbox フィルタ拡張（dueSoon/person/sourceType） ([#218](https://github.com/ozzy-labs/suasor/issues/218)) ([d917d04](https://github.com/ozzy-labs/suasor/commit/d917d0442b97770f0d318e8462bb0cca32d5858e))
+* **skills:** frontmatter スキーマ拡張 + skills search/info + 利用ガイド ※ADR 先行 ([#208](https://github.com/ozzy-labs/suasor/issues/208)) ([7c82eca](https://github.com/ozzy-labs/suasor/commit/7c82eca246f2af5387bf8cb4599ea9a9a9e3a861))
+
+
+### Bug Fixes
+
+* **connectors:** empty/no-op config を sync 前に warn（全 connector） ([#206](https://github.com/ozzy-labs/suasor/issues/206)) ([2d046c1](https://github.com/ozzy-labs/suasor/commit/2d046c156fa048ce520760ef5ffce8ff93fa88f3))
+* **connectors:** github fetch パスに 429 retry + API version pin 更新 ([#229](https://github.com/ozzy-labs/suasor/issues/229)) ([5b998d9](https://github.com/ozzy-labs/suasor/commit/5b998d990996adcc2fa598a9c01784e9e82ebe85))
+* **connectors:** local roots を config ロード時にパス検証 ([#188](https://github.com/ozzy-labs/suasor/issues/188)) ([#210](https://github.com/ozzy-labs/suasor/issues/210)) ([64f4e0e](https://github.com/ozzy-labs/suasor/commit/64f4e0ef03393d5c58ca816a9278674aaee4fdab))
+* **connectors:** per-resource エラー分離（github/google/box/ms-graph） ([#213](https://github.com/ozzy-labs/suasor/issues/213)) ([b7e2860](https://github.com/ozzy-labs/suasor/commit/b7e2860d52603f73b6a4a844e30420a0c1def19a))
+* **retrieval:** search 透明性（strategy/totalHits/analyzedQuery）+ filter help ([#203](https://github.com/ozzy-labs/suasor/issues/203)) ([8dc0b53](https://github.com/ozzy-labs/suasor/commit/8dc0b53c79cfe8ebbdac21d00129b4bdc2a066d7))
+
 ## [0.1.10](https://github.com/ozzy-labs/suasor/compare/v0.1.9...v0.1.10) (2026-06-20)
 
 
