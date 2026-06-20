@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.6](https://github.com/ozzy-labs/suasor/compare/v0.1.5...v0.1.6) (2026-06-20)
+
+
+### Features
+
+* **cli:** embeddings 保守 CLI — status / rebuild / drain / find-duplicates ([#107](https://github.com/ozzy-labs/suasor/issues/107)) ([35bcb6c](https://github.com/ozzy-labs/suasor/commit/35bcb6c3252f88956ea56981fed3a8e6936a4285))
+* **cli:** introspection verbs — connectors list / mcp tools ([#100](https://github.com/ozzy-labs/suasor/issues/100)) ([2735c4b](https://github.com/ozzy-labs/suasor/commit/2735c4b7cdc4716fa72e889df4e2cc25a96aea2b))
+* **commitment:** commitment 台帳 (scan/list/resolve/dismiss/reopen) ([#111](https://github.com/ozzy-labs/suasor/issues/111)) ([bd7e3d2](https://github.com/ozzy-labs/suasor/commit/bd7e3d206dd8a4e656878c9d7e5d3f3bb94b2384))
+* **connectors:** add generic local filesystem connector (ADR-0023) ([#110](https://github.com/ozzy-labs/suasor/issues/110)) ([9b97643](https://github.com/ozzy-labs/suasor/commit/9b9764347222f04395a3bf38cb4c564fa012ba5b))
+* **connectors:** 非 Slack connector の auth set / auth test CLI (github/ms-graph/google/box) ([#101](https://github.com/ozzy-labs/suasor/issues/101)) ([e5a1d0c](https://github.com/ozzy-labs/suasor/commit/e5a1d0cf62c5a2edfe0d6b0bc61801fadbac463b))
+* **github:** sync に notifications 取り込みを追加 ([#106](https://github.com/ozzy-labs/suasor/issues/106)) ([b77e4d5](https://github.com/ozzy-labs/suasor/commit/b77e4d533c73366340c7e338cd984015abc19441))
+* **mcp:** graph.expand に direction パラメータ追加 (graph.trace 相当, ADR-0020) ([#105](https://github.com/ozzy-labs/suasor/issues/105)) ([6c06add](https://github.com/ozzy-labs/suasor/commit/6c06add0101c5fe75d02caddc95da11064ff9f73)), closes [#97](https://github.com/ozzy-labs/suasor/issues/97)
+* **mcp:** person identity resolution — person.list/merge/split (HITL) ([#108](https://github.com/ozzy-labs/suasor/issues/108)) ([d02d4a2](https://github.com/ozzy-labs/suasor/commit/d02d4a2bcad6f803627cac7b068922c1116439db))
+* **mcp:** propose ライフサイクル補完 — propose.list / propose.reject ([#103](https://github.com/ozzy-labs/suasor/issues/103)) ([836afed](https://github.com/ozzy-labs/suasor/commit/836afeda163a4eb345f32ae20b9659756ff40de5))
+* **mcp:** write tools — decision.record / inbox.add / inbox.triage (HITL) ([#102](https://github.com/ozzy-labs/suasor/issues/102)) ([3d0242e](https://github.com/ozzy-labs/suasor/commit/3d0242e62c0887ea3cf69c284c6e8acd6a845a6d))
+* **mcp:** 手動リンク CRUD — link.add / link.remove (HITL) ([#104](https://github.com/ozzy-labs/suasor/issues/104)) ([5d4b69a](https://github.com/ozzy-labs/suasor/commit/5d4b69ac863c32aa9b63e2faccb0d6ae0fd5bafa))
+* **slack:** CLI UX 改善 — status 可読化 + conversations 進捗表示 ([#98](https://github.com/ozzy-labs/suasor/issues/98)) ([7259e87](https://github.com/ozzy-labs/suasor/commit/7259e8788d28dd93c13ba68a91ebe8d4064df949))
+
 ## [0.1.5](https://github.com/ozzy-labs/suasor/compare/v0.1.4...v0.1.5) (2026-06-19)
 
 
