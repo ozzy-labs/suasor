@@ -91,6 +91,14 @@ export interface LocalFileEntry {
   content?: string;
 }
 
+/**
+ * Extensions sent to the document-extraction sidecar (ADR-0024) when extraction
+ * is enabled. Disjoint from {@link DEFAULT_TEXT_EXTENSIONS} (those are read as
+ * text directly); these are binaries the sidecar converts. The sync service
+ * only uses this when an extractor is configured — otherwise they stay name-only.
+ */
+const EXTRACTABLE_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
+
 /** Stable per-path id component (SHA-1 of the absolute path, hex). */
 function pathId(path: string): string {
   return createHash("sha1").update(path).digest("hex");
@@ -116,6 +124,18 @@ function toRecord(entry: LocalFileEntry): SourceRecord {
       ? `${entry.name}\n\n${entry.content}`
       : entry.name;
   const contentHash = entry.content !== undefined ? sha256Hex(entry.content) : "";
+  // Office/PDF binaries (not read as text) are offered to the extraction sidecar
+  // (ADR-0024). Lazy: the sync service calls readBytes only for new/changed
+  // records when an extractor is configured. fingerprint stays mtime:size-based
+  // (the file entity), so extraction never affects delta detection.
+  const ext = extname(entry.name).toLowerCase();
+  const extractable = EXTRACTABLE_EXTENSIONS.has(ext)
+    ? {
+        filename: entry.name,
+        byteSize: entry.size,
+        readBytes: async (): Promise<Uint8Array> => readFile(entry.path),
+      }
+    : undefined;
   return {
     externalId: `local:${pathId(entry.path)}`,
     sourceType: "local_file",
@@ -123,6 +143,7 @@ function toRecord(entry: LocalFileEntry): SourceRecord {
     observedAt: new Date(entry.mtimeMs).toISOString(),
     fingerprint: sha256Hex(`${entry.mtimeMs}:${entry.size}:${contentHash}`),
     meta: { path: entry.path, name: entry.name, size: entry.size },
+    ...(extractable !== undefined ? { extractable } : {}),
   };
 }
 

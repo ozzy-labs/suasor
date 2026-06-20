@@ -62,6 +62,25 @@ export interface SourceRecord {
    * change detection for free even without a delta API.
    */
   readonly fingerprint?: string;
+  /**
+   * Optional document-extraction handle (ADR-0024). When present **and** an
+   * extractor is configured, the sync service replaces `body` with the sidecar's
+   * extracted text for new/changed records (before fingerprint diff is recorded
+   * and before embedding). Lazy: `readBytes` is only called when extraction will
+   * actually run (not for unchanged records or when extraction is disabled), so
+   * connectors attach it without paying the read cost up-front. Connectors that
+   * produce no extractable binaries omit it; `body` then stays as set (e.g.
+   * name-only). `fingerprint` is unaffected — it keys off the file entity
+   * (e.g. local's `mtime:size`), so extraction never changes delta detection.
+   */
+  readonly extractable?: {
+    /** Original filename, so the sidecar can dispatch by extension. */
+    readonly filename: string;
+    /** Byte size, so the sync service can skip oversized inputs (ADR-0024 §5). */
+    readonly byteSize: number;
+    /** Read the raw file bytes to send to the extractor (called at most once). */
+    readBytes(): Promise<Uint8Array>;
+  };
 }
 
 /** Outcome of one connector `sync` pass, returned to the sync service. */

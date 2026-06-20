@@ -33,6 +33,7 @@ import {
   DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_OLLAMA_MODEL,
   type EmbeddingConfig,
+  type ExtractionConfig,
 } from "../config/schema.ts";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import type { Store } from "../db/index.ts";
@@ -134,6 +135,8 @@ export interface McpServerDeps {
     config: {
       connectors: Record<string, Record<string, unknown>>;
       embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
+      /** `[extraction]` section; enables Office/PDF body extraction at ingest (ADR-0024). */
+      extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
     };
   };
 }

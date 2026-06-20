@@ -33,13 +33,19 @@ class ConnectorSyncCommand extends Command {
 
   override async execute(): Promise<number> {
     const name = (this.constructor as typeof ConnectorSyncCommand).connectorName;
-    const [{ loadConfig }, { Store }, { loadConnector, syncConnector }, { createEmbedder }] =
-      await Promise.all([
-        import("../../config/index.ts"),
-        import("../../db/index.ts"),
-        import("../../connectors/index.ts"),
-        import("../../retrieval/embedding/index.ts"),
-      ]);
+    const [
+      { loadConfig },
+      { Store },
+      { loadConnector, syncConnector },
+      { createEmbedder },
+      { createExtractor },
+    ] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../connectors/index.ts"),
+      import("../../retrieval/embedding/index.ts"),
+      import("../../extraction/index.ts"),
+    ]);
 
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
@@ -65,6 +71,11 @@ class ConnectorSyncCommand extends Command {
     // never fail the ingest — FTS still reflects the data.
     const embedder = createEmbedder(config.embedding);
 
+    // Extractor from [extraction] (null when disabled). When enabled, Office/PDF
+    // bodies are converted to text at ingest (best-effort, ADR-0024); failures
+    // are surfaced as a warning and never fail the ingest (name-only fallback).
+    const extractor = createExtractor(config.extraction);
+
     // Indeterminate progress on stderr while the stream drains (TTY-gated; a
     // no-op in CI / pipes so stdout/--json stay clean). opshub ADR-0026 parity.
     const progress = createProgress(
@@ -78,6 +89,8 @@ class ConnectorSyncCommand extends Command {
       const outcome = await syncConnector(store, connector, {
         ...(this.full ? { cursor: null } : {}),
         embedder,
+        extractor,
+        extractionMaxBytes: config.extraction.maxBytes,
         onProgress: () => progress.tick(),
         onWarn: (message) => {
           progress.finish();
@@ -85,6 +98,8 @@ class ConnectorSyncCommand extends Command {
         },
         onEmbedError: (error) =>
           this.context.stderr.write(`warning: ${name} embedding skipped: ${error.message}\n`),
+        onExtractError: (error) =>
+          this.context.stderr.write(`warning: ${name} extraction skipped: ${error.message}\n`),
       });
       progress.finish();
 
@@ -94,9 +109,10 @@ class ConnectorSyncCommand extends Command {
       }
 
       const embedNote = embedder ? `, ${outcome.embedded} embedded` : "";
+      const extractNote = extractor ? `, ${outcome.extracted} extracted` : "";
       this.context.stdout.write(
         `${name} sync: ${outcome.observed} observed, ${outcome.updated} updated, ` +
-          `${outcome.unchanged} unchanged${embedNote}.\n`,
+          `${outcome.unchanged} unchanged${embedNote}${extractNote}.\n`,
       );
       return 0;
     } catch (cause) {
