@@ -100,4 +100,32 @@ describe("suasor search", () => {
     expect(code).toBe(0);
     expect(JSON.parse(out).strategy).toBe("like-fallback");
   });
+
+  test("hints on stderr when the embedding backend is disabled (Issue #159)", async () => {
+    await seed("deploy the rocket");
+    const { code, out, err } = await run(["search", "rocket"]);
+    expect(code).toBe(0);
+    expect(err).toContain("embedding disabled");
+    expect(err).toContain("docs/guide/embedding.md");
+    // stdout (the result body) must stay clean of the hint.
+    expect(out).not.toContain("embedding disabled");
+  });
+
+  test("emits no hint when the embedding backend is enabled (Issue #159)", async () => {
+    await Bun.write(join(dir, "config.toml"), '[embedding]\nbackend = "ollama"\n');
+    await seed("deploy the rocket");
+    const { code, err } = await run(["search", "rocket"]);
+    expect(code).toBe(0);
+    expect(err).not.toContain("embedding disabled");
+  });
+
+  test("--json suppresses the hint so stdout/stderr stay pipe-clean (Issue #159)", async () => {
+    await seed("deploy the rocket");
+    const { code, out, err } = await run(["search", "--json", "rocket"]);
+    expect(code).toBe(0);
+    expect(err).not.toContain("embedding disabled");
+    expect(out).not.toContain("embedding disabled");
+    // stdout still parses as the result JSON.
+    expect(JSON.parse(out).strategy).toBe("fts");
+  });
 });

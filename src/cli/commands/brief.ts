@@ -68,11 +68,18 @@ export class BriefCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { Store }, { buildBrief }, { resolveSelfUserIds }] = await Promise.all([
+    const [
+      { loadConfig },
+      { Store },
+      { buildBrief },
+      { resolveSelfUserIds },
+      { emitEmbeddingDisabledHint },
+    ] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
       import("../../mcp/queries.ts"),
       import("../../connectors/slack.ts"),
+      import("../embedding-hint.ts"),
     ]);
 
     const now = Date.now();
@@ -108,6 +115,11 @@ export class BriefCommand extends Command {
       this.context.stderr.write("error: storage.dbPath is not configured\n");
       return 1;
     }
+
+    // The brief's recall-backed material degrades to FTS when embeddings are
+    // disabled — surface that on stderr (Issue #159). Suppressed under --json so
+    // a piped bundle stays clean.
+    emitEmbeddingDisabledHint(this.context.stderr, config.embedding.backend, this.json);
 
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {

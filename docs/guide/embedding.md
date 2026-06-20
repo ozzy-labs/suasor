@@ -6,6 +6,7 @@ ML はプロセス内で計算せず、**ローカルサイドカー（Ollama）
 
 - 無効（既定）でも `search` は完全に動く。`recall.search` は空 + `embedding_disabled` シグナルを返し、host は `search` に寄る（graceful degradation）
 - 有効化すると、取り込み時に新規 / 本文変更 source が埋め込まれて `recall.search` の対象になる
+- backend が無効なまま `suasor search` / `suasor brief` を実行すると、意味検索が効かず FTS のみで検索している旨を **stderr に 1 行ヒント**する（stdout / `--json` は汚さない）。常時 FTS 運用なら無視してよい
 
 ## Ollama サイドカーのセットアップ
 
