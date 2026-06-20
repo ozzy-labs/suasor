@@ -121,11 +121,13 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | tool | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|---|
-| `task.list` | `state?: string` / `dueBefore?: string` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
+| `task.list` | `state?: string` / `dueBefore?: string` / `dueWithinDays?: int` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
 | `decision.list` | （なし） | `recorded_at`（`recordedAfter` / `recordedBefore`） | `{ "decisions": [...] }` |
-| `inbox.list` | `state?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
+| `inbox.list` | `state?: string` / `sourceType?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
 
-`task.list` の各 task レコードは `dueDate` / `priority`（low / normal / high・null 可）と、read 時派生の `overdue`（`dueDate < now AND state ∈ {open, in_progress}`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）を持つ。`dueBefore` は `due_date < ?` で絞り（null due は除外）、`overdue: true` は overdue な task のみに絞る。overdue は projection に焼かず read 時に計算する（`now` は決定論テスト用に注入可能、replay 不変性を保つため・[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+`task.list` の各 task レコードは `dueDate` / `priority`（low / normal / high・null 可）と、read 時派生の `overdue`（`dueDate < now AND state ∈ {open, in_progress}`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）を持つ。`dueBefore` は `due_date < ?` で絞り（null due は除外）、`dueWithinDays: N` は「今日/今週の優先」観点で `due_date < now + N 日`（上限 exclusive、null due 除外）に絞る（`now` は overdue と同じく注入可能で決定論的）、`overdue: true` は overdue な task のみに絞る。overdue は projection に焼かず read 時に計算する（`now` は決定論テスト用に注入可能、replay 不変性を保つため・[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+
+`inbox.list` の `sourceType` は inbox projection に `source_type` 列が無いため `sources` を JOIN して解決する（`sources.external_id = inbox.source_external_id`）。「inbox の中で slack_message だけ」のように元 source 種別で絞れる。
 
 ### `slack.demand.list`（[ADR-0012](../adr/0012-slack-demand-digest.md)）
 
@@ -501,7 +503,7 @@ commitment_scan (propose.generate → propose.apply)
    └───────────┘
 ```
 
-- **`commitment.list`（read）**: `open` / `resolved` / `dismissed` の state と `owed_by_me` / `owed_to_me` の direction でフィルタ。`updated_at` の時間フィルタ可。`brief` / `next-actions` skill が demand と並べて「やるべきこと」signal として取り込める。
+- **`commitment.list`（read）**: `open` / `resolved` / `dismissed` の state、`owed_by_me` / `owed_to_me` の direction、`person`（関連 person 完全一致 = 特定の相手の約束を追う）でフィルタ。`updated_at` の時間フィルタ可。`brief` / `next-actions` / `commitment-chase` skill が demand と並べて「やるべきこと」signal として取り込める。
 - **`commitment.resolve`（write / HITL）**: `open` → `resolved`（`CommitmentResolved` append）。idempotent（既 `resolved` は no-op）。`dismissed` からは `invalid_state`（先に reopen）、該当なしは `missing`。
 - **`commitment.dismiss`（write / HITL）**: `open` → `dismissed`（誤検出/不要、`CommitmentDismissed` append）。idempotent。`resolved` からは `invalid_state`、該当なしは `missing`。
 - **`commitment.reopen`（write / HITL）**: `resolved` / `dismissed` → `open`（`CommitmentReopened` append）。既 `open` は no-op、該当なしは `missing`。

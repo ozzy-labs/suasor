@@ -5,6 +5,7 @@ import {
   deriveBriefWarnings,
   expandGraph,
   getSource,
+  listCommitments,
   listDecisions,
   listInbox,
   listLinks,
@@ -186,6 +187,33 @@ describe("listTasks scheduling / overdue (ADR-0028)", () => {
     expect(before.map((t) => t.id).sort()).toEqual(["done", "past"]);
   });
 
+  test("dueWithinDays keeps tasks due before now + N days, excluding null due", () => {
+    // now = 06-20; +7d horizon = 06-27 (exclusive). past (06-10) + done (06-01)
+    // are < 06-27; future (06-30) is beyond it; nodue has no due date.
+    const within = listTasks(sqlite(), { dueWithinDays: 7, now: NOW });
+    expect(within.map((t) => t.id).sort()).toEqual(["done", "past"]);
+  });
+
+  test("dueWithinDays horizon is exclusive on the upper bound", () => {
+    // A task due exactly at now + N days is past the exclusive horizon.
+    store.record({
+      type: "TaskProposed",
+      taskId: "edge",
+      title: "due at horizon",
+      dueDate: "2026-06-27T00:00:00.000Z", // = NOW (06-20) + 7d
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "edge", state: "open" });
+    const within = listTasks(sqlite(), { dueWithinDays: 7, now: NOW });
+    expect(within.map((t) => t.id)).not.toContain("edge");
+  });
+
+  test("dueWithinDays widens to include future due tasks with a larger window", () => {
+    // +30d horizon = 07-20 (exclusive) → now includes future (06-30).
+    const within = listTasks(sqlite(), { dueWithinDays: 30, now: NOW });
+    expect(within.map((t) => t.id).sort()).toEqual(["done", "future", "past"]);
+  });
+
   test("exposes dueDate / priority on the record", () => {
     const future = listTasks(sqlite(), { now: NOW }).find((t) => t.id === "future");
     expect(future?.dueDate).toBe("2026-06-30T00:00:00.000Z");
@@ -232,6 +260,94 @@ describe("listInbox", () => {
       state: "done",
     });
     expect(listInbox(sqlite(), { state: "open" }).map((i) => i.id)).toEqual(["i1"]);
+  });
+
+  test("filters by the underlying source's sourceType via a join", () => {
+    source("gh", "2026-06-10T00:00:00.000Z", "github_issue");
+    source("sl", "2026-06-11T00:00:00.000Z", "slack_message");
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "ig",
+      sourceExternalId: "gh",
+      state: "open",
+    });
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "is",
+      sourceExternalId: "sl",
+      state: "open",
+    });
+    const slackOnly = listInbox(sqlite(), { sourceType: "slack_message" });
+    expect(slackOnly.map((i) => i.id)).toEqual(["is"]);
+  });
+
+  test("sourceType combines with state", () => {
+    source("gh", "2026-06-10T00:00:00.000Z", "github_issue");
+    source("sl", "2026-06-11T00:00:00.000Z", "slack_message");
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "ig",
+      sourceExternalId: "gh",
+      state: "open",
+    });
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "is",
+      sourceExternalId: "sl",
+      state: "done",
+    });
+    // open + slack_message → none (the slack item is done).
+    expect(listInbox(sqlite(), { sourceType: "slack_message", state: "open" })).toEqual([]);
+    // open + github_issue → the gh item.
+    expect(
+      listInbox(sqlite(), { sourceType: "github_issue", state: "open" }).map((i) => i.id),
+    ).toEqual(["ig"]);
+  });
+});
+
+describe("listCommitments (ADR-0021)", () => {
+  beforeEach(() => {
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: "c1",
+      title: "send the deck to Alice",
+      direction: "owed_by_me",
+      person: "Alice",
+      sourceExternalIds: [],
+    });
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: "c2",
+      title: "Bob to review the PR",
+      direction: "owed_to_me",
+      person: "Bob",
+      sourceExternalIds: [],
+    });
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: "c3",
+      title: "Alice to confirm budget",
+      direction: "owed_to_me",
+      person: "Alice",
+      sourceExternalIds: [],
+    });
+  });
+
+  test("filters by related person", () => {
+    const alice = listCommitments(sqlite(), { person: "Alice" });
+    expect(alice.map((c) => c.id).sort()).toEqual(["c1", "c3"]);
+  });
+
+  test("person combines with direction", () => {
+    const owedToMeByAlice = listCommitments(sqlite(), {
+      person: "Alice",
+      direction: "owed_to_me",
+    });
+    expect(owedToMeByAlice.map((c) => c.id)).toEqual(["c3"]);
+  });
+
+  test("an unknown person matches nothing", () => {
+    expect(listCommitments(sqlite(), { person: "Carol" })).toEqual([]);
   });
 });
 
