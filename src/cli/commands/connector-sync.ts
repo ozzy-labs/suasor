@@ -12,7 +12,8 @@
  * the DB layer, config loader, and connector SDK are imported inside `execute`.
  */
 import { Command, type CommandClass, Option } from "clipanion";
-import { connectorNames } from "../../connectors/registry.ts";
+import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
+import { standaloneGate } from "../build-target.ts";
 import { createProgress } from "../progress.ts";
 
 /** A `suasor <name> sync` command bound to one connector name. */
@@ -33,6 +34,21 @@ class ConnectorSyncCommand extends Command {
 
   override async execute(): Promise<number> {
     const name = (this.constructor as typeof ConnectorSyncCommand).connectorName;
+
+    // The heavier connector SDKs are external to the standalone binary
+    // (ADR-0010); only the bundled connectors can sync there. Gate the rest with
+    // a human-readable error instead of an opaque `Cannot find module` deep in
+    // the SDK import.
+    if (!connectorBundledInBinary(name)) {
+      const gate = standaloneGate(
+        `'${name} sync' (the ${name} connector SDK is not shipped in the binary)`,
+      );
+      if (!gate.ok) {
+        this.context.stderr.write(gate.message);
+        return 1;
+      }
+    }
+
     const [
       { loadConfig },
       { Store },

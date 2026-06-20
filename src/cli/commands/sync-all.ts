@@ -17,7 +17,8 @@
  * `execute` / through the shared bulk-sync service.
  */
 import { Command, Option } from "clipanion";
-import { connectorNames } from "../../connectors/registry.ts";
+import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
+import { BINARY_SCOPE_DOC, currentBuildIsBinary } from "../build-target.ts";
 import { createProgress } from "../progress.ts";
 
 export class SyncAllCommand extends Command {
@@ -106,6 +107,21 @@ export class SyncAllCommand extends Command {
         return 1;
       }
       names = names.filter((n) => requested.has(n));
+    }
+
+    // In the standalone binary the heavier connector SDKs are external
+    // (ADR-0010): drop those connectors up front (with a human-readable note)
+    // rather than letting each fail with an opaque `Cannot find module`. The
+    // bundled connectors (github / local) still run.
+    if (currentBuildIsBinary()) {
+      const unsupported = names.filter((n) => !connectorBundledInBinary(n));
+      if (unsupported.length > 0) {
+        this.context.stderr.write(
+          `warning: skipping ${unsupported.join(", ")}: not available in the standalone binary ` +
+            `(SDK not shipped) — use npm (Bun) or Docker. See ${BINARY_SCOPE_DOC}\n`,
+        );
+        names = names.filter((n) => connectorBundledInBinary(n));
+      }
     }
 
     if (names.length === 0) {

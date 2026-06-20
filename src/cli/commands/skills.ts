@@ -17,6 +17,7 @@
  * command registry cheap to build (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { standaloneGate } from "../build-target.ts";
 
 /** Install targets for assistant skills (ADR-0008). Mirrors `skills` module. */
 const SCOPES = ["claude", "agents", "all"] as const;
@@ -54,6 +55,14 @@ export class SkillsInstallCommand extends Command {
   });
 
   override async execute(): Promise<number> {
+    const gate = standaloneGate(
+      "'skills install' (the bundled docs/skills are not shipped in the binary)",
+    );
+    if (!gate.ok) {
+      this.context.stderr.write(gate.message);
+      return 1;
+    }
+
     if (!SCOPES.includes(this.scope as Scope)) {
       this.context.stderr.write(
         `error: invalid --scope '${this.scope}' (expected: ${SCOPES.join(" | ")})\n`,
@@ -129,6 +138,14 @@ export class SkillsListCommand extends Command {
   });
 
   override async execute(): Promise<number> {
+    const gate = standaloneGate(
+      "'skills list' (the bundled docs/skills are not shipped in the binary)",
+    );
+    if (!gate.ok) {
+      this.context.stderr.write(gate.message);
+      return 1;
+    }
+
     if (!SCOPES.includes(this.scope as Scope)) {
       this.context.stderr.write(
         `error: invalid --scope '${this.scope}' (expected: ${SCOPES.join(" | ")})\n`,

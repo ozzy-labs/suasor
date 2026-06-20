@@ -65,9 +65,31 @@ const SECRET_NAMES: Record<string, readonly string[]> = {
   local: [],
 };
 
+/**
+ * Connectors whose code path is fully bundled into the standalone single binary
+ * (ADR-0010, docs/guide/install.md#binary-scope). The heavier connector SDKs are
+ * kept **external** from the `bun build --compile` output to keep it light, so
+ * those connectors can't `sync` in the binary — only the ones here can. Mirrors
+ * the `--external` SDK list in package.json's `compile` script; the inverse set
+ * (slack / ms-graph / google / box / web) gates with a binary-unsupported error.
+ *
+ * `github` uses `octokit` (bundled) and `local` reads the filesystem only, so
+ * both work in the binary.
+ */
+const BINARY_BUNDLED_CONNECTORS: ReadonlySet<string> = new Set(["github", "local"]);
+
 /** Names of all registered connectors (cheap; loads no SDK). */
 export function connectorNames(): string[] {
   return Object.keys(REGISTRY).sort();
+}
+
+/**
+ * Whether a connector's SDK is bundled into the standalone single binary (so its
+ * `sync` works there). `false` for the connectors kept external to keep the
+ * binary light (slack / ms-graph / google / box / web) and for unknown names.
+ */
+export function connectorBundledInBinary(name: string): boolean {
+  return BINARY_BUNDLED_CONNECTORS.has(name);
 }
 
 /**
