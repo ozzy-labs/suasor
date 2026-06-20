@@ -4,7 +4,7 @@
  * Exposes Suasor's read tools over MCP using the official TypeScript SDK. The
  * read half: `search` (FTS5), `recall.search` (semantic vec0 KNN when an
  * embedding backend is enabled, else the `embedding_disabled` signal — #11),
- * `source.list` / `source.get`, `task.list` / `decision.list` / `inbox.list`,
+ * `source.list` / `source.get` / `source.history`, `task.list` / `decision.list` / `inbox.list`,
  * `propose.list` (the proposal ledger by state, #89), `commitment.list` (the
  * commitment ledger by state, ADR-0021), and `person.list` (resolved persons +
  * their connector identities, ADR-0022 / #92). The write tools —
@@ -78,6 +78,7 @@ import {
   listPersons,
   listProposals,
   listSlackDemand,
+  listSourceHistory,
   listSources,
   listTasks,
 } from "./queries.ts";
@@ -287,6 +288,29 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
     async ({ externalId }) => {
       const source = getSource(sqlite, externalId);
       return jsonResult({ source });
+    },
+  );
+
+  server.registerTool(
+    "source.history",
+    {
+      title: "Get source body history",
+      description:
+        "List a source's body versions from the event log, newest first. Unlike " +
+        "source.get (current body only), this reconstructs every version from the " +
+        "append-only events (SourceObserved / SourceBodyUpdated both retain the full " +
+        "body), enabling a true before/after diff. Read-only.",
+      inputSchema: {
+        externalId: z.string().min(1).describe("Connector-assigned source id."),
+        limit: limitShape.describe(`Max versions, newest first (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ externalId, limit }) => {
+      const versions = listSourceHistory(sqlite, externalId, {
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult({ versions });
     },
   );
 

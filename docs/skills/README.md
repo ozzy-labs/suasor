@@ -4,7 +4,7 @@
 
 > 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter（`name` / 自然文トリガの `description`）+ 駆動する MCP tool flow を持つ。
 
-## Read 系（自律 OK・13）
+## Read 系（自律 OK・14）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -21,6 +21,7 @@
 | [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | recall.search / decision.list / brief（text-only・persist なし） |
 | [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | slack.demand.list（→ inbox.add / source-extract へ HITL 橋渡し） |
 | [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
+| [`doc-diff`](doc-diff/SKILL.md) | 「前回から何が変わった」「この資料の差分」 | source.history（event log の本文版）+ graph.related |
 
 ## HITL write 系（人の承認で適用・8）
 

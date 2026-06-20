@@ -136,6 +136,62 @@ export function getSource(sqlite: Database, externalId: string): SourceRecord | 
   return row ? toSourceRecord(row) : null;
 }
 
+/** One version of a source's body, reconstructed from the event log. */
+export interface SourceVersion {
+  /** When the source was observed at its origin (ISO 8601). */
+  observedAt: string;
+  /** Content fingerprint at this version. */
+  fingerprint: string;
+  /** Full body text at this version (events retain every version, ADR-0002). */
+  body: string;
+  /** When this version's event was appended (ISO 8601). */
+  recordedAt: string;
+}
+
+interface EventBodyRow {
+  recorded_at: string;
+  payload: string;
+}
+
+/**
+ * List a source's body versions from the event log, newest first.
+ *
+ * Unlike `getSource` (which reads the projection's current body only), this
+ * reconstructs the full history from the append-only `events` table:
+ * `SourceObserved` and `SourceBodyUpdated` both carry the complete body
+ * (src/events/types.ts), so a true before/after diff is possible. Side-effect
+ * free (a SELECT over `events`), backing the `source.history` read tool (#121).
+ */
+export function listSourceHistory(
+  sqlite: Database,
+  externalId: string,
+  options: { limit?: number } = {},
+): SourceVersion[] {
+  const rows = sqlite
+    .query<EventBodyRow, [string, number]>(
+      `SELECT recorded_at, payload
+         FROM events
+        WHERE type IN ('SourceObserved', 'SourceBodyUpdated')
+          AND json_extract(payload, '$.externalId') = ?
+        ORDER BY recorded_at DESC
+        LIMIT ?`,
+    )
+    .all(externalId, options.limit ?? DEFAULT_LIST_LIMIT);
+  return rows.map((row) => {
+    const payload = JSON.parse(row.payload) as {
+      observedAt: string;
+      fingerprint: string;
+      body: string;
+    };
+    return {
+      observedAt: payload.observedAt,
+      fingerprint: payload.fingerprint,
+      body: payload.body,
+      recordedAt: row.recorded_at,
+    };
+  });
+}
+
 /** A task projection row. */
 export interface TaskRecord {
   id: string;

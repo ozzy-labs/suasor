@@ -36,6 +36,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
   },
   { name: "source.list", readOnlyHint: true, summary: "List ingested sources newest-first." },
   { name: "source.get", readOnlyHint: true, summary: "Fetch one source (with body) by id." },
+  {
+    name: "source.history",
+    readOnlyHint: true,
+    summary: "List a source's body versions from the event log (newest first).",
+  },
   { name: "task.list", readOnlyHint: true, summary: "List tasks, most-recently-updated first." },
   {
     name: "decision.list",
