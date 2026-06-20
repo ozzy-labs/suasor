@@ -6,7 +6,11 @@
 # ---- build stage: compile the app bundle with Bun ----
 FROM oven/bun:1 AS build
 WORKDIR /app
+# `scripts/` is copied before install because package.json's `postinstall`
+# (scripts/postinstall.mjs, #155) runs during `bun install` and would otherwise
+# fail with "Module not found" in this deps-only layer.
 COPY package.json bun.lock ./
+COPY scripts ./scripts
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
