@@ -79,6 +79,15 @@ describe("suasor onboard — wiring + validation", () => {
     expect(code).toBe(1);
     expect(err).toContain("--connector was empty");
   });
+
+  test("multiple connectors over a non-TTY stdin without --skip-auth exits 1", async () => {
+    // One pipe cannot carry N tokens unambiguously; the wizard rejects it up
+    // front rather than draining stdin on the first connector and failing rest.
+    const { code, err } = await run(["onboard", "--connector", "github,box", "--skip-sync"]);
+    expect(code).toBe(1);
+    expect(err).toContain("cannot read multiple connector tokens");
+    expect(err).toContain("--skip-auth");
+  });
 });
 
 describe("suasor onboard — config slice append (the structural fix)", () => {

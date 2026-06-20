@@ -117,6 +117,19 @@ export class OnboardCommand extends Command {
     }
     const connectors = selected.connectors;
 
+    // A single non-TTY stdin stream cannot unambiguously carry N tokens, so
+    // multi-connector token entry over a pipe is rejected up front (rather than
+    // silently draining stdin on the first connector and failing the rest).
+    // Use --skip-auth (env override) or onboard one connector at a time.
+    if (connectors.length > 1 && !this.skipAuth && !interactive) {
+      stderr.write(
+        "error: cannot read multiple connector tokens from a single non-TTY stdin; " +
+          "use --skip-auth with env overrides (SUASOR_CONNECTOR_<NAME>_<SECRET>) " +
+          "or onboard one connector at a time\n",
+      );
+      return 1;
+    }
+
     const reports: ConnectorReport[] = [];
 
     // 2-4. Per connector: store token, auth test, append config slice.

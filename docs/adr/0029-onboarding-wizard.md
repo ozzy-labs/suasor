@@ -38,6 +38,7 @@
 4. **非対話 / headless / `--json` でも壊れない。**
    - **非 TTY**（パイプ / CI）では対話プロンプトを出さず、`--connector` 指定が必須。未指定なら明確なエラーで終了する（無音で誤動作しない、[ADR-0007](0007-connector-contract.md) の "no silent wrong answer"）
    - token は stdin から read 済みのものを使い、TTY 前提のプロンプトは出さない
+   - **複数 connector + 非対話 token 入力は拒否する。** 単一の非 TTY stdin ストリームは N 個の token を曖昧なく運べないため、`--connector a,b`（複数）かつ `--skip-auth` 無しかつ非 TTY の組み合わせは事前にエラーで弾く（最初の connector で stdin を drain して残りを無音失敗させない）。`--skip-auth`（env override）か 1 connector ずつの onboard を案内する
    - **headless（env override 前提）**: token が `SUASOR_CONNECTOR_<NAME>_<SECRET>` で渡る環境では `auth set`（keychain 格納）ステップを skip でき（`--skip-auth`）、binary 配布（keychain 非搭載、[install](../guide/install.md)）でも config 追記・sync・雛形出力は機能する
    - `--json` で各ステップの結果（auth 格納 / test 疎通 / config 追記有無 / sync 集計 / scheduler 種別）を機械可読出力する
 
