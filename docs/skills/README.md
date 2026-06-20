@@ -35,7 +35,7 @@
 | [`source-extract`](source-extract/SKILL.md) | 「この資料からタスク抽出」 | source.get → propose.generate(source_extract) → propose.apply |
 | [`meeting-followup`](meeting-followup/SKILL.md) | 「会議後のaction items」「議事録からタスク」 | source.list(calendar) → propose.generate(meeting_followup) → propose.apply |
 | [`commitment-review`](commitment-review/SKILL.md) | 「約束をスキャンして」「貸し借り確認」 | propose.generate(commitment_scan) → propose.apply / commitment.list → resolve / dismiss / reopen |
-| [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject |
+| [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject / propose.batch |
 | [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
 | [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
 | [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply |

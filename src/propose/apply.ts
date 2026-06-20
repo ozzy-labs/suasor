@@ -22,7 +22,9 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { appendEvent } from "../events/store.ts";
 import type { NewEvent } from "../events/types.ts";
+import { applyEvent } from "../projections/reducer.ts";
 import { type Candidate, Candidate as CandidateSchema } from "./candidates.ts";
 import { entityId } from "./id.ts";
 
@@ -49,7 +51,7 @@ export interface ProposeApplyOutput {
 }
 
 /** True when an entity with this id already exists in the relevant projection. */
-function entityExists(store: Store, candidate: Candidate, id: string): boolean {
+export function entityExists(store: Store, candidate: Candidate, id: string): boolean {
   const sqlite = store.connection.sqlite;
   switch (candidate.kind) {
     case "task":
@@ -79,7 +81,7 @@ function entityExists(store: Store, candidate: Candidate, id: string): boolean {
 }
 
 /** Build the domain event a candidate maps to, targeting the given entity id. */
-function candidateToEvent(candidate: Candidate, id: string): NewEvent {
+export function candidateToEvent(candidate: Candidate, id: string): NewEvent {
   switch (candidate.kind) {
     case "task":
       return {
@@ -121,6 +123,40 @@ function candidateToEvent(candidate: Candidate, id: string): NewEvent {
         sourceExternalIds: candidate.sourceExternalIds,
       };
   }
+}
+
+/**
+ * Apply one approved candidate WITHOUT opening its own transaction (cf.
+ * `proposeApply`, which records each candidate in a per-candidate transaction).
+ * The caller is responsible for the transaction boundary — `propose.batch`
+ * (src/propose/batch.ts) wraps a whole mixed apply/reject set in a single
+ * transaction and calls this per apply op so the batch is atomic (Issue #197).
+ *
+ * Same idempotence contract as `proposeApply`: an existing entity (matched by
+ * content-derived id) is `skipped` and NO event is appended.
+ */
+export function applyCandidateStep(
+  store: Store,
+  candidate: Candidate,
+  now: Date,
+): AppliedCandidate {
+  const id = entityId(candidate);
+  if (entityExists(store, candidate, id)) {
+    return {
+      candidateId: candidate.candidateId,
+      kind: candidate.kind,
+      entityId: id,
+      status: "skipped",
+    };
+  }
+  const persisted = appendEvent(store.connection.sqlite, candidateToEvent(candidate, id), now);
+  applyEvent(store.connection.sqlite, persisted);
+  return {
+    candidateId: candidate.candidateId,
+    kind: candidate.kind,
+    entityId: id,
+    status: "applied",
+  };
 }
 
 /**

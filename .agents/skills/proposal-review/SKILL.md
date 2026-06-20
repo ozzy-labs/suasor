@@ -14,6 +14,7 @@ mcp_tools_read:
 mcp_tools_write:
   - propose.apply
   - propose.reject
+  - propose.batch
 ---
 
 # proposal-review
@@ -29,10 +30,11 @@ mcp_tools_write:
 
 read で集めて、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. `propose.list`（`state=pending`）で承認待ち候補を一覧する。`kind`（`task` / `decision` / `reply_draft` / `triage`）や `updated_at` 時間窓で絞り込める。各行は `candidateId` / `mode` / `kind` / `summary` / `createdAt`（`commitment` 候補も pending として列挙されるが kind フィルタの対象外なので、mode / summary で見分ける）
+1. `propose.list`（`state=pending`）で承認待ち候補を一覧する。`kind`（`task` / `decision` / `reply_draft` / `triage` / `commitment`）や `updated_at` 時間窓で絞り込める。各行は `candidateId` / `mode` / `kind` / `summary` / `createdAt`。既に却下した候補とその理由を振り返るときは `state=rejected` で一覧する（各行の `reason` に却下理由が入る、[#197](https://github.com/ozzy-labs/suasor/issues/197)）
 2. 候補を kind / mode 別に整理し、**ユーザーに提示して 1 件ずつ（または一括で）承認 / 却下の判断を取る**（native framing: ホスト側で人の承認を促す）
 3. 承認分は `propose.apply` でまとめて適用する（対応する domain event を append、idempotent。既適用は `skipped`）。適用で ledger が `pending` → `applied` に遷移する
 4. 却下分は `propose.reject`（`candidateId`、任意で `reason`）で却下する。ledger が `pending` → `rejected` に遷移し、以後 `propose.list` の `pending` に現れない（再提示しない）
+5. **承認と却下が混在するとき**は `propose.batch`（`operations: [{action: "apply", candidate}, {action: "reject", candidateId, reason?}]`）で 1 RPC・単一トランザクションにまとめられる（atomic、apply/reject と同じ semantics）。HITL（人の一括判断後にのみ呼ぶ、[#197](https://github.com/ozzy-labs/suasor/issues/197)）
 
 ## 制約
 

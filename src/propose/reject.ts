@@ -16,6 +16,8 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { appendEvent } from "../events/store.ts";
+import { applyEvent } from "../projections/reducer.ts";
 
 /** Input to `propose.reject`. */
 export const ProposeRejectInput = z.object({
@@ -41,6 +43,39 @@ interface ProposalStateRow {
 }
 
 /**
+ * Reject one pending candidate WITHOUT opening its own transaction (cf.
+ * `proposeReject`, which records via `store.record`'s per-event transaction).
+ * The caller owns the transaction boundary — `propose.batch`
+ * (src/propose/batch.ts) wraps a whole mixed apply/reject set in a single
+ * transaction and calls this per reject op so the batch is atomic (Issue #197).
+ *
+ * Same state-dependent contract as `proposeReject`: rejects only a `pending`
+ * row; `applied` / `missing` / `already_rejected` are reported, not mutated.
+ */
+export function rejectCandidateStep(
+  store: Store,
+  candidateId: string,
+  reason: string,
+  now: Date,
+): ProposeRejectOutput {
+  const row = store.connection.sqlite
+    .query<ProposalStateRow, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
+    .get(candidateId);
+
+  if (row === null) return { candidateId, status: "missing" };
+  if (row.state === "rejected") return { candidateId, status: "already_rejected" };
+  if (row.state === "applied") return { candidateId, status: "applied" };
+
+  const persisted = appendEvent(
+    store.connection.sqlite,
+    { type: "ProposalRejected", candidateId, reason },
+    now,
+  );
+  applyEvent(store.connection.sqlite, persisted);
+  return { candidateId, status: "rejected" };
+}
+
+/**
  * Reject a pending proposal candidate (append `ProposalRejected`). The host must
  * have human approval/decision first. Idempotent on an already-rejected row.
  */
@@ -50,14 +85,7 @@ export function proposeReject(
   now: Date = new Date(),
 ): ProposeRejectOutput {
   const { candidateId, reason } = ProposeRejectInput.parse(input);
-  const row = store.connection.sqlite
-    .query<ProposalStateRow, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
-    .get(candidateId);
-
-  if (row === null) return { candidateId, status: "missing" };
-  if (row.state === "rejected") return { candidateId, status: "already_rejected" };
-  if (row.state === "applied") return { candidateId, status: "applied" };
-
-  store.record({ type: "ProposalRejected", candidateId, reason }, now);
-  return { candidateId, status: "rejected" };
+  return store.connection.sqlite.transaction(() =>
+    rejectCandidateStep(store, candidateId, reason, now),
+  )();
 }
