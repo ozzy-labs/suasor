@@ -127,4 +127,15 @@ describe("suasor sync (bulk)", () => {
     expect(out).toContain("web: 0 observed");
     expect(out).toContain("1 succeeded, 1 failed");
   });
+
+  test("--no-continue-on-error stops at the first failure (fail-fast)", async () => {
+    await run(["init"]);
+    // github (sorted before web) throws at load; fail-fast skips web.
+    await writeConfig('[connectors.github]\nrepos = ["not-a-repo"]\n[connectors.web]\nurls = []\n');
+    const { code, out, err } = await run(["sync", "--no-continue-on-error"]);
+    expect(code).toBe(1);
+    expect(err).toContain("github sync failed");
+    expect(out).not.toContain("web: 0 observed");
+    expect(out).toContain("0 succeeded, 1 failed");
+  });
 });

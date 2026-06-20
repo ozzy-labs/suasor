@@ -22,7 +22,7 @@
 
 1. **`suasor sync` は config の有効 connector を列挙して直列に sync する。** 有効判定は `connectors list` / `doctor` と同一規約 —`[connectors.<name>]` slice が存在し `enabled = false` でない connector。connector 実装の lazy import は維持する（[ADR-0007](0007-connector-contract.md) import-clean、NFR-PRF-1）。各 connector の取り込み本体は既存の共有 `syncConnector` サービスを呼ぶ（CLI 単体 sync・`connector.sync` MCP tool と同一コードパス）。
 
-2. **continue-on-error。** 1 connector の失敗が全体を止めない。各 connector の成否を集計し、**1 つでも失敗があれば exit 1**（`doctor` の終了コード規約に合わせ、cron / CI が gate に使える）。`--continue-on-error` フラグで明示制御するが、既定でも他 connector の完了は妨げない方針とする（部分的に集まる方が「集める」価値に資する）。
+2. **continue-on-error（既定）。** 1 connector の失敗が全体を止めない。各 connector の成否を集計し、**1 つでも失敗があれば exit 1**（`doctor` の終了コード規約に合わせ、cron / CI が gate に使える）。既定で他 connector の完了を妨げない（部分的に集まる方が「集める」価値に資する）。`--no-continue-on-error` で fail-fast（最初の失敗で停止）に切り替えられる。
 
 3. **`--connector a,b` で対象を絞り込める。** 指定された名前のうち、有効かつ登録済みのものだけを対象にする。
 

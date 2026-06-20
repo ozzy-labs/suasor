@@ -32,9 +32,10 @@ export class SyncAllCommand extends Command {
       (short-lived, idempotent — ADR-0027). Re-runs are incremental
       (fingerprint/cursor delta, FR-ING-3). One connector's failure does not stop
       the others (continue-on-error); the command exits 1 when any connector
-      failed so cron / CI can gate on it. Periodic runs are delegated to the OS
-      scheduler — see docs/guide/scheduling.md. Use --connector to narrow the set
-      and --json for machine-readable output.
+      failed so cron / CI can gate on it (use --no-continue-on-error for
+      fail-fast). Periodic runs are delegated to the OS scheduler — see
+      docs/guide/scheduling.md. Use --connector to narrow the set and --json for
+      machine-readable output.
     `,
     examples: [
       ["Ingest from all enabled connectors", "suasor sync"],
@@ -48,8 +49,7 @@ export class SyncAllCommand extends Command {
   });
 
   continueOnError = Option.Boolean("--continue-on-error", true, {
-    description:
-      "Keep going when a connector fails (default on; exit 1 if any failed).",
+    description: "Keep going when a connector fails (default on; exit 1 if any failed).",
   });
 
   json = Option.Boolean("--json", false, {
@@ -140,6 +140,7 @@ export class SyncAllCommand extends Command {
         names,
         connectors: config.connectors,
         loadConnector,
+        continueOnError: this.continueOnError,
         syncOptions: {
           ...(this.full ? { cursor: null } : {}),
           embedder,

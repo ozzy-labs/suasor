@@ -124,6 +124,27 @@ describe("runBulkSync", () => {
     expect(errors).toEqual(["bad: boom: no token"]);
   });
 
+  test("fail-fast (continueOnError: false) stops at the first failure", async () => {
+    const ran: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["good", "bad", "after"],
+      connectors: { good: {}, bad: {}, after: {} },
+      continueOnError: false,
+      loadConnector: async (name) => {
+        ran.push(name);
+        if (name === "bad") throw new Error("boom");
+        return fakeConnector(name, [rec(`${name}:1`, "body")]);
+      },
+    });
+
+    // "after" never ran; it is absent from results (not marked failed).
+    expect(ran).toEqual(["good", "bad"]);
+    expect(result.results.map((r) => r.connector)).toEqual(["good", "bad"]);
+    expect(result.succeeded).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(sourceCount()).toBe(1);
+  });
+
   test("idempotent: re-running the same data appends no duplicate events", async () => {
     const opts = {
       names: ["a"],

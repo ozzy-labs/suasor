@@ -54,7 +54,7 @@ suasor --version                       # バージョン出力
 | `<connector> sync` | `--json` | false | 件数 + cursor（`SyncOutcome`）を JSON で出力 |
 | `<connector> sync` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
 | `sync` | `--connector a,b` | all enabled | 一括対象を絞り込む connector 名のカンマ列（有効かつ登録済みのみ。非該当は error） |
-| `sync` | `--continue-on-error` | true | 1 connector の失敗で全体を止めない（既定 on。失敗が 1 つでもあれば exit 1） |
+| `sync` | `--continue-on-error` / `--no-continue-on-error` | true | 1 connector の失敗で全体を止めない（既定 on）。`--no-` で fail-fast（最初の失敗で停止）。いずれも失敗が 1 つでもあれば exit 1 |
 | `sync` | `--full` | false | 各 connector の保存済み cursor を無視して全件再スキャン |
 | `sync` | `--json` | false | connector ごとの件数・cursor・エラーを集約した `BulkSyncResult` を JSON 出力 |
 | `sync` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |

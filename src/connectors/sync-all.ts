@@ -61,14 +61,24 @@ export interface BulkSyncOptions {
   /** Builds a connector by name (lazy SDK import). Injected for tests. */
   loadConnector: ConnectorLoader;
   /**
-   * Per-connector sync options forwarded to `syncConnector` (embedder, extractor,
-   * progress/warn sinks, …). `cursor` is intentionally not part of this — bulk
-   * sync always resumes from each connector's saved cursor.
+   * Sync options forwarded to every connector's `syncConnector` call (embedder,
+   * extractor, progress/warn sinks, …). When omitted, each connector resumes from
+   * its own saved cursor. Setting `cursor: null` here forces a full re-scan for
+   * **all** connectors uniformly (the bulk-level `--full` flag) — there is no
+   * per-connector cursor override at the bulk level by design.
    */
-  syncOptions?: Omit<SyncOptions, "cursor">;
+  syncOptions?: SyncOptions;
+  /**
+   * When `true` (default), a connector's failure is recorded and the run
+   * proceeds to the next connector (continue-on-error, FR-ING-6). When `false`
+   * (fail-fast), the run stops at the first failure; the connectors that had not
+   * yet run are simply absent from the result (they are not marked failed).
+   */
+  continueOnError?: boolean;
   /**
    * Called when a connector throws so the caller can surface it (e.g. stderr)
-   * without waiting for the aggregate. The run continues to the next connector.
+   * without waiting for the aggregate. With continue-on-error the run proceeds to
+   * the next connector; with fail-fast it then stops.
    */
   onConnectorError?: (connector: string, error: Error) => void;
   /** Called right before a connector's pass starts (e.g. to reset a progress label). */
@@ -98,15 +108,14 @@ export function selectEnabledConnectors(
 /**
  * Run a bulk sync pass over the named connectors in series (ADR-0027).
  *
- * Continue-on-error: each connector is built and synced inside a try/catch; a
- * throw is recorded as a failed entry and the loop proceeds to the next
- * connector (FR-ING-6). The aggregate's `failed` count lets the caller decide
- * the exit code (non-zero when any failed, doctor parity).
+ * Continue-on-error (default, FR-ING-6): each connector is built and synced
+ * inside a try/catch; a throw is recorded as a failed entry and the loop proceeds
+ * to the next connector. With `continueOnError: false` (fail-fast) the loop stops
+ * at the first failure. Either way the aggregate's `failed` count lets the caller
+ * decide the exit code (non-zero when any failed, doctor parity).
  */
-export async function runBulkSync(
-  store: Store,
-  options: BulkSyncOptions,
-): Promise<BulkSyncResult> {
+export async function runBulkSync(store: Store, options: BulkSyncOptions): Promise<BulkSyncResult> {
+  const continueOnError = options.continueOnError ?? true;
   const results: BulkSyncEntry[] = [];
   let succeeded = 0;
   let failed = 0;
@@ -126,6 +135,7 @@ export async function runBulkSync(
       results.push({ connector: name, ok: false, error: error.message });
       failed += 1;
       options.onConnectorError?.(name, error);
+      if (!continueOnError) break; // fail-fast: stop at the first failure
     }
   }
 
