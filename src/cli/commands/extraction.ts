@@ -75,7 +75,7 @@ export class ExtractionStatusCommand extends Command {
         );
       } else if (t.pending > 0 || t.stale > 0) {
         this.context.stdout.write(
-          "  run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync`) " +
+          "  run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync` / `suasor google sync`) " +
             "to (re)extract pending / stale sources\n",
         );
       }
@@ -95,9 +95,9 @@ export class ExtractionListPendingCommand extends Command {
     details: `
       Drilldown behind the pending / stale roll-ups of \`extraction status\`
       (Issue #202): lists the actual sources awaiting (re)extraction (local_file /
-      box_file). \`pending\` rows are extractable but never attempted; \`stale\`
+      box_file / google_drive). \`pending\` rows are extractable but never attempted; \`stale\`
       rows were extracted under a different version (drift). Run the owning
-      connector's sync (e.g. \`suasor local sync\` / \`suasor box sync\`) to
+      connector's sync (e.g. \`suasor local sync\` / \`suasor box sync\` / \`suasor google sync\`) to
       backfill them. Use --limit to cap the listing (default 50).
     `,
     examples: [
@@ -164,7 +164,7 @@ export class ExtractionListPendingCommand extends Command {
         );
       } else {
         this.context.stdout.write(
-          "  run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync`) " +
+          "  run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync` / `suasor google sync`) " +
             "to (re)extract these sources\n",
         );
       }

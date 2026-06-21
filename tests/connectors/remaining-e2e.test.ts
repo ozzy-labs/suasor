@@ -107,6 +107,8 @@ describe("Google: sync → projection → FTS", () => {
               },
             ],
           }),
+          downloadFile: async () => new Uint8Array(0),
+          exportFile: async () => new Uint8Array(0),
         }),
       },
     );
