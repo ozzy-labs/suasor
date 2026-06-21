@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateConfig } from "../../src/config/validate.ts";
+import { checkEmbeddingDim, validateConfig } from "../../src/config/validate.ts";
 
 let tmp: string;
 beforeEach(() => {
@@ -122,5 +122,26 @@ describe("validateConfig", () => {
       () => true,
     );
     expect(findings).toEqual([]);
+  });
+});
+
+describe("checkEmbeddingDim", () => {
+  test("no finding when the DB vec0 table is absent (fresh / FTS-only store)", () => {
+    expect(checkEmbeddingDim(1024, null)).toEqual([]);
+  });
+
+  test("no finding when the config dim matches the DB vec0 dim", () => {
+    expect(checkEmbeddingDim(1536, 1536)).toEqual([]);
+  });
+
+  test("an ERROR-class invalid-value finding when config dim ≠ DB vec0 dim", () => {
+    const findings = checkEmbeddingDim(1536, 1024);
+    expect(findings).toHaveLength(1);
+    const [f] = findings;
+    expect(f?.path).toBe("embedding.dim");
+    expect(f?.kind).toBe("invalid-value");
+    expect(f?.fixable).toBe(false); // remedy is a fresh DB / re-sync, never auto-rewrite
+    expect(f?.message).toContain("1536");
+    expect(f?.message).toContain("1024");
   });
 });

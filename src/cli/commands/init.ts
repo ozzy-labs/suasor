@@ -30,12 +30,20 @@ const DEFAULT_CONFIG_TOML = `# Suasor configuration (docs/design/config.md).
 backend = "disabled"   # disabled | ollama | openai | voyage
 # baseUrl = "http://localhost:11434"   # ollama sidecar (/api/embed is appended)
 # model = "bge-m3"                      # embedding model; identical for ingest & query
-# dim = 1024                            # embedding dim; must match the model (bge-m3=1024)
+# dim = 1024                            # embedding dim; MUST match the model AND the existing
+#                                       #   DB's vec0 width (sized at DB creation). Per backend:
+#                                       #   ollama bge-m3=1024, openai text-embedding-3-small=1536,
+#                                       #   voyage voyage-3=1024. A mismatch silently breaks recall;
+#                                       #   changing it needs a fresh DB / re-sync (run \`suasor
+#                                       #   validate-config\` / \`suasor doctor\` to detect drift).
 # maxBatch = 64                         # max texts per request; larger inputs split in order
 # requestTimeoutMs = 60000              # per-request timeout (ms); 0 disables
 # maxRetries = 3                        # 429/5xx retry attempts incl. first; 1 disables
 
 [llm]
+# NOTE: [llm].backend is accepted by the schema but NOT read by the runtime today
+#   — inference is delegated to the host LLM (ADR-0006). Setting it has no effect
+#   beyond a startup warning; it is reserved for a future on-box inference path.
 backend = "disabled"   # disabled | anthropic | openai | ollama
 
 [extraction]

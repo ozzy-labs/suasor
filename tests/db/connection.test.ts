@@ -4,6 +4,7 @@ import {
   DEFAULT_VEC_TABLE,
   initSchema,
   openDatabase,
+  readVecDim,
   type SuasorDb,
 } from "../../src/db/connection.ts";
 
@@ -112,6 +113,24 @@ describe("vec disabled", () => {
     const noVec = openDatabase({ path: ":memory:", enableVec: false });
     expect(tableExists(noVec, "events")).toBe(true);
     expect(tableExists(noVec, DEFAULT_VEC_TABLE)).toBe(false);
+    noVec.close();
+  });
+});
+
+describe("readVecDim (Issue #294)", () => {
+  test("reports the dimension the vec0 table was created with (default 1024)", () => {
+    expect(readVecDim(db.sqlite)).toBe(1024);
+  });
+
+  test("reflects a non-default dimension passed at open", () => {
+    const wide = openDatabase({ path: ":memory:", embeddingDim: 1536 });
+    expect(readVecDim(wide.sqlite)).toBe(1536);
+    wide.close();
+  });
+
+  test("returns null when the vec0 table is absent (FTS-only store)", () => {
+    const noVec = openDatabase({ path: ":memory:", enableVec: false });
+    expect(readVecDim(noVec.sqlite)).toBeNull();
     noVec.close();
   });
 });
