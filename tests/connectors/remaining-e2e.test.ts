@@ -77,6 +77,7 @@ describe("MS Graph: sync → projection → FTS", () => {
           getPage: async () => ({
             value: [{ id: "m1", subject: "Quarterly orbit review", bodyPreview: "agenda" }],
           }),
+          downloadFile: async () => new Uint8Array(0),
         }),
       },
     );

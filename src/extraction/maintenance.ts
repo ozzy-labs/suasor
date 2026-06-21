@@ -14,10 +14,11 @@ import { EXTRACTABLE_EXTENSIONS } from "./extractor.ts";
 /**
  * `source_type`s that can carry an `extractable` handle (ADR-0024). `pending` /
  * `stale` backfill is tracked for these. `local_file` is the initial scope;
- * `box_file` joins as the Box API connector grows content fetch (PR-2 / #241).
- * Drive / OneDrive extend this set in their follow-ups (#242 / #243).
+ * `box_file` joins as the Box API connector grows content fetch (PR-2 / #241);
+ * `ms365_file` joins for OneDrive via the ms-graph connector (#243). Google
+ * Drive extends this set in its follow-up (#242).
  */
-export const EXTRACTABLE_SOURCE_TYPES = ["local_file", "box_file"] as const;
+export const EXTRACTABLE_SOURCE_TYPES = ["local_file", "box_file", "ms365_file"] as const;
 
 /** SQL `IN (...)` placeholder list + bound params for {@link EXTRACTABLE_SOURCE_TYPES}. */
 const SOURCE_TYPE_IN = EXTRACTABLE_SOURCE_TYPES.map(() => "?").join(", ");

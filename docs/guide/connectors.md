@@ -260,7 +260,9 @@ resources = ["mail", "calendar"]        # mail | calendar | files | teams
 ```
 
 - **identity**: `msgraph:<resource>:<id>` / **source_type**: `ms365_mail` / `ms365_calendar` / `ms365_file` / `ms365_teams_message`
-- **差分検知**: コレクションを `@odata.nextLink` でページングし、本文 fingerprint で未変更を skip
+- **差分検知**: コレクションを `@odata.nextLink` でページングし、本文 fingerprint で未変更を skip。`files`（OneDrive）は DriveItem の content hash（`file.hashes.quickXorHash`、なければ sha256/sha1）を fingerprint に使い、リネーム無しの**内容変更も検知**して再抽出する（[ADR-0024](../adr/0024-document-extraction-sidecar.md) §6）。hash 不在時は body（ファイル名）の SHA-256 に fallback
+- **本文抽出（OneDrive `files`）**（[ADR-0024](../adr/0024-document-extraction-sidecar.md) / [ADR-0034](../adr/0034-api-connector-extraction.md), #243）: `[extraction]` サイドカーを有効にすると、`files` リソースの Office/PDF（`.docx`/`.xlsx`/`.pptx`/`.pdf`）は Graph API（`GET /users/{user}/drive/items/{id}/content`）で本文を **read-only** で lazy fetch して抽出テキストに差し替える。`local` / `box` と同じ共通基盤（`src/connectors/sync.ts` の抽出段）を通る。mail / calendar / teams はテキスト本文をそのまま取り込むため抽出対象外。それ以外のファイルは **name-only**。詳細・degrade 挙動は [extraction ガイド](extraction.md) を参照
+- **size guard**: DriveItem の `size` が `[extraction].maxBytes` 超過なら fetch せず name-only。fetch / 抽出失敗・unsupported も name-only に degrade（取り込み自体は成功）
 - **onboarding**（Issue #85）: `suasor ms-graph auth set`（client secret を keychain に保存）/ `suasor ms-graph auth test`（client-credential token 交換で client secret + tenantId/clientId の疎通を検証し granted scope を出力）。`auth test` は config の `tenantId` / `clientId` を要求する。
 - **feature readiness**（Issue #194）: `auth test` は config の `resources` ごとに `features:` 行を出す（Slack 同形式）。client-credential は `.default` を返し、実 application permission（Mail.Read / Calendars.Read / Files.Read.All / Channel・Chat.Read.All）は server 側で解決され token の `scope` に列挙されないため、各行は `N/A (scopes not enumerated)`（実権限は Azure app registration 側で確認する）。`resources` 未設定なら `ingestion: N/A (no resources configured)` の 1 行のみ:
 
