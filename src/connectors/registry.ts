@@ -53,6 +53,10 @@ const REGISTRY: Record<string, FactoryLoader> = {
     const { createBoxConnector } = await import("./box.ts");
     return (config: ConnectorConfig) => createBoxConnector(config);
   },
+  notion: async () => {
+    const { createNotionConnector } = await import("./notion.ts");
+    return (config: ConnectorConfig) => createNotionConnector(config);
+  },
   web: async () => {
     const { createWebConnector } = await import("./web.ts");
     return (config: ConnectorConfig) => createWebConnector(config);
@@ -79,6 +83,7 @@ const CONFIG_SCHEMAS: Record<string, SchemaLoader> = {
   "ms-graph": async () => (await import("./ms-graph.ts")).MsGraphConnectorConfig,
   google: async () => (await import("./google.ts")).GoogleConnectorConfig,
   box: async () => (await import("./box.ts")).BoxConnectorConfig,
+  notion: async () => (await import("./notion.ts")).NotionConnectorConfig,
   web: async () => (await import("./web.ts")).WebConnectorConfig,
   // Uses the load-time variant so each configured root is verified to exist and
   // be a readable directory at `loadConfig` time (Issue #188), not warn+skipped
@@ -104,6 +109,7 @@ const SECRET_NAMES: Record<string, readonly string[]> = {
   "ms-graph": ["clientSecret"],
   google: ["refreshToken"],
   box: ["token"],
+  notion: ["token"],
   web: [],
   local: [],
 };
@@ -117,9 +123,10 @@ const SECRET_NAMES: Record<string, readonly string[]> = {
  * (slack / ms-graph / google / box / web) gates with a binary-unsupported error.
  *
  * `github` uses `octokit` (bundled) and `local` reads the filesystem only, so
- * both work in the binary.
+ * both work in the binary. `notion` is `fetch`-based (no heavy SDK to externalize,
+ * mirroring `web`), so it too works in the binary.
  */
-const BINARY_BUNDLED_CONNECTORS: ReadonlySet<string> = new Set(["github", "local"]);
+const BINARY_BUNDLED_CONNECTORS: ReadonlySet<string> = new Set(["github", "local", "notion"]);
 
 /** Names of all registered connectors (cheap; loads no SDK). */
 export function connectorNames(): string[] {

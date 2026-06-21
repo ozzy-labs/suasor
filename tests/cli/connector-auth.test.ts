@@ -16,6 +16,7 @@ const SECRET_ENVS = [
   "SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET",
   "SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN",
   "SUASOR_CONNECTOR_BOX_TOKEN",
+  "SUASOR_CONNECTOR_NOTION_TOKEN",
 ];
 
 /** Run the CLI capturing stdout/stderr (connector secret envs cleared). */
@@ -56,10 +57,10 @@ async function run(
 }
 
 describe("suasor <connector> auth — wiring + arg validation (no network)", () => {
-  test("all four connectors register auth set + auth test in --help", async () => {
+  test("all connectors register auth set + auth test in --help", async () => {
     const { code, out } = await run(["--help"]);
     expect(code).toBe(0);
-    for (const name of ["github", "ms-graph", "google", "box"]) {
+    for (const name of ["github", "ms-graph", "google", "box", "notion"]) {
       expect(out).toContain(`${name} auth set`);
       expect(out).toContain(`${name} auth test`);
     }
@@ -89,11 +90,18 @@ describe("suasor <connector> auth — wiring + arg validation (no network)", () 
     expect(code).toBe(1);
     expect(err).toContain("no box token configured");
   });
+
+  test("notion auth test without a token exits 1 with onboarding guidance", async () => {
+    const { code, err } = await run(["notion", "auth", "test"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no notion token configured");
+    expect(err).toContain("notion auth set");
+  });
 });
 
 describe("AUTH_SPECS table (SSOT)", () => {
-  test("covers exactly github / ms-graph / google / box (Slack keeps its own)", () => {
-    expect(authConnectorNames()).toEqual(["box", "github", "google", "ms-graph"]);
+  test("covers exactly github / ms-graph / google / box / notion (Slack keeps its own)", () => {
+    expect(authConnectorNames()).toEqual(["box", "github", "google", "ms-graph", "notion"]);
     expect(AUTH_SPECS.slack).toBeUndefined();
   });
 
@@ -102,6 +110,7 @@ describe("AUTH_SPECS table (SSOT)", () => {
     expect(AUTH_SPECS["ms-graph"]?.secretName).toBe("clientSecret");
     expect(AUTH_SPECS.google?.secretName).toBe("refreshToken");
     expect(AUTH_SPECS.box?.secretName).toBe("token");
+    expect(AUTH_SPECS.notion?.secretName).toBe("token");
   });
 
   test("each spec's secretName matches the registry SECRET_NAMES SSOT (no drift)", () => {

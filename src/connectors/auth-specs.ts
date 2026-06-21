@@ -301,6 +301,28 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
       };
     },
   },
+  notion: {
+    connector: "notion",
+    secretName: "token",
+    secretLabel: "integration token",
+    async test({ secret }) {
+      const token = await secret("token");
+      if (!token) throw new Error("no notion token configured");
+      const { testNotionAuth } = await import("./notion/auth.ts");
+      const result = await testNotionAuth(token);
+      const who =
+        result.name && result.workspaceName
+          ? `${result.name} @ ${result.workspaceName}`
+          : result.name || result.workspaceName || "(unknown integration)";
+      return {
+        principal: who,
+        // Notion's users/me carries no scope list; capability is gated by which
+        // pages/databases the integration is *shared* into, not by token scopes.
+        scopes: null,
+        features: [{ label: "Notion page / database read", status: "READY" }],
+      };
+    },
+  },
 };
 
 /** Connectors that expose the generic `auth set` / `auth test` verbs (sorted). */

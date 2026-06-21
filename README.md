@@ -56,7 +56,7 @@ suasor onboard --connector github   # interactive on a TTY; --json for a summary
 # Verify config / DB / connector readiness (diagnostic only; creates nothing).
 suasor doctor
 
-# Ingest read-only from a connector (github / slack / ms-graph / google / box / web / local).
+# Ingest read-only from a connector (github / slack / ms-graph / google / box / notion / web / local).
 suasor github sync
 
 # Or ingest from every enabled connector in one read-only pass (one-shot).
@@ -74,7 +74,7 @@ suasor db migrate            # apply the projection schema (idempotent)
 suasor projections rebuild   # replay the event log into projections
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Audit ingested data and purge a source locally with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / notion / web / local — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Audit ingested data and purge a source locally with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ### From source
 
