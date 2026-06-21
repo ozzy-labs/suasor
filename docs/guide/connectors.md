@@ -149,9 +149,9 @@ MCP 経由では `search` read tool で同じ検索ができる（[retrieval](..
 
 すべての connector で取り込み・検索・delta 検知・secret 経路（env override > keychain）の挙動は同一。以下は各 connector 固有の token / config slice のみ記す。token は **config.toml には書かない**（env override か keychain）。
 
-## per-resource エラー分離（github / google / box / ms-graph / notion）
+## per-resource エラー分離（github / google / box / ms-graph / notion / jira）
 
-複数リソース（github=repo / google=resource family / box=folder / ms-graph=resource family / notion=database + pages）を 1 pass で走査する connector は、**1 リソースの失敗が他リソースの取り込みを巻き添えにしない**（[ADR-0014](../adr/0014-slack-multi-workspace.md) の per-workspace エラー分離を Slack 以外へ一般化、[#193](https://github.com/ozzy-labs/suasor/issues/193)）。従来は 1 repo の `403` が同 pass の他 repo の取り込みも止めていた。
+複数リソース（github=repo / google=resource family / box=folder / ms-graph=resource family / notion=database + pages / jira=project）を 1 pass で走査する connector は、**1 リソースの失敗が他リソースの取り込みを巻き添えにしない**（[ADR-0014](../adr/0014-slack-multi-workspace.md) の per-workspace エラー分離を Slack 以外へ一般化、[#193](https://github.com/ozzy-labs/suasor/issues/193)）。従来は 1 repo の `403` が同 pass の他 repo の取り込みも止めていた。
 
 - **失敗リソースは skip して continue**：fetch 途中で失敗したリソースは warning に集約し、残りのリソースの取り込みは止めない。
 - **warn は 1 本に集約**：`github: 2 repo OK, 1 failed (cursor preserved) — owner/x (403)` の形式で、どのリソースがなぜ失敗したかを明示する（kind は connector ごとに `repo` / `resource` / `folder`）。
@@ -159,7 +159,7 @@ MCP 経由では `search` read tool で同じ検索ができる（[retrieval](..
 - **全リソース失敗時のみ throw**：すべてのリソースが失敗した pass は「無音の空成功」ではなく **error** として終了する（最後のエラーを再 throw）。
 - **部分失敗の exit code + サマリ**：一部だけ失敗した部分失敗は `partialFailure` を立て、sync 末尾に **リソース別サマリ行**（例: `repos: owner/a=ok, owner/b=failed (cursor preserved)`）を 1 本出し、cron / CI が exit code を gate に検知できるよう **exit 1** で終了する（取り込めたリソースのレコードは保持される、[ADR-0027](../adr/0027-bulk-sync-orchestration.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)）。Slack の per-workspace 分離と同じセマンティクス。
 
-token を持つ connector（github / ms-graph / google / box / notion）は、汎用の `auth set` / `auth test` verb で keychain への保存と検証ができる（Issue #85）。`suasor <connector> auth set`（stdin / `--token` で primary secret を keychain に保存）/ `suasor <connector> auth test`（資格情報の有効性を read-only round-trip で検証し identity・granted scopes・readiness を出力）。各 connector が読む primary secret は github=`token` / ms-graph=`clientSecret` / google=`refreshToken` / box=`token` / notion=`token`。Slack は scope readiness とマルチ workspace を持つ独自の `slack auth set/test`（後述）を維持する。
+token を持つ connector（github / ms-graph / google / box / notion / jira）は、汎用の `auth set` / `auth test` verb で keychain への保存と検証ができる（Issue #85）。`suasor <connector> auth set`（stdin / `--token` で primary secret を keychain に保存）/ `suasor <connector> auth test`（資格情報の有効性を read-only round-trip で検証し identity・granted scopes・readiness を出力）。各 connector が読む primary secret は github=`token` / ms-graph=`clientSecret` / google=`refreshToken` / box=`token` / notion=`token` / jira=`token`。Slack は scope readiness とマルチ workspace を持つ独自の `slack auth set/test`（後述）を維持する。
 
 ## Slack
 
@@ -355,6 +355,32 @@ pages = true                             # search で見える standalone ペー
 - **onboarding**（Issue #85）: `suasor notion auth set`（integration token を keychain に保存）/ `suasor notion auth test`（`GET /v1/users/me` で token の有効性を検証し bot 名 / workspace 名を出力）。
 - **discovery**（[ADR-0030](../adr/0030-connector-discovery-verbs.md)）: `suasor notion databases [--filter S] [--json]`。`POST /v1/search`（`database` object のみ・`start_cursor` ページング）を `fetch` のみで列挙し、paste-ready な `[connectors.notion]` ブロック（`databases = [...]`、各行 `# <title>` ラベル）を出力する。`--filter` は title / id の部分一致、`--json` は `{items, configBlock}` を出力（token は出さない）。database id 手写し typo による silent 0 件（[ADR-0007](../adr/0007-connector-contract.md)）を回避する。
 - **feature readiness**（Issue #194）: Notion の `users/me` は scope リストを持たない（capability は token scope ではなく **共有されたページ / DB** で決まる）ため、`features:` は `Notion page / database read: READY` の 1 行。
+- **backoff**（[#269](https://github.com/ozzy-labs/suasor/issues/269)）: 全 fetch 経路（sync / auth / discovery）は共有 `withRetry` を通り、429 / 5xx は `Retry-After` を尊重して指数バックオフ + jitter で再試行する。
+
+## Jira
+
+issue / comment を取り込み、project / ticket の demand signal（GitHub issues とは別軸の agile context）を search / research / next-actions に供給する。Jira REST API は plain JSON のため SDK を持たず `fetch` のみ（import-clean）で実装する。
+
+- **token**: Cloud は API token、self-hosted は PAT。env override `SUASOR_CONNECTOR_JIRA_TOKEN`、keychain account `connector:jira:token`
+  - **email は config**: Cloud の HTTP Basic 認証は `email:apiToken` を使うため、`email` は **非機密の config 値**として持つ（keyring に入れるのは API token のみ）。self-hosted の `auth = "bearer"`（PAT）では `email` は不要。
+- **config**:
+
+```toml
+[connectors.jira]
+host = "example.atlassian.net"           # Jira サイトのホスト（scheme なし）
+email = "you@example.com"                # Cloud (basic) 認証用。self-hosted PAT では省略
+projects = ["PROJ"]                       # 取り込み対象 project key（issue + comment）
+# jql = "assignee = currentUser()"       # projects の代わりに明示 JQL で 1 sweep（任意）
+# auth = "basic"                          # basic（Cloud, 既定）| bearer（self-hosted PAT）
+```
+
+- **identity**: `jira:<host>:<project>:<issue-key>`（issue）/ `jira:<host>:<project>:<issue-key>:comment:<id>`（comment）。host + project スコープの identity なので、同じ issue key が別 host にあっても衝突しない / **source_type**: `jira_issue` / `jira_comment`
+- **本文**: issue は `summary` + `description`（ADF / HTML → text 正規化は最小限）。comment は本文テキスト。`description` カスタムフィールドが欠如していても summary 単独に degrade して throw しない
+- **差分検知**（FR-ING-3）: JQL `project = <key> AND updated >= "<ts>" ORDER BY updated ASC` で、各 project の最新 `updated` を **per-project cursor**（`{ "<project>": "<iso-ts>" }` の JSON）として保存し、次回はその high-water mark から再開する（Slack の per-channel パターン）。`jql` モードでは `__jql__` キー 1 本で同様に再開する。ページングは `startAt` / `maxResults`
+- **per-project エラー分離**（[#193](https://github.com/ozzy-labs/suasor/issues/193)）: 1 project の失敗（404 / 403 等）は warn に集約して skip し、他 project の取り込みは継続する。失敗 project の cursor は保持（リセットしない）。全 project 失敗時のみ throw。partial failure は `partialFailure` + summary line で非ゼロ終了（[ADR-0027](../adr/0027-exit-code-parity.md)）
+- **onboarding**（Issue #85）: `suasor jira auth set`（API token / PAT を keychain に保存）/ `suasor jira auth test`（`GET /rest/api/3/myself` で資格情報の有効性を検証し account 名 / email を出力）。
+- **discovery**（[ADR-0030](../adr/0030-connector-discovery-verbs.md)）: `suasor jira projects [--filter S] [--json]`。`GET /rest/api/3/project/search`（`startAt` ページング）を `fetch` のみで列挙し、paste-ready な `[connectors.jira]` ブロック（`host` / `email` プレースホルダ + `projects = [...]`、各行 `# <name>` ラベル）を出力する。`--filter` は key / name の部分一致、`--json` は `{items, configBlock}` を出力（token は出さない）。project key 手写し typo による silent 0 件（[ADR-0007](../adr/0007-connector-contract.md)）を回避する。
+- **feature readiness**（Issue #194）: Jira の `/myself` は scope リストを持たない（capability は token scope ではなく **認証アカウントの project 権限**で決まる）ため、`features:` は `Jira issue / comment read: READY` の 1 行。
 - **backoff**（[#269](https://github.com/ozzy-labs/suasor/issues/269)）: 全 fetch 経路（sync / auth / discovery）は共有 `withRetry` を通り、429 / 5xx は `Retry-After` を尊重して指数バックオフ + jitter で再試行する。
 
 ## Web（`web`）

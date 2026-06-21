@@ -57,6 +57,23 @@ describe("loadConfig — connector slice validation (valid slices pass)", () => 
     expect(cfg.connectors.local).toEqual({ roots: [realRoot], maxBytes: 2048 });
   });
 
+  test("jira: a correct slice loads unchanged", async () => {
+    const cfg = await loadWithConnectors({
+      jira: { host: "example.atlassian.net", email: "me@example.com", projects: ["PROJ"] },
+    });
+    expect(cfg.connectors.jira).toEqual({
+      host: "example.atlassian.net",
+      email: "me@example.com",
+      projects: ["PROJ"],
+    });
+  });
+
+  test("jira: a typo'd key (`project` for `projects`) rejects with ConfigError", async () => {
+    await expect(
+      loadWithConnectors({ jira: { host: "h", project: ["PROJ"] } }),
+    ).rejects.toBeInstanceOf(ConfigError);
+  });
+
   test("an empty slice (all defaults) passes for every connector", async () => {
     const cfg = await loadWithConnectors({
       github: {},
@@ -64,6 +81,8 @@ describe("loadConfig — connector slice validation (valid slices pass)", () => 
       "ms-graph": {},
       google: {},
       box: {},
+      notion: {},
+      jira: {},
       web: {},
       local: {},
     });

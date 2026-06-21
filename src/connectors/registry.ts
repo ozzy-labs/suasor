@@ -57,6 +57,10 @@ const REGISTRY: Record<string, FactoryLoader> = {
     const { createNotionConnector } = await import("./notion.ts");
     return (config: ConnectorConfig) => createNotionConnector(config);
   },
+  jira: async () => {
+    const { createJiraConnector } = await import("./jira.ts");
+    return (config: ConnectorConfig) => createJiraConnector(config);
+  },
   web: async () => {
     const { createWebConnector } = await import("./web.ts");
     return (config: ConnectorConfig) => createWebConnector(config);
@@ -84,6 +88,7 @@ const CONFIG_SCHEMAS: Record<string, SchemaLoader> = {
   google: async () => (await import("./google.ts")).GoogleConnectorConfig,
   box: async () => (await import("./box.ts")).BoxConnectorConfig,
   notion: async () => (await import("./notion.ts")).NotionConnectorConfig,
+  jira: async () => (await import("./jira.ts")).JiraConnectorConfig,
   web: async () => (await import("./web.ts")).WebConnectorConfig,
   // Uses the load-time variant so each configured root is verified to exist and
   // be a readable directory at `loadConfig` time (Issue #188), not warn+skipped
@@ -110,6 +115,7 @@ const SECRET_NAMES: Record<string, readonly string[]> = {
   google: ["refreshToken"],
   box: ["token"],
   notion: ["token"],
+  jira: ["token"],
   web: [],
   local: [],
 };
@@ -123,10 +129,15 @@ const SECRET_NAMES: Record<string, readonly string[]> = {
  * (slack / ms-graph / google / box / web) gates with a binary-unsupported error.
  *
  * `github` uses `octokit` (bundled) and `local` reads the filesystem only, so
- * both work in the binary. `notion` is `fetch`-based (no heavy SDK to externalize,
- * mirroring `web`), so it too works in the binary.
+ * both work in the binary. `notion` and `jira` are `fetch`-based (no heavy SDK to
+ * externalize, mirroring `web`), so they too work in the binary.
  */
-const BINARY_BUNDLED_CONNECTORS: ReadonlySet<string> = new Set(["github", "local", "notion"]);
+const BINARY_BUNDLED_CONNECTORS: ReadonlySet<string> = new Set([
+  "github",
+  "local",
+  "notion",
+  "jira",
+]);
 
 /** Names of all registered connectors (cheap; loads no SDK). */
 export function connectorNames(): string[] {

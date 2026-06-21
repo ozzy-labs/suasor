@@ -15,6 +15,14 @@ import {
 import { testBoxAuth } from "../../src/connectors/box/auth.ts";
 import { testGithubAuth } from "../../src/connectors/github/auth.ts";
 import { testGoogleAuth } from "../../src/connectors/google/auth.ts";
+import {
+  basicCredential,
+  buildJiraAuth,
+  makeDefaultTransport as makeJiraAuthTransport,
+  SELF_HOSTED_API_BASE,
+  testJiraAuth,
+} from "../../src/connectors/jira/auth.ts";
+import { DEFAULT_API_BASE } from "../../src/connectors/jira/client.ts";
 import { testMsGraphAuth } from "../../src/connectors/ms-graph/auth.ts";
 import { testNotionAuth } from "../../src/connectors/notion/auth.ts";
 
@@ -314,5 +322,92 @@ describe("notion auth probe", () => {
     }));
     expect(result.name).toBe("Bot only");
     expect(result.workspaceName).toBe("");
+  });
+});
+
+describe("jira auth — credential building", () => {
+  test("basic builds an email:token Basic header on the Cloud REST base", () => {
+    const auth = buildJiraAuth({
+      scheme: "basic",
+      host: "example.atlassian.net",
+      email: "me@example.com",
+      token: SECRET,
+    });
+    expect(auth.authorization).toBe(basicCredential("me@example.com", SECRET));
+    expect(auth.apiBase).toBe(DEFAULT_API_BASE);
+    expect(auth.host).toBe("example.atlassian.net");
+  });
+
+  test("bearer builds a PAT header on the self-hosted REST base (no email)", () => {
+    const auth = buildJiraAuth({ scheme: "bearer", host: "jira.internal", token: SECRET });
+    expect(auth.authorization).toBe(`Bearer ${SECRET}`);
+    expect(auth.apiBase).toBe(SELF_HOSTED_API_BASE);
+  });
+
+  test("basic without an email throws (Cloud needs email:token)", () => {
+    expect(() => buildJiraAuth({ scheme: "basic", host: "h", token: SECRET })).toThrow(
+      /email is required/,
+    );
+  });
+
+  test("a missing host throws", () => {
+    expect(() => buildJiraAuth({ scheme: "bearer", host: "", token: SECRET })).toThrow(
+      /host is required/,
+    );
+  });
+
+  test("a host carrying a scheme / path / userinfo is rejected (credential-misdirection guard)", () => {
+    for (const host of [
+      "https://example.atlassian.net",
+      "evil.com/x",
+      "user@evil.com",
+      "evil.com?",
+    ]) {
+      expect(() => buildJiraAuth({ scheme: "bearer", host, token: SECRET })).toThrow(
+        /bare host or host:port/,
+      );
+    }
+  });
+});
+
+describe("jira auth probe", () => {
+  const auth = buildJiraAuth({
+    scheme: "basic",
+    host: "example.atlassian.net",
+    email: "me@example.com",
+    token: SECRET,
+  });
+
+  test("resolves the account display name + email from a 200 myself", async () => {
+    const result = await testJiraAuth(auth, async (got) => {
+      expect(got.authorization).toContain("Basic");
+      return { status: 200, body: { displayName: "Alice", emailAddress: "alice@example.com" } };
+    });
+    expect(result.displayName).toBe("Alice");
+    expect(result.email).toBe("alice@example.com");
+  });
+
+  test("non-2xx throws with the Jira message, never the credential", async () => {
+    const probe = testJiraAuth(auth, async () => ({
+      status: 401,
+      body: { errorMessages: ["Client must be authenticated to access this resource."] },
+    }));
+    await expect(probe).rejects.toThrow(/401 Client must be authenticated/);
+    await probe.catch((e: Error) => expect(e.message).not.toContain(SECRET));
+  });
+
+  test("default transport calls <apiBase>/myself with the Authorization header", async () => {
+    let seenUrl = "";
+    const transport = makeJiraAuthTransport({
+      fetchImpl: async (url, init) => {
+        seenUrl = url;
+        expect((init?.headers as Record<string, string>).Authorization).toBe(auth.authorization);
+        return new Response(JSON.stringify({ displayName: "Z" }), { status: 200 });
+      },
+    });
+    const { status, body } = await transport(auth);
+    expect(status).toBe(200);
+    expect(seenUrl).toBe("https://example.atlassian.net/rest/api/3/myself");
+    expect(body.displayName).toBe("Z");
   });
 });

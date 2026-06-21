@@ -189,6 +189,33 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
       return { items, configBlock: renderConfigBlock(result) };
     },
   },
+  jira: {
+    connector: "jira",
+    verb: "projects",
+    summary: "List projects the credential can see and print a paste-ready config block.",
+    itemNoun: "project",
+    async discover({ secret, config, filter, onProgress }) {
+      const token = await secret("token");
+      if (!token) throw new Error("no jira token configured");
+      const host = asString(config.host);
+      if (!host) throw new Error("jira: host is required in config");
+      const scheme = asString(config.auth) === "bearer" ? "bearer" : "basic";
+      const email = asString(config.email) || undefined;
+      const { buildJiraAuth } = await import("./jira/auth.ts");
+      const { listProjects, renderConfigBlock } = await import("./jira/projects.ts");
+      const auth = buildJiraAuth({ scheme, host, ...(email ? { email } : {}), token });
+      const result = await listProjects(auth, {
+        ...(filter ? { filter } : {}),
+        ...(onProgress ? { onProgress } : {}),
+      });
+      const items: DiscoveryItem[] = result.projects.map((p) => ({
+        value: p.key,
+        label: p.name || "(no name)",
+        attrs: { key: p.key, name: p.name },
+      }));
+      return { items, configBlock: renderConfigBlock(result, host) };
+    },
+  },
 };
 
 /** Connectors that expose a discovery verb (sorted). */
