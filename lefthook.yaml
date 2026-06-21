@@ -7,7 +7,7 @@ pre-commit:
   commands:
     biome:
       glob: "**/*.{ts,tsx,js,jsx,json,jsonc}"
-      run: mise exec -- biome check --write {staged_files}
+      run: mise exec -- biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
     # Assistant-skill dogfood drift check (ADR-0008): the committed mirrors under
     # .claude/skills/ and .agents/skills/ must stay byte-identical to the SSOT
