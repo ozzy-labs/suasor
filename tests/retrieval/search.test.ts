@@ -318,6 +318,69 @@ describe("searchSources — filters (FTS path)", () => {
   });
 });
 
+describe("searchSources — ranking determinism & limit boundaries", () => {
+  test("repeated identical queries return a stable order (deterministic ranking)", () => {
+    seed("a", "rocket rocket fuel", "2026-06-14T00:00:00.000Z");
+    seed("b", "rocket science", "2026-06-14T00:01:00.000Z");
+    seed("c", "rocket rocket rocket booster", "2026-06-14T00:02:00.000Z");
+    const first = ids(searchSources(store.connection.sqlite, "rocket"));
+    const second = ids(searchSources(store.connection.sqlite, "rocket"));
+    const third = ids(searchSources(store.connection.sqlite, "rocket"));
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+  });
+
+  test("limit at exactly the match count is not reported as truncated (boundary)", () => {
+    for (let i = 0; i < 3; i++) {
+      seed(`s${i}`, `rocket ${i}`, `2026-06-14T00:0${i}:00.000Z`);
+    }
+    const result = searchSources(store.connection.sqlite, "rocket", { limit: 3 });
+    expect(result.hits).toHaveLength(3);
+    expect(result.totalHits).toBe(3);
+    expect(result.truncated).toBe(false); // 3 hits, limit 3 → full, not truncated
+  });
+
+  test("limit one below the match count is truncated with the full totalHits", () => {
+    for (let i = 0; i < 3; i++) {
+      seed(`s${i}`, `rocket ${i}`, `2026-06-14T00:0${i}:00.000Z`);
+    }
+    const result = searchSources(store.connection.sqlite, "rocket", { limit: 2 });
+    expect(result.hits).toHaveLength(2);
+    expect(result.totalHits).toBe(3);
+    expect(result.truncated).toBe(true);
+  });
+
+  test("a limit of 0 returns no hits but still reports the full totalHits", () => {
+    seed("a", "rocket alpha", "2026-06-14T00:00:00.000Z");
+    seed("b", "rocket bravo", "2026-06-14T00:01:00.000Z");
+    const result = searchSources(store.connection.sqlite, "rocket", { limit: 0 });
+    expect(result.hits).toHaveLength(0);
+    expect(result.totalHits).toBe(2);
+    expect(result.truncated).toBe(true);
+  });
+
+  test("all-documents-hit query returns every source (full hit set)", () => {
+    seed("a", "common term here", "2026-06-14T00:00:00.000Z");
+    seed("b", "the common term again", "2026-06-14T00:01:00.000Z");
+    seed("c", "common term in c too", "2026-06-14T00:02:00.000Z");
+    const result = searchSources(store.connection.sqlite, "common");
+    expect(result.hits).toHaveLength(3);
+    expect(result.totalHits).toBe(3);
+    expect(new Set(ids(result))).toEqual(new Set(["a", "b", "c"]));
+  });
+
+  test("LIKE fallback ties on identical observed_at remain deterministic across runs", () => {
+    // Two short-query hits with the same observed_at: the order must be stable so
+    // pagination / display does not flicker between calls.
+    seed("a", "go a", "2026-06-14T00:00:00.000Z");
+    seed("b", "go b", "2026-06-14T00:00:00.000Z");
+    const first = ids(searchSources(store.connection.sqlite, "go"));
+    const second = ids(searchSources(store.connection.sqlite, "go"));
+    expect(first).toHaveLength(2);
+    expect(second).toEqual(first);
+  });
+});
+
 describe("searchSources — filters (LIKE fallback path)", () => {
   test("sourceType narrows the short-query fallback result set", () => {
     seed("gh", "go now", "2026-06-14T00:00:00.000Z", "github_issue");

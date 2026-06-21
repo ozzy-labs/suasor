@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
+import { identityKey, personIdFor } from "../../src/projections/person.ts";
 
 let store: Store;
 
@@ -443,5 +444,279 @@ describe("SyncRunStarted / SyncRunEnded (ADR-0033)", () => {
     store.rebuild();
     const after = rows(store, "sync_runs");
     expect(after).toEqual(before);
+  });
+});
+
+describe("idempotent re-application (no double-update under replay)", () => {
+  type SourceRow = { external_id: string; body: string; fingerprint: string };
+
+  test("re-applying the same SourceObserved leaves a single row + single FTS entry", () => {
+    const now = new Date("2026-06-14T00:00:00.000Z");
+    const event = {
+      type: "SourceObserved" as const,
+      externalId: "gh:1",
+      sourceType: "github_issue",
+      body: "deploy the rocket",
+      observedAt: "2026-06-14T00:00:00.000Z",
+      fingerprint: "fp1",
+      meta: {},
+    };
+    // The reducer is content-keyed (ON CONFLICT(external_id)) so applying the
+    // exact same event twice must converge to one row, not duplicate it.
+    store.record(event, now);
+    store.record(event, now);
+    const src = rows(store, "sources") as SourceRow[];
+    expect(src).toHaveLength(1);
+    expect(src[0]?.body).toBe("deploy the rocket");
+    const fts = store.connection.sqlite.query("SELECT external_id FROM sources_fts").all();
+    expect(fts).toHaveLength(1);
+  });
+
+  test("a stale (out-of-order) SourceObserved still converges via last-writer-wins", () => {
+    const now = new Date("2026-06-14T00:00:00.000Z");
+    store.record(
+      {
+        type: "SourceObserved",
+        externalId: "gh:1",
+        sourceType: "github_issue",
+        body: "new body",
+        observedAt: "2026-06-15T00:00:00.000Z",
+        fingerprint: "fp-new",
+        meta: {},
+      },
+      now,
+    );
+    // A re-observed (possibly older) payload for the same id overwrites the row;
+    // the reducer carries no per-event ordering guard — convergence is the caller's
+    // delta-detection job. This documents the last-writer-wins projection contract.
+    store.record(
+      {
+        type: "SourceObserved",
+        externalId: "gh:1",
+        sourceType: "github_issue",
+        body: "older body",
+        observedAt: "2026-06-13T00:00:00.000Z",
+        fingerprint: "fp-old",
+        meta: {},
+      },
+      now,
+    );
+    const src = rows(store, "sources") as SourceRow[];
+    expect(src).toHaveLength(1);
+    expect(src[0]?.body).toBe("older body");
+    expect(src[0]?.fingerprint).toBe("fp-old");
+  });
+
+  test("re-proposing a task many times never duplicates its provenance link", () => {
+    const now = new Date("2026-06-14T00:00:00.000Z");
+    for (let i = 0; i < 5; i++) {
+      store.record(
+        {
+          type: "TaskProposed",
+          taskId: "t1",
+          title: `iteration ${i}`,
+          sourceExternalIds: ["gh:1", "gh:2"],
+        },
+        now,
+      );
+    }
+    const tasks = rows(store, "tasks") as Array<{ title: string }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.title).toBe("iteration 4"); // last write wins
+    const links = rows(store, "links") as Array<{ to_id: string }>;
+    expect(links).toHaveLength(2); // one per distinct source, no dupes
+  });
+});
+
+describe("invalid / no-op transitions (no fabricated rows)", () => {
+  const now = new Date("2026-06-14T00:00:00.000Z");
+
+  test("TaskApplied without a prior TaskProposed fabricates no task row", () => {
+    store.record({ type: "TaskApplied", taskId: "ghost", state: "completed" }, now);
+    expect(rows(store, "tasks")).toHaveLength(0);
+  });
+
+  test("CommitmentResolved / Dismissed / Reopened on a missing commitment is a no-op", () => {
+    store.record({ type: "CommitmentResolved", commitmentId: "ghost" }, now);
+    store.record({ type: "CommitmentDismissed", commitmentId: "ghost" }, now);
+    store.record({ type: "CommitmentReopened", commitmentId: "ghost" }, now);
+    expect(rows(store, "commitments")).toHaveLength(0);
+  });
+
+  test("ProposalRejected only acts on a pending candidate (applied stays applied)", () => {
+    // Generate a candidate, apply it (TaskProposed flips it to applied), then a
+    // late reject must NOT downgrade the already-applied proposal.
+    store.record(
+      {
+        type: "ProposalGenerated",
+        candidateId: "c1",
+        mode: "source_extract",
+        kind: "task",
+        entityId: "t1",
+        summary: "do the thing",
+      },
+      now,
+    );
+    store.record(
+      { type: "TaskProposed", taskId: "t1", title: "do it", sourceExternalIds: [] },
+      now,
+    );
+    store.record({ type: "ProposalRejected", candidateId: "c1", reason: "too late" }, now);
+    const proposal = store.connection.sqlite
+      .query<{ state: string }, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
+      .get("c1");
+    expect(proposal?.state).toBe("applied"); // not "rejected"
+  });
+
+  test("ProposalRejected on a still-pending candidate records the reason", () => {
+    store.record(
+      {
+        type: "ProposalGenerated",
+        candidateId: "c2",
+        mode: "source_extract",
+        kind: "task",
+        entityId: "t2",
+        summary: "maybe",
+      },
+      now,
+    );
+    store.record({ type: "ProposalRejected", candidateId: "c2", reason: "not now" }, now);
+    const proposal = store.connection.sqlite
+      .query<{ state: string; reason: string }, [string]>(
+        "SELECT state, reason FROM proposals WHERE candidate_id = ?",
+      )
+      .get("c2");
+    expect(proposal?.state).toBe("rejected");
+    expect(proposal?.reason).toBe("not now");
+  });
+});
+
+describe("person identity reducer (ADR-0022)", () => {
+  const now = new Date("2026-06-14T00:00:00.000Z");
+
+  function observe(connector: string, handle: string, displayName?: string): string {
+    const personId = personIdFor(connector, handle);
+    store.record(
+      {
+        type: "PersonIdentityObserved",
+        personId,
+        connector,
+        handle,
+        ...(displayName !== undefined ? { displayName } : {}),
+      },
+      now,
+    );
+    return personId;
+  }
+
+  function personOf(connector: string, handle: string): string | undefined {
+    return store.connection.sqlite
+      .query<{ person_id: string }, [string]>(
+        "SELECT person_id FROM person_identities WHERE identity_key = ?",
+      )
+      .get(identityKey(connector, handle))?.person_id;
+  }
+
+  function person(id: string): { display_name: string; identity_count: number } | null {
+    return store.connection.sqlite
+      .query<{ display_name: string; identity_count: number }, [string]>(
+        "SELECT display_name, identity_count FROM persons WHERE id = ?",
+      )
+      .get(id);
+  }
+
+  test("first observation creates a person with identity_count 1", () => {
+    const id = observe("github", "octocat", "Octo Cat");
+    expect(person(id)).toEqual({ display_name: "Octo Cat", identity_count: 1 });
+  });
+
+  test("re-observing an existing identity with a new display name updates it without re-pointing", () => {
+    // Covers the `else if (name !== "")` branch: the identity keeps its person,
+    // but the latest non-empty display name lands on both identity + person.
+    const id = observe("github", "octocat", "Old Name");
+    observe("github", "octocat", "New Name");
+    expect(personOf("github", "octocat")).toBe(id); // not re-pointed
+    expect(person(id)?.display_name).toBe("New Name");
+    const identityName = store.connection.sqlite
+      .query<{ display_name: string }, [string]>(
+        "SELECT display_name FROM person_identities WHERE identity_key = ?",
+      )
+      .get(identityKey("github", "octocat"))?.display_name;
+    expect(identityName).toBe("New Name");
+    expect(person(id)?.identity_count).toBe(1); // still one identity
+  });
+
+  test("re-observing with an empty display name leaves the prior name intact", () => {
+    const id = observe("github", "octocat", "Keep Me");
+    observe("github", "octocat"); // no displayName → empty string branch skipped
+    expect(person(id)?.display_name).toBe("Keep Me");
+  });
+
+  test("PersonsMerged rewrites identity ownership and refreshes both counts", () => {
+    const gh = observe("github", "octocat");
+    const slack = observe("slack", "U1");
+    store.record({ type: "PersonsMerged", targetPersonId: gh, sourcePersonId: slack }, now);
+    expect(personOf("slack", "U1")).toBe(gh);
+    expect(person(gh)?.identity_count).toBe(2);
+    expect(person(slack)?.identity_count).toBe(0); // emptied, row retained for audit
+  });
+
+  test("a self-merge (source == target) is a guarded no-op", () => {
+    const gh = observe("github", "octocat");
+    store.record({ type: "PersonsMerged", targetPersonId: gh, sourcePersonId: gh }, now);
+    expect(person(gh)?.identity_count).toBe(1);
+  });
+
+  test("re-applying a PersonsMerged is a no-op (idempotent under replay)", () => {
+    const gh = observe("github", "octocat");
+    const slack = observe("slack", "U1");
+    store.record({ type: "PersonsMerged", targetPersonId: gh, sourcePersonId: slack }, now);
+    store.record({ type: "PersonsMerged", targetPersonId: gh, sourcePersonId: slack }, now);
+    expect(person(gh)?.identity_count).toBe(2);
+    expect(person(slack)?.identity_count).toBe(0);
+  });
+
+  test("PersonSplit moves an identity to a new person and refreshes both counts", () => {
+    const gh = observe("github", "octocat");
+    const slack = observe("slack", "U1");
+    store.record({ type: "PersonsMerged", targetPersonId: gh, sourcePersonId: slack }, now);
+    // Split the slack identity back out to a fresh person.
+    store.record(
+      { type: "PersonSplit", newPersonId: slack, connector: "slack", handle: "U1" },
+      now,
+    );
+    expect(personOf("slack", "U1")).toBe(slack);
+    expect(person(gh)?.identity_count).toBe(1);
+    expect(person(slack)?.identity_count).toBe(1);
+  });
+
+  test("PersonSplit of an unknown identity is a no-op", () => {
+    store.record(
+      { type: "PersonSplit", newPersonId: "person_new", connector: "slack", handle: "ghost" },
+      now,
+    );
+    expect(personOf("slack", "ghost")).toBeUndefined();
+    expect(person("person_new")).toBeNull();
+  });
+
+  test("PersonSplit that resolves to the same person is a no-op", () => {
+    const gh = observe("github", "octocat");
+    // newPersonId equals the identity's current person → early return.
+    store.record(
+      { type: "PersonSplit", newPersonId: gh, connector: "github", handle: "octocat" },
+      now,
+    );
+    expect(personOf("github", "octocat")).toBe(gh);
+    expect(person(gh)?.identity_count).toBe(1);
+  });
+
+  test("identity ownership survives a full rebuild (merge is replay-stable)", () => {
+    const gh = observe("github", "octocat");
+    const slack = observe("slack", "U1");
+    store.record({ type: "PersonsMerged", targetPersonId: gh, sourcePersonId: slack }, now);
+    store.rebuild();
+    expect(personOf("slack", "U1")).toBe(gh);
+    expect(person(gh)?.identity_count).toBe(2);
+    expect(person(slack)?.identity_count).toBe(0);
   });
 });

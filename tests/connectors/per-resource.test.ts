@@ -109,6 +109,88 @@ describe("syncResourcesIsolated", () => {
     expect(warns).toEqual([]);
   });
 
+  test("multiple failures among many resources are each aggregated, the rest stream", async () => {
+    // 4 resources: a + c fail, b + d succeed. The successes must all stream and
+    // both failures land in `failures` / the summary line (no silent drop).
+    const warns: string[] = [];
+    let result: IsolationResult | undefined;
+    const records = await collect(
+      syncResourcesIsolated(
+        ["a", "b", "c", "d"],
+        ctx({ onWarn: (m) => warns.push(m) }),
+        (r) => r,
+        "repo",
+        (r) =>
+          (async function* () {
+            if (r === "a" || r === "c") throw new Error(`403 ${r}`);
+            yield rec(r);
+          })(),
+        (res) => {
+          result = res;
+        },
+      ),
+    );
+    expect(records.map((r) => r.body)).toEqual(["b", "d"]);
+    expect(result?.okCount).toBe(2);
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.failures).toEqual([
+      { resource: "a", message: "403 a" },
+      { resource: "c", message: "403 c" },
+    ]);
+    // The warn names both failed resources with their messages.
+    expect(warns[0]).toBe("2 repo OK, 2 failed (cursor preserved) — a (403 a), c (403 c)");
+    // The summary line records every resource's per-resource outcome, in order.
+    expect(result?.summaryLines).toEqual([
+      "repos: a=failed (cursor preserved), b=ok, c=failed (cursor preserved), d=ok",
+    ]);
+  });
+
+  test("a single survivor among all-but-one failures is still a partial (not a throw)", async () => {
+    // Only the last resource succeeds: because at least one succeeded the pass
+    // must NOT throw (that is reserved for an all-failed run) — it is a partial.
+    let result: IsolationResult | undefined;
+    const records = await collect(
+      syncResourcesIsolated(
+        ["a", "b", "ok"],
+        ctx({ onWarn: () => {} }),
+        (r) => r,
+        "repo",
+        (r) =>
+          (async function* () {
+            if (r !== "ok") throw new Error("down");
+            yield rec(r);
+          })(),
+        (res) => {
+          result = res;
+        },
+      ),
+    );
+    expect(records.map((r) => r.body)).toEqual(["ok"]);
+    expect(result?.okCount).toBe(1);
+    expect(result?.failures).toHaveLength(2);
+    expect(result?.partialFailure).toBe(true);
+  });
+
+  test("a single-resource pass that fails throws (all-failed semantics, n=1)", async () => {
+    // With exactly one resource, a failure means every resource failed → throw.
+    await expect(
+      collect(
+        syncResourcesIsolated(
+          ["only"],
+          ctx({ onWarn: () => {} }),
+          (r) => r,
+          "repo",
+          (r) =>
+            (async function* () {
+              if (r) throw new Error("solo failure");
+              yield rec(r); // unreachable; present so this is a valid generator
+            })(),
+          () => {},
+        ),
+      ),
+    ).rejects.toThrow("solo failure");
+  });
+
   test("a non-Error thrown value is stringified into the failure message", async () => {
     let result: IsolationResult | undefined;
     await collect(

@@ -89,4 +89,51 @@ describe("fuseRrf — limit", () => {
     const fused = fuseRrf(fts, [], { limit: 2 });
     expect(ids(fused)).toEqual(["a", "b"]);
   });
+
+  test("a limit of 0 yields an empty fused list", () => {
+    const fused = fuseRrf([hit("a"), hit("b")], [hit("c")], { limit: 0 });
+    expect(fused).toEqual([]);
+  });
+
+  test("a limit larger than the fused set returns every hit", () => {
+    const fused = fuseRrf([hit("a")], [hit("b")], { limit: 99 });
+    expect(ids(fused)).toEqual(["a", "b"]);
+  });
+});
+
+describe("fuseRrf — embedding-disabled graceful fallback (vec list empty)", () => {
+  test("an empty vec list degrades to pure FTS order (FR-RET fallback)", () => {
+    // When the embedder is disabled the hybrid path passes an empty vec list;
+    // fusion must then be exactly the FTS ranking, never crash or reorder.
+    const fts = [hit("a"), hit("b"), hit("c")];
+    const fused = fuseRrf(fts, []);
+    expect(ids(fused)).toEqual(["a", "b", "c"]);
+  });
+
+  test("both lists empty (no embedder, no FTS hit) fuses to nothing without error", () => {
+    expect(fuseRrf([], [])).toEqual([]);
+  });
+
+  test("FTS-only fusion preserves the representative bodies/scores unchanged", () => {
+    const a: SearchHit = { ...hit("a"), body: "lexical a", score: -2.1 };
+    const fused = fuseRrf([a], []);
+    expect(fused[0]?.body).toBe("lexical a");
+    expect(fused[0]?.score).toBe(-2.1);
+    expect(fused[0]?.rrfScore).toBeGreaterThan(0);
+  });
+});
+
+describe("fuseRrf — k sensitivity (rank weighting)", () => {
+  test("a smaller k sharpens the top-rank advantage but keeps the same winner", () => {
+    const fts = [hit("top"), hit("mid"), hit("low")];
+    const sharp = fuseRrf(fts, [], { k: 1 });
+    const flat = fuseRrf(fts, [], { k: 1000 });
+    // The order is unchanged (single list), but the score gap between rank 0 and
+    // rank 1 is larger for the smaller k.
+    expect(ids(sharp)).toEqual(["top", "mid", "low"]);
+    expect(ids(flat)).toEqual(["top", "mid", "low"]);
+    const sharpGap = (sharp[0]?.rrfScore ?? 0) - (sharp[1]?.rrfScore ?? 0);
+    const flatGap = (flat[0]?.rrfScore ?? 0) - (flat[1]?.rrfScore ?? 0);
+    expect(sharpGap).toBeGreaterThan(flatGap);
+  });
 });
