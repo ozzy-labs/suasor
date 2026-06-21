@@ -4,7 +4,9 @@
 # the npm package or the standalone binary instead.
 
 # ---- build stage: compile the app bundle with Bun ----
-FROM oven/bun:1 AS build
+# Pin the base images by tag + digest for reproducible, supply-chain-safe builds
+# (#237). Bump in lockstep with `.mise.toml` / `package.json` `engines.bun`.
+FROM oven/bun:1.2.23@sha256:6ebf306367da43ad75c4d5119563e24de9b66372929ad4fa31546be053a16f74 AS build
 WORKDIR /app
 # `scripts/` is copied before install because package.json's `postinstall`
 # (scripts/postinstall.mjs, #155) runs during `bun install` and would otherwise
@@ -16,9 +18,11 @@ COPY . .
 RUN bun run build
 
 # ---- runtime stage: Ollama base + the Bun runtime + the built app ----
-FROM ollama/ollama:latest
+# Pinned by tag + digest so each build embeds a known Ollama (a `:latest` base
+# would silently change the bundled LLM/embedding runtime between builds, #237).
+FROM ollama/ollama:0.12.3@sha256:c622a7adec67cf5bd7fe1802b7e26aa583a955a54e91d132889301f50c3e0bd0
 # Bun is a single binary; copy it in rather than reinstalling.
-COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.2.23@sha256:6ebf306367da43ad75c4d5119563e24de9b66372929ad4fa31546be053a16f74 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules

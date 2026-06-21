@@ -426,6 +426,11 @@ describe("MCP read surface", () => {
     }
   });
 
+  // Cold-start / loaded-runner hardening: this case once tripped the default
+  // 5000ms timeout on a cold start despite normally finishing in ~1ms. The work
+  // (seed two events + build an in-process MCP server + two tool round-trips) is
+  // not slow; the margin guards against runner startup jitter, not a real perf
+  // regression. See issue #233.
   test("source.list returns ingested sources; source.get fetches a body", async () => {
     seedSource("gh:1", "first source");
     seedSource("gh:2", "second source");
@@ -441,7 +446,7 @@ describe("MCP read surface", () => {
     });
     const got = parseResult(getRes as never) as { source: { body: string } | null };
     expect(got.source?.body).toBe("first source");
-  });
+  }, 15_000);
 
   test("source.get returns null source for an unknown id", async () => {
     const client = await connect();

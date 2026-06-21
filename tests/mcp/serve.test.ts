@@ -14,11 +14,19 @@ import {
  * real config, store, MCP server, or stdio transport is touched (Issue #37).
  */
 
-/** A `Config` shaped just enough for `serveMcp` (dbPath + embedding.dim). */
-function fakeConfig(dbPath: string | null): Config {
+/**
+ * A `Config` shaped just enough for `serveMcp` (dbPath + embedding + llm). The
+ * `embedding.backend` / `llm.backend` overrides drive the config-warning check;
+ * both default to a no-warning value.
+ */
+function fakeConfig(
+  dbPath: string | null,
+  overrides: { embeddingBackend?: string; llmBackend?: string } = {},
+): Config {
   return {
     storage: { dbPath },
-    embedding: { dim: 1024 },
+    embedding: { dim: 1024, backend: overrides.embeddingBackend ?? "disabled" },
+    llm: { backend: overrides.llmBackend ?? "disabled" },
   } as unknown as Config;
 }
 
@@ -55,12 +63,20 @@ function options(args: {
   transport?: Transport;
   connect?: (transport: Transport) => Promise<void>;
   onOpen?: () => void;
+  embeddingBackend?: string;
+  llmBackend?: string;
 }): ServeOptions {
   const connect = args.connect ?? (() => Promise.resolve());
   const server: ServeServer = { connect };
   return {
     log: () => {},
-    loadConfig: () => Promise.resolve(fakeConfig(args.dbPath)),
+    loadConfig: () =>
+      Promise.resolve(
+        fakeConfig(args.dbPath, {
+          embeddingBackend: args.embeddingBackend,
+          llmBackend: args.llmBackend,
+        }),
+      ),
     openStore: () => {
       args.onOpen?.();
       return args.store ?? fakeStore();
@@ -100,6 +116,50 @@ describe("serveMcp boot glue", () => {
     // The issue + its hint are also written to the diagnostics channel (stderr).
     expect(logs.some((l) => l.includes("CONFIG_INVALID"))).toBe(true);
     expect(logs.some((l) => l.toLowerCase().includes("hint"))).toBe(true);
+  });
+
+  test("emits config warnings on stderr at boot for accepted-but-dropped keys (#235)", async () => {
+    const logs: string[] = [];
+    const transport = fakeTransport();
+    const booted = serveMcp({
+      ...options({
+        dbPath: ":memory:",
+        transport,
+        embeddingBackend: "openai",
+        llmBackend: "openai",
+      }),
+      log: (m) => logs.push(m),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    transport.onclose?.();
+    await booted;
+
+    // Both silently-dropped keys are surfaced on the diagnostics channel.
+    expect(logs.some((l) => l.includes("config warning") && l.includes("embedding.backend"))).toBe(
+      true,
+    );
+    expect(logs.some((l) => l.includes("config warning") && l.includes("llm.backend"))).toBe(true);
+  });
+
+  test("emits no config warning when backends are implemented / inert (#235)", async () => {
+    const logs: string[] = [];
+    const transport = fakeTransport();
+    const booted = serveMcp({
+      ...options({
+        dbPath: ":memory:",
+        transport,
+        embeddingBackend: "ollama",
+        llmBackend: "disabled",
+      }),
+      log: (m) => logs.push(m),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    transport.onclose?.();
+    await booted;
+
+    expect(logs.some((l) => l.includes("config warning"))).toBe(false);
   });
 
   test("transport.onclose closes the store exactly once (idempotent close)", async () => {

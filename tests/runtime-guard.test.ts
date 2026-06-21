@@ -63,7 +63,7 @@ describe("checkBunRuntime", () => {
   });
 
   test("recent-enough Bun passes with no message", () => {
-    const r = checkBunRuntime("1.1.0");
+    const r = checkBunRuntime("1.2.0");
     expect(r.ok).toBe(true);
     expect(r.message).toBeUndefined();
   });

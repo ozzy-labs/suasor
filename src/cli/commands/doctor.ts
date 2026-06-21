@@ -100,6 +100,18 @@ export class DoctorCommand extends Command {
       });
     }
 
+    // 1b. config warnings — keys accepted by the schema but silently dropped at
+    //    runtime (ADR-0007 silent-error eradication): an unimplemented embedding
+    //    backend (openai/voyage → recall falls back to FTS) or a set-but-unused
+    //    [llm] backend (inference is delegated to the host LLM). Degrade behavior
+    //    is unchanged; this just makes the no-op visible.
+    if (config !== null) {
+      const { collectConfigWarnings } = await import("../../config/index.ts");
+      for (const warning of collectConfigWarnings(config)) {
+        checks.push({ name: warning.key, status: "warn", detail: warning.message });
+      }
+    }
+
     // 2. database — file exists (do not create it) + core projection tables present.
     const dbPath = config?.storage.dbPath ?? null;
     let dbReady = false; // gates the maintenance-hint probes below.

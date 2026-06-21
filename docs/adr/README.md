@@ -74,3 +74,4 @@ NNNN-kebab-case-title.md
 | 0031 | MCP structured errors (code/hint) + startup config readiness |
 | 0032 | Skill frontmatter schema (machine-readable fields) + `skills search` / `skills info` |
 | 0033 | Sync run history & freshness (`SyncRunStarted` / `SyncRunEnded`, `suasor sync status`) |
+| 0034 | API connector extraction (Box / Drive / OneDrive; content fingerprint, lazy download, Google native export) |

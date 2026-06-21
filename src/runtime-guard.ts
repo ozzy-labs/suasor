@@ -15,8 +15,8 @@
  * package.json and by the npm-install `postinstall` warning (scripts/postinstall.mjs).
  */
 
-/** Minimum supported Bun major.minor (mirrors `engines.bun` ">=1.1"). */
-export const MIN_BUN_VERSION = "1.1";
+/** Minimum supported Bun major.minor (mirrors `engines.bun` ">=1.2"). */
+export const MIN_BUN_VERSION = "1.2";
 
 /** Result of a runtime check: `ok` when Bun is present and recent enough. */
 export interface RuntimeCheck {
