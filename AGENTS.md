@@ -35,6 +35,7 @@
 [ADR-0008]: docs/adr/0008-assistant-skills.md
 [ADR-0009]: docs/adr/0009-multi-agent-neutrality.md
 [ADR-0010]: docs/adr/0010-distribution.md
+[ADR-0035]: docs/adr/0035-project-skills-vendor-dev-skills.md
 
 ## 開発プロセス（spec-driven・必読）
 
@@ -97,7 +98,7 @@ bun test                   # テスト
 <!-- このブロックは sync-skills.sh が opt-in 後に自動管理する。opt-in していない場合は空のままで問題ない。 -->
 <!-- end: @ozzylabs/skills -->
 
-アシスタント 26 skill（Suasor 同梱・`suasor skills install`）の SSOT は `docs/skills/<name>/SKILL.md`（[ADR-0008]）。エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 経由。
+アシスタント 29 skill（Suasor 同梱・`suasor skills install`）の SSOT は `docs/skills/<name>/SKILL.md`（[ADR-0008]）。展開先の mirror（`.claude/skills/` / `.agents/skills/`）は **commit しない**（`.gitignore` 済みのローカル install 物・[ADR-0035]）。エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 由来で、suasor 開発に使う **project skill として host dir に commit 済み**（更新手順: [docs/skills/dev-skills-refresh.md](docs/skills/dev-skills-refresh.md)）。
 
 ## Adapter Files
 

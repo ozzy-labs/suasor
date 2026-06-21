@@ -4,6 +4,11 @@
 - Date: 2026-06-14
 - Deciders: Suasor maintainers
 
+> **Amended by [ADR-0035](0035-project-skills-vendor-dev-skills.md):** in-repo の dogfood-commit（mirror を
+> `.claude/skills/` / `.agents/skills/` に commit）と `skills-drift.sh` を廃止し、host dir は project skill
+> （vendored dev skill）の置き場に再定義した。assistant mirror は `.gitignore` 化（ローカル install のみ）。
+> 本 ADR の「アシスタント skill を提供し SSOT を `docs/skills/` に置く」中核判断は維持。
+
 ## Context
 
 ユーザーは「今日のまとめ」「次にやること」「この資料からタスク抽出」のような自然文で Suasor に依頼する。これらをエージェントホスト上の **skill**（自然文トリガ）として提供し、Suasor の MCP tool を組み合わせて応答させたい。

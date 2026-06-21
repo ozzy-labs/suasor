@@ -34,3 +34,34 @@ coverage/
 
 # Agent worktrees (isolated; tracked via git worktree metadata, never as a gitlink)
 .claude/worktrees/
+
+# Skills (ADR-0035): the host dirs hold project skills (vendored ecosystem dev
+# skills) which are committed, plus assistant-skill mirrors which are local
+# installs of the docs/skills SSOT and must NOT be committed. Ignore everything
+# under each host dir, then explicitly re-include the vendored dev skills. Any
+# `suasor skills install` output (assistant mirrors) is auto-ignored.
+.claude/skills/*
+!.claude/skills/commit/
+!.claude/skills/commit-conventions/
+!.claude/skills/drive/
+!.claude/skills/implement/
+!.claude/skills/lessons-triage/
+!.claude/skills/lint/
+!.claude/skills/lint-rules/
+!.claude/skills/pr/
+!.claude/skills/review/
+!.claude/skills/ship/
+!.claude/skills/test/
+!.claude/skills/usage-guard/
+.agents/skills/*
+!.agents/skills/commit/
+!.agents/skills/commit-conventions/
+!.agents/skills/drive/
+!.agents/skills/implement/
+!.agents/skills/lessons-triage/
+!.agents/skills/lint/
+!.agents/skills/lint-rules/
+!.agents/skills/pr/
+!.agents/skills/review/
+!.agents/skills/ship/
+!.agents/skills/test/

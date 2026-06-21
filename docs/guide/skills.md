@@ -81,7 +81,7 @@ description: 「次に何をする?」「やること教えて」…
 
 ### `modified` / drift と表示される
 
-mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。リポジトリ内では lefthook の `skills-drift` フック（`scripts/skills-drift.sh`）が pre-commit で mirror と SSOT の byte 一致を検査する（[ADR-0008](../adr/0008-assistant-skills.md)）。
+mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。なお [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo の mirror commit と `skills-drift` フックは廃止され、assistant mirror は `.gitignore` 済みのローカル install 物になった（commit されない）。host dir に commit されているのは vendored dev skill のみ。
 
 ### read / write 境界が分からない
 
