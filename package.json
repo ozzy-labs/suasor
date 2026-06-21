@@ -28,6 +28,7 @@
     "compile": "bun build ./src/index.ts --compile --outfile=dist/suasor --external @slack/web-api --external @microsoft/microsoft-graph-client --external @azure/msal-node --external googleapis --external box-typescript-sdk-gen --external playwright-core --external @napi-rs/keyring",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:coverage": "bun scripts/coverage-gate.mjs",
     "lint": "biome check .",
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "format": "biome format --write .",

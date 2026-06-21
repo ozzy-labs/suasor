@@ -1,0 +1,21 @@
+# Bun configuration. See https://bun.sh/docs/runtime/bunfig
+#
+# Test settings. `coverageSkipTestFiles` keeps the coverage report focused on
+# src/ (test files are excluded from the denominator).
+#
+# Coverage GATE is NOT configured here. Bun 1.2.23's native `coverageThreshold`
+# is unusable for an overall/global floor on this repo (verified):
+#   - the per-metric object/sub-table form (`{ line = .., function = .. }` /
+#     `[test.coverageThreshold]`) is parsed but silently NOT enforced;
+#   - the scalar form is enforced PER FILE, so entrypoint/wiring files with ~0%
+#     function coverage (src/index.ts, src/cli/commands/mcp-serve.ts) make any
+#     non-trivial global value fail;
+#   - the lcov reporter's line counts disagree with the text reporter (the
+#     numbers humans see), so gating on lcov is misleading.
+# Instead the gate lives in scripts/coverage-gate.mjs, which runs the tests and
+# enforces an overall line/function floor parsed from the text reporter. CI calls
+# that script (see .github/workflows/ci.yaml); it is the source of truth, so PRs
+# that bypass local lefthook (`--no-verify`, web edits) or land via an autonomous
+# run are still gated.
+[test]
+coverageSkipTestFiles = true

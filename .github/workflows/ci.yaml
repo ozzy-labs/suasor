@@ -31,12 +31,14 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # Coverage is measured (and printed) on every run, but stays advisory:
-      # there is no threshold gate yet. A failing/missing test still fails the
-      # step via `bun test`'s own exit code. Threshold enforcement is deferred
-      # to a follow-up issue (see #234).
-      - name: Test (with coverage)
-        run: bun test --coverage
+      # Coverage gate (#258). `coverage-gate.mjs` runs `bun test --coverage` and
+      # enforces an overall line/function floor parsed from the text reporter
+      # (Bun 1.2.23's native coverageThreshold can't express an overall floor for
+      # this repo — see bunfig.toml / scripts/coverage-gate.mjs). A failing test
+      # still fails the step via bun's own exit code; CI is the source of truth so
+      # a PR that bypasses local hooks is gated here. Floors ratchet up in #260.
+      - name: Test (coverage gate)
+        run: bun run test:coverage
 
       # Validate the distribution bundle (and its --external list) on every push,
       # not only at release time — a broken build otherwise lands on main unseen.
