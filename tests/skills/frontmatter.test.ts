@@ -123,8 +123,8 @@ describe("skillMatchesQuery", () => {
 describe("bundled skill catalog invariants (ADR-0032)", () => {
   const infos = loadSkillInfos(listBundledSkills());
 
-  test("there are 26 bundled skills", () => {
-    expect(infos.length).toBe(26);
+  test("there are 29 bundled skills", () => {
+    expect(infos.length).toBe(29);
   });
 
   test("every skill carries readOnly (boolean) + category (enum)", () => {
@@ -153,10 +153,10 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
     }
   });
 
-  test("exactly 17 read-only and 9 write skills (docs/skills/README.md split)", () => {
+  test("exactly 20 read-only and 9 write skills (docs/skills/README.md split)", () => {
     const read = infos.filter((i) => i.frontmatter.readOnly === true).length;
     const write = infos.filter((i) => i.frontmatter.readOnly === false).length;
-    expect(read).toBe(17);
+    expect(read).toBe(20);
     expect(write).toBe(9);
   });
 
