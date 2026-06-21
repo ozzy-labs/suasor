@@ -57,7 +57,6 @@ export {
   decisionRecord,
 } from "./decision-record.ts";
 export {
-  feedbackCandidateStep,
   ProposeFeedbackInput,
   type ProposeFeedbackOutput,
   proposeFeedback,

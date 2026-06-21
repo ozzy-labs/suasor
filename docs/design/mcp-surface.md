@@ -206,6 +206,8 @@ entity 軸の時系列ビューを返す read tool（実体は `src/mcp/queries.
 
 戻り値: `{ "origin": { kind, id }, "window": { since, until }, "items": [{ kind: "source"|"task"|"decision", id, at, record }] }`。`record` は各 kind の projection レコード（SourceRecord / TaskRecord / DecisionRecord）。接続 activity が無い entity は `items: []`。
 
+**完全性の境界**: graph walk は `depth` と内部の graphLimit（既定 `max(limit*4, 50)`）で打ち切る。打ち切りは BFS（hop 距離）順で newest-first sort の**前**に起こるため、到達ノード数が graphLimit を超える dense な entity では「より新しいが遠い（hop が多い）」item が落ちうる。newest-first 保証は graph 到達可能な部分集合内でのみ成り立つ。疎で遠い provenance を網羅したい場合は `depth` を上げる。
+
 ### `catchup` skill のバックエンド方針（レビュー D1 確定）
 
 assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の 26 skill 中、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。

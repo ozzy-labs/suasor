@@ -1249,6 +1249,15 @@ export interface ActivityTimelineOptions {
   /**
    * Cap on graph nodes explored while discovering related entities (keeps a
    * dense graph bounded). Defaults to a generous multiple of `limit`.
+   *
+   * NOTE — completeness bound: `expandGraph` truncates in breadth-first (hop-
+   * distance) order once this cap is hit, *before* the timeline is sorted
+   * newest-first. So on a provenance graph whose reachable node count exceeds
+   * `graphLimit`, items that are newer but farther (more hops) from the origin
+   * can be dropped — the "newest-first" guarantee holds only within the
+   * graph-reachable subset. The default ceiling is deliberately generous (≥ 4×
+   * `limit`); raise it (or lower `depth`) for very dense origins where exhaustive
+   * recency coverage matters.
    */
   graphLimit?: number;
 }
@@ -1287,6 +1296,10 @@ function activityAt(kind: ActivityKind, record: ActivityItem["record"]): string 
  * natural timestamp (source observed / task updated / decision recorded), apply
  * the optional time window, then sort newest-first and cap to `limit`. The origin
  * entity itself is included when it is one of the timeline kinds. Pure SELECTs.
+ *
+ * Completeness is bounded by `depth` and `graphLimit`: the graph walk truncates
+ * in breadth-first order before the newest-first sort, so a very dense origin can
+ * drop newer-but-farther items (see {@link ActivityTimelineOptions.graphLimit}).
  */
 export function buildActivityTimeline(
   sqlite: Database,

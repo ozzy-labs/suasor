@@ -520,9 +520,12 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "(kind + id — person / project / source / …) into one time-ordered view, " +
         "newest-first (Issue #279). Where `brief` is period-axis only, this is " +
         'entity-axis: "everything around this entity". Walks the links projection ' +
-        "from the origin, stamps each item with its natural timestamp (source " +
-        "observed / task updated / decision recorded), applies the optional " +
-        "observed/updated/recorded window, then sorts + caps to limit. Read-only.",
+        "from the origin (bounded by `depth`), stamps each item with its natural " +
+        "timestamp (source observed / task updated / decision recorded), applies the " +
+        "optional observed/updated/recorded window, then sorts + caps to limit. " +
+        "Completeness is bounded by `depth` (the graph walk truncates breadth-first " +
+        "before the newest-first sort), so raise `depth` for sparse, distant " +
+        "provenance. Read-only.",
       inputSchema: {
         kind: z.string().min(1).describe("Origin entity kind (e.g. person / source / project)."),
         id: z.string().min(1).describe("Origin entity id."),

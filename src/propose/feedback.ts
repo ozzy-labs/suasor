@@ -43,38 +43,16 @@ interface ProposalStateRow {
 }
 
 /**
- * Record feedback for one pending candidate WITHOUT opening its own transaction
- * (cf. `proposeFeedback`, which wraps this in `sqlite.transaction`). Same
- * state-dependent contract: records only on a `pending` row; `applied` /
- * `rejected` / `missing` are reported, not mutated.
- */
-export function feedbackCandidateStep(
-  store: Store,
-  candidateId: string,
-  reason: string,
-  now: Date,
-): ProposeFeedbackOutput {
-  const row = store.connection.sqlite
-    .query<ProposalStateRow, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
-    .get(candidateId);
-
-  if (row === null) return { candidateId, status: "missing" };
-  if (row.state === "applied") return { candidateId, status: "applied" };
-  if (row.state === "rejected") return { candidateId, status: "rejected" };
-
-  const persisted = appendEvent(
-    store.connection.sqlite,
-    { type: "ProposalFeedback", candidateId, reason },
-    now,
-  );
-  applyEvent(store.connection.sqlite, persisted);
-  return { candidateId, status: "recorded" };
-}
-
-/**
  * Record feedback on a pending proposal candidate (append `ProposalFeedback`).
  * The host must have human input first. Re-recording overwrites the prior
  * feedback reason (latest note wins); the candidate stays `pending`.
+ *
+ * State-dependent: records only on a `pending` row; an `applied` / `rejected`
+ * candidate is decided and `missing` means no such ledger row — all three are
+ * reported in the result, not mutated. The SELECT-then-append runs in a single
+ * transaction so the state check and the event append are atomic. (Unlike
+ * apply/reject there is no `*Step` variant: `proposal.feedback` is not part of
+ * `propose.batch`, so it needs no transaction-less composable step.)
  */
 export function proposeFeedback(
   store: Store,
@@ -82,7 +60,18 @@ export function proposeFeedback(
   now: Date = new Date(),
 ): ProposeFeedbackOutput {
   const { candidateId, reason } = ProposeFeedbackInput.parse(input);
-  return store.connection.sqlite.transaction(() =>
-    feedbackCandidateStep(store, candidateId, reason, now),
-  )();
+  const sqlite = store.connection.sqlite;
+  return sqlite.transaction(() => {
+    const row = sqlite
+      .query<ProposalStateRow, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
+      .get(candidateId);
+
+    if (row === null) return { candidateId, status: "missing" } as const;
+    if (row.state === "applied") return { candidateId, status: "applied" } as const;
+    if (row.state === "rejected") return { candidateId, status: "rejected" } as const;
+
+    const persisted = appendEvent(sqlite, { type: "ProposalFeedback", candidateId, reason }, now);
+    applyEvent(sqlite, persisted);
+    return { candidateId, status: "recorded" } as const;
+  })();
 }
