@@ -16,3 +16,8 @@ export {
   LlmConfig,
   StorageConfig,
 } from "./schema.ts";
+export {
+  type ConfigWarning,
+  type ConfigWarningInput,
+  collectConfigWarnings,
+} from "./warnings.ts";
