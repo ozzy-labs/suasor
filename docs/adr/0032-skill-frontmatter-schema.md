@@ -38,14 +38,14 @@
 **後方互換の担保:**
 
 - スキーマは **未知フィールドを許容**（`.passthrough()` 相当）し、追加フィールドが欠落していても **パースは失敗しない**。`name` / `description` だけの旧 frontmatter は引き続き valid。
-- `readOnly` / `category` は型としては optional だが、**全 26 skill に付与する**ことを validator テストで担保する（下記 (c)）。「実質必須」とはこの意味。新規 skill 追加時に欠落すれば validator テストが落ちる。
+- `readOnly` / `category` は型としては optional だが、**全 29 skill に付与する**ことを validator テストで担保する（下記 (c)）。「実質必須」とはこの意味。新規 skill 追加時に欠落すれば validator テストが落ちる。
 - mirror（`.claude/skills/` / `.agents/skills/`）は SSOT を byte コピーするだけなので（[ADR-0008](0008-assistant-skills.md)・`scripts/skills-drift.sh`）、frontmatter 拡張は drift フックと自動的に整合する。**SSOT を編集したら `suasor skills install` で mirror を再生成する**運用は不変。
 
 ### (b) `category` の値集合と `pairs` の整合
 
 - `category` は上表の閉じた集合（enum 相当）。新カテゴリを足すときは本 ADR とスキーマを同時に更新する。
 - `pairs` は **双方向で一致**させる（`a.pairs` に `b` があれば `b.pairs` に `a` がある）。validator テストで対称性を検証する。
-- `readOnly` の真偽は `docs/skills/README.md` の Read 系（17）/ HITL write 系（9）分類を SSOT とし、frontmatter に転記する。
+- `readOnly` の真偽は `docs/skills/README.md` の Read 系（19）/ HITL write 系（10）分類を SSOT とし、frontmatter に転記する。さらに validator テストが各 skill の `mcp_tools_read/write` を MCP tool catalog（`src/mcp/tool-catalog.ts`）と突き合わせ、tool 実在性と `readOnlyHint` 整合（read→`true` / write→`false`）、`readOnly:false`→非空 `mcp_tools_write` を検査して boundary drift を捕まえる。
 
 ### (c) frontmatter validator（テスト + drift 連携可能）
 
@@ -57,7 +57,7 @@
 
 テスト `tests/skills/frontmatter.test.ts` が:
 
-1. **全 26 SKILL.md がスキーマを通る**（必須 `name` / `description`、`readOnly` boolean、`category` が enum 値）。
+1. **全 29 SKILL.md がスキーマを通る**（必須 `name` / `description`、`readOnly` boolean、`category` が enum 値）。
 2. `name` frontmatter とディレクトリ名が一致する。
 3. `pairs` の対称性。
 4. mirror（`.claude/skills/` / `.agents/skills/`）の frontmatter が SSOT と一致する（drift と同等の回帰。byte 一致は `scripts/skills-drift.sh` が pre-commit で別途担保）。
@@ -85,5 +85,5 @@ CLI は import-clean を保つ（frontmatter ロードは `execute` 内で lazy-
 
 ### Negative / Trade-offs
 
-- 26 skill 全てに frontmatter フィールドを転記する初期コストと、`README.md` の read/write 分類との二重管理（validator が乖離を捕まえるので drift は検知できるが、SSOT が README と frontmatter に分かれる）。
+- 29 skill 全てに frontmatter フィールドを転記する初期コストと、`README.md` の read/write 分類との二重管理（validator が乖離を捕まえるので drift は検知できるが、SSOT が README と frontmatter に分かれる）。
 - `category` enum を増やすたびに ADR + スキーマ + 全 skill 見直しが要る（閉じた集合のメンテコスト）。best-effort な発見性向上のためで、過剰に細分化しない方針で抑える。

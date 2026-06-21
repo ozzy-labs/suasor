@@ -12,6 +12,7 @@
  * mirrors are no longer committed. install correctness lives in install.test.ts.
  */
 import { describe, expect, test } from "bun:test";
+import { mcpToolCatalog } from "../../src/mcp/tool-catalog.ts";
 import { listBundledSkills } from "../../src/skills/catalog.ts";
 import {
   extractFrontmatterBlock,
@@ -153,11 +154,61 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
     }
   });
 
-  test("exactly 20 read-only and 9 write skills (docs/skills/README.md split)", () => {
+  test("exactly 19 read-only and 10 write skills (docs/skills/README.md split)", () => {
     const read = infos.filter((i) => i.frontmatter.readOnly === true).length;
     const write = infos.filter((i) => i.frontmatter.readOnly === false).length;
-    expect(read).toBe(20);
-    expect(write).toBe(9);
+    expect(read).toBe(19);
+    expect(write).toBe(10);
+  });
+
+  // Cross-check the read/write boundary (frontmatter) against the MCP tool
+  // catalog so a skill cannot claim a tool that does not exist, nor misclassify a
+  // write tool as read (or vice-versa). Hosts trust this boundary for
+  // auto-approve, so drift here is a HITL-safety bug (ADR-0004 / ADR-0032).
+  const catalog = mcpToolCatalog();
+  const readOnlyByName = new Map(catalog.map((t) => [t.name, t.readOnlyHint]));
+
+  test("every mcp_tools_read tool exists in the catalog and is readOnlyHint:true", () => {
+    for (const info of infos) {
+      for (const tool of info.frontmatter.mcp_tools_read ?? []) {
+        const hint = readOnlyByName.get(tool);
+        expect(hint, `${info.name} reads '${tool}' which must exist in the MCP catalog`).toBe(true);
+      }
+    }
+  });
+
+  test("every mcp_tools_write tool exists in the catalog and is readOnlyHint:false", () => {
+    for (const info of infos) {
+      for (const tool of info.frontmatter.mcp_tools_write ?? []) {
+        const hint = readOnlyByName.get(tool);
+        expect(
+          hint,
+          `${info.name} writes '${tool}' which must be a write (readOnlyHint:false) catalog tool`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  test("readOnly:false skills declare at least one mcp_tools_write tool", () => {
+    for (const info of infos) {
+      if (info.frontmatter.readOnly === false) {
+        expect(
+          (info.frontmatter.mcp_tools_write ?? []).length,
+          `${info.name} is readOnly:false so it must list its write tool(s)`,
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("readOnly:true skills declare no mcp_tools_write tools", () => {
+    for (const info of infos) {
+      if (info.frontmatter.readOnly === true) {
+        expect(
+          info.frontmatter.mcp_tools_write ?? [],
+          `${info.name} is readOnly:true so it must not list write tools`,
+        ).toEqual([]);
+      }
+    }
   });
 
   // NOTE: in-repo の dogfood-commit（mirror を commit して SSOT との byte 一致を検査する）は

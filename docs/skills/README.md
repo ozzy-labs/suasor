@@ -4,7 +4,9 @@
 
 > 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
-## Read 系（自律 OK・20）
+## Read 系（自律 OK・19）
+
+各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_*` が SSOT・[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -22,18 +24,18 @@
 | [`pr-review`](pr-review/SKILL.md) | 「PR #N レビューして」 | recall.search (+ gh diff) |
 | [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / recall.search（text-only・persist なし） |
 | [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | recall.search / decision.list / brief（text-only・persist なし） |
-| [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | slack.demand.list（→ inbox.add / source-extract へ HITL 橋渡し） |
 | [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
 | [`doc-diff`](doc-diff/SKILL.md) | 「前回から何が変わった」「この資料の差分」 | source.history（event log の本文版）+ graph.related |
 | [`doc-review`](doc-review/SKILL.md) | 「この設計書レビューして」「仕様のレビュー」 | source.get + recall.search / decision.list / graph.related |
 | [`commitment-chase`](commitment-chase/SKILL.md) | 「催促して」「相手の約束で期限切れ」 | commitment.list(owed_to_me) + graph.related / source.get（text-only・persist なし） |
 | [`weekly-review`](weekly-review/SKILL.md) | 「週次レビュー」「棚卸し」 | task.list(overdue) / commitment.list / inbox.list / brief |
 
-## HITL write 系（人の承認で適用・9）
+## HITL write 系（人の承認で適用・10）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
-| [`reply-draft`](reply-draft/SKILL.md) | 「返信案考えて」「下書き作って」 | propose.generate(reply_draft) → propose.apply |
+| [`reply-draft`](reply-draft/SKILL.md) | 「返信案考えて」「下書き作って」 | propose.generate(reply_draft) → propose.apply / draft.export |
+| [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | slack.demand.list → inbox.add / source.get → propose.generate(source_extract) → propose.apply |
 | [`inbox-triage`](inbox-triage/SKILL.md) | 「受信箱整理して」「未処理捌いて」 | inbox.list → propose.generate(inbox_triage) → task.create / propose.apply |
 | [`source-extract`](source-extract/SKILL.md) | 「この資料からタスク抽出」 | source.get → propose.generate(source_extract) → propose.apply |
 | [`meeting-followup`](meeting-followup/SKILL.md) | 「会議後のaction items」「議事録からタスク」 | source.list(calendar) → propose.generate(meeting_followup) → propose.apply |
@@ -41,7 +43,7 @@
 | [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject / propose.batch |
 | [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
 | [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
-| [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply |
+| [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply / draft.export |
 
 エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）で、suasor 開発に使う project skill として host dir に commit 済み（[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md)・更新は [dev-skills-refresh.md](dev-skills-refresh.md)）。
 

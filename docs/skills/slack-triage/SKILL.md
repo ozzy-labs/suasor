@@ -1,7 +1,7 @@
 ---
 name: slack-triage
 description: 「Slack の未処理を捌いて」「mention/DM まとめて」「Slack で呼ばれてるやつ」「Slack の未読対応」と頼まれたら、Suasor MCP の slack.demand.list（@mention / DM の未処理 signal）を集めて緊急度・種別で整理し、action が要るものは inbox.add で捕捉 / source.get → propose.generate(source_extract) で task・decision・返信下書き候補へ橋渡しする。demand の列挙は read で自律 OK、書き込み橋渡しは HITL。
-readOnly: true
+readOnly: false
 category: triage
 triggers:
   - Slack の未処理を捌いて
@@ -12,12 +12,15 @@ pairs: []
 mcp_tools_read:
   - slack.demand.list
   - source.get
-mcp_tools_write: []
+mcp_tools_write:
+  - inbox.add
+  - propose.generate
+  - propose.apply
 ---
 
 # slack-triage
 
-Slack の @mention / DM を「読むべきが未処理」signal として集約し、捌く read 中心 skill（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0013](../../adr/0013-slack-engagement-axis.md)）。demand の列挙は read で自律 OK、action 化（task / decision / 返信 / inbox 捕捉）は HITL で橋渡しする（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `personal-brief` が状況 signal として取り込む demand を、Slack 起点で正面から扱う。
+Slack の @mention / DM を「読むべきが未処理」signal として集約し、捌く HITL write skill（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0013](../../adr/0013-slack-engagement-axis.md)）。demand の列挙は read で自律 OK だが、action 化（task / decision / 返信 / inbox 捕捉）で write tool（`inbox.add` / `propose.generate` / `propose.apply`）を HITL で呼ぶため boundary は write（auto-apply なし・[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `personal-brief` が状況 signal として取り込む demand を、Slack 起点で正面から扱う。
 
 ## いつ発火するか
 
@@ -37,7 +40,7 @@ read で集めて、action 化（write）は HITL（[ADR-0004](../../adr/0004-mc
 
 ## 制約
 
-- read 中心。`slack.demand.list` は read（自律 OK）。`inbox.add` / `propose.apply` 等の書き込みは HITL（人の承認なしに呼ばない・auto-apply なし）
+- demand 列挙は read（自律 OK）だが、write tool（`inbox.add` / `propose.generate` / `propose.apply`）を呼ぶため boundary は write。書き込みは HITL（人の承認なしに呼ばない・auto-apply なし）
 - `selfUserId` も config の `self_user_id` も無いと mention は無効化され DM のみ返る（`kinds: ["mention"]` 指定時は空）
 - demand は導出 view（新規 table なし）。`mention` = `body` に `<@uid>` を含む / `dm` = channel id が `D` 始まり（[ADR-0012](../../adr/0012-slack-demand-digest.md)）
 - 本 skill は手順書のみで実処理を持たない

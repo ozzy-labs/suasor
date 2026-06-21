@@ -13,6 +13,7 @@ mcp_tools_read:
 mcp_tools_write:
   - propose.generate
   - propose.apply
+  - draft.export
 ---
 
 # reply-draft
