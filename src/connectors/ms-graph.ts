@@ -12,17 +12,34 @@
  *   `finalize` returns `cursor: null` like other fingerprint-based connectors.
  *   Transient `429` responses are retried by the SDK's default RetryHandler
  *   (`initWithMiddleware`), so the connector does not add its own retry loop.
+ * - **body / extraction** — most records carry text bodies (mail/calendar/teams
+ *   subject + preview). OneDrive `files` are name-only, but Office/PDF files
+ *   (`.docx`/`.xlsx`/`.pptx`/`.pdf`) additionally carry an `extractable` handle
+ *   so the shared sync extraction stage (ADR-0024) can fetch their content via
+ *   the Graph API (`/drive/items/{id}/content`, read-only) and replace the body
+ *   with sidecar-extracted text. Non-extractable files stay name-only. Fetch /
+ *   extraction is best-effort: a download or sidecar failure degrades back to
+ *   name-only and ingest still succeeds (ADR-0024 §3). Drive content fetch shares
+ *   the same connector-agnostic base as `local` / `box` (#243).
  * - **identity** — `msgraph:<resource>:<id>` (cross-source-unique, resource-
  *   prefixed, ADR-0007). `source_type` is one of `ms365_mail`, `ms365_calendar`,
  *   `ms365_file`, `ms365_teams_message`.
+ * - **content fingerprint (files)** — for OneDrive `files`, the connector supplies
+ *   the DriveItem content hash (`file.hashes.quickXorHash`, else sha256/sha1) as
+ *   the delta fingerprint so a content-only change (same filename) surfaces as
+ *   `SourceBodyUpdated` and re-extracts (the content-fingerprint prerequisite for
+ *   API connectors, ADR-0024 §6). When no hash is reported the fingerprint is
+ *   omitted and the sync service falls back to SHA-256-over-body (the filename).
  * - **import-clean** — `@microsoft/microsoft-graph-client` + `@azure/msal-node`
  *   are **lazy-imported inside `sync`**, so building the connector / registry
  *   never pulls the SDKs (ADR-0007, NFR-PRF-1). Top-level imports are limited to
- *   `zod` + the contract types.
+ *   `zod` + the contract + extraction extension set (a pure `Set`, no SDK).
  * - **secrets** — the client secret comes from `ctx.secret("clientSecret")`
  *   (keychain + env override, NFR-PRV-4); tenant/client ids live in config.
  */
+import { extname } from "node:path";
 import { z } from "zod";
+import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
   ConnectorConfig,
@@ -51,6 +68,14 @@ export type MsGraphConnectorConfig = z.infer<typeof MsGraphConnectorConfig>;
 
 export const MS_GRAPH_CONNECTOR_NAME = "ms-graph";
 
+/** DriveItem content hashes (any one drives the content fingerprint, ADR-0024 §6). */
+interface GraphFileHashes {
+  /** OneDrive's native fast hash (preferred when present). */
+  quickXorHash?: string;
+  sha256Hash?: string;
+  sha1Hash?: string;
+}
+
 /** Minimal Graph item shape (the fields we map). */
 interface GraphItem {
   id: string;
@@ -62,6 +87,21 @@ interface GraphItem {
   receivedDateTime?: string;
   start?: { dateTime?: string };
   createdDateTime?: string;
+  /** DriveItem byte size (drives the extraction size guard, ADR-0024 §5). */
+  size?: number;
+  /** DriveItem `file` facet (present on files, absent on folders). */
+  file?: { hashes?: GraphFileHashes };
+}
+
+/**
+ * Pick a stable content hash from a DriveItem `file` facet, preferring OneDrive's
+ * native `quickXorHash` and falling back to sha256/sha1. Used as the delta
+ * fingerprint so a content-only change re-extracts (ADR-0024 §6). `undefined`
+ * when the item is not a file or reports no hash (sync falls back to body hash).
+ */
+function contentHash(item: GraphItem): string | undefined {
+  const h = item.file?.hashes;
+  return h?.quickXorHash ?? h?.sha256Hash ?? h?.sha1Hash ?? undefined;
 }
 
 /** A Graph collection page (OData). */
@@ -88,7 +128,10 @@ const RESOURCE_SPEC: Record<
   },
   files: {
     sourceType: "ms365_file",
-    path: (u) => `/users/${u}/drive/root/children?$top=50&$select=id,name,lastModifiedDateTime`,
+    // `size` + `file` (content hashes) drive the extraction size guard and
+    // content fingerprint (ADR-0024 §5/§6) on top of the name-only ingest.
+    path: (u) =>
+      `/users/${u}/drive/root/children?$top=50&$select=id,name,lastModifiedDateTime,size,file`,
   },
   teams: {
     sourceType: "ms365_teams_message",
@@ -96,8 +139,25 @@ const RESOURCE_SPEC: Record<
   },
 };
 
-/** Build a `SourceRecord` for one Graph item of a resource family. */
-function toRecord(resource: MsGraphResource, item: GraphItem): SourceRecord {
+/**
+ * Build a `SourceRecord` for one Graph item of a resource family.
+ *
+ * For the `files` resource, Office/PDF DriveItems additionally carry an
+ * `extractable` handle whose `readBytes` lazily downloads the file content via the
+ * Graph API; the shared sync extraction stage (ADR-0024) then replaces the body
+ * with the sidecar's extracted text for new/changed records. The `fingerprint` is
+ * the DriveItem content hash when available, so a content-only change (same
+ * filename) surfaces as `SourceBodyUpdated` and re-extracts (ADR-0024 §6). When no
+ * hash is reported the fingerprint is omitted and the sync service falls back to
+ * SHA-256-over-body (the filename). `readBytes` is lazy — called at most once, and
+ * only when extraction actually runs — so non-extractable files and unchanged
+ * records pay no download cost.
+ */
+function toRecord(
+  resource: MsGraphResource,
+  item: GraphItem,
+  client: MsGraphClientLike,
+): SourceRecord {
   const spec = RESOURCE_SPEC[resource];
   const title = item.subject ?? item.name ?? "";
   const detail = item.body?.content ?? item.bodyPreview ?? "";
@@ -108,23 +168,84 @@ function toRecord(resource: MsGraphResource, item: GraphItem): SourceRecord {
     item.start?.dateTime ??
     item.createdDateTime ??
     new Date(0).toISOString();
+
+  // Only OneDrive `files` carry binary content to extract. Office/PDF DriveItems
+  // with a known `size` get an extraction handle (lazy download) + content
+  // fingerprint; everything else stays name-only (ADR-0024).
+  const ext = resource === "files" && item.name ? extname(item.name).toLowerCase() : "";
+  const extractable =
+    resource === "files" && EXTRACTABLE_EXTENSIONS.has(ext) && item.size !== undefined
+      ? {
+          filename: item.name ?? "",
+          byteSize: item.size,
+          readBytes: (): Promise<Uint8Array> => client.downloadFile(item.id),
+        }
+      : undefined;
+  const fingerprint = resource === "files" ? contentHash(item) : undefined;
+
   return {
     externalId: `msgraph:${resource}:${item.id}`,
     sourceType: spec.sourceType,
     body,
     observedAt,
     meta: { resource, id: item.id },
+    ...(fingerprint ? { fingerprint } : {}),
+    ...(extractable !== undefined ? { extractable } : {}),
   };
 }
 
 /**
  * The Graph client surface we depend on: fetch a JSON page for a relative API
- * path. Declared structurally so tests inject a fake without the SDK and so the
- * real client is lazy-loaded.
+ * path, and download one DriveItem's bytes. Declared structurally so tests inject
+ * a fake without the SDK and so the real client is lazy-loaded.
  */
 export interface MsGraphClientLike {
   /** GET a Graph collection page by relative path (or an absolute nextLink). */
   getPage(path: string): Promise<GraphPage>;
+  /** Download one DriveItem's raw bytes (read-only; used by the extraction handle). */
+  downloadFile(itemId: string): Promise<Uint8Array>;
+}
+
+/**
+ * Drain a stream-ish download result (web `ReadableStream`, Node `Readable`, or
+ * any async-iterable of byte chunks) into a single `Uint8Array`. The Graph SDK's
+ * `getStream()` returns different shapes across runtimes, so we normalize them all
+ * here. `undefined` (no content) yields an empty buffer so the caller falls back
+ * to name-only.
+ */
+async function drainStream(stream: unknown): Promise<Uint8Array> {
+  if (!stream) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const push = (chunk: unknown) => {
+    const bytes =
+      chunk instanceof Uint8Array
+        ? chunk
+        : new Uint8Array(chunk as ArrayBuffer | ArrayLike<number>);
+    chunks.push(bytes);
+    total += bytes.byteLength;
+  };
+  // Web ReadableStream (has getReader): pull until done.
+  const getReader = (stream as { getReader?: () => ReadableStreamDefaultReader<Uint8Array> })
+    .getReader;
+  if (typeof getReader === "function") {
+    const r = getReader.call(stream);
+    for (;;) {
+      const { done, value } = await r.read();
+      if (done) break;
+      if (value) push(value);
+    }
+  } else {
+    // Node Readable / any async iterable of chunks.
+    for await (const chunk of stream as AsyncIterable<Uint8Array>) push(chunk);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 /** How the connector obtains a Graph client (overridable in tests). */
@@ -132,6 +253,8 @@ export type MsGraphClientFactory = (auth: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  /** User principal whose drive content downloads are scoped to (file fetch). */
+  user: string;
 }) => Promise<MsGraphClientLike> | MsGraphClientLike;
 
 /**
@@ -143,6 +266,7 @@ const defaultMsGraphClientFactory: MsGraphClientFactory = async ({
   tenantId,
   clientId,
   clientSecret,
+  user,
 }) => {
   const { ConfidentialClientApplication } = await import("@azure/msal-node");
   const { Client } = await import("@microsoft/microsoft-graph-client");
@@ -169,6 +293,13 @@ const defaultMsGraphClientFactory: MsGraphClientFactory = async ({
       // `client.api` accepts both a relative resource path and an absolute
       // `@odata.nextLink`, so the same call covers first page and pagination.
       return (await client.api(path).get()) as GraphPage;
+    },
+    async downloadFile(itemId) {
+      // Read-only content fetch for extraction (ADR-0024). `/content` redirects to
+      // a pre-authenticated download URL; `getStream()` follows it and returns the
+      // raw bytes as a stream. Drain it (runtime-agnostic) and concatenate.
+      const stream = await client.api(`/users/${user}/drive/items/${itemId}/content`).getStream();
+      return drainStream(stream);
     },
   };
 };
@@ -209,6 +340,7 @@ class MsGraphConnector implements Connector {
       tenantId: this.config.tenantId,
       clientId: this.config.clientId,
       clientSecret,
+      user: this.config.user,
     });
     this.isolation = null;
 
@@ -222,7 +354,7 @@ class MsGraphConnector implements Connector {
         while (path) {
           const page: GraphPage = await client.getPage(path);
           for (const item of page.value ?? []) {
-            yield toRecord(resource, item);
+            yield toRecord(resource, item, client);
           }
           path = page["@odata.nextLink"];
         }
