@@ -135,3 +135,36 @@ describe("box folders backoff", () => {
     expect(waited).toEqual([]); // 4xx (non-429) is terminal
   });
 });
+
+describe("per-attempt timeout default (Issue #269)", () => {
+  test("a hung host is aborted (per-attempt timeout) and retried, then succeeds", async () => {
+    // The default per-attempt timeout (DEFAULT_CONNECTOR_TIMEOUT_MS) means a fetch
+    // that never resolves on its own is aborted and retried as a transient failure
+    // rather than pinning a bulk-sync worker forever. We force a *short* timeout via
+    // the injectable retry options so the test does not wait the real budget: the
+    // first attempt hangs until aborted (its signal fires), the second resolves 200.
+    const { sleep, waited } = fakeSleep();
+    let attempt = 0;
+    const fetchImpl = (_url: string, init?: RequestInit): Promise<Response> => {
+      attempt += 1;
+      if (attempt === 1) {
+        // Hang until the per-attempt AbortController aborts us.
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      }
+      return Promise.resolve({
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({ login: "u@x", name: "U" }),
+      } as unknown as Response);
+    };
+    const transport = boxAuthTransport({ fetchImpl, sleep, timeoutMs: 5 });
+    const res = await transport("tok");
+    expect(res.status).toBe(200);
+    expect(attempt).toBe(2); // first attempt timed out, second succeeded
+    expect(waited.length).toBe(1); // one backoff between the timed-out attempt and the retry
+  });
+});

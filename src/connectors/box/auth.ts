@@ -13,7 +13,11 @@
  * a transient 429/5xx (with `Retry-After` honoured) is retried rather than failing
  * the check (Issue #269). The token is never echoed in thrown errors.
  */
-import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 
 /** Identity resolved from a successful `GET /2.0/users/me`. */
 export interface BoxAuthResult {
@@ -35,11 +39,14 @@ export type BoxAuthTransport = (
  * success" with no real waiting.
  */
 export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): BoxAuthTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
   return async (token) => {
     const res = await fetchWithRetry(
       "https://api.box.com/2.0/users/me",
       { method: "GET", headers: { Authorization: `Bearer ${token}` } },
-      retry,
+      opts,
     );
     let body: Record<string, unknown> = {};
     try {

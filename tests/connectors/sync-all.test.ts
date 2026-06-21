@@ -289,11 +289,13 @@ describe("resolveConcurrency", () => {
 /**
  * A connector whose `sync` blocks on an externally-resolved gate so a test can
  * observe how many connectors are mid-sync at once (the bounded-pool invariant).
- * `tracker` records concurrency; `release()` lets all gated connectors finish.
+ * `tracker` records concurrency and signals `onEnter` each time a connector
+ * actually starts; `release()` lets all gated connectors finish. The `onEnter`
+ * signal lets a test await pool saturation deterministically (no wall-clock sleep).
  */
 function gatedConnector(
   name: string,
-  tracker: { inflight: number; max: number },
+  tracker: { inflight: number; max: number; onEnter: () => void },
   gate: Promise<void>,
 ): Connector {
   return {
@@ -302,6 +304,7 @@ function gatedConnector(
     async *sync(): AsyncIterable<SourceRecord> {
       tracker.inflight += 1;
       tracker.max = Math.max(tracker.max, tracker.inflight);
+      tracker.onEnter();
       try {
         await gate;
       } finally {
@@ -315,9 +318,29 @@ function gatedConnector(
   };
 }
 
+/** A latch that resolves once `count` signals have arrived (a counting barrier). */
+function barrier(count: number): { signal: () => void; reached: Promise<void> } {
+  let seen = 0;
+  let resolve!: () => void;
+  const reached = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return {
+    signal: () => {
+      seen += 1;
+      if (seen >= count) resolve();
+    },
+    reached,
+  };
+}
+
 describe("runBulkSync — bounded concurrency (Issue #269)", () => {
   test("never runs more than `concurrency` connectors at once", async () => {
-    const tracker = { inflight: 0, max: 0 };
+    // Deterministic (no sleep): wait until exactly `poolSize` connectors have
+    // entered, assert the pool is saturated but not over, then release the gate.
+    const poolSize = 2;
+    const entered = barrier(poolSize);
+    const tracker = { inflight: 0, max: 0, onEnter: () => entered.signal() };
     let release!: () => void;
     const gate = new Promise<void>((r) => {
       release = r;
@@ -327,17 +350,19 @@ describe("runBulkSync — bounded concurrency (Issue #269)", () => {
     const run = runBulkSync(store, {
       names,
       connectors: Object.fromEntries(names.map((n) => [n, {}])),
-      concurrency: 2,
+      concurrency: poolSize,
       loadConnector: async (name) => gatedConnector(name, tracker, gate),
     });
-    // Let the pool spin up its workers, then release every gated connector.
-    await new Promise((r) => setTimeout(r, 10));
-    expect(tracker.max).toBe(2); // bounded at the requested concurrency
+    // Block until the first `poolSize` connectors are gated (pool saturated).
+    await entered.reached;
+    expect(tracker.inflight).toBe(poolSize); // saturated
+    expect(tracker.max).toBe(poolSize); // and never exceeded the bound
     release();
     const result = await run;
 
     expect(result.succeeded).toBe(5);
     expect(result.failed).toBe(0);
+    expect(tracker.max).toBe(poolSize); // bound held for the whole run
     expect(result.results.map((r) => r.connector)).toEqual(names); // names order
   });
 

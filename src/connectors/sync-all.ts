@@ -206,9 +206,13 @@ async function runOneConnector(
   name: string,
   options: BulkSyncOptions,
 ): Promise<{ entry: BulkSyncEntry; ok: boolean }> {
-  options.onConnectorStart?.(name);
   const slice = options.connectors[name] ?? {};
   try {
+    // `onConnectorStart` is inside the try so a misbehaving caller callback that
+    // throws is mapped to a failed entry rather than rejecting the worker promise
+    // — on the bounded-pool path that rejection would otherwise abort `Promise.all`
+    // and discard every other in-flight connector (breaking continue-on-error).
+    options.onConnectorStart?.(name);
     const connector = await options.loadConnector(name, slice);
     const outcome = await syncConnector(store, connector, { ...(options.syncOptions ?? {}) });
     return classifyOutcome(name, outcome, options.onConnectorError);

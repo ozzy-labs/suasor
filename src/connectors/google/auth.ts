@@ -21,7 +21,11 @@
  * the Slack/GitHub `_fetch.ts` already had). The refresh token / client secret are
  * never echoed in thrown errors.
  */
-import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 
 /** Granted scope + lifetime resolved from a successful refresh exchange. */
 export interface GoogleAuthResult {
@@ -51,6 +55,9 @@ export type GoogleAuthTransport = (
  * "429 → Retry-After → success" with no real waiting.
  */
 export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): GoogleAuthTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
   return async ({ clientId, refreshToken, clientSecret }) => {
     const form = new URLSearchParams({
       client_id: clientId,
@@ -65,7 +72,7 @@ export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): GoogleA
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form.toString(),
       },
-      retry,
+      opts,
     );
     let body: Record<string, unknown> = {};
     try {

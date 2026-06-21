@@ -21,7 +21,11 @@
  * `clientSecret` for installed/web clients) at Google's OAuth2 token endpoint —
  * the same exchange `google auth test` performs (`src/connectors/google/auth.ts`).
  */
-import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 
 /** One calendar surfaced for the discovery CLI. */
 export interface GoogleCalendar {
@@ -85,11 +89,14 @@ const CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calen
  * no real waiting.
  */
 export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): GoogleCalendarsTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
   return async ({ method, url, headers, body }) => {
     const res = await fetchWithRetry(
       url,
       { method, headers, ...(body !== undefined ? { body } : {}) },
-      retry,
+      opts,
     );
     let parsed: unknown = {};
     try {

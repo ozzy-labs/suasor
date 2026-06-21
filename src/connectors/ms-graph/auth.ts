@@ -16,7 +16,11 @@
  * (with `Retry-After` honoured) is retried rather than failing the check (Issue
  * #269). The client secret is never echoed in thrown errors.
  */
-import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 
 /** Identity + granted scope resolved from a successful token exchange. */
 export interface MsGraphAuthResult {
@@ -45,6 +49,9 @@ export type MsGraphAuthTransport = (
  * "429 → Retry-After → success" with no real waiting.
  */
 export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): MsGraphAuthTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
   return async ({ tenantId, clientId, clientSecret }) => {
     const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
     const form = new URLSearchParams({
@@ -60,7 +67,7 @@ export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): MsGraph
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form.toString(),
       },
-      retry,
+      opts,
     );
     let body: Record<string, unknown> = {};
     try {

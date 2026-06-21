@@ -19,7 +19,11 @@
  * echoed in thrown errors.
  */
 
-import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 import { type ConfigBlockEntry, renderConnectorConfigBlock } from "../onboard/config-block.ts";
 
 /** One folder surfaced for the discovery CLI (flattened, depth-tagged). */
@@ -84,6 +88,9 @@ const DEFAULT_MAX_DEPTH = 0;
  * no real waiting.
  */
 export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): BoxFoldersTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
   return async ({ token, folderId, marker }) => {
     const params = new URLSearchParams({
       usemarker: "true",
@@ -94,7 +101,7 @@ export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): BoxFold
     const res = await fetchWithRetry(
       `https://api.box.com/2.0/folders/${encodeURIComponent(folderId)}/items?${params.toString()}`,
       { method: "GET", headers: { Authorization: `Bearer ${token}` } },
-      retry,
+      opts,
     );
     let body: unknown = {};
     try {
