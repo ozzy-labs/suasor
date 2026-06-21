@@ -118,6 +118,23 @@ describe("extractionStatus (ADR-0024)", () => {
     expect(rows).toEqual([{ externalId: "o2", name: "deck.pptx", reason: "pending" }]);
   });
 
+  test("google_drive sources are tracked for pending/extracted (Drive API connector, #242)", async () => {
+    // A Drive Office file extracts; another is ingested name-only → pending.
+    await syncConnector(store, fakeConnector([docRecord("g1", "spec.docx", "google_drive")]), {
+      extractor: extractor("1", { "spec.docx": "drive text" }),
+    });
+    await syncConnector(store, fakeConnector([docRecord("g2", "deck.pptx", "google_drive")])); // no extractor
+
+    const status = extractionStatus(store.connection.sqlite, {
+      backend: "markitdown",
+      version: "1",
+    });
+    expect(status.totals.extracted).toBe(1);
+    expect(status.totals.pending).toBe(1); // g2 google_drive never attempted
+    const rows = listPendingExtractions(store.connection.sqlite, { version: "1" });
+    expect(rows).toEqual([{ externalId: "g2", name: "deck.pptx", reason: "pending" }]);
+  });
+
   test("a recorded version different from the current counts as stale", async () => {
     await syncConnector(store, fakeConnector([docRecord("d1", "a.docx")]), {
       extractor: extractor("1", { "a.docx": "alpha" }),

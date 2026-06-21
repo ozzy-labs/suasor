@@ -289,7 +289,7 @@ resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
 ```
 
 - **identity**: `google:<resource>:<id>` / **source_type**: `google_drive` / `gmail_message` / `google_calendar`
-- **差分検知**: `nextPageToken` でページングし、本文 fingerprint で未変更を skip
+- **差分検知**: `nextPageToken` でページングし、本文 fingerprint で未変更を skip。Drive ファイルは **content fingerprint**（binary は `md5Checksum`、Google ネイティブは md5 を持たないため単調増加の `version`）を使うため、リネーム無しの内容変更も検知して再取り込み・再抽出される。Gmail / Calendar は本文 SHA-256 fingerprint のまま
 - **onboarding**（Issue #85）: `suasor google auth set`（refresh token を keychain に保存）/ `suasor google auth test`（refresh→access token 交換で疎通を検証し granted scope を出力）。`auth test` は config の `clientId` を要求し、installed/web client の場合は `connector:google:clientSecret` を keychain に置けば併せて使う（public client は不要）。
 - **calendar discovery**（[ADR-0030](../adr/0030-connector-discovery-verbs.md)）: `calendarId` を Web UI から手写しすると typo で calendar の sync が **silent に 0 件**になりやすい。token から可視カレンダーを列挙して貼れる discovery verb を使う（github の `github repos` 相当）:
 
@@ -310,6 +310,8 @@ resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
     Gmail read: READY
     Calendar read: MISSING calendar
   ```
+
+- **本文抽出**（[ADR-0024](../adr/0024-document-extraction-sidecar.md) / [ADR-0034](../adr/0034-api-connector-extraction.md), #242）: `[extraction]` サイドカーを有効にすると、Drive 上の Office/PDF（`.docx`/`.xlsx`/`.pptx`/`.pdf`）は Drive media エンドポイントで本文を **read-only** lazy fetch（`downloadFile`）、Google ネイティブ（Docs/Sheets/Slides）は Drive **export** エンドポイント（`exportFile`）で Office 形式（docx/xlsx/pptx）へ写像してから抽出テキストに差し替える。`local` / `box` と同じ共通基盤（`src/connectors/sync.ts` の抽出段）を通る。Gmail / Calendar や export 不能なネイティブ（Forms 等）は **name-only**。size guard（binary の `size` が `maxBytes` 超過なら fetch せず name-only）、fetch / export / 抽出失敗・unsupported の name-only degrade（取り込み自体は成功）。詳細は [extraction ガイド](extraction.md) を参照
 
 ## Box
 
