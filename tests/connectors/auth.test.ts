@@ -355,6 +355,19 @@ describe("jira auth — credential building", () => {
       /host is required/,
     );
   });
+
+  test("a host carrying a scheme / path / userinfo is rejected (credential-misdirection guard)", () => {
+    for (const host of [
+      "https://example.atlassian.net",
+      "evil.com/x",
+      "user@evil.com",
+      "evil.com?",
+    ]) {
+      expect(() => buildJiraAuth({ scheme: "bearer", host, token: SECRET })).toThrow(
+        /bare host or host:port/,
+      );
+    }
+  });
 });
 
 describe("jira auth probe", () => {

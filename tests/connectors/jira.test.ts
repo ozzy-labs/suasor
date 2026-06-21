@@ -11,6 +11,7 @@ import {
   makeDefaultTransport,
   makeJiraClient,
   projectKeyOf,
+  shouldStopPaging,
 } from "../../src/connectors/jira/client.ts";
 import {
   buildExplicitJql,
@@ -20,6 +21,7 @@ import {
   issueToRecord,
   JiraConnectorConfig,
   jqlTimestamp,
+  quoteJql,
 } from "../../src/connectors/jira.ts";
 import { Store } from "../../src/db/index.ts";
 
@@ -95,6 +97,22 @@ describe("JiraConnectorConfig", () => {
   test("rejects an unknown auth scheme", () => {
     expect(() => JiraConnectorConfig.parse({ auth: "oauth" })).toThrow();
   });
+
+  test("accepts a bare host and host:port", () => {
+    expect(JiraConnectorConfig.parse({ host: "example.atlassian.net" }).host).toBe(
+      "example.atlassian.net",
+    );
+    expect(JiraConnectorConfig.parse({ host: "jira.internal:8443" }).host).toBe(
+      "jira.internal:8443",
+    );
+  });
+
+  test("rejects a host carrying a scheme / path / userinfo (credential-misdirection guard)", () => {
+    expect(() => JiraConnectorConfig.parse({ host: "https://example.atlassian.net" })).toThrow();
+    expect(() => JiraConnectorConfig.parse({ host: "evil.com/x" })).toThrow();
+    expect(() => JiraConnectorConfig.parse({ host: "user@evil.com" })).toThrow();
+    expect(() => JiraConnectorConfig.parse({ host: "evil.com?" })).toThrow();
+  });
 });
 
 describe("identity + source_type + fingerprint (ADR-0007)", () => {
@@ -164,6 +182,37 @@ describe("JQL building (per-project delta)", () => {
   test("projectKeyOf splits the trailing number off an issue key", () => {
     expect(projectKeyOf("PROJ-123")).toBe("PROJ");
     expect(projectKeyOf("nodash")).toBe("");
+  });
+
+  test("quoteJql escapes embedded quotes and backslashes (injection guard)", () => {
+    expect(quoteJql("PROJ")).toBe('"PROJ"');
+    expect(quoteJql('A" OR project=B OR "')).toBe('"A\\" OR project=B OR \\""');
+    expect(quoteJql("back\\slash")).toBe('"back\\\\slash"');
+  });
+
+  test("buildProjectJql escapes a key with a quote so it cannot break out", () => {
+    const jql = buildProjectJql('A" OR x', undefined);
+    expect(jql).toBe('project = "A\\" OR x" ORDER BY updated ASC');
+  });
+});
+
+describe("shouldStopPaging (reliable-total vs page-shape)", () => {
+  test("stops on an empty page regardless of total", () => {
+    expect(shouldStopPaging(100, 0, 50, 100)).toBe(true);
+  });
+
+  test("with a reliable total, stops once startAt reaches it", () => {
+    expect(shouldStopPaging(2, 1, 1, 100)).toBe(false); // startAt 1 < total 2
+    expect(shouldStopPaging(2, 1, 2, 100)).toBe(true); // startAt 2 >= total 2
+  });
+
+  test("with a negative/absent total, falls back to short-page detection", () => {
+    // Jira approximate-count mode (total: -1): a full page may have more.
+    expect(shouldStopPaging(-1, 100, 100, 100)).toBe(false);
+    // A short page is the last page.
+    expect(shouldStopPaging(-1, 30, 30, 100)).toBe(true);
+    expect(shouldStopPaging(undefined, 100, 100, 100)).toBe(false);
+    expect(shouldStopPaging(undefined, 30, 30, 100)).toBe(true);
   });
 });
 
@@ -453,6 +502,32 @@ describe("Jira client — pagination, comments, error mapping", () => {
     for await (const i of client.searchIssues('project = "PROJ"')) issues.push(i);
     expect(issues.map((i) => i.key)).toEqual(["PROJ-1", "PROJ-2"]);
     expect(calls.filter((c) => c.includes("startAt=1")).length).toBe(1);
+  });
+
+  test("paginates past page 1 when total is -1 (approximate-count mode)", async () => {
+    // A full first page (PAGE_SIZE=100) with total:-1 must NOT truncate; a short
+    // second page ends the sweep.
+    const full = Array.from({ length: 100 }, (_, i) => ({
+      key: `PROJ-${i + 1}`,
+      fields: { summary: "s", updated: "t" },
+    }));
+    const { transport } = cannedTransport({
+      search: [
+        { status: 200, body: { total: -1, issues: full } },
+        {
+          status: 200,
+          body: {
+            total: -1,
+            issues: [{ key: "PROJ-101", fields: { summary: "s", updated: "t" } }],
+          },
+        },
+      ],
+    });
+    const client = makeJiraClient(AUTH, transport);
+    const issues: JiraIssue[] = [];
+    for await (const i of client.searchIssues('project = "PROJ"')) issues.push(i);
+    expect(issues).toHaveLength(101);
+    expect(issues.at(-1)?.key).toBe("PROJ-101");
   });
 
   test("derives the project key from the issue key when fields.project is absent", async () => {

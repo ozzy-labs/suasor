@@ -31,6 +31,15 @@ export type JiraAuthScheme = "basic" | "bearer";
 /** Self-hosted REST API base path (Jira Server / Data Center use v2). */
 export const SELF_HOSTED_API_BASE = "/rest/api/2";
 
+/**
+ * A bare Jira authority: `host` or `host:port`, no scheme / path / userinfo /
+ * query / fragment. The credential is attached to `https://<host>...`, so a value
+ * carrying `/`, `@`, `?`, `#`, or a scheme could redirect the credentialed request
+ * to another origin; validating the shape closes that misdirection (and rejects an
+ * accidental `https://` paste).
+ */
+export const JIRA_HOST_PATTERN = /^[A-Za-z0-9.-]+(:\d+)?$/;
+
 /** Base64-encode a `user:pass` pair for an HTTP Basic header (no Buffer dep). */
 export function basicCredential(email: string, token: string): string {
   // btoa is available in Bun / modern runtimes; ASCII-safe for email:token.
@@ -56,6 +65,12 @@ export function buildJiraAuth(input: {
 }): JiraAuth {
   const host = input.host.trim();
   if (!host) throw new Error("jira: host is required in config");
+  if (!JIRA_HOST_PATTERN.test(host)) {
+    throw new Error(
+      `jira: host '${host}' must be a bare host or host:port ` +
+        "(no scheme / path / '@' / '?' / '#'), e.g. example.atlassian.net",
+    );
+  }
   if (!input.token) throw new Error("jira: no API token / PAT configured");
   let authorization: string;
   if (input.scheme === "bearer") {

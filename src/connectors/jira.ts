@@ -43,7 +43,12 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
-import { buildJiraAuth, type JiraAuthScheme, SELF_HOSTED_API_BASE } from "./jira/auth.ts";
+import {
+  buildJiraAuth,
+  JIRA_HOST_PATTERN,
+  type JiraAuthScheme,
+  SELF_HOSTED_API_BASE,
+} from "./jira/auth.ts";
 import {
   DEFAULT_API_BASE,
   DEFAULT_JIRA_CLIENT,
@@ -57,7 +62,13 @@ import {
 export const JiraConnectorConfig = z
   .object({
     /** Jira site host, e.g. `example.atlassian.net` (no scheme). */
-    host: z.string().min(1).default(""),
+    host: z
+      .string()
+      .default("")
+      .refine((h) => h === "" || JIRA_HOST_PATTERN.test(h), {
+        message:
+          "must be a bare host or host:port (no scheme / path / '@' / '?' / '#'), e.g. example.atlassian.net",
+      }),
     /**
      * Account email for Cloud HTTP Basic auth (`email:apiToken`). A non-secret
      * config value; the API token itself is the keychain secret. Omit for
@@ -136,25 +147,40 @@ export function commentToRecord(host: string, comment: JiraComment): SourceRecor
 }
 
 /**
+ * Quote a value as a JQL string literal, escaping the JQL metacharacters that
+ * can break out of a quoted literal (`\` and `"`). Without this, a project key or
+ * a hand-set / persisted cursor value containing a `"` would either malform the
+ * query (the resource then fails every run on the same broken JQL) or, worse,
+ * inject extra clauses that broaden the read scope beyond the configured project
+ * — defeating per-project isolation. JQL escapes both inside a double-quoted
+ * literal with a backslash.
+ */
+export function quoteJql(value: string): string {
+  return `"${value.replace(/[\\"]/g, (ch) => `\\${ch}`)}"`;
+}
+
+/**
  * Build the per-project JQL: `project = "<key>"` plus the saved `updated >=`
  * floor (so a resumed project only re-fetches what changed since), ordered by
  * `updated ASC` so the high-water mark advances monotonically as records stream.
  * A `since` floor with no prior cursor is omitted (a cold start reads everything
- * the JQL matches).
+ * the JQL matches). The key and floor are quoted via {@link quoteJql}.
  */
 export function buildProjectJql(projectKey: string, floor: string | undefined): string {
-  const clauses = [`project = "${projectKey}"`];
-  if (floor) clauses.push(`updated >= "${jqlTimestamp(floor)}"`);
+  const clauses = [`project = ${quoteJql(projectKey)}`];
+  if (floor) clauses.push(`updated >= ${quoteJql(jqlTimestamp(floor))}`);
   return `${clauses.join(" AND ")} ORDER BY updated ASC`;
 }
 
 /**
  * Build the explicit-JQL sweep query: the operator's `jql` AND the saved floor,
  * ordered by `updated ASC`. The operator's JQL is wrapped in parentheses so the
- * appended `updated >=` clause cannot be swallowed by a trailing `OR`.
+ * appended `updated >=` clause cannot be swallowed by a trailing `OR`. The floor
+ * literal is quoted via {@link quoteJql}; the operator's `jql` is by-design raw
+ * (it is the operator's own query).
  */
 export function buildExplicitJql(jql: string, floor: string | undefined): string {
-  const base = floor ? `(${jql}) AND updated >= "${jqlTimestamp(floor)}"` : jql;
+  const base = floor ? `(${jql}) AND updated >= ${quoteJql(jqlTimestamp(floor))}` : jql;
   // Append ORDER BY only when the operator did not specify one (Jira rejects two).
   return /\border\s+by\b/i.test(jql) ? base : `${base} ORDER BY updated ASC`;
 }

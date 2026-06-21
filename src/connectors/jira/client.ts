@@ -230,6 +230,28 @@ function jiraErrorMessage(obj: Record<string, unknown>): string {
   return asString(obj.message) || "request failed";
 }
 
+/**
+ * Decide whether a paginated sweep should stop after this page. Termination on
+ * `startAt >= total` is only used when `total` is a **reliable** count (a
+ * non-negative number): Jira Cloud's newer search can report `total: -1`
+ * (approximate-count mode) or omit it, and trusting a negative/absent total would
+ * truncate the sweep after page 1 and silently drop the rest (ADR-0007 "no silent
+ * wrong answer"). When the total is unreliable, fall back to the page-shape signal:
+ * stop only once a page comes back empty or short (fewer than `maxResults`).
+ */
+export function shouldStopPaging(
+  rawTotal: unknown,
+  pageLen: number,
+  startAt: number,
+  maxResults: number,
+): boolean {
+  if (pageLen === 0) return true;
+  const hasReliableTotal = typeof rawTotal === "number" && rawTotal >= 0;
+  if (hasReliableTotal) return startAt >= rawTotal;
+  // Unknown/negative total: a short page is the last page; a full page may have more.
+  return pageLen < maxResults;
+}
+
 /** Project key from an issue `key` (`PROJ-123` → `PROJ`); empty when malformed. */
 export function projectKeyOf(issueKey: string): string {
   const dash = issueKey.lastIndexOf("-");
@@ -298,11 +320,8 @@ export function makeJiraClient(auth: JiraAuth, transport: JiraTransport): JiraCl
           const issue = toIssue(raw);
           if (issue) yield issue;
         }
-        const total = typeof page.total === "number" ? page.total : startAt + issues.length;
         startAt += issues.length;
-        // Stop when a page returned nothing (guards a server that ignores startAt)
-        // or once startAt has reached the reported total.
-        if (issues.length === 0 || startAt >= total) break;
+        if (shouldStopPaging(page.total, issues.length, startAt, PAGE_SIZE)) break;
       }
     },
     async *issueComments(issueKey, projectKey) {
@@ -327,9 +346,8 @@ export function makeJiraClient(auth: JiraAuth, transport: JiraTransport): JiraCl
           const comment = toComment(raw, issueKey, projectKey);
           if (comment) yield comment;
         }
-        const total = typeof page.total === "number" ? page.total : startAt + comments.length;
         startAt += comments.length;
-        if (comments.length === 0 || startAt >= total) break;
+        if (shouldStopPaging(page.total, comments.length, startAt, PAGE_SIZE)) break;
       }
     },
   };

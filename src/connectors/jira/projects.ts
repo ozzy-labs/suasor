@@ -22,7 +22,7 @@ import {
   fetchWithRetry,
 } from "../../util/retry.ts";
 import { type ConfigBlockEntry, renderConnectorConfigBlock } from "../onboard/config-block.ts";
-import { DEFAULT_API_BASE, type JiraAuth } from "./client.ts";
+import { DEFAULT_API_BASE, type JiraAuth, shouldStopPaging } from "./client.ts";
 
 /** Jira's max page size for `project/search`. */
 const PAGE_SIZE = 100;
@@ -99,8 +99,10 @@ const defaultTransport: JiraProjectsTransport = makeDefaultTransport();
 
 interface SearchPage {
   readonly projects: JiraProject[];
-  /** Reported total, used to know when pagination is exhausted. */
-  readonly total: number;
+  /** Raw `total` from the response (may be absent / negative — see shouldStopPaging). */
+  readonly rawTotal: unknown;
+  /** Number of raw `values` on the page (before key-filtering), for pagination. */
+  readonly pageLen: number;
 }
 
 /**
@@ -127,8 +129,7 @@ async function fetchPage(
   const projects = values
     .filter((v) => asString(v.key).length > 0)
     .map((v) => ({ key: asString(v.key), name: asString(v.name) }));
-  const total = typeof obj.total === "number" ? obj.total : startAt + values.length;
-  return { projects, total };
+  return { projects, rawTotal: obj.total, pageLen: values.length };
 }
 
 /**
@@ -155,8 +156,10 @@ export async function listProjects(
     const page = await fetchPage(transport, auth, startAt);
     tick();
     for (const p of page.projects) projects.push(p);
-    startAt += page.projects.length;
-    if (page.projects.length === 0 || startAt >= page.total) break;
+    // Advance by the raw page size (pre key-filter) so a page of all-keyless
+    // values still progresses, and stop using the reliable-total / short-page rule.
+    startAt += page.pageLen;
+    if (shouldStopPaging(page.rawTotal, page.pageLen, startAt, PAGE_SIZE)) break;
   }
 
   projects.sort((a, b) => a.key.localeCompare(b.key, undefined, { sensitivity: "base" }));
