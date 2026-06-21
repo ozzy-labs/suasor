@@ -115,6 +115,8 @@ export SUASOR_EMBEDDING_VOYAGE_API_KEY=pa-...     # voyage
 
 OS キーチェーンに保存する場合は service `suasor` / account `embedding:<backend>:apiKey`（例 `embedding:openai:apiKey`）へ格納する。キー未設定だと embedder は構築されず `recall.search` は FTS にフォールバックし、`suasor mcp serve` 起動時 / `suasor doctor` が「キー未設定」WARN を出す。
 
+> **`baseUrl` は `https://` 必須**: 外部 backend は API キーを毎リクエストの `Authorization` ヘッダで送るため、`http://`（平文）の `baseUrl` はキーを cleartext で漏らす。`openai` / `voyage` で `https://` 以外を設定すると **fail-closed で `EmbeddingError`**（`http://localhost` のみテスト / ローカルプロキシ用に許容）。
+
 ### 3. 取り込み・意味検索
 
 以降は Ollama backend と同じ。`suasor <connector> sync` で新規 / 本文変更 source が外部 API で埋め込まれ（best-effort：API 失敗時も取り込みは成功し warning のみ）、`recall.search` の対象になる。既存データの後付け・model 変更時の再生成も同様に `suasor <connector> sync --full` / `suasor embeddings rebuild`。

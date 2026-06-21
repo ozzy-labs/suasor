@@ -172,7 +172,17 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
 
   constructor(options: OpenAICompatibleEmbedderOptions) {
     this.model = options.model;
-    this.endpoint = `${options.baseUrl.replace(/\/$/, "")}/v1/embeddings`;
+    const base = options.baseUrl.replace(/\/$/, "");
+    // Require TLS for external backends: the Bearer API key egresses with every
+    // request (ADR-0003), so a non-https baseUrl would send the secret in
+    // cleartext. Fail closed on a misconfigured scheme rather than leak the key.
+    // `localhost` over http is allowed for tests/local proxies (no real egress).
+    if (!/^https:\/\//i.test(base) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(base)) {
+      throw new EmbeddingError(
+        "external embedding baseUrl must use https:// (the API key is sent on every request)",
+      );
+    }
+    this.endpoint = `${base}/v1/embeddings`;
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   }
@@ -213,13 +223,15 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
     }
 
     // Restore input order via the per-item `index`. Default to array position
-    // when `index` is absent (some compatible APIs omit it but keep order).
+    // when `index` is absent (some compatible APIs omit it but keep order). The
+    // `vectors[at] !== undefined` guard rejects a duplicate index, which would
+    // otherwise leave a hole despite the matching count check above.
     const vectors: number[][] = new Array(texts.length);
     for (let i = 0; i < data.length; i++) {
       const item = data[i];
       const at = typeof item?.index === "number" ? item.index : i;
       const embedding = item?.embedding;
-      if (at < 0 || at >= texts.length || !Array.isArray(embedding)) {
+      if (at < 0 || at >= texts.length || !Array.isArray(embedding) || vectors[at] !== undefined) {
         throw new EmbeddingError(`${this.provider} embed returned a malformed data entry`);
       }
       vectors[at] = embedding;
