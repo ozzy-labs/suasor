@@ -60,6 +60,12 @@ const DEFAULT_THRESHOLD = 95;
 // restores the legacy "resume exactly at resets_at" behaviour.
 const DEFAULT_RESUME_BUFFER_SECONDS = 300;
 const DEFAULT_CACHE_TTL_MS = 45_000; // 30–60s window so the #123 hook can share it.
+// Cache hygiene (#139 (e)): an over-threshold reading may be a transient
+// endpoint spike or residual lag just outside the epsilon. Caching it for the
+// full TTL would pin a possibly-stale block across every subsequent tool call;
+// persist over-threshold reads with a SHORTENED TTL so the next check re-verifies
+// soon while still avoiding an endpoint stampede.
+const DEFAULT_OVER_THRESHOLD_CACHE_TTL_MS = 10_000;
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 // Reflection-lag detection (#133). After a window resets, the server-side
@@ -85,6 +91,16 @@ const PROJECTS_DIR = join(homedir(), ".claude", "projects");
 // same file (and so it is never wiped when the dogfood skills mirror is
 // rebuilt).
 const CACHE_PATH = join(homedir(), ".claude", "usage-guard", "cache.json");
+// File kill-switch (#139 (a)): when this file exists the PreToolUse hook is an
+// instant no-op. It lives beside the cache (HOME-anchored, OUTSIDE any skills
+// dir) so an operator can `touch`/`rm` it from a `!` shell without editing
+// settings — the escape hatch that frees a session a transient bad reading
+// would otherwise hard-stop. Exported so the hook resolves it from one place.
+export const DISABLE_PATH = join(homedir(), ".claude", "usage-guard", "DISABLE");
+// PreToolUse hook debounce/spike state (#139 (b)(c)). Tracks the consecutive
+// over-threshold count and the last sub-threshold reading across tool calls so a
+// lone bad reading does not deny. HOME-anchored beside the cache.
+export const HOOK_STATE_PATH = join(homedir(), ".claude", "usage-guard", "hook-state.json");
 
 /**
  * Resolve the threshold (env override → default).
@@ -455,7 +471,10 @@ export async function readCache({
   try {
     const parsed = JSON.parse(await readFileImpl(cachePath, "utf8"));
     if (typeof parsed?.cached_at !== "number") return null;
-    if (now() - parsed.cached_at > ttlMs) return null;
+    // A record may carry its own TTL (e.g. the shortened TTL writeCache embeds
+    // for an over-threshold reading, #139 (e)); fall back to the caller's ttlMs.
+    const effectiveTtl = typeof parsed.ttl_ms === "number" ? parsed.ttl_ms : ttlMs;
+    if (now() - parsed.cached_at > effectiveTtl) return null;
     return parsed.result ?? null;
   } catch {
     return null;
@@ -469,12 +488,16 @@ export async function readCache({
  */
 export async function writeCache(
   result,
-  { writeFileImpl, mkdirImpl, cachePath = CACHE_PATH, now = Date.now } = {},
+  { writeFileImpl, mkdirImpl, cachePath = CACHE_PATH, now = Date.now, ttlMs } = {},
 ) {
   if (!writeFileImpl) return;
   try {
     if (mkdirImpl) await mkdirImpl(join(cachePath, ".."), { recursive: true });
-    await writeFileImpl(cachePath, JSON.stringify({ cached_at: now(), result }));
+    // Embed a per-record TTL only when the caller asks for a non-default one
+    // (#139 (e)); records without `ttl_ms` use readCache's caller-supplied TTL.
+    const record = { cached_at: now(), result };
+    if (typeof ttlMs === "number") record.ttl_ms = ttlMs;
+    await writeFileImpl(cachePath, JSON.stringify(record));
   } catch {
     // best-effort cache; ignore.
   }
@@ -521,7 +544,12 @@ export async function getUsage({
   // endpoint and can observe the post-lag value immediately.
   const maybeCache = async (result) => {
     if (result.suspected_reflection_lag) return result; // do NOT cache a lagged read
-    await writeCache(result, { writeFileImpl, mkdirImpl, cachePath, now });
+    // (#139 (e)) Over-threshold reads get a SHORTENED TTL so a transient spike /
+    // residual lag just outside the epsilon is re-verified soon (the next check
+    // re-hits the endpoint) rather than pinned for the full TTL. Sub-threshold
+    // reads cache normally.
+    const ttlMs = result.ok === false ? DEFAULT_OVER_THRESHOLD_CACHE_TTL_MS : undefined;
+    await writeCache(result, { writeFileImpl, mkdirImpl, cachePath, now, ttlMs });
     return result;
   };
 

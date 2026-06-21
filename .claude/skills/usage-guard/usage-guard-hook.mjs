@@ -33,12 +33,33 @@
 // takes a usage JSON object (the shape usage-check.mjs emits) and returns
 // `{ allow, reason }` with no I/O, so tests can feed usage without real files.
 
-import { getUsage, readCache, resolveThreshold } from "./usage-check.mjs";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  DISABLE_PATH,
+  getUsage,
+  HOOK_STATE_PATH,
+  readCache,
+  resolveThreshold,
+} from "./usage-check.mjs";
 
 // PreToolUse "deny" is signaled to the harness with exit code 2 (stderr/JSON is
 // surfaced to the model); 0 = allow. Keep these named for clarity.
 const EXIT_ALLOW = 0;
 const EXIT_DENY = 2;
+
+// Debounce / spike-rejection defaults (#139 (b)(c)). A lone over-threshold
+// reading does NOT deny; only DEBOUNCE_COUNT consecutive over readings do, so a
+// single transient spike can never hard-stop the session.
+const DEFAULT_DEBOUNCE_COUNT = 2;
+// A jump to ≥threshold within this many seconds of a comfortably sub-threshold
+// reading is physically impossible (no consumption happened in between) → treat
+// the over reading as a suspect spike and allow it.
+const DEFAULT_SPIKE_WINDOW_SECONDS = 120;
+// "Comfortably sub-threshold" = the prior good reading was below
+// (threshold - SPIKE_DELTA). A wide gap closing in seconds is the spike signal.
+const DEFAULT_SPIKE_DELTA = 25;
 
 /**
  * Format an ISO `resets_at` as a local `HH:MM` string for the deny message.
@@ -80,6 +101,15 @@ export function decide(usage, threshold = 95, now = Date.now) {
   }
   // fail-open is itself an "ok" usage; allow without ceremony.
   if (usage.ok !== false) {
+    return { allow: true, reason: null };
+  }
+
+  // (#139 (d)) A suspected reflection lag is the prior window's residue still
+  // echoing through the endpoint just after a reset, NOT a genuine throttle.
+  // ALLOW at the hook layer — the resumable-unit boundary checkpoint will still
+  // stop a real overage. Without this the hook would deny on a transient 100%
+  // right at a window boundary and hard-stop the session (the #139 incident).
+  if (usage.suspected_reflection_lag === true) {
     return { allow: true, reason: null };
   }
 
@@ -197,6 +227,190 @@ export async function resolveUsage({ readCacheImpl = readCache, getUsageImpl = g
 }
 
 /**
+ * Resolve the consecutive-deny debounce count (env override → default).
+ * `USAGE_GUARD_DEBOUNCE_COUNT` overrides the default (2). Set it to `1` to deny
+ * on the first over reading (legacy single-reading behaviour). Values < 1,
+ * non-finite, or blank fall back to the default (a 0/negative count would never
+ * deny). Fractional values are floored.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function resolveDebounceCount(env = process.env) {
+  const raw = env?.USAGE_GUARD_DEBOUNCE_COUNT;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return DEFAULT_DEBOUNCE_COUNT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_DEBOUNCE_COUNT;
+  return Math.floor(n);
+}
+
+/**
+ * Resolve the spike-rejection window in seconds (env override → default).
+ * `USAGE_GUARD_SPIKE_WINDOW_SECONDS` overrides the default (120).
+ * Negative/non-finite/blank → default. 0 disables spike rejection.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function resolveSpikeWindow(env = process.env) {
+  const raw = env?.USAGE_GUARD_SPIKE_WINDOW_SECONDS;
+  if (raw === undefined || raw === null || String(raw).trim() === "")
+    return DEFAULT_SPIKE_WINDOW_SECONDS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_SPIKE_WINDOW_SECONDS;
+  return n;
+}
+
+/**
+ * Resolve the spike-rejection delta in percent (env override → default).
+ * `USAGE_GUARD_SPIKE_DELTA` overrides the default (25). Negative/non-finite/
+ * blank → default.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function resolveSpikeDelta(env = process.env) {
+  const raw = env?.USAGE_GUARD_SPIKE_DELTA;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return DEFAULT_SPIKE_DELTA;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_SPIKE_DELTA;
+  return n;
+}
+
+/**
+ * Read the cross-call hook state (debounce counter + last good reading).
+ * Tolerates a missing / malformed file → `{}` (so the first run starts clean).
+ * @param {object} [deps]
+ * @param {typeof readFile} [deps.readFileImpl]
+ * @param {string} [deps.statePath]
+ * @returns {Promise<object>}
+ */
+export async function readHookState({ readFileImpl = readFile, statePath = HOOK_STATE_PATH } = {}) {
+  try {
+    const parsed = JSON.parse(await readFileImpl(statePath, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist the cross-call hook state (best-effort; failures are swallowed so the
+ * hook never hard-stops on a state write error).
+ * @param {object} state
+ * @param {object} [deps]
+ * @param {typeof writeFile} [deps.writeFileImpl]
+ * @param {typeof mkdir} [deps.mkdirImpl]
+ * @param {string} [deps.statePath]
+ */
+export async function writeHookState(
+  state,
+  { writeFileImpl = writeFile, mkdirImpl = mkdir, statePath = HOOK_STATE_PATH } = {},
+) {
+  try {
+    await mkdirImpl(join(statePath, ".."), { recursive: true });
+    await writeFileImpl(statePath, JSON.stringify(state));
+  } catch {
+    // best-effort state; ignore.
+  }
+}
+
+/**
+ * Pure hook decision with debounce + spike rejection (#139 (b)(c)(d)).
+ *
+ * Layered on top of `decide()`: it consumes the prior cross-call state and
+ * returns the allow/deny verdict PLUS the next state to persist and a
+ * `degraded` tag for the caller to surface as a warning.
+ *
+ * Order of precedence (each ALLOWs without counting toward debounce):
+ *   1. usage missing / fail-open / under threshold → ALLOW, reset counter; a
+ *      sub-threshold reading is recorded as the latest "good" baseline.
+ *   2. (d) suspected reflection lag → ALLOW (`degraded:"lag"`), reset counter.
+ *   3. (c) implausible spike from a recent comfortably-sub-threshold baseline →
+ *      ALLOW (`degraded:"spike"`), reset counter.
+ *   4. (b) genuine over reading → increment the consecutive counter; ALLOW
+ *      (`degraded:"debounce"`) until it reaches `debounceCount`, then DENY.
+ *
+ * @param {object|null|undefined} usage usage JSON from usage-check.mjs
+ * @param {object|null|undefined} prevState prior state from readHookState
+ * @param {object} [opts]
+ * @param {number} [opts.threshold]
+ * @param {number} [opts.debounceCount]
+ * @param {number} [opts.spikeWindowSeconds]
+ * @param {number} [opts.spikeDelta]
+ * @param {() => number} [opts.now]
+ * @returns {{ allow: boolean, reason: string|null, degraded: string|null, nextState: object }}
+ */
+export function evaluateHookDecision(
+  usage,
+  prevState,
+  {
+    threshold = 95,
+    debounceCount = DEFAULT_DEBOUNCE_COUNT,
+    spikeWindowSeconds = DEFAULT_SPIKE_WINDOW_SECONDS,
+    spikeDelta = DEFAULT_SPIKE_DELTA,
+    now = Date.now,
+  } = {},
+) {
+  const nowMs = now();
+  const prev = prevState && typeof prevState === "object" ? prevState : {};
+  const prevConsecutive = Number(prev.consecutive_over) || 0;
+  const lastGood = prev.last_good && typeof prev.last_good === "object" ? prev.last_good : null;
+
+  // 1a. Unreadable usage → fail-open ALLOW, reset counter (keep last_good).
+  if (!usage || typeof usage !== "object") {
+    return { allow: true, reason: null, degraded: null, nextState: resetState(lastGood) };
+  }
+  // 1b. Under threshold → ALLOW; record this as the latest good baseline.
+  if (usage.ok !== false) {
+    const good = {
+      five_hour: Number(usage.five_hour?.utilization) || 0,
+      seven_day: Number(usage.seven_day?.utilization) || 0,
+      at: nowMs,
+    };
+    return {
+      allow: true,
+      reason: null,
+      degraded: null,
+      nextState: { consecutive_over: 0, last_good: good },
+    };
+  }
+
+  // From here usage.ok === false (a window is at/over threshold).
+
+  // 2. (d) reflection lag → ALLOW, do NOT count (transient by definition).
+  if (usage.suspected_reflection_lag === true) {
+    return { allow: true, reason: null, degraded: "lag", nextState: resetState(lastGood) };
+  }
+
+  // 3. (c) spike: a recent comfortably-sub-threshold baseline jumping to
+  // ≥threshold within seconds is physically impossible → suspect, ALLOW.
+  if (lastGood && typeof lastGood.at === "number" && spikeWindowSeconds > 0) {
+    const ageS = (nowMs - lastGood.at) / 1000;
+    const maxPrevUtil = Math.max(Number(lastGood.five_hour) || 0, Number(lastGood.seven_day) || 0);
+    if (ageS >= 0 && ageS <= spikeWindowSeconds && maxPrevUtil < threshold - spikeDelta) {
+      return { allow: true, reason: null, degraded: "spike", nextState: resetState(lastGood) };
+    }
+  }
+
+  // 4. (b) debounce: a genuine over reading. Increment the consecutive counter;
+  // DENY only once it reaches the debounce count.
+  const consecutive = prevConsecutive + 1;
+  const nextState = { consecutive_over: consecutive, last_good: lastGood };
+  if (consecutive < debounceCount) {
+    return { allow: true, reason: null, degraded: "debounce", nextState };
+  }
+  const { reason } = decide(usage, threshold, now);
+  return { allow: false, reason, degraded: null, nextState };
+}
+
+/**
+ * Build a "counter reset" next-state that preserves the last good baseline.
+ * @param {object|null} lastGood
+ * @returns {object}
+ */
+function resetState(lastGood) {
+  return lastGood ? { consecutive_over: 0, last_good: lastGood } : { consecutive_over: 0 };
+}
+
+/**
  * Run the hook end to end. Returns the intended exit code (the CLI wrapper
  * applies it). All effects (warn / deny output) go through injected sinks so
  * tests can assert without spawning a process.
@@ -204,6 +418,9 @@ export async function resolveUsage({ readCacheImpl = readCache, getUsageImpl = g
  * @param {object} [deps]
  * @param {() => Promise<string>} [deps.readStdinImpl]
  * @param {() => Promise<object|null>} [deps.resolveUsageImpl]
+ * @param {() => boolean} [deps.killSwitchImpl]   // true → hook disabled (no-op)
+ * @param {() => Promise<object>} [deps.readStateImpl]
+ * @param {(s: object) => Promise<void>} [deps.writeStateImpl]
  * @param {NodeJS.ProcessEnv} [deps.env]
  * @param {() => number} [deps.now]
  * @param {(msg: string) => void} [deps.warn]
@@ -213,12 +430,35 @@ export async function resolveUsage({ readCacheImpl = readCache, getUsageImpl = g
 export async function run({
   readStdinImpl = () => readStdin(),
   resolveUsageImpl = () => resolveUsage(),
+  killSwitchImpl = () => existsSync(DISABLE_PATH),
+  readStateImpl = () => readHookState(),
+  writeStateImpl = (s) => writeHookState(s),
   env = process.env,
   now = Date.now,
   warn = (msg) => process.stderr.write(`${msg}\n`),
   deny = (msg) => process.stderr.write(`${msg}\n`),
 } = {}) {
+  // (#139 (a)) File kill-switch — the escape hatch. When
+  // `~/.claude/usage-guard/DISABLE` exists the hook is an instant no-op, so an
+  // operator can free a session a transient bad reading hard-stopped by running
+  // `touch ~/.claude/usage-guard/DISABLE` from a `!` shell (no settings edit).
+  // Checked FIRST, before any I/O, and itself fail-open (a check error → not
+  // disabled → continue normally).
+  let disabled = false;
+  try {
+    disabled = !!killSwitchImpl();
+  } catch {
+    disabled = false;
+  }
+  if (disabled) {
+    warn(`usage-guard hook: disabled via kill-switch (${DISABLE_PATH}); allowing (no-op)`);
+    return EXIT_ALLOW;
+  }
+
   const threshold = resolveThreshold(env);
+  const debounceCount = resolveDebounceCount(env);
+  const spikeWindowSeconds = resolveSpikeWindow(env);
+  const spikeDelta = resolveSpikeDelta(env);
   const { agentId } = parsePayload(await readStdinImpl());
   const origin = agentId ? `subagent ${agentId}` : "main session";
 
@@ -237,7 +477,33 @@ export async function run({
     warn(degradedSourceWarning(source, origin));
   }
 
-  const { allow, reason } = decide(usage, threshold, now);
+  const prevState = await readStateImpl();
+  const { allow, reason, degraded, nextState } = evaluateHookDecision(usage, prevState, {
+    threshold,
+    debounceCount,
+    spikeWindowSeconds,
+    spikeDelta,
+    now,
+  });
+  // Persist the debounce/spike state for the next tool call (best-effort).
+  await writeStateImpl(nextState);
+
+  // Surface why an over-threshold reading was ALLOWed (lag/spike/debounce) so a
+  // soft-allow never looks like the guard simply being off.
+  if (degraded === "lag") {
+    warn(
+      `usage-guard hook: suspected reflection lag — over threshold but barely past a window reset (${origin}); allowing (the boundary checkpoint will still stop a genuine overage). See SKILL.md §振る舞い.`,
+    );
+  } else if (degraded === "spike") {
+    warn(
+      `usage-guard hook: implausible usage spike from a recent sub-threshold reading (${origin}); treating as suspect and allowing. If real, consecutive checks will debounce-deny.`,
+    );
+  } else if (degraded === "debounce") {
+    warn(
+      `usage-guard hook: over threshold (${origin}) but below the consecutive-deny count (debounce); allowing once more before blocking.`,
+    );
+  }
+
   if (allow) return EXIT_ALLOW;
 
   deny(`${reason} [origin: ${origin}]`);
