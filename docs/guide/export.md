@@ -19,7 +19,9 @@
 
 ## Office 形式（docx / pptx / xlsx）— composition サイドカー
 
-`format = "docx"` / `"pptx"` / `"xlsx"` は **md → Office 変換サイドカー**（[#138](https://github.com/ozzy-labs/suasor/issues/138)）が必要。抽出サイドカー（[extraction](extraction.md)・Office→md）の逆方向で、[ADR-0006](../adr/0006-ml-delegation.md) に沿い重い変換はサイドカーに委譲する（本体は thin client）。**docx を第一級**（md 散文→Word が自然）、pptx/xlsx はサイドカー対応次第のベストエフォート。
+`format = "docx"` / `"pptx"` / `"xlsx"` は **md → Office 変換サイドカー**（[#138](https://github.com/ozzy-labs/suasor/issues/138)）が必要。抽出サイドカー（[extraction](extraction.md)・Office→md）の逆方向で、[ADR-0006](../adr/0006-ml-delegation.md) に沿い重い変換はサイドカーに委譲する（本体は thin client）。**docx を第一級**（md 散文→Word が自然）、pptx/xlsx は**サイドカー側の対応次第**。
+
+> **「ベストエフォート」= サイドカーが対応していれば動く、の意（自動 fallback は無い）**: 本体側（`src/export/compose.ts` の `PandocComposer`）は要求 format をそのままサイドカーに渡し、サイドカーが非対応 format に `4xx` を返せば（または他の非 2xx でも）`ComposeError` を **throw** して `draft.export` を tool error にする。**docx への自動 fallback や部分ファイル生成は行わない**（pptx 不可なら docx で代替、といった挙動は無い）。pptx/xlsx が必要なら、その format を扱えるサイドカー（pandoc 等）を用意すること。
 
 ### サイドカーのセットアップ
 

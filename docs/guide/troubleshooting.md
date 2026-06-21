@@ -18,7 +18,7 @@ suasor store info --breakdown       # event ログを type 別に集計（rebuil
 各 check は `ok` / `info` / `warn` / `error` を持ち、**1 つでも `error` があれば exit 1**（cron / CI の gate に使える）。秘密値は出さない（NFR-PRV-4）。主な check:
 
 - **config** — `config.toml` の有無・ロード可否
-- **database** — `storage.dbPath` の存在・projection table 9 種の有無（DB は作らない＝診断専用）
+- **database** — `storage.dbPath` の存在・コア projection table（`sources` / `tasks` / `sync_runs` / `decisions` / `inbox` / `proposals` / `commitments` / `links` / `persons` / `person_identities`）の有無（DB は作らない＝診断専用）。check の detail は table 数を `src/db/schema.ts` の集合から動的に算出するため、新 projection 追加時も件数表記がズレない
 - **embedding** — `[embedding].backend` の設定（`disabled` は INFO）。backend 有効時は `embedding.dim` も probe して **model 出力次元と `[embedding].dim` の一致**を検査する（後述の「次元不一致」）
 - **connectors** — enabled connector の資格情報設定有無（未設定は WARN）。`auth set` 済みだが `[connectors.<name>]` を有効化していない *dangling credential* も WARN
 - **maintenance** — `pending embeddings` / `stale embeddings` / `extraction version drift` 等の drainable backlog を WARN で surface（保守ヒント・exit code には影響しない）
@@ -101,6 +101,31 @@ event ログを `type` 別に集計（`COUNT(*) GROUP BY type`、read-only）し
 
 - **重要**: `dim` は vec0 のスキーマを規定するため、**後から変更すると既存ベクトルと整合しない**。新しい DB を作るか、`dim` を直したうえで DB を作り直し → `suasor sync`（再取り込み）/ `suasor embeddings rebuild`（再埋め込み）が必要。
 - `model` は ingest と query で必ず同一にする（ベクトル空間整合）。
+
+## Office/PDF を ingest したのに本文が検索に出ない
+
+Word / Excel / PowerPoint / PDF を取り込んだのに `search` / `recall.search` で**本文**がヒットせず、ファイル名でしか引けない。これらは既定で **name-only**（本文未抽出）で取り込まれ、本文を検索可能にするには `[extraction]` サイドカーが要る（[ADR-0024](../adr/0024-document-extraction-sidecar.md) / [extraction guide](extraction.md)）。「sync は exit 0 なのに本文が無い」silent な症状で、原因は複数ある。
+
+まず現状を可視化する（roll-up → drilldown）:
+
+```bash
+suasor extraction status              # backend / version と extracted/stale/pending/unsupported/too-large の集計
+suasor extraction list-pending        # 実際にどのファイルが (再)抽出待ちかを列挙（--json で機械可読）
+suasor doctor                         # extraction backend / version と保守ヒント（drift/pending）を 1 行で
+```
+
+1. **`[extraction]` 未設定（既定 disabled）** — 設定しなければ従来どおり name-only。`extraction status` が `backend=disabled` を示す。[extraction guide](extraction.md) の手順でサイドカー（markitdown 系）を立てて `[extraction].backend` を設定する。有効化後、既に取り込み済みのファイルは**次の sync で自動 backfill**（drift 検知）。
+2. **サイドカーが down / 到達不能** — backend は設定済みだが抽出サイドカーが落ちている / `baseUrl` に届かない。sync 時の抽出は **best-effort** で、失敗しても取り込み自体は成功し（FTS にファイル名は載る）name-only に degrade、warning（stderr）だけ出る。サイドカーを起動してから owning connector を再 sync すると pending が解消する:
+
+   ```bash
+   suasor local sync     # / suasor box sync / suasor google sync など owning connector
+   ```
+
+3. **`too_large`（`maxBytes` 超過）** — `extraction status` の `too-large` が増えている。Box / OneDrive / Drive(binary) は `size` メタで fetch 前に判定し、超過ファイルは name-only に落とす（store/FTS が膨らまない）。本文が必要なら `[extraction].maxBytes` を上げて再 sync する。
+4. **`unsupported`（サイドカーが非対応 format）** — サイドカーが `{ "text": null }` を返した format。`extraction status` の `unsupported`。markitdown が対応する形式（docx/xlsx/pptx/pdf）かを確認する。
+5. **extractor version drift（`stale`）** — `[extraction].version` を bump した、またはサイドカー改善後で、`extraction_meta` の記録 version が現行と食い違う source は `stale` 扱いになり**次の sync で内容未変更でも再抽出**される。`extraction list-pending` に `[stale]` で出るものは owning connector の sync で backfill する。`suasor doctor` も `extraction version drift: N` を WARN で surface する。
+
+> **注意**: 再抽出は **connector sync** でのみ起きる（`embeddings rebuild` は埋め込みの再生成のみで再抽出はしない・[embedding guide](embedding.md)）。extraction drift と embedding drift は別ドメインなので、本文が出ない時はまず `extraction status` を見る。
 
 ## rate-limit / backoff（sync が遅い / 429 が出る）
 

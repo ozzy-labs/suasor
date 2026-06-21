@@ -47,7 +47,7 @@ FTS-first（ADR-0005）を保ったままの additive 拡張。`search.hybrid` r
 ## Graceful degradation
 
 - `recall.search` は backend=disabled / 外部 backend のキー未設定（embedder が `null`）のとき **hard error にせず空 + `embedding_disabled` シグナル**を返す（`reason: "backend_disabled"`）→ host が `search`(FTS) に寄る
-- backend 有効でも**サイドカー到達不能**（Ollama down 等）のときは同じく degrade（`reason: "backend_unreachable"`）。`signal` は常に `embedding_disabled` で host の fallback 判断は一貫
+- backend 有効でも**サイドカー到達不能**（Ollama down 等）のときは同じく degrade（`reason: "backend_unreachable"`）。**ただし帰属する層が異なる**: core の `recallSearch`（`src/retrieval/embedding/recall.ts`）の `RecallReason` は `backend_disabled | ok` のみで、サイドカー失敗時は `EmbeddingError` を **throw** する。これを `recall.search` / `search.hybrid` の MCP handler（`src/mcp/server-read.ts`）が catch し、空 hits + `embedding_disabled` シグナル + `reason: "backend_unreachable"` を**合成して返す**（host を hard-error から守る境界）。`signal` はいずれも `embedding_disabled` で host の fallback 判断は一貫
 - `vec0` は基盤として常設（安価）。populate は backend 次第。`projections rebuild` は vec0 を truncate せず、`external_id` キーのベクトルは source 再構築後も有効なまま JOIN される（次回 ingest で再 populate）
 
 ## 使い分け
