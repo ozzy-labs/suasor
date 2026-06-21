@@ -67,4 +67,27 @@ describe("MCP tool catalog ↔ server registration", () => {
       expect(t.summary.length).toBeGreaterThan(0);
     }
   });
+
+  // The server `instructions` string tells agents which tools are HITL writes.
+  // It must enumerate *every* write tool (else a destructive tool like
+  // source.forget reads as auto-approvable). Assert the enumeration equals the
+  // catalog's readOnlyHint:false set — count-independent, so adding a write tool
+  // forces an instructions update rather than silently going stale.
+  test("server instructions enumerate every write tool in the catalog", async () => {
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "disabled",
+      write: { store, config: { connectors: {} } },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const instructions = client.getInstructions() ?? "";
+    const writeNames = mcpToolCatalog(true)
+      .filter((t) => !t.readOnlyHint)
+      .map((t) => t.name);
+    const missing = writeNames.filter((name) => !instructions.includes(name));
+    expect(missing).toEqual([]);
+  });
 });

@@ -51,13 +51,16 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "(FTS5); `recall.search` adds semantic search only when an embedding backend " +
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
-        "propose.generate, propose.apply, propose.reject, propose.batch, task.create, decision.record, " +
-        "inbox.add, inbox.triage, link.add, link.remove, commitment.resolve, " +
-        "commitment.dismiss, commitment.reopen, person.merge, person.split) are HITL: " +
-        "gate them behind human approval, never auto-apply. propose.list (read) shows the " +
-        "candidate ledger by state for the approve/reject loop; commitment.list (read) shows " +
-        "the commitment ledger by state for the resolve/dismiss/reopen loop; person.list " +
-        "(read) shows resolved persons and their connector identities (ADR-0022).",
+        "propose.generate, propose.apply, propose.reject, proposal.feedback, propose.batch, " +
+        "task.create, task.update, decision.record, inbox.add, inbox.triage, link.add, " +
+        "link.remove, person.merge, person.split, commitment.resolve, commitment.dismiss, " +
+        "commitment.reopen, draft.export, source.forget) are HITL: gate them behind human " +
+        "approval, never auto-apply — including the destructive source.forget (local purge, " +
+        "ADR-0026) and the local-file draft.export (export sandbox, ADR-0025). propose.list " +
+        "(read) shows the candidate ledger by state for the approve/reject loop; " +
+        "commitment.list (read) shows the commitment ledger by state for the " +
+        "resolve/dismiss/reopen loop; person.list (read) shows resolved persons and their " +
+        "connector identities (ADR-0022).",
     },
   );
 

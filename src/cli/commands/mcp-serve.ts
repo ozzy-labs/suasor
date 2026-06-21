@@ -2,9 +2,11 @@
  * `suasor mcp serve` — start the MCP server over stdio (ADR-0004).
  *
  * Exposes Suasor's read tools (search / recall.search / source.* / task.list /
- * decision.list / inbox.list) over the MCP stdio transport, the agent boundary
- * (docs/design/mcp-surface.md). Read tools have no side effects; write/HITL
- * tools are added by later Issues.
+ * decision.list / inbox.list) and HITL write tools (connector.sync / propose.* /
+ * task.* / decision.record / inbox.* / link.* / person.* / commitment.* /
+ * draft.export / source.forget) over the MCP stdio transport, the agent boundary
+ * (docs/design/mcp-surface.md). Read tools have no side effects; write tools are
+ * gated behind human approval (ADR-0004, no auto-apply).
  *
  * Heavy dependencies (MCP SDK, DB layer, config loader) are imported lazily
  * inside `execute` so the CLI cold start stays light (NFR-PRF-1).
@@ -23,8 +25,11 @@ export class McpServeCommand extends Command {
       Exposes Suasor's read tools over MCP (stdio transport): search,
       recall.search (returns the embedding_disabled signal until a backend is
       enabled), source.list / source.get, and task.list / decision.list /
-      inbox.list. Read tools are side-effect-free; write tools (HITL) are added
-      by later Issues (ADR-0004, docs/design/mcp-surface.md).
+      inbox.list. Read tools are side-effect-free. HITL write tools (connector.sync,
+      propose.*, task.create / task.update, decision.record, inbox.*, link.*,
+      person.*, commitment.*, draft.export, source.forget) are also exposed; each
+      is gated behind human approval (ADR-0004 — no auto-apply,
+      docs/design/mcp-surface.md).
 
       Configure an MCP host to launch this command over stdio.
     `,
