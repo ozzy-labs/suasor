@@ -36,6 +36,9 @@ backend = "ollama"                  # disabled（既定）| ollama | openai | vo
 baseUrl = "http://localhost:11434"  # /api/embed は client が付与
 model = "bge-m3"                     # ingest と query で必ず同一（ベクトル空間整合）
 dim = 1024                           # model の出力次元と一致必須（bge-m3=1024、nomic-embed-text=768 等）
+# maxBatch = 64                       # 1 リクエスト最大件数。超過は順序保持で分割（Issue #267）
+# requestTimeoutMs = 60000            # per-request timeout（ms）。超過は abort→retry（0 で無効）
+# maxRetries = 3                      # 429/5xx の最大試行回数（初回含む）。1 で retry 無効
 ```
 
 env override も可能（headless / Docker 用、[config](../design/config.md)）:
@@ -100,6 +103,9 @@ backend = "openai"                  # または "voyage"
 baseUrl = "https://api.openai.com"  # /v1/embeddings は client が付与（voyage は https://api.voyageai.com）
 model = "text-embedding-3-small"    # ingest と query で必ず同一
 dim = 1536                           # model の出力次元と一致必須（上表参照）
+# maxBatch = 64                       # 大規模 sync で 413 / context 超過を避ける分割上限（Issue #267）
+# requestTimeoutMs = 60000            # 外部 API のハングを防ぐ per-request timeout（ms）
+# maxRetries = 3                      # 429/5xx の指数 backoff + jitter retry 回数（Retry-After 尊重）
 ```
 
 ### 2. API キーを設定する（keyring または env）
@@ -120,6 +126,17 @@ OS キーチェーンに保存する場合は service `suasor` / account `embedd
 ### 3. 取り込み・意味検索
 
 以降は Ollama backend と同じ。`suasor <connector> sync` で新規 / 本文変更 source が外部 API で埋め込まれ（best-effort：API 失敗時も取り込みは成功し warning のみ）、`recall.search` の対象になる。既存データの後付け・model 変更時の再生成も同様に `suasor <connector> sync --full` / `suasor embeddings rebuild`。
+
+## egress 堅牢化（retry / batch / timeout / 次元ガード）
+
+外部 backend（`openai` / `voyage`）の egress は本番 sync に耐えるよう堅牢化されている（[Issue #267](https://github.com/ozzy-labs/suasor/issues/267)）。**送信内容は変えず**（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）、リクエスト形状と失敗時の挙動だけを足している。
+
+- **retry / backoff**: `429`（rate limit）と `5xx`（サーバ）を**指数 backoff + full jitter**で再試行する。`Retry-After` ヘッダがあれば尊重（上限 60s）。最大試行回数は `maxRetries`（既定 3、初回含む。`1` で無効）。`4xx`（401/404 等）は config エラーとして即 fail（再試行しない）。共有ロジックは `src/util/retry.ts` にあり connector（slack/github の `_fetch.ts`）と同じポリシー。
+- **batch 分割**: `maxBatch`（既定 64）を超える入力は**順序を保って分割**し、各 chunk の結果を結合する。1 リクエストに全件を詰めて 413 / model context 超過で**全ベクトルを失う**事故を防ぐ。
+- **per-request timeout**: `requestTimeoutMs`（既定 60000ms）。外部 API がハングしても sync を止めない。timeout は abort して transient 失敗として retry する（`0` で無効）。
+- **次元不一致 fail-fast**: `model` の実出力次元が `[embedding].dim` と異なる場合、**初回 embed で actionable な `EmbeddingError`**（「model は N-dim だが dim は M」「`dim = N` に直し新規 DB / delete + rebuild + 再 sync」）を投げる。従来は vec0 insert が静かに全失敗し recall が無言で空になっていた（例: `dim` 既定 1024 のまま `backend=openai` model `text-embedding-3-small`=1536）。`suasor doctor` も backend 有効時に 1 件 probe して「model 出力次元 vs `dim`」を検査し、不一致を ERROR で surface する（probe は外部 backend では 1 回の egress を伴う）。
+
+> **cost 注意**: 外部 backend は本文を送る課金 egress。大規模 sync は `maxBatch` でリクエスト数が、retry で失敗時の追加リクエストが増える。コスト・レート制限を踏まえて値を調整する。
 
 ## 保守 verb（status / rebuild / drain / list-failed / find-duplicates）
 
@@ -172,3 +189,6 @@ suasor embeddings find-duplicates --threshold 0.95
   - ingest と query で `model` が一致しているか（途中で変えたら `suasor embeddings rebuild`、または `sync --full` で再生成）
   - 現状を確かめたい → `suasor embeddings status` で embedded / pending / stale を確認、`suasor embeddings list-failed` でどの source が欠けているかを確認
   - `suasor doctor` は backend 有効時に未埋め込み backlog（`pending embeddings: N — suasor embeddings drain` / `stale embeddings: N — suasor embeddings rebuild`）を WARN で surface する。store 全体の規模（vec0 件数等）は `suasor store info` で確認できる
+- `embedding dimension mismatch` / `recall` が常に空（backend 有効・キーあり）:
+  - `[embedding].dim` が `model` の実出力次元と一致しているか（例 openai `text-embedding-3-small`=1536・voyage `voyage-3`=1024・bge-m3=1024）。不一致だと初回 embed で fail-fast し、`suasor doctor` が `embedding.dim` ERROR を出す
+  - `dim` は DB 作成時に vec0 サイズを固定するため、変更には**新規 DB または delete + rebuild + 再 sync** が必要

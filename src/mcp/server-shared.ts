@@ -40,7 +40,10 @@ export interface McpServerDeps {
    * Accepts either the full config (preferred) or a bare backend string for
    * back-compat; a bare string with no model uses the schema defaults.
    */
-  embedding: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> | EmbeddingConfig["backend"];
+  embedding:
+    | (Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> &
+        Partial<Pick<EmbeddingConfig, "dim" | "maxBatch" | "requestTimeoutMs" | "maxRetries">>)
+    | EmbeddingConfig["backend"];
   /**
    * Pre-built embedder override (tests inject a fake to avoid a live sidecar).
    * When provided it takes precedence over building one from `embedding`.
@@ -86,7 +89,7 @@ export interface McpServerDeps {
 /** Normalize the `embedding` dep (bare backend string or full config) → config. */
 export function resolveEmbeddingConfig(
   embedding: McpServerDeps["embedding"],
-): Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> {
+): Exclude<McpServerDeps["embedding"], string> {
   if (typeof embedding === "string") {
     // Back-compat: a bare backend string uses the schema model/baseUrl defaults.
     return { backend: embedding, baseUrl: DEFAULT_OLLAMA_BASE_URL, model: DEFAULT_OLLAMA_MODEL };

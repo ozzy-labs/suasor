@@ -31,6 +31,9 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 # baseUrl = "http://localhost:11434"   # ollama sidecar (/api/embed is appended)
 # model = "bge-m3"                      # embedding model; identical for ingest & query
 # dim = 1024                            # embedding dim; must match the model (bge-m3=1024)
+# maxBatch = 64                         # max texts per request; larger inputs split in order
+# requestTimeoutMs = 60000              # per-request timeout (ms); 0 disables
+# maxRetries = 3                        # 429/5xx retry attempts incl. first; 1 disables
 
 [llm]
 backend = "disabled"   # disabled | anthropic | openai | ollama
