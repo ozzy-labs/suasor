@@ -6,12 +6,13 @@
  *    cases, backward compatibility, validation errors).
  * 2. Catalog invariants over the real bundled skills: every SKILL.md carries the
  *    required machine-readable fields, name matches its directory, categories are
- *    in the closed set, pairs are symmetric, and the host mirrors match the SSOT.
+ *    in the closed set, and pairs are symmetric.
+ *
+ * The host-mirror byte-parity check (in-repo dogfood) was removed in ADR-0035;
+ * mirrors are no longer committed. install correctness lives in install.test.ts.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { listBundledSkills, resolveSkillsSource } from "../../src/skills/catalog.ts";
+import { listBundledSkills } from "../../src/skills/catalog.ts";
 import {
   extractFrontmatterBlock,
   loadSkillInfos,
@@ -21,7 +22,6 @@ import {
   skillMatchesQuery,
   validateFrontmatter,
 } from "../../src/skills/frontmatter.ts";
-import { mirrorPath } from "../../src/skills/install.ts";
 
 describe("extractFrontmatterBlock", () => {
   test("extracts the block between the leading fences", () => {
@@ -160,18 +160,8 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
     expect(write).toBe(9);
   });
 
-  test("host mirrors carry frontmatter identical to the SSOT", () => {
-    // mirrorPath resolves under <baseDir>/.claude|.agents; the repo root is the
-    // dir holding docs/skills (resolveSkillsSource → docs/skills, two up).
-    const skillsRoot = resolveSkillsSource();
-    expect(skillsRoot).not.toBeNull();
-    const repoRoot = dirname(dirname(skillsRoot as string));
-    for (const info of infos) {
-      const ssot = readFileSync(info.sourcePath, "utf8");
-      for (const host of ["claude", "agents"] as const) {
-        const mirror = mirrorPath(repoRoot, host, info.name);
-        expect(readFileSync(mirror, "utf8"), `${host} mirror of ${info.name}`).toBe(ssot);
-      }
-    }
-  });
+  // NOTE: in-repo の dogfood-commit（mirror を commit して SSOT との byte 一致を検査する）は
+  // ADR-0035 で廃止した。host dir は project skill（vendored dev skill）の置き場に再定義され、
+  // assistant mirror は gitignore されたローカル install のみ。install の正しさは
+  // tests/skills/install.test.ts（synthetic SSOT 上の installSkills / detectDrift）が担保する。
 });

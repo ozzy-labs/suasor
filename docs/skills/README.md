@@ -43,7 +43,7 @@
 | [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
 | [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply |
 
-エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）。
+エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）で、suasor 開発に使う project skill として host dir に commit 済み（[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md)・更新は [dev-skills-refresh.md](dev-skills-refresh.md)）。
 
 ## インストール
 
@@ -64,6 +64,9 @@ suasor skills info <name>             # 単一 skill の category / 境界 / tri
 
 展開は冪等で、内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated` に上書きする。`suasor init` は本コマンドを案内するのみで自動展開はしない。
 
-### in-repo dogfood
+### host dir の扱い（ADR-0035）
 
-本リポジトリは展開結果（`.claude/skills/` / `.agents/skills/`）を commit して dogfood する。SSOT を編集したら `suasor skills install` を再実行して mirror を更新し、両方を commit する。pre-commit の `skills-drift` フック（`scripts/skills-drift.sh`）が SSOT ↔ mirror の同期を検査し、ずれていれば commit を止める。
+[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo dogfood-commit は廃止した。host dir（`.claude/skills/` / `.agents/skills/`）の扱いは次の 2 系統に分かれる:
+
+- **assistant skill の mirror** — `docs/skills/` SSOT のローカル install 物。**commit しない**（`.gitignore` 済み）。各開発者が必要に応じ `suasor skills install` で展開する。install の正しさは `tests/skills/install.test.ts`（synthetic SSOT 上の `installSkills` / `detectDrift`）が担保する。
+- **エコシステム共通 dev skill（drive / lint / commit 等）** — suasor 開発に使う **project skill として commit 済み**。更新手順は [dev-skills-refresh.md](dev-skills-refresh.md) を参照。
