@@ -9,8 +9,11 @@
  * confirm which identity the connector ingests as.
  *
  * Import-clean (ADR-0007): no `box-typescript-sdk-gen`. The default transport
- * uses the global `fetch` (no SDK). The token is never echoed in thrown errors.
+ * uses the global `fetch` (no SDK), wrapped in the shared {@link fetchWithRetry} so
+ * a transient 429/5xx (with `Retry-After` honoured) is retried rather than failing
+ * the check (Issue #269). The token is never echoed in thrown errors.
  */
+import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
 
 /** Identity resolved from a successful `GET /2.0/users/me`. */
 export interface BoxAuthResult {
@@ -25,20 +28,30 @@ export type BoxAuthTransport = (
   token: string,
 ) => Promise<{ status: number; body: Record<string, unknown> }>;
 
-/** Default transport: a `GET /2.0/users/me` against the Box API. */
-const defaultTransport: BoxAuthTransport = async (token) => {
-  const res = await fetch("https://api.box.com/2.0/users/me", {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  let body: Record<string, unknown> = {};
-  try {
-    body = (await res.json()) as Record<string, unknown>;
-  } catch {
-    // Non-JSON error body → leave empty; status drives the verdict.
-  }
-  return { status: res.status, body };
-};
+/**
+ * Build the default transport: a `GET /2.0/users/me`, run through
+ * {@link fetchWithRetry} so a transient 429/5xx is retried (Issue #269). `retry`
+ * is injectable (`fetchImpl` / `sleep`) so a test can drive "429 → Retry-After →
+ * success" with no real waiting.
+ */
+export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): BoxAuthTransport {
+  return async (token) => {
+    const res = await fetchWithRetry(
+      "https://api.box.com/2.0/users/me",
+      { method: "GET", headers: { Authorization: `Bearer ${token}` } },
+      retry,
+    );
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await res.json()) as Record<string, unknown>;
+    } catch {
+      // Non-JSON error body → leave empty; status drives the verdict.
+    }
+    return { status: res.status, body };
+  };
+}
+
+const defaultTransport: BoxAuthTransport = makeDefaultTransport();
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

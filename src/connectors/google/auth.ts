@@ -15,9 +15,13 @@
  * connector's OAuth2 client, which passes only clientId + refresh_token).
  *
  * Import-clean (ADR-0007): no `googleapis`. The default transport uses the
- * global `fetch` (no SDK). The refresh token / client secret are never echoed in
- * thrown errors.
+ * global `fetch` (no SDK), wrapped in the shared {@link fetchWithRetry} so a
+ * transient 429/5xx (with `Retry-After` honoured) is retried rather than failing
+ * the check (Issue #269 — google/box/ms-graph fetch paths gain the same backoff
+ * the Slack/GitHub `_fetch.ts` already had). The refresh token / client secret are
+ * never echoed in thrown errors.
  */
+import { type FetchWithRetryOptions, fetchWithRetry } from "../../util/retry.ts";
 
 /** Granted scope + lifetime resolved from a successful refresh exchange. */
 export interface GoogleAuthResult {
@@ -40,27 +44,40 @@ export type GoogleAuthTransport = (
   input: GoogleAuthInput,
 ) => Promise<{ status: number; body: Record<string, unknown> }>;
 
-/** Default transport: a refresh-token POST to Google's OAuth2 token endpoint. */
-const defaultTransport: GoogleAuthTransport = async ({ clientId, refreshToken, clientSecret }) => {
-  const form = new URLSearchParams({
-    client_id: clientId,
-    refresh_token: refreshToken,
-    grant_type: "refresh_token",
-  });
-  if (clientSecret) form.set("client_secret", clientSecret);
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: form.toString(),
-  });
-  let body: Record<string, unknown> = {};
-  try {
-    body = (await res.json()) as Record<string, unknown>;
-  } catch {
-    // Non-JSON error body → leave empty; status drives the verdict.
-  }
-  return { status: res.status, body };
-};
+/**
+ * Build the default transport: a refresh-token POST to Google's OAuth2 token
+ * endpoint, run through {@link fetchWithRetry} so a transient 429/5xx is retried
+ * (Issue #269). `retry` is injectable (`fetchImpl` / `sleep`) so a test can drive
+ * "429 → Retry-After → success" with no real waiting.
+ */
+export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): GoogleAuthTransport {
+  return async ({ clientId, refreshToken, clientSecret }) => {
+    const form = new URLSearchParams({
+      client_id: clientId,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    });
+    if (clientSecret) form.set("client_secret", clientSecret);
+    const res = await fetchWithRetry(
+      "https://oauth2.googleapis.com/token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      },
+      retry,
+    );
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await res.json()) as Record<string, unknown>;
+    } catch {
+      // Non-JSON error body → leave empty; status drives the verdict.
+    }
+    return { status: res.status, body };
+  };
+}
+
+const defaultTransport: GoogleAuthTransport = makeDefaultTransport();
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

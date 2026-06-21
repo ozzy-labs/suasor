@@ -20,7 +20,7 @@
 
 **一括 sync は短命・冪等な one-shot コマンド `suasor sync` として提供する。定期実行は Suasor の責務とせず、OS スケジューラ（cron / launchd / systemd timer）へ委譲する。常駐 `--watch` は採らない（将来必要になれば別 ADR に隔離する）。**
 
-1. **`suasor sync` は config の有効 connector を列挙して直列に sync する。** 有効判定は `connectors list` / `doctor` と同一規約 —`[connectors.<name>]` slice が存在し `enabled = false` でない connector。connector 実装の lazy import は維持する（[ADR-0007](0007-connector-contract.md) import-clean、NFR-PRF-1）。各 connector の取り込み本体は既存の共有 `syncConnector` サービスを呼ぶ（CLI 単体 sync・`connector.sync` MCP tool と同一コードパス）。
+1. **`suasor sync` は config の有効 connector を列挙して sync する。** 有効判定は `connectors list` / `doctor` と同一規約 —`[connectors.<name>]` slice が存在し `enabled = false` でない connector。connector 実装の lazy import は維持する（[ADR-0007](0007-connector-contract.md) import-clean、NFR-PRF-1）。各 connector の取り込み本体は既存の共有 `syncConnector` サービスを呼ぶ（CLI 単体 sync・`connector.sync` MCP tool と同一コードパス）。**当初は直列実行だったが、Issue #269 で connector 間を bounded pool で並列化した**（各 connector は別 API ホスト＝独立 rate-limit バケットのため。既定並列度 4、`--concurrency` で上書き、8 超は警告のみ。**connector 内 per-resource は直列を維持**＝googleapis / graph.microsoft はクォータ共有のため）。集約結果は完了順ではなく `names` 順に整列し決定的。DB は単一 `bun:sqlite` コネクション共有のままで、同期 API が SQL を逐次化するため write lock 競合は発生しない。`--no-continue-on-error`（fail-fast）は「最初の失敗で停止」の意味が順序依存のため直列を維持する。
 
 2. **continue-on-error（既定）。** 1 connector の失敗が全体を止めない。各 connector の成否を集計し、**1 つでも失敗があれば exit 1**（`doctor` の終了コード規約に合わせ、cron / CI が gate に使える）。既定で他 connector の完了を妨げない（部分的に集まる方が「集める」価値に資する）。`--no-continue-on-error` で fail-fast（最初の失敗で停止）に切り替えられる。
 
@@ -45,12 +45,12 @@
 ### Negative / Trade-offs
 
 - 「常に最新」は OS スケジューラの設定責任になる（Suasor 単体では定期実行しない）。セットアップに 1 ステップ追加される（ガイドで吸収）
-- 直列実行のため、connector 数 × 各取り込み時間だけかかる（並列化は将来の最適化余地。現状は単純性優先）
+- ~~直列実行のため、connector 数 × 各取り込み時間だけかかる（並列化は将来の最適化余地。現状は単純性優先）~~ → Issue #269 で connector 間を並列化（bounded pool）。同時に複数 connector を sync するため、共有ローカル sidecar（embedding / extraction）への負荷集中・API rate limit 消費に注意が要る（既定並列度 4 で抑制、8 超は警告）
 - `--watch` を望む声には別 ADR を要する（意図的に scope 外）
 
 ## Alternatives Considered
 
 - **常駐デーモン（`suasor sync --watch`）** — 却下。多重起動ロック・クラッシュ復旧・再起動という [ADR-0020](0020-multi-actor-coordination-scope.md) が意図的に避けた複雑性を再導入する。single-user / local-first には過剰
 - **connector ごとの個別 cron エントリ（一括コマンドを作らない）** — 却下。connector を増やすたび cron 設定が増え、全体の成否集約・exit code 規約を運用者が自前で組む必要がある。一括コマンド + continue-on-error の方が単純
-- **並列 sync** — 現時点では却下（直列で十分・単純）。rate limit 制御や進捗集約の複雑性に見合わない。将来ボトルネックになれば別途検討
+- **並列 sync** — ~~現時点では却下（直列で十分・単純）~~ → **Issue #269 で採用**。6 連携で sync サイクルが ~30 分かかりボトルネック化したため、connector 間を bounded pool で並列化した（各 connector は別 API ホスト＝独立 rate-limit、sync 時間の大半はネットワーク待ち）。当初懸念した複雑性は、(a) per-resource は直列維持で connector 内のクォータ競合を回避、(b) 集約は `names` 順整列で決定的、(c) 単一 `bun:sqlite` 同期コネクションが SQL を逐次化、により限定的に収まった。並列度は bounded（既定 4、`--concurrency`）でローカル sidecar 競合を抑える
 - **fail-fast（最初の失敗で停止）** — 却下を既定とする。一部でも集まる方が価値に資するため continue-on-error を既定にし、exit code で失敗を通知する

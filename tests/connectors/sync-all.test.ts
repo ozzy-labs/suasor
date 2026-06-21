@@ -7,7 +7,13 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Connector, SourceRecord, SyncResult } from "../../src/connectors/contract.ts";
-import { runBulkSync, selectEnabledConnectors } from "../../src/connectors/sync-all.ts";
+import {
+  CONCURRENCY_WARN_THRESHOLD,
+  DEFAULT_CONCURRENCY,
+  resolveConcurrency,
+  runBulkSync,
+  selectEnabledConnectors,
+} from "../../src/connectors/sync-all.ts";
 import { Store } from "../../src/db/index.ts";
 
 let store: Store;
@@ -245,5 +251,197 @@ describe("runBulkSync", () => {
       syncOptions: { onWarn: (m) => warnings.push(m) },
     });
     expect(warnings).toEqual([]);
+  });
+});
+
+describe("resolveConcurrency", () => {
+  test("defaults to DEFAULT_CONCURRENCY, capped at the connector count", () => {
+    expect(resolveConcurrency(10, undefined)).toBe(DEFAULT_CONCURRENCY);
+    expect(resolveConcurrency(2, undefined)).toBe(2); // fewer connectors than the default
+    expect(resolveConcurrency(0, undefined)).toBe(1); // never below 1
+  });
+
+  test("honours an explicit value, clamped to [1, count]", () => {
+    expect(resolveConcurrency(10, 2)).toBe(2);
+    expect(resolveConcurrency(3, 10)).toBe(3); // can't exceed the connector count
+    expect(resolveConcurrency(5, 0)).toBe(1); // non-positive → serial
+    expect(resolveConcurrency(5, -3)).toBe(1);
+  });
+
+  test("warns (but does not cap) above the threshold", () => {
+    const warnings: string[] = [];
+    // 12 connectors so the request itself is the binding limit, not the count.
+    const resolved = resolveConcurrency(12, CONCURRENCY_WARN_THRESHOLD + 1, (m) =>
+      warnings.push(m),
+    );
+    expect(resolved).toBe(CONCURRENCY_WARN_THRESHOLD + 1); // not capped
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("exceeds the recommended max");
+  });
+
+  test("does not warn at or below the threshold", () => {
+    const warnings: string[] = [];
+    resolveConcurrency(20, CONCURRENCY_WARN_THRESHOLD, (m) => warnings.push(m));
+    expect(warnings).toEqual([]);
+  });
+});
+
+/**
+ * A connector whose `sync` blocks on an externally-resolved gate so a test can
+ * observe how many connectors are mid-sync at once (the bounded-pool invariant).
+ * `tracker` records concurrency; `release()` lets all gated connectors finish.
+ */
+function gatedConnector(
+  name: string,
+  tracker: { inflight: number; max: number },
+  gate: Promise<void>,
+): Connector {
+  return {
+    name,
+    sourceType: name,
+    async *sync(): AsyncIterable<SourceRecord> {
+      tracker.inflight += 1;
+      tracker.max = Math.max(tracker.max, tracker.inflight);
+      try {
+        await gate;
+      } finally {
+        tracker.inflight -= 1;
+      }
+      yield rec(`${name}:1`, "body");
+    },
+    finalize(): SyncResult {
+      return { cursor: null };
+    },
+  };
+}
+
+describe("runBulkSync — bounded concurrency (Issue #269)", () => {
+  test("never runs more than `concurrency` connectors at once", async () => {
+    const tracker = { inflight: 0, max: 0 };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const names = ["a", "b", "c", "d", "e"];
+
+    const run = runBulkSync(store, {
+      names,
+      connectors: Object.fromEntries(names.map((n) => [n, {}])),
+      concurrency: 2,
+      loadConnector: async (name) => gatedConnector(name, tracker, gate),
+    });
+    // Let the pool spin up its workers, then release every gated connector.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(tracker.max).toBe(2); // bounded at the requested concurrency
+    release();
+    const result = await run;
+
+    expect(result.succeeded).toBe(5);
+    expect(result.failed).toBe(0);
+    expect(result.results.map((r) => r.connector)).toEqual(names); // names order
+  });
+
+  test("aggregates in `names` order regardless of finish order", async () => {
+    // "slow" finishes last but must still appear in its names position.
+    const names = ["slow", "fast1", "fast2"];
+    const result = await runBulkSync(store, {
+      names,
+      connectors: Object.fromEntries(names.map((n) => [n, {}])),
+      concurrency: 3,
+      loadConnector: async (name) => {
+        if (name === "slow") {
+          return {
+            name,
+            sourceType: name,
+            async *sync(): AsyncIterable<SourceRecord> {
+              await new Promise((r) => setTimeout(r, 15));
+              yield rec("slow:1", "s");
+            },
+            finalize: (): SyncResult => ({ cursor: null }),
+          };
+        }
+        return fakeConnector(name, [rec(`${name}:1`, "b")]);
+      },
+    });
+    expect(result.results.map((r) => r.connector)).toEqual(names);
+    expect(result.succeeded).toBe(3);
+  });
+
+  test("partial failure stays isolated under parallelism (ADR-0014, exit-code parity)", async () => {
+    const names = ["ok1", "boom", "partial", "ok2"];
+    const errors: string[] = [];
+    const result = await runBulkSync(store, {
+      names,
+      connectors: Object.fromEntries(names.map((n) => [n, {}])),
+      concurrency: 4,
+      loadConnector: async (name) => {
+        if (name === "boom") throw new Error("no token");
+        if (name === "partial") {
+          return {
+            name,
+            sourceType: name,
+            async *sync(): AsyncIterable<SourceRecord> {
+              yield rec("partial:1", "kept");
+            },
+            finalize: (): SyncResult => ({
+              cursor: null,
+              partialFailure: true,
+              summaryLines: ["units: a=ok, b=failed (cursor preserved)"],
+            }),
+          };
+        }
+        return fakeConnector(name, [rec(`${name}:1`, "b")]);
+      },
+      onConnectorError: (c, e) => errors.push(`${c}: ${e.message}`),
+    });
+
+    expect(result.succeeded).toBe(2); // ok1, ok2
+    expect(result.failed).toBe(2); // boom (threw), partial (partialFailure)
+    expect(result.results.map((r) => r.connector)).toEqual(names); // deterministic order
+    expect(result.results.find((r) => r.connector === "boom")?.error).toContain("no token");
+    const partial = result.results.find((r) => r.connector === "partial");
+    expect(partial?.ok).toBe(false);
+    expect(partial?.outcome?.observed).toBe(1); // records kept
+    expect(errors.sort()).toEqual(
+      [
+        "boom: no token",
+        "partial: partial failure (units: a=ok, b=failed (cursor preserved))",
+      ].sort(),
+    );
+  });
+
+  test("concurrency > 8 warns via onWarn but still runs every connector", async () => {
+    const warnings: string[] = [];
+    const names = ["a", "b", "c"];
+    const result = await runBulkSync(store, {
+      names,
+      connectors: Object.fromEntries(names.map((n) => [n, {}])),
+      concurrency: 16,
+      loadConnector: async (name) => fakeConnector(name, [rec(`${name}:1`, "b")]),
+      syncOptions: { onWarn: (m) => warnings.push(m) },
+    });
+    expect(result.succeeded).toBe(3);
+    expect(warnings.some((w) => w.includes("exceeds the recommended max"))).toBe(true);
+  });
+
+  test("fail-fast (continueOnError: false) stays serial and stops at the first failure", async () => {
+    // With parallelism disabled, the original ADR-0027 serial semantics hold:
+    // connectors after the failure never run and are absent from the result.
+    const ran: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["good", "bad", "after"],
+      connectors: { good: {}, bad: {}, after: {} },
+      continueOnError: false,
+      concurrency: 4, // ignored on the fail-fast path
+      loadConnector: async (name) => {
+        ran.push(name);
+        if (name === "bad") throw new Error("boom");
+        return fakeConnector(name, [rec(`${name}:1`, "body")]);
+      },
+    });
+    expect(ran).toEqual(["good", "bad"]); // "after" never ran
+    expect(result.results.map((r) => r.connector)).toEqual(["good", "bad"]);
+    expect(result.succeeded).toBe(1);
+    expect(result.failed).toBe(1);
   });
 });
