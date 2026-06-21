@@ -155,4 +155,12 @@ describe("suasor config show", () => {
     expect(out).toContain("connectors.slack.token = unset");
     expect(out).not.toContain("ghp_secret_token");
   });
+
+  test("--no-effective is rejected (not a silent no-op)", async () => {
+    const { code, out, err } = await run(["config", "show", "--no-effective"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--no-effective is not supported");
+    // It must not silently print the effective report despite the unsupported flag.
+    expect(out).not.toContain("config show (effective)");
+  });
 });

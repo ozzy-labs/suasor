@@ -116,7 +116,15 @@ export class ExtractionListPendingCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    let limit = 50;
+    const [{ loadConfig }, { Store }, { listPendingExtractions }, { DEFAULT_LIST_LIMIT }] =
+      await Promise.all([
+        import("../../config/index.ts"),
+        import("../../db/index.ts"),
+        import("../../extraction/index.ts"),
+        import("../../mcp/queries.ts"),
+      ]);
+
+    let limit = DEFAULT_LIST_LIMIT;
     if (this.limit !== undefined) {
       const parsed = Number(this.limit);
       if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -125,12 +133,6 @@ export class ExtractionListPendingCommand extends Command {
       }
       limit = parsed;
     }
-
-    const [{ loadConfig }, { Store }, { listPendingExtractions }] = await Promise.all([
-      import("../../config/index.ts"),
-      import("../../db/index.ts"),
-      import("../../extraction/index.ts"),
-    ]);
 
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;

@@ -53,4 +53,18 @@ describe("connector registry", () => {
   test("loadConnectorConfigSchema returns null for a schema-less / unknown connector", async () => {
     expect(await loadConnectorConfigSchema("does-not-exist")).toBeNull();
   });
+
+  // Guard against cli.md drift (Issue #296): every registered connector must be
+  // listed in the `<connector> sync` synopsis so the doc never lags the registry.
+  test("docs/design/cli.md `<connector> sync` synopsis enumerates every connector", async () => {
+    const url = new URL("../../docs/design/cli.md", import.meta.url);
+    const md = await Bun.file(url).text();
+    const syncLine = md.split("\n").find((line) => line.includes("suasor <connector> sync"));
+    expect(syncLine).toBeDefined();
+    for (const name of connectorNames()) {
+      // Match the bare connector token (e.g. ` web ` / ` web)`) to avoid false
+      // positives from substrings.
+      expect(syncLine).toContain(name);
+    }
+  });
 });
