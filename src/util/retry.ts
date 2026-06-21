@@ -180,10 +180,13 @@ async function fetchOnce(
   if (timeoutMs <= 0) return fetchImpl(url, init);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  // Chain a caller-supplied signal so an outer abort still propagates.
+  // Chain a caller-supplied signal so an outer abort still propagates. Handle the
+  // already-aborted case too: a listener added after the event fired never runs,
+  // so an outer signal that aborted before this attempt started would be ignored.
   const outer = init?.signal;
   const onOuterAbort = () => controller.abort();
-  outer?.addEventListener("abort", onOuterAbort, { once: true });
+  if (outer?.aborted) controller.abort();
+  else outer?.addEventListener("abort", onOuterAbort, { once: true });
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal });
   } finally {

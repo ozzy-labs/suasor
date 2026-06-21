@@ -260,6 +260,30 @@ describe("fetchWithRetry", () => {
     expect(sawAbort).toBe(true);
   });
 
+  test("an already-aborted caller signal aborts the first attempt under a timeout", async () => {
+    const outer = new AbortController();
+    outer.abort(); // aborted before the request is even attempted
+    let sawAbort = false;
+    const fetchImpl = (_url: string, init?: RequestInit): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        if (init?.signal?.aborted) {
+          sawAbort = true;
+          reject(new Error("aborted"));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    const { sleep } = fakeSleep();
+    await expect(
+      fetchWithRetry(
+        "https://api.example.com",
+        { signal: outer.signal },
+        { fetchImpl, sleep, maxAttempts: 1, timeoutMs: 1000, random: () => 0 },
+      ),
+    ).rejects.toThrow("aborted");
+    expect(sawAbort).toBe(true);
+  });
+
   test("passes through a 200 with no timeout configured", async () => {
     const { fetchImpl, calls } = fakeFetch([{ status: 200 }]);
     const res = await fetchWithRetry("https://api.example.com", { method: "POST" }, { fetchImpl });
