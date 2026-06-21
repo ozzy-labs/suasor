@@ -417,10 +417,61 @@ describe("Notion client — block recursion, pagination, cycle guard, 429 retry"
     });
     const client = makeNotionClient("tok", transport);
     const items: NotionItem[] = [];
-    // depth 0: the page's own children are read, but their children are not.
-    for await (const item of client.pages(0)) items.push(item);
+    // page_depth 1: the page's own children are read (1 level), but their
+    // children are not (that would be level 2).
+    for await (const item of client.pages(1)) items.push(item);
     expect(items[0]?.text).toBe("top");
     expect(calls).not.toContain("GET /v1/blocks/deep/children");
+  });
+
+  test("page_depth 0 reads no block text at all", async () => {
+    const { transport, calls } = cannedTransport({
+      "POST /v1/search": [
+        {
+          status: 200,
+          body: { results: [{ object: "page", id: "p1", last_edited_time: "t" }], has_more: false },
+        },
+      ],
+    });
+    const client = makeNotionClient("tok", transport);
+    const items: NotionItem[] = [];
+    for await (const item of client.pages(0)) items.push(item);
+    expect(items[0]?.text).toBe("");
+    expect(calls).not.toContain("GET /v1/blocks/p1/children");
+  });
+
+  test("child_page block is not recursed into (no body duplication)", async () => {
+    const { transport, calls } = cannedTransport({
+      "POST /v1/search": [
+        {
+          status: 200,
+          body: { results: [{ object: "page", id: "p1", last_edited_time: "t" }], has_more: false },
+        },
+      ],
+      "GET /v1/blocks/p1/children": [
+        {
+          status: 200,
+          body: {
+            results: [
+              {
+                id: "child1",
+                type: "child_page",
+                child_page: { title: "Nested Page" },
+                has_children: true,
+              },
+            ],
+            has_more: false,
+          },
+        },
+      ],
+    });
+    const client = makeNotionClient("tok", transport);
+    const items: NotionItem[] = [];
+    for await (const item of client.pages(10)) items.push(item);
+    // The child page's title is kept inline as a pointer, but its body is NOT
+    // pulled in — that page owns its own standalone record.
+    expect(items[0]?.text).toBe("Nested Page");
+    expect(calls).not.toContain("GET /v1/blocks/child1/children");
   });
 
   test("non-2xx throws with the Notion message, never the token", async () => {

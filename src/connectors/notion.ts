@@ -56,9 +56,11 @@ export const NotionConnectorConfig = z
      */
     databases: z.array(z.string().min(1)).default([]),
     /**
-     * Max block-recursion depth when extracting a page/row body (a child page
-     * counts as one level). Defaults to {@link DEFAULT_PAGE_DEPTH}; bounded so a
-     * deep / cyclic tree cannot walk forever.
+     * Max block-nesting levels to read when extracting a page/row body: `N` reads
+     * the page's direct children plus `N-1` further levels of nesting (a nested
+     * list / toggle counts as one level). `child_page` blocks are never recursed
+     * into — that page is ingested as its own standalone record. Defaults to
+     * {@link DEFAULT_PAGE_DEPTH}; bounded so a deep / cyclic tree cannot walk forever.
      */
     page_depth: z.number().int().positive().default(DEFAULT_PAGE_DEPTH),
     /**

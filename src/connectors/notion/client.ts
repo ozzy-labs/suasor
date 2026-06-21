@@ -183,20 +183,30 @@ function blockText(block: Record<string, unknown>): string {
 }
 
 /**
- * Recursively gather the plain-text of a block subtree, bounded by `depth` and a
- * `visited` id guard so a synced/duplicated-block cycle cannot loop forever. Each
- * level pages `GET /v1/blocks/{id}/children` to exhaustion. Lines are joined with
- * newlines in document order.
+ * Recursively gather the plain-text of a block subtree, bounded by `remaining`
+ * levels and a `visited` id guard so a synced/duplicated-block cycle cannot loop
+ * forever. `remaining` is the number of nesting levels still allowed to be read:
+ * the entry call reads the page's direct children at `remaining = page_depth`, and
+ * each recursion descends one level (`remaining - 1`) until it hits 0 — so a
+ * configured `page_depth` of N reads exactly N levels of nesting (no off-by-one).
+ * Each level pages `GET /v1/blocks/{id}/children` to exhaustion; lines are joined
+ * with newlines in document order.
+ *
+ * A `child_page` block is **not** recursed into: that child page is ingested as
+ * its own standalone `notion_page` record (Notion `search` returns it
+ * independently), so pulling its body into the parent too would duplicate the
+ * content across two records. Only the child page's title (from {@link blockText})
+ * is kept inline, as a pointer.
  */
 async function collectBlockText(
   transport: NotionTransport,
   token: string,
   blockId: string,
-  depth: number,
+  remaining: number,
   visited: Set<string>,
   budget: { remaining: number },
 ): Promise<string> {
-  if (depth < 0 || budget.remaining <= 0) return "";
+  if (remaining <= 0 || budget.remaining <= 0) return "";
   if (visited.has(blockId)) return ""; // cycle guard
   visited.add(blockId);
 
@@ -217,15 +227,17 @@ async function collectBlockText(
       budget.remaining -= 1;
       const text = blockText(block);
       if (text) lines.push(text);
-      // Recurse into children one level deeper (a nested list, toggle, child page).
-      if (block.has_children === true && depth > 0) {
+      // Recurse one level deeper (a nested list, toggle, etc.), but skip
+      // child_page blocks: that page owns its own standalone record, so recursing
+      // would ingest its body twice (here and as notion:page:<child>).
+      if (block.has_children === true && asString(block.type) !== "child_page") {
         const childId = asString(block.id);
         if (childId) {
           const childText = await collectBlockText(
             transport,
             token,
             childId,
-            depth - 1,
+            remaining - 1,
             visited,
             budget,
           );
