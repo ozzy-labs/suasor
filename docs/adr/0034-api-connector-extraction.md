@@ -1,6 +1,6 @@
 # 0034. API connector の本文抽出（Box / Google Drive / OneDrive）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-21
 - Deciders: Suasor maintainers
 - Related: [ADR-0024](0024-document-extraction-sidecar.md)（抽出 sidecar・local 先行）, [ADR-0003](0003-local-first-and-content-minimization.md)（local-first / content minimization）, [ADR-0006](0006-ml-delegation.md)（ML 委譲）, [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0023](0023-local-filesystem-connectors.md)（local connector）, [ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md)（FTS-first）
