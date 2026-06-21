@@ -29,12 +29,16 @@ backend = "disabled"   # disabled（既定）| ollama | openai | voyage（local=
 baseUrl = "http://localhost:11434"  # ollama サイドカー。/api/embed は client が付与
 model = "bge-m3"                     # 埋め込みモデル。ingest と query で同一（ベクトル空間整合）
 dim = 1024                           # 埋め込み次元。model の出力次元と一致必須（bge-m3=1024）
+maxBatch = 64                        # 1 リクエストあたり最大件数。超過は順序保持で分割（Issue #267）
+requestTimeoutMs = 60000             # per-request timeout（ms）。timeout は abort して retry（0 で無効）
+maxRetries = 3                       # 429/5xx の最大試行回数（初回含む）。1 で retry 無効
 ```
 
 - `backend` 既定 `disabled`（base install を軽く保つ）。`recall.search` は無効時に空 + `embedding_disabled` シグナルで FTS に degrade（[retrieval](retrieval.md) / [ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 - **egress-free な `ollama`（ローカルサイドカー）が既定の推奨経路**。`openai` / `voyage` も実装済みだが、本文を外部 API に送る **egress を伴う**（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）opt-in 経路で、`ollama`（ローカル完結・egress なし）と非対称。両者は **API キー（OS キーチェーン / 環境変数、config に平文で書かない）でゲート**され、キー未設定なら embedder は `null` ＝ FTS に degrade し、黙って無効化されないよう **起動時（`suasor mcp serve`）と `suasor doctor` が「キー未設定」WARN を出す**（silent-error 撲滅・[Issue #235](https://github.com/ozzy-labs/suasor/issues/235) / [Issue #259](https://github.com/ozzy-labs/suasor/issues/259)）。API キー env は `SUASOR_EMBEDDING_<BACKEND>_API_KEY`、keyring account は `embedding:<backend>:apiKey`（service `suasor`）。詳細は [embedding guide](../guide/embedding.md)
 - `baseUrl` / `model` は backend ごとに合わせる。ollama は `/api/embed`、openai/voyage は `/v1/embeddings` が client で付与される。既定 model は ollama `bge-m3`(1024-dim) / openai `text-embedding-3-small`(1536-dim) / voyage `voyage-3`(1024-dim)。`model` は **ingest（文書）と query（クエリ）で必ず同一**（混在すると recall が静かに劣化するため、単一値が両方を駆動）
-- `dim` は埋め込みベクトルの次元で、`model` の出力次元と一致必須（`bge-m3`=1024、例: `nomic-embed-text`=768）。DB 作成時に vec0 テーブルのサイズを決めるため、既存ストアで変えるには新規 DB（または delete + rebuild + 再 sync）が必要。不一致だと全ベクトル挿入が失敗し recall が静かに空へ degrade するため、非 1024 次元 model を使うときは必ず設定する
+- `dim` は埋め込みベクトルの次元で、`model` の出力次元と一致必須（`bge-m3`=1024、例: `nomic-embed-text`=768）。DB 作成時に vec0 テーブルのサイズを決めるため、既存ストアで変えるには新規 DB（または delete + rebuild + 再 sync）が必要。不一致だと全ベクトル挿入が失敗し recall が静かに空へ degrade するため、非 1024 次元 model を使うときは必ず設定する。不一致は **初回 embed で fail-fast**（actionable な `EmbeddingError`）し、`suasor doctor` も「model 出力次元 vs `dim`」を probe して不一致を ERROR で surface する（Issue #267）
+- `maxBatch` / `requestTimeoutMs` / `maxRetries` は外部 embedding egress の堅牢化（Issue #267）。`maxBatch` を超える入力は**順序を保って分割**し各 chunk の結果を結合する（大規模 sync で 413 / context 超過の全滅を防ぐ）。`requestTimeoutMs` は per-request timeout（超過は abort して transient 失敗として retry。`0` で無効）。`maxRetries` は 429/5xx に対する指数 backoff + jitter retry の最大試行回数（`Retry-After` を尊重・上限 60s、`1` で retry 無効）。**送信内容は変えず堅牢性のみ追加**（ADR-0003）。共有 backoff util は `src/util/retry.ts`（connector からも再利用）
 - 未知キーは保持（`passthrough`）し、backend 固有項目を後続が確定する
 - env override 例: `SUASOR_EMBEDDING__BACKEND=ollama` / `SUASOR_EMBEDDING__MODEL=bge-large` / `SUASOR_EMBEDDING__BASEURL=http://sidecar:11434`
 

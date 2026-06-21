@@ -171,6 +171,57 @@ export class DoctorCommand extends Command {
             }
           : { name: "embedding", status: "ok", detail: `backend=${backend} model=${model}` },
       );
+
+      // 3b. embedding dim — probe the model's actual output dimension once and
+      //     compare it to [embedding].dim, which sizes the vec0 table. A mismatch
+      //     makes every vector insert fail and silently degrades recall to empty
+      //     (Issue #267). Only probe when a backend is enabled AND an embedder can
+      //     build (external backends need a key); skip otherwise (no key → recall
+      //     already degrades, surfaced by the readiness warning above). The probe
+      //     embeds one short string — for external backends that is one egress
+      //     (ADR-0003), acceptable for an explicit health check.
+      if (backend !== "disabled") {
+        const { createEmbedderResolved } = await import("../../retrieval/embedding/index.ts");
+        const embedder = await createEmbedderResolved({
+          backend,
+          baseUrl: config.embedding.baseUrl,
+          model: config.embedding.model,
+          // dim intentionally omitted: probe the raw model output, compare below.
+          // Fail fast for a health check — one attempt, short timeout — so a
+          // missing sidecar / hung API surfaces a probe warning quickly instead
+          // of waiting out the runtime retry/backoff budget.
+          maxRetries: 1,
+          requestTimeoutMs: 5000,
+        });
+        if (embedder !== null) {
+          try {
+            const [vector] = await embedder.embed(["healthcheck"]);
+            const actual = vector?.length ?? 0;
+            checks.push(
+              actual === config.embedding.dim
+                ? {
+                    name: "embedding.dim",
+                    status: "ok",
+                    detail: `model output ${actual}-dim matches [embedding].dim`,
+                  }
+                : {
+                    name: "embedding.dim",
+                    status: "error",
+                    detail:
+                      `model "${model}" returns ${actual}-dim but [embedding].dim is ${config.embedding.dim}; ` +
+                      `vector inserts fail and recall degrades to empty. Set [embedding].dim = ${actual} ` +
+                      "(needs a fresh DB / delete + rebuild + re-sync). See docs/guide/embedding.md.",
+                  },
+            );
+          } catch (err) {
+            checks.push({
+              name: "embedding.dim",
+              status: "warn",
+              detail: `could not probe embedding dimension: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        }
+      }
     }
 
     // 4. extraction — report the configured backend; disabled is informational.

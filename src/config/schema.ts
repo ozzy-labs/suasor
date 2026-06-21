@@ -48,6 +48,20 @@ export const DEFAULT_OLLAMA_MODEL = "bge-m3";
  */
 const DEFAULT_EMBEDDING_DIM = 1024;
 
+/**
+ * Default max texts per embedding request (Issue #267). Large syncs send many
+ * sources at once; an unbounded batch risks 413 / context-overflow that fails
+ * *every* vector in the request. The client splits inputs into chunks of this
+ * size and concatenates results in input order.
+ */
+const DEFAULT_EMBEDDING_MAX_BATCH = 64;
+/**
+ * Default per-request embedding timeout (ms, Issue #267). A hung external API
+ * call would otherwise block a sync indefinitely; on timeout the attempt aborts
+ * and is retried as a transient failure (see src/util/retry.ts).
+ */
+const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 60_000;
+
 /** Default markitdown extraction sidecar base URL (`/extract` appended by the client). */
 export const DEFAULT_MARKITDOWN_BASE_URL = "http://localhost:8929";
 /** Default cap on extracted text bytes (ADR-0024 §5; large PDFs degrade to name-only). */
@@ -95,6 +109,24 @@ export const EmbeddingConfig = z
      * whenever `model` is not a 1024-dim model.
      */
     dim: z.number().int().positive().default(DEFAULT_EMBEDDING_DIM),
+    /**
+     * Max texts sent per embedding request (Issue #267). Inputs larger than this
+     * are split into ordered chunks and the per-chunk results concatenated, so a
+     * big sync cannot 413 / overflow the model context and lose every vector. The
+     * vector space is unchanged — only request shape (no content change, ADR-0003).
+     */
+    maxBatch: z.number().int().positive().default(DEFAULT_EMBEDDING_MAX_BATCH),
+    /**
+     * Per-request timeout (ms) for an embedding call (Issue #267). On timeout the
+     * attempt aborts and is retried with backoff (src/util/retry.ts); only the
+     * external openai/voyage egress and the ollama sidecar honour it. `0` disables.
+     */
+    requestTimeoutMs: z.number().int().nonnegative().default(DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS),
+    /**
+     * Max retry attempts (including the first) for a transient 429/5xx embedding
+     * response (Issue #267). `1` disables retry. See src/util/retry.ts.
+     */
+    maxRetries: z.number().int().positive().default(3),
   })
   .passthrough();
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfig>;
