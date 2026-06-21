@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.15](https://github.com/ozzy-labs/suasor/compare/v0.1.14...v0.1.15) (2026-06-21)
+
+
+### Features
+
+* **cli:** export backup / config edit / validate-config を追加 ([#285](https://github.com/ozzy-labs/suasor/issues/285)) ([a053081](https://github.com/ozzy-labs/suasor/commit/a053081cd6ec50c57746aac3dab96e0fadd141a5))
+* **connectors:** jira connector (issue/comment ingest) ([#286](https://github.com/ozzy-labs/suasor/issues/286)) ([e33e184](https://github.com/ozzy-labs/suasor/commit/e33e1843aa8aa718bf5ad75b438ba307f9c78b10))
+* **connectors:** notion connector (DB rows + page bodies) ([#283](https://github.com/ozzy-labs/suasor/issues/283)) ([d0d8dd1](https://github.com/ozzy-labs/suasor/commit/d0d8dd1d25139846cbe740fd62edd553fa1dbcd1))
+* **mcp:** source.get.full / activity.timeline / proposal.feedback を追加 ([#284](https://github.com/ozzy-labs/suasor/issues/284)) ([0b6d667](https://github.com/ozzy-labs/suasor/commit/0b6d66790af4aee9a0aff0b45261b9982aaec1ba))
+* **skills:** add decision-log / health-check / action-item-status ([#281](https://github.com/ozzy-labs/suasor/issues/281)) ([4d4a8b3](https://github.com/ozzy-labs/suasor/commit/4d4a8b3e9fcb0e307516a84b9fd02ef5a2574e78))
+
 ## [0.1.14](https://github.com/ozzy-labs/suasor/compare/v0.1.13...v0.1.14) (2026-06-21)
 
 
