@@ -52,7 +52,22 @@ export const CONNECTOR_SLICE_TEMPLATES: Record<string, ConnectorSliceTemplate> =
     body: ["enabled = true", '# clientId = "<oauth-client-id>"  # required for auth'],
   },
   box: {
-    body: ["enabled = true", '# folderId = "0"           # root folder to ingest from'],
+    body: ["enabled = true", '# folders = ["0"]          # Box folder ids to ingest (root は "0")'],
+  },
+  notion: {
+    body: [
+      "enabled = true",
+      '# databases = ["<database-id>"]  # db rows to ingest (`suasor notion databases`)',
+      "# pages = true               # also ingest standalone pages the integration can see",
+    ],
+  },
+  jira: {
+    body: [
+      "enabled = true",
+      '# host = "example.atlassian.net"  # Jira site host (no scheme)',
+      '# email = "you@example.com"       # Cloud HTTP Basic account email (omit for self-hosted PAT)',
+      '# projects = ["PROJ"]             # project keys to ingest (`suasor jira projects`)',
+    ],
   },
   web: {
     body: ["enabled = true", '# urls = ["https://example.com"]  # public pages to ingest'],

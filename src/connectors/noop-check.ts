@@ -5,7 +5,8 @@
  * is not `enabled = false`) yet still ingest nothing because its scope is empty:
  * github with no `repos` and `notifications = "off"`, box with no `folders`,
  * local with no `roots`, web with no `urls`, google/ms-graph with empty
- * `resources`. Without a hint the sync just reports `0 observed` and the user has
+ * `resources`, notion with no `databases` and `pages = false`, jira with no
+ * `projects` and no `jql`. Without a hint the sync just reports `0 observed` and the user has
  * to inspect the DB to realize their config never had a target (the failure mode
  * called out in the issue).
  *
@@ -28,8 +29,10 @@ import { BoxConnectorConfig } from "./box.ts";
 import type { ConnectorConfig } from "./contract.ts";
 import { GithubConnectorConfig } from "./github.ts";
 import { GoogleConnectorConfig } from "./google.ts";
+import { JiraConnectorConfig } from "./jira.ts";
 import { LocalConnectorConfig } from "./local.ts";
 import { MsGraphConnectorConfig } from "./ms-graph.ts";
+import { NotionConnectorConfig } from "./notion.ts";
 import { SlackConnectorConfig } from "./slack.ts";
 import { WebConnectorConfig } from "./web.ts";
 
@@ -85,6 +88,24 @@ const DETECTORS: Record<string, (slice: ConnectorConfig) => string | null> = {
     const cfg = MsGraphConnectorConfig.parse(slice ?? {});
     if (cfg.resources.length === 0) {
       return "resources 未設定 — 取り込み対象なし（config の resources を設定）";
+    }
+    return null;
+  },
+  notion(slice) {
+    const cfg = NotionConnectorConfig.parse(slice ?? {});
+    // A target exists if any database is configured or standalone-page discovery
+    // is on (the default). Both off = nothing to ingest.
+    if (cfg.databases.length === 0 && !cfg.pages) {
+      return "databases 未設定かつ pages=false — 取り込み対象なし（config の databases を設定するか pages を true に）";
+    }
+    return null;
+  },
+  jira(slice) {
+    const cfg = JiraConnectorConfig.parse(slice ?? {});
+    // An explicit `jql` is its own target (it overrides per-project queries).
+    // Otherwise a target exists only when `projects` is non-empty.
+    if (cfg.projects.length === 0 && (cfg.jql ?? "") === "") {
+      return "projects 未設定かつ jql 未設定 — 取り込み対象なし（config の projects を設定するか jql を指定）";
     }
     return null;
   },
