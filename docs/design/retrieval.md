@@ -25,8 +25,9 @@
 
 実装は `src/retrieval/embedding/`（`embedder.ts` = thin client / `recall.ts` = vec0 populate + KNN search）。[ADR-0006](../adr/0006-ml-delegation.md) の ML 委譲不変条件に従い、`src/` にモデル実体を持たず**外部への薄いクライアント**のみ（torch なし）。
 
-- backend: `disabled`（既定）/ `ollama` / `openai` / `voyage`。**`local`(in-process torch) は持たない**（[ADR-0006](../adr/0006-ml-delegation.md)）。現状 `ollama` のみ実装。`openai` / `voyage` は config 上は受理するが embedder 未実装のため `recall.search` は `embedding_disabled` に degrade する
+- backend: `disabled`（既定）/ `ollama` / `openai` / `voyage`。**`local`(in-process torch) は持たない**（[ADR-0006](../adr/0006-ml-delegation.md)）。3 backend とも実装済み。`openai` / `voyage` は外部 API（本文を送る egress・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）で **API キー（keyring/env）でゲート**され、キー未設定時は embedder が `null` ＝ `recall.search` は `embedding_disabled` に degrade する（[Issue #259](https://github.com/ozzy-labs/suasor/issues/259)）
 - `ollama` backend = `POST <baseUrl>/api/embed`（既定 `http://localhost:11434`、`bge-m3` 等の多言語モデル）。batch API（`{ model, input: string[] }` → `{ embeddings: number[][] }`）。egress なし
+- `openai` / `voyage` backend = `POST <baseUrl>/v1/embeddings`（OpenAI 互換、`Authorization: Bearer <key>`、`{ model, input: string[] }` → `{ data: [{ index, embedding }] }`、index で入力順を復元）。既定 model は openai `text-embedding-3-small`(1536-dim) / voyage `voyage-3`(1024-dim)。**egress あり**（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）
 - 文書 embedding（ingest 時）とクエリ embedding（query 時）は**同一モデル必須**（ベクトル空間整合）。`[embedding].model` が両者を駆動する単一の値で、`OllamaEmbedder` の 1 インスタンスが両方を埋め込むため model 混在は構造的に起きない
 - ベクトルは `sqlite-vec` の `vec0`（`embeddings_vec_default`）に little-endian float32 blob で格納。upsert は `external_id` キーの delete-then-insert（FTS の sync と同じ流儀）。同時に provenance サイドカー `embeddings_meta`（`external_id` / `model_id` / `model_version` / `embedded_at`）へ生成 model を記録し、保守 verb の drift 検出に使う
 - **populate（取り込み時）**: `syncConnector` が新規 / 本文変更 source のみを batch embed して vec0 へ書き込む（未変更は再埋め込みしない）。CLI `suasor <connector> sync` / MCP `connector.sync` の両経路で同一。embedding は **best-effort**: サイドカー失敗時も ingest は成功し（FTS は反映済み）、警告のみ出す（`onEmbedError` / CLI は stderr）
@@ -45,7 +46,7 @@ FTS-first（ADR-0005）を保ったままの additive 拡張。`search.hybrid` r
 
 ## Graceful degradation
 
-- `recall.search` は backend=disabled / 未実装 backend のとき **hard error にせず空 + `embedding_disabled` シグナル**を返す（`reason: "backend_disabled"`）→ host が `search`(FTS) に寄る
+- `recall.search` は backend=disabled / 外部 backend のキー未設定（embedder が `null`）のとき **hard error にせず空 + `embedding_disabled` シグナル**を返す（`reason: "backend_disabled"`）→ host が `search`(FTS) に寄る
 - backend 有効でも**サイドカー到達不能**（Ollama down 等）のときは同じく degrade（`reason: "backend_unreachable"`）。`signal` は常に `embedding_disabled` で host の fallback 判断は一貫
 - `vec0` は基盤として常設（安価）。populate は backend 次第。`projections rebuild` は vec0 を truncate せず、`external_id` キーのベクトルは source 再構築後も有効なまま JOIN される（次回 ingest で再 populate）
 

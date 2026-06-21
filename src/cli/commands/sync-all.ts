@@ -71,7 +71,7 @@ export class SyncAllCommand extends Command {
       { Store },
       { loadConnector },
       { runBulkSync, selectEnabledConnectors },
-      { createEmbedder },
+      { createEmbedderResolved },
       { createExtractor },
     ] = await Promise.all([
       import("../../config/index.ts"),
@@ -153,7 +153,7 @@ export class SyncAllCommand extends Command {
 
     // Embedder/extractor from config (null when disabled), shared across the run
     // — same best-effort degrade as single-connector sync (ADR-0005/0006/0024).
-    const embedder = createEmbedder(config.embedding);
+    const embedder = await createEmbedderResolved(config.embedding);
     const extractor = createExtractor(config.extraction);
 
     const progress = createProgress(

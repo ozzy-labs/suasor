@@ -17,7 +17,7 @@ import { z } from "zod";
 import type { EmbeddingConfig, ExtractionConfig } from "../config/schema.ts";
 import type { Store } from "../db/index.ts";
 import { createExtractor } from "../extraction/index.ts";
-import { createEmbedder } from "../retrieval/embedding/index.ts";
+import { createEmbedderResolved } from "../retrieval/embedding/index.ts";
 import { type SecretStoreOptions, syncConnector } from "./index.ts";
 import { loadConnector } from "./registry.ts";
 
@@ -97,7 +97,9 @@ export async function runConnectorSyncTool(
   // Build an embedder from the [embedding] config (null when disabled) so ingest
   // populates vec0 with the same model recall queries with. Embedding is
   // best-effort inside the sync service (a sidecar failure won't fail ingest).
-  const embedder = deps.config.embedding ? createEmbedder(deps.config.embedding) : null;
+  const embedder = deps.config.embedding
+    ? await createEmbedderResolved(deps.config.embedding)
+    : null;
   // Build an extractor from [extraction] (null when disabled) so Office/PDF
   // bodies are converted to text at ingest (best-effort, ADR-0024).
   const extractor = deps.config.extraction ? createExtractor(deps.config.extraction) : null;

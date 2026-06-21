@@ -25,7 +25,14 @@ function fakeConfig(
 ): Config {
   return {
     storage: { dbPath },
-    embedding: { dim: 1024, backend: overrides.embeddingBackend ?? "disabled" },
+    embedding: {
+      dim: 1024,
+      backend: overrides.embeddingBackend ?? "disabled",
+      // baseUrl/model are required by createEmbedder for non-disabled backends
+      // (serveMcp now resolves the embedder at boot); use the schema defaults.
+      baseUrl: "http://localhost:11434",
+      model: "bge-m3",
+    },
     llm: { backend: overrides.llmBackend ?? "disabled" },
   } as unknown as Config;
 }
@@ -41,6 +48,16 @@ function fakeStore(): ServeStore & { opened: boolean; closeCount: number } {
     },
   };
   return store;
+}
+
+/**
+ * Yield the microtask queue enough times for `serveMcp`'s pre-connect awaits
+ * (config load, embedder + API-key resolution, store open) to settle so the
+ * transport's `onclose` is wired before a test invokes it. A handful of ticks
+ * covers the bounded await chain without coupling to its exact length.
+ */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
 /** A transport seam — `onclose` is wired by `serveMcp`; tests invoke it. */
@@ -70,6 +87,12 @@ function options(args: {
   const server: ServeServer = { connect };
   return {
     log: () => {},
+    // In-memory keychain + empty env so boot never touches the native keyring;
+    // an external embedding backend resolves to "no key" (recall → FTS).
+    secrets: {
+      env: {},
+      keychain: { get: () => null, set: () => {} },
+    },
     loadConfig: () =>
       Promise.resolve(
         fakeConfig(args.dbPath, {
@@ -130,8 +153,7 @@ describe("serveMcp boot glue", () => {
       }),
       log: (m) => logs.push(m),
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
     transport.onclose?.();
     await booted;
 
@@ -154,8 +176,7 @@ describe("serveMcp boot glue", () => {
       }),
       log: (m) => logs.push(m),
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
     transport.onclose?.();
     await booted;
 
@@ -169,8 +190,7 @@ describe("serveMcp boot glue", () => {
     const booted = serveMcp(options({ dbPath: ":memory:", store, transport }));
 
     // Let connect() settle so onclose is wired and the success log runs.
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
     // Host disconnects, then a stray second close arrives (e.g. close() also
     // invokes onclose). The `closed` flag must collapse both to one store close.
@@ -216,7 +236,7 @@ describe("serveMcp boot glue", () => {
       }),
     );
 
-    await Promise.resolve();
+    await flush();
     // Host disconnects first → store closed via onclose, boot promise resolves.
     transport.onclose?.();
     await booted;

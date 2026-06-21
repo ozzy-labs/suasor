@@ -70,8 +70,8 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 
 graceful degradation（host は常に `signal === "embedding_disabled"` だけで FTS フォールバックを判断できる）:
 
-- `[embedding].backend = "disabled"`（既定）/ 未実装 backend（openai・voyage）→ `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_disabled" }`
-- backend 有効だがサイドカー到達不能（Ollama down 等）→ `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_unreachable" }`
+- `[embedding].backend = "disabled"`（既定）/ 外部 backend（openai・voyage）の API キー未設定 → `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_disabled" }`
+- backend 有効だがサイドカー / 外部 API 到達不能（Ollama down・API エラー等）→ `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_unreachable" }`
 
 `reason` は診断用の補助（host は `signal` を見る）。ingest 時の文書 embedding と query embedding は同一モデルで、`[embedding].model` が両者を駆動する（[config](config.md) / [retrieval](retrieval.md)）。
 

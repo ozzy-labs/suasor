@@ -9,11 +9,21 @@
  */
 export {
   createEmbedder,
+  createEmbedderResolved,
+  DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_VOYAGE_BASE_URL,
+  DEFAULT_VOYAGE_MODEL,
   type Embedder,
   EmbeddingError,
+  EXTERNAL_EMBEDDING_BACKENDS,
   type FetchLike,
   OllamaEmbedder,
   type OllamaEmbedderOptions,
+  type OpenAICompatibleEmbedderOptions,
+  OpenAIEmbedder,
+  resolveEmbeddingApiKeyPresent,
+  VoyageEmbedder,
 } from "./embedder.ts";
 export {
   DEFAULT_DUPLICATE_THRESHOLD,

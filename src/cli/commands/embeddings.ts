@@ -29,7 +29,7 @@ async function openEmbeddingContext(context: { stderr: { write: (s: string) => v
   embedder: import("../../retrieval/embedding/index.ts").Embedder | null;
   backend: string;
 } | null> {
-  const [{ loadConfig }, { Store }, { createEmbedder }] = await Promise.all([
+  const [{ loadConfig }, { Store }, { createEmbedderResolved }] = await Promise.all([
     import("../../config/index.ts"),
     import("../../db/index.ts"),
     import("../../retrieval/embedding/index.ts"),
@@ -40,7 +40,7 @@ async function openEmbeddingContext(context: { stderr: { write: (s: string) => v
     context.stderr.write("error: storage.dbPath is not configured\n");
     return null;
   }
-  const embedder = createEmbedder(config.embedding);
+  const embedder = await createEmbedderResolved(config.embedding);
   const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
   return { store, embedder, backend: config.embedding.backend };
 }

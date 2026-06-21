@@ -8,10 +8,15 @@ import { type ConfigWarningInput, collectConfigWarnings } from "../../src/config
  */
 
 /** A baseline input with everything implemented / inert (no warnings expected). */
-function input(overrides: Partial<{ embedding: string; llm: string }> = {}): ConfigWarningInput {
+function input(
+  overrides: Partial<{ embedding: string; llm: string; embeddingApiKeyPresent: boolean }> = {},
+): ConfigWarningInput {
   return {
     embedding: { backend: overrides.embedding ?? "disabled" },
     llm: { backend: overrides.llm ?? "disabled" },
+    ...(overrides.embeddingApiKeyPresent !== undefined
+      ? { embeddingApiKeyPresent: overrides.embeddingApiKeyPresent }
+      : {}),
   };
 }
 
@@ -25,16 +30,31 @@ describe("collectConfigWarnings", () => {
   });
 
   for (const backend of ["openai", "voyage"] as const) {
-    test(`warns when embedding.backend = ${backend} (unimplemented → FTS fallback)`, () => {
+    test(`warns when embedding.backend = ${backend} with no API key (→ FTS fallback)`, () => {
       const warnings = collectConfigWarnings(input({ embedding: backend }));
       expect(warnings).toHaveLength(1);
       expect(warnings[0]?.key).toBe("embedding.backend");
       expect(warnings[0]?.message).toContain(backend);
-      expect(warnings[0]?.message).toContain("FTS");
+      expect(warnings[0]?.message).toContain("API key");
+      expect(warnings[0]?.message).toContain(`SUASOR_EMBEDDING_${backend.toUpperCase()}_API_KEY`);
+    });
+
+    test(`does not warn when embedding.backend = ${backend} and an API key is present`, () => {
+      expect(
+        collectConfigWarnings(input({ embedding: backend, embeddingApiKeyPresent: true })),
+      ).toEqual([]);
+    });
+
+    test(`warns when embedding.backend = ${backend} and embeddingApiKeyPresent is false`, () => {
+      const warnings = collectConfigWarnings(
+        input({ embedding: backend, embeddingApiKeyPresent: false }),
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.key).toBe("embedding.backend");
     });
   }
 
-  test("does not warn for embedding.backend = ollama (implemented)", () => {
+  test("does not warn for embedding.backend = ollama (implemented, no key needed)", () => {
     expect(collectConfigWarnings(input({ embedding: "ollama" }))).toEqual([]);
   });
 
