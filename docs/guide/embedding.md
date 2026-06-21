@@ -173,10 +173,12 @@ suasor embeddings find-duplicates --threshold 0.95
 - **rebuild**: 記録 model が現行 `[embedding].model`（+ version）と異なる/欠落の source を再埋め込み。settled な状態では冪等（再実行で 0 件）。`model` を変えたらこれ（または `--full`）を実行する。
 - **drain**: ベクトル未生成の pending だけを catch-up（stale-but-present は rebuild の担当）。
 - **list-failed**: `status` の roll-up に対する drilldown。現行 model ベクトルを欠く実際の source を `pending`（未生成→`drain`）/ `stale`（別 model→`rebuild`）付きで列挙する（pending 先頭、`--limit` 既定 50）。backend 無効時は全件 pending。
-- **find-duplicates**: vec0 のベクトル間 cosine 類似度が `--threshold`（既定 0.95）超のペアを列挙する。
+- **find-duplicates**: vec0 のベクトル間 cosine 類似度が `--threshold`（既定 0.95）超のペアを列挙する。実装は全ベクトルの **all-pairs 比較（O(n²)）** を JS で行う（`src/retrieval/embedding/maintenance.ts`）。インタラクティブな保守 verb 向けで、上限フィルタや近似 index は持たないため、**中規模 store 向け**（数千〜万件で重くなる）。大規模 store では実行時間とメモリに注意し、必要なら対象を絞って使う。
 - 共通: `[embedding].backend` 無効時は全 verb が明示メッセージで no-op 終了。`rebuild` / `drain` の埋め込みは **best-effort**（サイドカー失敗は warning に留め、部分件数を返す）。`--json` で機械可読出力。
 
 > `embeddings rebuild` / `embeddings rebuild --full` は §4 の `suasor <connector> sync --full` を再取り込みなしで置き換える（既存の取り込み済み source をそのまま再埋め込みするため connector を再スキャンしない）。新規取り込みも兼ねたい場合は引き続き `sync --full` を使う。
+>
+> **rebuild は既存 body の再 embed のみ・再抽出はしない**: `rebuild` は store 済みの body をそのまま再埋め込みする。Office/PDF の**本文を作り直す（再抽出）**のは connector sync の責務で、`[extraction].version` を bump した後などは `suasor <connector> sync`（drift で再抽出）が必要。embedding drift（`[embedding].model` 変更）と extraction drift（`[extraction].version` 変更）は別ドメインなので、本文が古い/欠けている時は rebuild ではなく sync を回す（[extraction guide](extraction.md)）。
 
 ## トラブルシュート
 
