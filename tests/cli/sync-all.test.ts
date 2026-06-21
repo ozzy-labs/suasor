@@ -101,6 +101,25 @@ describe("suasor sync (bulk)", () => {
     expect(err).toContain("not enabled or not registered");
   });
 
+  test("--concurrency runs the bounded pool and reports counts (Issue #269)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n[connectors.web]\nurls = []\n");
+    const { code, out } = await run(["sync", "--concurrency", "2"]);
+    expect(code).toBe(0);
+    expect(out).toContain("2 succeeded, 0 failed");
+  });
+
+  test("--concurrency rejects a non-positive / non-numeric value with exit 1", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.web]\nurls = []\n");
+    const zero = await run(["sync", "--concurrency", "0"]);
+    expect(zero.code).toBe(1);
+    expect(zero.err).toContain("--concurrency must be a positive integer");
+    const nan = await run(["sync", "--concurrency", "abc"]);
+    expect(nan.code).toBe(1);
+    expect(nan.err).toContain("--concurrency must be a positive integer");
+  });
+
   test("--json emits the aggregate result", async () => {
     await run(["init"]);
     await writeConfig("[connectors.web]\nurls = []\n");

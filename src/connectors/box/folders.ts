@@ -12,11 +12,18 @@
  * id (the plural `folders = [...]` the connector config expects).
  *
  * Import-clean (ADR-0007): no `box-typescript-sdk-gen`. The default transport
- * uses the global `fetch` (same pattern as `src/connectors/box/auth.ts`), so
- * building the connector / CLI registry never pulls the SDK. The token is never
+ * uses the global `fetch` (same pattern as `src/connectors/box/auth.ts`), wrapped
+ * in the shared {@link fetchWithRetry} so a transient 429/5xx (with `Retry-After`
+ * honoured) is retried rather than aborting the sweep mid-pagination (Issue #269).
+ * Building the connector / CLI registry never pulls the SDK. The token is never
  * echoed in thrown errors.
  */
 
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 import { type ConfigBlockEntry, renderConnectorConfigBlock } from "../onboard/config-block.ts";
 
 /** One folder surfaced for the discovery CLI (flattened, depth-tagged). */
@@ -73,27 +80,41 @@ const PAGE_LIMIT = 1000;
 /** Default recursion depth (root's direct children only). */
 const DEFAULT_MAX_DEPTH = 0;
 
-/** Default transport: a `GET /2.0/folders/<id>/items` reading folder entries. */
-const defaultTransport: BoxFoldersTransport = async ({ token, folderId, marker }) => {
-  const params = new URLSearchParams({
-    usemarker: "true",
-    limit: String(PAGE_LIMIT),
-    fields: "id,name,type",
-  });
-  if (marker) params.set("marker", marker);
-  const res = await fetch(
-    `https://api.box.com/2.0/folders/${encodeURIComponent(folderId)}/items?${params.toString()}`,
-    { method: "GET", headers: { Authorization: `Bearer ${token}` } },
-  );
-  let body: unknown = {};
-  try {
-    body = await res.json();
-  } catch {
-    // Non-JSON error body (e.g. an HTML 5xx) → leave empty; status drives it.
-    body = {};
-  }
-  return { status: res.status, body };
-};
+/**
+ * Build the default transport: a `GET /2.0/folders/<id>/items` reading folder
+ * entries, run through {@link fetchWithRetry} so a transient 429/5xx is retried
+ * rather than aborting the sweep mid-pagination (Issue #269). `retry` is injectable
+ * (`fetchImpl` / `sleep`) so a test can drive "429 → Retry-After → success" with
+ * no real waiting.
+ */
+export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): BoxFoldersTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
+  return async ({ token, folderId, marker }) => {
+    const params = new URLSearchParams({
+      usemarker: "true",
+      limit: String(PAGE_LIMIT),
+      fields: "id,name,type",
+    });
+    if (marker) params.set("marker", marker);
+    const res = await fetchWithRetry(
+      `https://api.box.com/2.0/folders/${encodeURIComponent(folderId)}/items?${params.toString()}`,
+      { method: "GET", headers: { Authorization: `Bearer ${token}` } },
+      opts,
+    );
+    let body: unknown = {};
+    try {
+      body = await res.json();
+    } catch {
+      // Non-JSON error body (e.g. an HTML 5xx) → leave empty; status drives it.
+      body = {};
+    }
+    return { status: res.status, body };
+  };
+}
+
+const defaultTransport: BoxFoldersTransport = makeDefaultTransport();
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

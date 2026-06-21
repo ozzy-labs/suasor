@@ -10,15 +10,22 @@
  * discovered ids (the singular `calendarId` the connector config expects).
  *
  * Import-clean (ADR-0007): no `googleapis`. The default transport uses the
- * global `fetch` (same pattern as `src/connectors/google/auth.ts`), so building
- * the connector / CLI registry never pulls the SDK. The refresh token / client
- * secret / access token are never echoed in thrown errors.
+ * global `fetch` (same pattern as `src/connectors/google/auth.ts`), wrapped in the
+ * shared {@link fetchWithRetry} so a transient 429/5xx (with `Retry-After`
+ * honoured) is retried rather than aborting the sweep mid-pagination (Issue #269).
+ * Building the connector / CLI registry never pulls the SDK. The refresh token /
+ * client secret / access token are never echoed in thrown errors.
  *
  * The probe needs an **access token**, so it first exchanges the keychain
  * refresh token (`refreshToken`) + config `clientId` (+ optional keychain
  * `clientSecret` for installed/web clients) at Google's OAuth2 token endpoint —
  * the same exchange `google auth test` performs (`src/connectors/google/auth.ts`).
  */
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 
 /** One calendar surfaced for the discovery CLI. */
 export interface GoogleCalendar {
@@ -74,22 +81,35 @@ const PAGE_LIMIT = 250;
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 
-/** Default transport: a `fetch` round-trip (token POST + calendarList GET). */
-const defaultTransport: GoogleCalendarsTransport = async ({ method, url, headers, body }) => {
-  const res = await fetch(url, {
-    method,
-    headers,
-    ...(body !== undefined ? { body } : {}),
-  });
-  let parsed: unknown = {};
-  try {
-    parsed = await res.json();
-  } catch {
-    // Non-JSON error body (e.g. an HTML 5xx) → leave empty; status drives it.
-    parsed = {};
-  }
-  return { status: res.status, body: parsed };
-};
+/**
+ * Build the default transport: a `fetch` round-trip (token POST + calendarList
+ * GET) run through {@link fetchWithRetry} so a transient 429/5xx is retried rather
+ * than aborting the sweep mid-pagination (Issue #269). `retry` is injectable
+ * (`fetchImpl` / `sleep`) so a test can drive "429 → Retry-After → success" with
+ * no real waiting.
+ */
+export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): GoogleCalendarsTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
+  return async ({ method, url, headers, body }) => {
+    const res = await fetchWithRetry(
+      url,
+      { method, headers, ...(body !== undefined ? { body } : {}) },
+      opts,
+    );
+    let parsed: unknown = {};
+    try {
+      parsed = await res.json();
+    } catch {
+      // Non-JSON error body (e.g. an HTML 5xx) → leave empty; status drives it.
+      parsed = {};
+    }
+    return { status: res.status, body: parsed };
+  };
+}
+
+const defaultTransport: GoogleCalendarsTransport = makeDefaultTransport();
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

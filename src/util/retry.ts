@@ -20,6 +20,15 @@
 
 /** Default attempts including the first try. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
+/**
+ * Default per-attempt timeout (ms) for connector HTTP fetch paths (Issue #269).
+ * A hung host (no response, no error) would otherwise pin a bulk-sync worker slot
+ * forever; under the bounded pool that can starve the other connectors. Each
+ * attempt aborts after this budget and is retried as a transient failure. Connector
+ * transports pass it through {@link FetchWithRetryOptions.timeoutMs}; it is opt-in
+ * (the util default stays `0` = no timeout) so non-connector callers are unaffected.
+ */
+export const DEFAULT_CONNECTOR_TIMEOUT_MS = 30_000;
 /** Default base backoff (ms); doubles each attempt before jitter. */
 export const DEFAULT_BASE_BACKOFF_MS = 1000;
 /** Default cap on a single backoff/`Retry-After` wait (ms). */

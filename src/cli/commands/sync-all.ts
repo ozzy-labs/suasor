@@ -1,8 +1,8 @@
 /**
  * `suasor sync` — bulk one-shot ingest across every *enabled* connector
- * (ADR-0027, FR-ING-5/6, docs/design/cli.md). Short-lived and idempotent: it
- * runs one read-only pass per enabled connector in series and exits — no daemon.
- * Periodic execution is delegated to the OS scheduler (docs/guide/scheduling.md).
+ * (ADR-0027, FR-ING-5/6, docs/design/cli.md). Short-lived and idempotent: it runs
+ * one read-only pass per enabled connector and exits — no daemon. Periodic
+ * execution is delegated to the OS scheduler (docs/guide/scheduling.md).
  *
  * Enabled = a `[connectors.<name>]` slice exists and does not set
  * `enabled = false` — the same rule as `connectors list` / `doctor`. `--connector
@@ -10,7 +10,9 @@
  *
  * Continue-on-error (FR-ING-6): one connector's failure does not stop the rest;
  * the run aggregates per-connector results and exits 1 when any connector failed
- * (doctor exit-code parity, so cron / CI can gate on it).
+ * (doctor exit-code parity, so cron / CI can gate on it). On this default path
+ * connectors sync concurrently in a bounded pool (`--concurrency`, default 4 —
+ * Issue #269); `--no-continue-on-error` runs them serially, fail-fast.
  *
  * Lazy-import discipline (NFR-PRF-1): the registry's name list is cheap (loads no
  * SDK); the DB layer, config loader, and connector SDKs are imported inside
@@ -29,18 +31,22 @@ export class SyncAllCommand extends Command {
     description: "Ingest from every enabled connector in one read-only pass.",
     details: `
       Runs one read-only ingest pass for each enabled connector
-      ([connectors.<name>] present and not enabled = false) in series, then exits
+      ([connectors.<name>] present and not enabled = false), then exits
       (short-lived, idempotent — ADR-0027). Re-runs are incremental
       (fingerprint/cursor delta, FR-ING-3). One connector's failure does not stop
       the others (continue-on-error); the command exits 1 when any connector
-      failed so cron / CI can gate on it (use --no-continue-on-error for
-      fail-fast). Periodic runs are delegated to the OS scheduler — see
-      docs/guide/scheduling.md. Use --connector to narrow the set and --json for
-      machine-readable output.
+      failed so cron / CI can gate on it (use --no-continue-on-error for a serial
+      fail-fast run). On the continue-on-error path connectors sync concurrently in
+      a bounded pool (default 4 — each hits a different API host / rate-limit
+      bucket); --concurrency tunes it (>8 warns but is not capped; per-resource work
+      inside a connector stays serial). Periodic runs are delegated to the OS
+      scheduler — see docs/guide/scheduling.md. Use --connector to narrow the set
+      and --json for machine-readable output.
     `,
     examples: [
       ["Ingest from all enabled connectors", "suasor sync"],
       ["Only github and slack", "suasor sync --connector github,slack"],
+      ["Cap concurrent connectors at 2", "suasor sync --concurrency 2"],
       ["Machine-readable output for cron logs", "suasor sync --json"],
     ],
   });
@@ -51,6 +57,11 @@ export class SyncAllCommand extends Command {
 
   continueOnError = Option.Boolean("--continue-on-error", true, {
     description: "Keep going when a connector fails (default on; exit 1 if any failed).",
+  });
+
+  concurrency = Option.String("--concurrency", {
+    description:
+      "Max connectors syncing at once (default 4; >8 warns; ignored with --no-continue-on-error).",
   });
 
   json = Option.Boolean("--json", false, {
@@ -99,6 +110,20 @@ export class SyncAllCommand extends Command {
     if (dbPath === null) {
       this.context.stderr.write("error: storage.dbPath is not configured\n");
       return 1;
+    }
+
+    // Parse --concurrency up front so an invalid value fails fast (a string flag
+    // keeps clipanion from coercing; we want a clear error, not NaN downstream).
+    let concurrency: number | undefined;
+    if (this.concurrency !== undefined) {
+      const parsed = Number.parseInt(this.concurrency, 10);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        this.context.stderr.write(
+          `error: --concurrency must be a positive integer (got "${this.concurrency}")\n`,
+        );
+        return 1;
+      }
+      concurrency = parsed;
     }
 
     // Enabled connectors (registry order), then narrow by --connector if given.
@@ -169,6 +194,7 @@ export class SyncAllCommand extends Command {
         connectors: config.connectors,
         loadConnector,
         continueOnError: this.continueOnError,
+        ...(concurrency !== undefined ? { concurrency } : {}),
         syncOptions: {
           ...(this.full ? { cursor: null } : {}),
           embedder,

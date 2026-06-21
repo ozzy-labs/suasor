@@ -12,8 +12,15 @@
  *
  * Import-clean (ADR-0007): no MSAL / Graph SDK. The default transport uses the
  * global `fetch` (no SDK) — building the connector / CLI registry never pulls
- * the SDKs. The client secret is never echoed in thrown errors.
+ * the SDKs — wrapped in the shared {@link fetchWithRetry} so a transient 429/5xx
+ * (with `Retry-After` honoured) is retried rather than failing the check (Issue
+ * #269). The client secret is never echoed in thrown errors.
  */
+import {
+  DEFAULT_CONNECTOR_TIMEOUT_MS,
+  type FetchWithRetryOptions,
+  fetchWithRetry,
+} from "../../util/retry.ts";
 
 /** Identity + granted scope resolved from a successful token exchange. */
 export interface MsGraphAuthResult {
@@ -35,28 +42,44 @@ export type MsGraphAuthTransport = (
   input: MsGraphAuthInput,
 ) => Promise<{ status: number; body: Record<string, unknown> }>;
 
-/** Default transport: a client-credentials POST to the tenant token endpoint. */
-const defaultTransport: MsGraphAuthTransport = async ({ tenantId, clientId, clientSecret }) => {
-  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
-  const form = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: form.toString(),
-  });
-  let body: Record<string, unknown> = {};
-  try {
-    body = (await res.json()) as Record<string, unknown>;
-  } catch {
-    // Non-JSON error body → leave empty; status drives the verdict.
-  }
-  return { status: res.status, body };
-};
+/**
+ * Build the default transport: a client-credentials POST to the tenant token
+ * endpoint, run through {@link fetchWithRetry} so a transient 429/5xx is retried
+ * (Issue #269). `retry` is injectable (`fetchImpl` / `sleep`) so a test can drive
+ * "429 → Retry-After → success" with no real waiting.
+ */
+export function makeDefaultTransport(retry: FetchWithRetryOptions = {}): MsGraphAuthTransport {
+  // Default a per-attempt timeout so a hung host cannot pin a bulk-sync worker
+  // (Issue #269); a caller-supplied `timeoutMs` still wins.
+  const opts = { timeoutMs: DEFAULT_CONNECTOR_TIMEOUT_MS, ...retry };
+  return async ({ tenantId, clientId, clientSecret }) => {
+    const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    const form = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      scope: "https://graph.microsoft.com/.default",
+      grant_type: "client_credentials",
+    });
+    const res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      },
+      opts,
+    );
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await res.json()) as Record<string, unknown>;
+    } catch {
+      // Non-JSON error body → leave empty; status drives the verdict.
+    }
+    return { status: res.status, body };
+  };
+}
+
+const defaultTransport: MsGraphAuthTransport = makeDefaultTransport();
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
