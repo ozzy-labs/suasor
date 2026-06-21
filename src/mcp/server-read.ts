@@ -27,11 +27,13 @@ import {
 import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
 import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import {
+  buildActivityTimeline,
   buildBrief,
   DEFAULT_LIST_LIMIT,
   deriveBriefWarnings,
   expandGraph,
   getSource,
+  getSourceFull,
   listCommitments,
   listDecisions,
   listInbox,
@@ -243,6 +245,31 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     async ({ externalId }) => {
       const source = getSource(sqlite, externalId);
       return jsonResult({ source });
+    },
+  );
+
+  // --- source.get.full: one-call bundle of source + provenance + extraction. ---
+  // Read tool (readOnlyHint: true): folds source.get + graph.related(out) +
+  // extraction_meta into one round-trip (Issue #279), reusing the existing query
+  // layer (getSourceFull). An unknown id returns source:null (no error).
+  server.registerTool(
+    "source.get.full",
+    {
+      title: "Get source (full bundle)",
+      description:
+        "Fetch a source's metadata + body together with its outgoing provenance " +
+        "links (graph.related direction=out) and its document-extraction sidecar " +
+        "(extraction_meta, ADR-0024) in one call — what otherwise needs source.get " +
+        "+ graph.related + an extraction query in three round-trips (Issue #279). " +
+        "Read-only. An unknown id returns { source: null, links: [], " +
+        "extractionMeta: null }.",
+      inputSchema: {
+        externalId: z.string().min(1).describe("Connector-assigned source id."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ externalId }) => {
+      return jsonResult(getSourceFull(sqlite, externalId));
     },
   );
 
@@ -475,6 +502,50 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         ...(limit !== undefined ? { limit } : {}),
       });
       return jsonResult({ origin: { kind, id }, ...expansion });
+    },
+  );
+
+  // --- activity.timeline: entity-axis merged source/task/decision view. ---
+  // Read tool (readOnlyHint: true): where `brief` is period-axis, this is
+  // entity-axis — walk the provenance graph from an entity (person/project/source/
+  // …) and merge the connected sources/tasks/decisions into one time-ordered
+  // timeline (Issue #279). Reuses the existing query layer (buildActivityTimeline:
+  // expandGraph + getSource/getTask/getDecision → merge → sort newest-first).
+  server.registerTool(
+    "activity.timeline",
+    {
+      title: "Activity timeline (entity-axis)",
+      description:
+        "Merge the sources / tasks / decisions provenance-connected to an entity " +
+        "(kind + id — person / project / source / …) into one time-ordered view, " +
+        "newest-first (Issue #279). Where `brief` is period-axis only, this is " +
+        'entity-axis: "everything around this entity". Walks the links projection ' +
+        "from the origin, stamps each item with its natural timestamp (source " +
+        "observed / task updated / decision recorded), applies the optional " +
+        "observed/updated/recorded window, then sorts + caps to limit. Read-only.",
+      inputSchema: {
+        kind: z.string().min(1).describe("Origin entity kind (e.g. person / source / project)."),
+        id: z.string().min(1).describe("Origin entity id."),
+        depth: z
+          .number()
+          .int()
+          .positive()
+          .max(10)
+          .optional()
+          .describe("Provenance hops to walk from the origin (default 2)."),
+        after: isoDateTime.optional().describe("Inclusive lower bound on each item's timestamp."),
+        before: isoDateTime.optional().describe("Exclusive upper bound on each item's timestamp."),
+        limit: limitShape.describe(`Max items, newest-first (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ kind, id, depth, after, before, limit }) => {
+      const timeline = buildActivityTimeline(sqlite, kind, id, {
+        ...(depth !== undefined ? { depth } : {}),
+        window: { after, before },
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult(timeline);
     },
   );
 

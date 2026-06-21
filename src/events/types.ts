@@ -276,6 +276,25 @@ export const ProposalRejected = z.object({
 });
 
 /**
+ * Human feedback on a pending proposal candidate (HITL, ADR-0004 / Issue #279).
+ *
+ * The third option beyond apply/reject: instead of accepting or discarding a
+ * candidate outright, the human records a `reason` ("修正して再生成") so the next
+ * `propose.generate` can use it as a hint. Unlike `ProposalRejected`, this does
+ * NOT change the candidate's lifecycle state — it stays `pending` (still
+ * appliable/rejectable); it only records the latest feedback `reason` on the
+ * ledger row. Acts only on a still-`pending` candidate (an applied/rejected one
+ * is decided); the write tool reports an invalid/missing target.
+ */
+export const ProposalFeedback = z.object({
+  type: z.literal("ProposalFeedback"),
+  ...Envelope,
+  candidateId: z.string().min(1),
+  /** Feedback note for the next regeneration (recorded on the ledger row). */
+  reason: z.string().min(1),
+});
+
+/**
  * A human/agent created a manual provenance link between two entities (HITL,
  * ADR-0004 / ADR-0018 追補). Unlike the reducer-derived edges (`derived_from` /
  * `replies_to` / `references`), a manual link carries its own stable `linkId`
@@ -425,6 +444,7 @@ export const DomainEvent = z.discriminatedUnion("type", [
   InboxItemTriaged,
   ProposalGenerated,
   ProposalRejected,
+  ProposalFeedback,
   LinkAdded,
   LinkRemoved,
   PersonIdentityObserved,
@@ -453,6 +473,7 @@ export const EVENT_TYPES = [
   "InboxItemTriaged",
   "ProposalGenerated",
   "ProposalRejected",
+  "ProposalFeedback",
   "LinkAdded",
   "LinkRemoved",
   "PersonIdentityObserved",
@@ -484,6 +505,7 @@ export type NewEvent =
   | Omit<z.input<typeof InboxItemTriaged>, "id" | "recordedAt">
   | Omit<z.input<typeof ProposalGenerated>, "id" | "recordedAt">
   | Omit<z.input<typeof ProposalRejected>, "id" | "recordedAt">
+  | Omit<z.input<typeof ProposalFeedback>, "id" | "recordedAt">
   | Omit<z.input<typeof LinkAdded>, "id" | "recordedAt">
   | Omit<z.input<typeof LinkRemoved>, "id" | "recordedAt">
   | Omit<z.input<typeof PersonIdentityObserved>, "id" | "recordedAt">

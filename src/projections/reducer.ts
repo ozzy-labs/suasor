@@ -389,6 +389,19 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
         .run({ $cid: event.candidateId, $reason: event.reason, $ts: event.recordedAt });
       return;
     }
+    case "ProposalFeedback": {
+      // Feedback records a regeneration hint on a still-pending candidate WITHOUT
+      // changing its state (Issue #279) — the candidate stays `pending` and
+      // appliable/rejectable. The reason column carries the latest feedback note
+      // (the host reads it via propose.list to steer the next generate). No-op
+      // when no pending row matches (an applied/rejected candidate is decided).
+      sqlite
+        .query(
+          "UPDATE proposals SET reason = $reason, updated_at = $ts WHERE candidate_id = $cid AND state = 'pending'",
+        )
+        .run({ $cid: event.candidateId, $reason: event.reason, $ts: event.recordedAt });
+      return;
+    }
     case "LinkAdded": {
       // A manual link (ADR-0018 追補 / #90) carries its own stable link_id so it
       // can be removed by id and replayed deterministically. Idempotent: a second

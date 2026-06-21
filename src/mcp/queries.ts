@@ -136,6 +136,71 @@ export function getSource(sqlite: Database, externalId: string): SourceRecord | 
   return row ? toSourceRecord(row) : null;
 }
 
+/** A source's document-extraction provenance sidecar row (ADR-0024). */
+export interface ExtractionMetaRecord {
+  /** Extractor version that produced the extracted body (drift detection). */
+  version: string;
+  /** Per-source outcome: extracted / unsupported / too_large (src/connectors/sync.ts). */
+  state: string;
+  /** When the extraction meta row was last updated (ISO 8601). */
+  updatedAt: string;
+}
+
+interface ExtractionMetaRow {
+  version: string;
+  state: string;
+  updated_at: string;
+}
+
+/**
+ * Fetch a source's `extraction_meta` sidecar row (ADR-0024), or `null` when the
+ * source was never extracted (e.g. a plain-text connector body). Pure SELECT.
+ */
+export function getExtractionMeta(
+  sqlite: Database,
+  externalId: string,
+): ExtractionMetaRecord | null {
+  const row = sqlite
+    .query<ExtractionMetaRow, [string]>(
+      "SELECT version, state, updated_at FROM extraction_meta WHERE external_id = ?",
+    )
+    .get(externalId);
+  return row ? { version: row.version, state: row.state, updatedAt: row.updated_at } : null;
+}
+
+/**
+ * A source's full bundle for `source.get.full` (Issue #279): the source record
+ * (metadata + body), its outgoing provenance links, and its extraction-meta
+ * sidecar — what otherwise needs `source.get` + `graph.related(out)` + an
+ * extraction query in three round-trips, returned in one. `source` is `null`
+ * when the id is unknown (then links/extractionMeta are empty/null too).
+ */
+export interface SourceFull {
+  source: SourceRecord | null;
+  /** Outgoing provenance neighbours (origin is the link's `from`). */
+  links: GraphNeighbor[];
+  /** Document-extraction provenance, or `null` when never extracted (ADR-0024). */
+  extractionMeta: ExtractionMetaRecord | null;
+}
+
+/**
+ * Bundle a source's metadata + body, its outgoing provenance links, and its
+ * extraction-meta sidecar in one call (`source.get.full`, Issue #279). Reuses
+ * the existing query layer (`getSource` + `listLinks(direction=out)` +
+ * `getExtractionMeta`); a graph entity is addressed as `(kind=source, id=externalId)`.
+ * Pure SELECTs (read-only). An unknown id returns `{ source: null, links: [],
+ * extractionMeta: null }`.
+ */
+export function getSourceFull(sqlite: Database, externalId: string): SourceFull {
+  const source = getSource(sqlite, externalId);
+  if (source === null) return { source: null, links: [], extractionMeta: null };
+  return {
+    source,
+    links: listLinks(sqlite, "source", externalId, { direction: "out" }),
+    extractionMeta: getExtractionMeta(sqlite, externalId),
+  };
+}
+
 /** Latest sync run for a connector, as exposed to `sync status` (ADR-0033). */
 export interface SyncRunRecord {
   connector: string;
@@ -1114,4 +1179,161 @@ export function expandGraph(
     frontier = next;
   }
   return { nodes, edges };
+}
+
+/** Fetch a single task by id (read-time overdue derived), or `null` when absent. */
+export function getTask(
+  sqlite: Database,
+  taskId: string,
+  options: { now?: string } = {},
+): TaskRecord | null {
+  const now = options.now ?? new Date().toISOString();
+  const row = sqlite
+    .query<TaskRow, [string]>(
+      `SELECT id, title, state, due_date, priority, created_at, updated_at
+         FROM tasks WHERE id = ?`,
+    )
+    .get(taskId);
+  if (row === null) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    state: row.state,
+    dueDate: row.due_date,
+    priority: row.priority,
+    overdue: isOverdue(row.due_date, row.state, now),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Fetch a single decision by id, or `null` when absent. */
+export function getDecision(sqlite: Database, decisionId: string): DecisionRecord | null {
+  const row = sqlite
+    .query<DecisionRow, [string]>(
+      "SELECT id, title, rationale, recorded_at FROM decisions WHERE id = ?",
+    )
+    .get(decisionId);
+  if (row === null) return null;
+  return { id: row.id, title: row.title, rationale: row.rationale, recordedAt: row.recorded_at };
+}
+
+/** Entity kinds that {@link buildActivityTimeline} threads onto the timeline. */
+export const ACTIVITY_KINDS = ["source", "task", "decision"] as const;
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+
+/** One item on an entity's activity timeline (Issue #279). */
+export interface ActivityItem {
+  /** Which projection the item came from. */
+  kind: ActivityKind;
+  /** The entity's id (source externalId / task id / decision id). */
+  id: string;
+  /**
+   * The item's position on the timeline (ISO 8601): each kind's natural moment —
+   * source `observed_at`, task `updated_at`, decision `recorded_at`.
+   */
+  at: string;
+  /** The full projection record (SourceRecord / TaskRecord / DecisionRecord). */
+  record: SourceRecord | TaskRecord | DecisionRecord;
+}
+
+export interface ActivityTimelineOptions {
+  /** How far to walk the provenance graph from the origin entity (default 2). */
+  depth?: number;
+  /** Inclusive lower / exclusive upper bound on each item's `at` timestamp. */
+  window?: TimeRange;
+  /** Max items returned, newest-first (default {@link DEFAULT_LIST_LIMIT}). */
+  limit?: number;
+  /** Reference "now" for task overdue derivation (ISO 8601; injectable for tests). */
+  now?: string;
+  /**
+   * Cap on graph nodes explored while discovering related entities (keeps a
+   * dense graph bounded). Defaults to a generous multiple of `limit`.
+   */
+  graphLimit?: number;
+}
+
+/** An entity's activity timeline: merged source/task/decision items, newest-first. */
+export interface ActivityTimeline {
+  /** The entity the timeline is centred on. */
+  origin: GraphNode;
+  /** The covered window (null bound when unbounded). */
+  window: { since: string | null; until: string | null };
+  /** Items sorted by `at` DESC (newest-first), capped to `limit`. */
+  items: ActivityItem[];
+}
+
+/** The natural timeline timestamp for each kind's record. */
+function activityAt(kind: ActivityKind, record: ActivityItem["record"]): string {
+  switch (kind) {
+    case "source":
+      return (record as SourceRecord).observedAt;
+    case "task":
+      return (record as TaskRecord).updatedAt;
+    case "decision":
+      return (record as DecisionRecord).recordedAt;
+  }
+}
+
+/**
+ * Build an entity's activity timeline (`activity.timeline`, Issue #279): the
+ * sources / tasks / decisions provenance-connected to an origin entity (kind +
+ * id), merged and sorted into one time-ordered view. Where `brief` is period-
+ * axis only, this is entity-axis — "everything around this person/project/source".
+ *
+ * Implementation: walk the `links` provenance graph from the origin
+ * (`expandGraph`, both directions) to discover related entities, fetch each
+ * reached source/task/decision via the existing query layer, stamp each with its
+ * natural timestamp (source observed / task updated / decision recorded), apply
+ * the optional time window, then sort newest-first and cap to `limit`. The origin
+ * entity itself is included when it is one of the timeline kinds. Pure SELECTs.
+ */
+export function buildActivityTimeline(
+  sqlite: Database,
+  kind: string,
+  id: string,
+  options: ActivityTimelineOptions = {},
+): ActivityTimeline {
+  const limit = options.limit ?? DEFAULT_LIST_LIMIT;
+  const now = options.now ?? new Date().toISOString();
+  const depth = options.depth ?? 2;
+  // Explore enough of the graph to fill the timeline without unbounded growth.
+  const graphLimit = options.graphLimit ?? Math.max(limit * 4, DEFAULT_LIST_LIMIT);
+
+  // Discover related entities (and the origin itself) over the provenance graph.
+  const { nodes } = expandGraph(sqlite, kind, id, {
+    depth,
+    direction: "both",
+    limit: graphLimit,
+  });
+
+  const isActivityKind = (k: string): k is ActivityKind =>
+    (ACTIVITY_KINDS as readonly string[]).includes(k);
+
+  const items: ActivityItem[] = [];
+  for (const node of nodes) {
+    if (!isActivityKind(node.kind)) continue;
+    const record: ActivityItem["record"] | null =
+      node.kind === "source"
+        ? getSource(sqlite, node.id)
+        : node.kind === "task"
+          ? getTask(sqlite, node.id, { now })
+          : getDecision(sqlite, node.id);
+    if (record === null) continue;
+    const at = activityAt(node.kind, record);
+    if (options.window?.after !== undefined && at < options.window.after) continue;
+    if (options.window?.before !== undefined && at >= options.window.before) continue;
+    items.push({ kind: node.kind, id: node.id, at, record });
+  }
+
+  // Newest-first; ties broken by (kind, id) for a deterministic order.
+  items.sort((a, b) =>
+    a.at === b.at ? `${a.kind} ${a.id}`.localeCompare(`${b.kind} ${b.id}`) : a.at < b.at ? 1 : -1,
+  );
+
+  return {
+    origin: { kind, id },
+    window: { since: options.window?.after ?? null, until: options.window?.before ?? null },
+    items: items.slice(0, limit),
+  };
 }
