@@ -31,8 +31,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test
-        run: bun test
+      # Coverage is measured (and printed) on every run, but stays advisory:
+      # there is no threshold gate yet. A failing/missing test still fails the
+      # step via `bun test`'s own exit code. Threshold enforcement is deferred
+      # to a follow-up issue (see #234).
+      - name: Test (with coverage)
+        run: bun test --coverage
 
       # Validate the distribution bundle (and its --external list) on every push,
       # not only at release time — a broken build otherwise lands on main unseen.
@@ -59,3 +63,34 @@ jobs:
 
       - name: Markdownlint
         run: bun run lint:md
+
+  # Security & workflow quality gates. These mirror the local lefthook hooks
+  # (gitleaks / trivy live in lefthook-base.yaml, actionlint in lefthook.yaml)
+  # but CI is the source of truth: a PR that bypasses local hooks (e.g.
+  # --no-verify, or a web edit) is still guarded here (#234). Tool versions are
+  # pinned in .mise.toml and installed via mise-action to stay in lockstep.
+  security:
+    name: security (gitleaks + trivy + actionlint)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # gitleaks scans git history, so it needs full history rather than the
+          # default shallow (depth 1) checkout.
+          fetch-depth: 0
+
+      - name: Install pinned tools (mise)
+        uses: jdx/mise-action@v4
+        with:
+          # Only the tools this job needs; avoids installing the full toolchain.
+          install_args: gitleaks trivy actionlint
+
+      - name: Gitleaks (secret scan, full history)
+        run: gitleaks git --no-banner --redact --exit-code 1
+
+      - name: Trivy (vuln + secret scan)
+        run: trivy fs --scanners vuln,secret --exit-code 1 --no-progress .
+
+      - name: Actionlint (workflow lint)
+        run: actionlint
