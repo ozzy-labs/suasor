@@ -21,7 +21,7 @@
 1. **責務境界 — ウィザードはオーケストレータ。** 認証・疎通・取り込みのロジックは既存の `AUTH_SPECS`（`storeSecret` / `test` probe、[ADR-0011](0011-slack-operational-verbs-and-readiness.md)）と bulk-sync サービス（[ADR-0027](0027-bulk-sync-orchestration.md)）を呼ぶ。`onboard` 自身は connector SDK を一切持たず、import-clean を維持する（[ADR-0007](0007-connector-contract.md)・NFR-PRF-1）。
 
 2. **フロー（対話時）。**
-   1. connector を選択（複数可。`--connector a,b` で非対話指定も可）
+   1. connector を選択（複数可。`--connector a,b` で非対話指定も可）。`--connector` 未指定かつ TTY の場合は番号付きメニューを表示し、1 行の選択入力（番号 / 名前、カンマ / 空白区切り）を pure resolver（`resolveSelection`、Issue #293）で解決する。非 TTY では従来どおり `--connector` 必須エラー（§4）
    2. 各 connector の token を stdin で受け取り keychain 格納（`storeSecret` 再利用）
    3. `auth test` を即実行しスコープ / 疎通を表示（失敗しても続行可能 —token は保存済みで後から直せる）
    4. **`config.toml` に `[connectors.X]` slice を自動追記**（`enabled = true` を含む）
@@ -44,7 +44,7 @@
    - **headless（env override 前提）**: token が `SUASOR_CONNECTOR_<NAME>_<SECRET>` で渡る環境では `auth set`（keychain 格納）ステップを skip でき（`--skip-auth`）、binary 配布（keychain 非搭載、[install](../guide/install.md)）でも config 追記・sync・雛形出力は機能する
    - `--json` で各ステップの結果（auth 格納 / test 疎通 / config 追記有無 / sync 集計 / scheduler 種別）を機械可読出力する
 
-5. **scheduler 雛形は OS 注入の純粋関数。** `renderSchedulerSnippet(os, command)` を `os` パラメータで分岐させ、OS を注入してテストする（実 OS 依存にしない）。crontab 追記（`--write-cron`）のみ副作用を持つ。
+5. **scheduler 雛形は OS 注入の純粋関数。** `renderSchedulerSnippet(os, command)` を `os` パラメータで分岐させ、OS を注入してテストする（実 OS 依存にしない）。crontab 追記（`--write-cron`）のみ副作用を持つ。雛形は global な `suasor`（PATH 上）を前提とするため、実行 channel（`detectInvocationChannel(argv, execPath)`、Issue #293）を heuristic に判定し、from-source（`bun run src/index.ts`）/ bunx では「`suasor` は PATH に無いので invocation を読み替えよ」という注記を出力する。`--write-cron` が非 PATH channel に解決される場合は warning も出す（literal `suasor` を crontab に書くと cron 実行時に失敗しうるため）。
 
 ## Consequences
 
