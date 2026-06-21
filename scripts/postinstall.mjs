@@ -22,7 +22,7 @@
 import { spawnSync } from "node:child_process";
 
 // Mirror of `engines.bun` / src/runtime-guard.ts MIN_BUN_VERSION.
-const MIN_BUN_VERSION = "1.1";
+const MIN_BUN_VERSION = "1.2";
 
 /**
  * Detect a usable Bun: either we are already running under Bun, or a `bun`

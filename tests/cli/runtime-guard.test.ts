@@ -29,6 +29,6 @@ describe("CLI startup Bun version guard", () => {
   });
 
   test("at the minimum version → ok (CLI proceeds)", () => {
-    expect(checkBunRuntime("1.1.0", MIN_BUN_VERSION).ok).toBe(true);
+    expect(checkBunRuntime("1.2.0", MIN_BUN_VERSION).ok).toBe(true);
   });
 });

@@ -13,7 +13,7 @@
     "docs/skills"
   ],
   "engines": {
-    "bun": ">=1.1"
+    "bun": ">=1.2"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.14",

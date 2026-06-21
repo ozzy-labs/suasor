@@ -13,7 +13,7 @@ the simplest option if you don't already run Bun:
 | --- | --- | --- |
 | just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) |
 | want local embedding with zero egress | **Docker (+Ollama)** | none (container only) |
-| already use Bun | **npm** (`bunx`) | Bun ≥ 1.1 |
+| already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 |
 
 > Releases are automated with release-please: merging its release PR publishes
 > npm + binaries + Docker (see [Releasing](#releasing-maintainers)).
@@ -91,6 +91,10 @@ docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
   container or a mounted Ollama volume.
 - Larger than the other channels (Ollama runtime included). Stay on npm/binary if
   you only need FTS or already run Ollama.
+- The image's base layers (`oven/bun` and `ollama/ollama`) are pinned by tag +
+  digest in the `Dockerfile` so each build embeds a known Bun and Ollama
+  (reproducible, supply-chain-safe builds). The Bun version is kept in lockstep
+  across the `Dockerfile`, `.mise.toml`, and `engines.bun`.
 
 ## 3. npm — `@ozzylabs/suasor` (for Bun users)
 
@@ -101,7 +105,7 @@ server from an agent host.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash   # official installer
-# or:  mise use -g bun@1   |   brew install oven-sh/bun/bun
+# or:  mise use -g bun@1.2 |   brew install oven-sh/bun/bun
 bun --version
 ```
 
@@ -118,7 +122,7 @@ bun add -g @ozzylabs/suasor                  # or: pnpm add -g @ozzylabs/suasor
 suasor --version                             #     (npm i -g also works; Bun runs it)
 ```
 
-> Requires **Bun ≥ 1.1** (`engines.bun`): Suasor uses `bun:sqlite` and other
+> Requires **Bun ≥ 1.2** (`engines.bun`): Suasor uses `bun:sqlite` and other
 > `Bun.*` APIs, so it cannot run under Node — use `bunx`, **not** `npx`. If you
 > don't run Bun, use the standalone binary or the Docker image above.
 >
@@ -128,7 +132,7 @@ suasor --version                             #     (npm i -g also works; Bun run
 > never fails the install) when no `bun` is detected, pointing you at Bun / the
 > binary / Docker. At runtime the CLI also checks the Bun version on startup and
 > exits with a short, human-readable message (no stack trace) if Bun is missing or
-> below 1.1 — instead of the opaque `ERR_UNSUPPORTED_ESM_URL_SCHEME` you would
+> below 1.2 — instead of the opaque `ERR_UNSUPPORTED_ESM_URL_SCHEME` you would
 > otherwise hit under Node. Set `SUASOR_SKIP_POSTINSTALL=1` to silence the
 > install-time advisory (e.g. in CI that only fetches the tarball).
 
