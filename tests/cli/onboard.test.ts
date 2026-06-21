@@ -90,6 +90,66 @@ describe("suasor onboard — wiring + validation", () => {
   });
 });
 
+/** A TTY-flagged stdin that yields the given line(s) then EOF. */
+function ttyStdin(...lines: string[]): AsyncIterable<Buffer | string> & { isTTY: boolean } {
+  return {
+    isTTY: true,
+    async *[Symbol.asyncIterator]() {
+      for (const line of lines) yield `${line}\n`;
+    },
+  };
+}
+
+describe("suasor onboard — interactive connector selection (ADR-0029 §2, Issue #293)", () => {
+  test("a TTY stdin with no --connector prompts and resolves the name selection", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // Select by name (the menu's number order is the registry order, which is
+      // not part of this contract); --skip-auth/--skip-sync so the prompt line
+      // is the only stdin we consume.
+      const { code, out } = await run(["onboard", "--skip-auth", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyStdin("github"),
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("Select connector(s)");
+      expect(out).toContain("appended [connectors.github]");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.github]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty interactive selection exits 1", async () => {
+    const { code, err } = await run(["onboard", "--skip-auth", "--skip-sync"], {
+      stdin: ttyStdin(""),
+    });
+    expect(code).toBe(1);
+    expect(err).toContain("no connector selected");
+  });
+});
+
+describe("suasor onboard — scheduler invocation note (Issue #293)", () => {
+  test("the human-readable output carries an invocation note for the cron/scheduler template", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "web", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      // The bun test runner launches from a .ts entry → from-source channel, so
+      // the note warns that `suasor` is not on PATH. (In any channel a Note: line
+      // about the invocation is always present.)
+      expect(out).toContain("Note:");
+      expect(out.toLowerCase()).toContain("path");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("suasor onboard — config slice append (the structural fix)", () => {
   test("appends [connectors.github] enabled = true to a fresh config", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));

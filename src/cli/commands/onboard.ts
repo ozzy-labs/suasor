@@ -24,8 +24,10 @@
 import { Command, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import { connectorNames } from "../../connectors/registry.ts";
+import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
 import { renderMcpSnippet } from "../onboard/mcp-snippet.ts";
 import { renderSchedulerSnippet } from "../onboard/scheduler.ts";
+import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
 
 /** One connector's per-step onboarding outcome (for `--json`). */
 interface ConnectorReport {
@@ -125,17 +127,11 @@ export class OnboardCommand extends Command {
 
     const interactive = isInteractive(this.context.stdin);
 
-    // 1. Resolve the connector set. The non-TTY guard takes priority when no
-    // --connector was given (a pipe / CI cannot prompt for a selection).
-    if (this.connector === undefined && !interactive) {
-      stderr.write(
-        "error: --connector is required when stdin is not a TTY " +
-          "(non-interactive setup cannot prompt for the connector selection)\n",
-      );
-      return 1;
-    }
-
-    const selected = this.resolveConnectors();
+    // 1. Resolve the connector set. With --connector we validate the explicit
+    // list; without it we prompt interactively on a TTY (ADR-0029 §2) and keep
+    // the explicit "--connector required" error on a non-TTY (ADR-0029 §4).
+    const selected =
+      this.connector === undefined ? await this.promptConnectors() : this.resolveConnectors();
     if ("error" in selected) {
       stderr.write(`error: ${selected.error}\n`);
       return 1;
@@ -244,10 +240,21 @@ export class OnboardCommand extends Command {
       if (!this.json) stdout.write(result.summary);
     }
 
-    // 6. Scheduler template.
+    // 6. Scheduler template. The printed cron / launchd / systemd entries assume
+    // a global `suasor` on PATH; from source / bunx no such binary exists, so we
+    // detect the likely invocation channel and append a substitution note (and,
+    // when --write-cron resolves to a non-PATH channel, a louder warning).
     const command = invocationCommand();
+    const channel = detectInvocationChannel(process.argv, process.execPath);
     const scheduler = renderSchedulerSnippet(process.platform, command);
     if (this.writeCron) {
+      if (channel !== "global") {
+        stderr.write(
+          `warning: --write-cron wrote a literal \`${command}\` line, but you appear to be running ` +
+            `via ${channel} — \`${command}\` is likely not on PATH for cron. ` +
+            "Edit the crontab entry to use your real invocation.\n",
+        );
+      }
       const wrote = await this.appendCron(command);
       if (!this.json) {
         stdout.write(wrote ? "Appended the cron line to your crontab.\n" : "");
@@ -256,6 +263,7 @@ export class OnboardCommand extends Command {
     if (!this.json) {
       stdout.write(`\nPeriodic sync — ${scheduler.label} (Suasor runs no daemon, ADR-0027):\n`);
       stdout.write(`${scheduler.snippet}\n`);
+      stdout.write(`${invocationNote(channel)}\n`);
     }
 
     // 7. MCP registration snippet.
@@ -281,26 +289,44 @@ export class OnboardCommand extends Command {
     return syncExitCode && syncExitCode > 0 ? 1 : 0;
   }
 
-  /** Resolve and validate the requested connector list. */
+  /** Resolve and validate an explicit `--connector` list. */
   private resolveConnectors(): { connectors: string[] } | { error: string } {
     const known = new Set(connectorNames());
-    if (this.connector !== undefined) {
-      const requested = this.connector
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-      if (requested.length === 0) return { error: "--connector was empty" };
-      const unknown = requested.filter((n) => !known.has(n));
-      if (unknown.length > 0) {
-        return {
-          error: `unknown connector(s): ${unknown.join(", ")} (known: ${[...known].join(", ")})`,
-        };
-      }
-      return { connectors: dedupe(requested) };
+    // Only called when --connector was provided (interactive prompt handles the
+    // unset case in promptConnectors).
+    const requested = (this.connector ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (requested.length === 0) return { error: "--connector was empty" };
+    const unknown = requested.filter((n) => !known.has(n));
+    if (unknown.length > 0) {
+      return {
+        error: `unknown connector(s): ${unknown.join(", ")} (known: ${[...known].join(", ")})`,
+      };
     }
-    // Interactive default: no explicit list yet → caller already gated non-TTY.
-    // With no prompt UI wired here, require an explicit --connector for now.
-    return { error: "no connector selected (pass --connector <name[,name]>)" };
+    return { connectors: dedupe(requested) };
+  }
+
+  /**
+   * Interactive connector selection (ADR-0029 §2). On a TTY stdin with no
+   * `--connector`, render a numbered menu, read one line, and resolve it with
+   * the pure {@link resolveSelection} helper. On a non-TTY stdin (a pipe / CI)
+   * prompting is unsafe, so we keep the explicit-error behavior (no silent wrong
+   * answer, ADR-0007 / ADR-0029 §4).
+   */
+  private async promptConnectors(): Promise<{ connectors: string[] } | { error: string }> {
+    if (!isInteractive(this.context.stdin)) {
+      return {
+        error:
+          "--connector is required when stdin is not a TTY " +
+          "(non-interactive setup cannot prompt for the connector selection)",
+      };
+    }
+    const candidates = connectorNames();
+    this.context.stdout.write(renderConnectorMenu(candidates));
+    const raw = (await readLine(this.context.stdin)).trim();
+    return resolveSelection(raw, candidates);
   }
 
   /** Read a token from stdin and store it in the keychain. Returns a status tag. */
@@ -514,6 +540,22 @@ async function readStdin(stdin: AsyncIterable<Buffer | string>): Promise<string>
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Read a single line from stdin (up to and excluding the first newline). Used by
+ * the interactive connector prompt so the rest of stdin stays available for the
+ * subsequent per-connector token reads. On EOF the accumulated buffer is
+ * returned (a TTY user pressing Enter terminates the line).
+ */
+async function readLine(stdin: AsyncIterable<Buffer | string>): Promise<string> {
+  let buffer = "";
+  for await (const chunk of stdin) {
+    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk as string);
+    const newline = buffer.indexOf("\n");
+    if (newline >= 0) return buffer.slice(0, newline);
+  }
+  return buffer;
 }
 
 /** Exported for tests: the connectors that expose the generic auth verbs. */
