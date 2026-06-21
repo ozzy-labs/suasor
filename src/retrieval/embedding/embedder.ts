@@ -19,6 +19,7 @@
  */
 import type { EmbeddingBackend, EmbeddingConfig } from "../../config/schema.ts";
 import { resolveEmbeddingApiKey, type SecretStoreOptions } from "../../connectors/secrets.ts";
+import { fetchWithRetry, type SleepLike } from "../../util/retry.ts";
 
 /** A thin embedding client. Delegates to a sidecar/API — never in-process ML. */
 export interface Embedder {
@@ -53,7 +54,51 @@ export class EmbeddingError extends Error {
 /** Minimal `fetch` shape used by the clients (injectable for tests). */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-export interface OllamaEmbedderOptions {
+/**
+ * Shared robustness knobs for every embedder (Issue #267). Defaults keep prior
+ * behaviour close while adding safety: batch splitting, per-request timeout, and
+ * 429/5xx retry with backoff (src/util/retry.ts). The vector space and request
+ * *content* are unchanged — only request shape and failure handling (ADR-0003).
+ */
+export interface EmbedderRobustnessOptions {
+  /** Max texts per request; larger inputs are split into ordered chunks. */
+  maxBatch?: number;
+  /** Per-request timeout in ms (`0` disables). On timeout the attempt retries. */
+  requestTimeoutMs?: number;
+  /** Max attempts incl. the first for a transient 429/5xx (`1` disables retry). */
+  maxRetries?: number;
+  /** Sleep override (tests inject a no-op to avoid real backoff waits). */
+  sleep?: SleepLike;
+  /** Randomness override for backoff jitter (tests inject a fixed value). */
+  random?: () => number;
+}
+
+/** Default batch size when an embedder is constructed without one. */
+const DEFAULT_MAX_BATCH = 64;
+
+/**
+ * Split `texts` into chunks of at most `maxBatch`, await `embedChunk` per chunk
+ * (sequentially, to keep request rate sane), and concatenate the per-chunk
+ * vectors back in input order. An empty input or a non-positive `maxBatch`
+ * (defensive) collapses to a single chunk.
+ */
+async function embedInBatches(
+  texts: string[],
+  maxBatch: number,
+  embedChunk: (chunk: string[]) => Promise<number[][]>,
+): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const size = maxBatch > 0 ? maxBatch : texts.length;
+  if (texts.length <= size) return embedChunk(texts);
+  const out: number[][] = [];
+  for (let i = 0; i < texts.length; i += size) {
+    const vectors = await embedChunk(texts.slice(i, i + size));
+    for (const v of vectors) out.push(v);
+  }
+  return out;
+}
+
+export interface OllamaEmbedderOptions extends EmbedderRobustnessOptions {
   /** Sidecar base URL (e.g. `http://localhost:11434`). */
   baseUrl: string;
   /** Model name (e.g. `bge-m3`). Pins the vector space. */
@@ -79,20 +124,34 @@ export class OllamaEmbedder implements Embedder {
   readonly model: string;
   private readonly endpoint: string;
   private readonly fetchImpl: FetchLike;
+  private readonly robustness: EmbedderRobustnessOptions;
 
   constructor(options: OllamaEmbedderOptions) {
     this.model = options.model;
     // Trim a single trailing slash so `baseUrl` with or without one both work.
     this.endpoint = `${options.baseUrl.replace(/\/$/, "")}/api/embed`;
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.robustness = options;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
+    // Split into ordered chunks so a large local batch cannot overflow the
+    // sidecar in one shot; the sidecar is local (no egress) but still bounded.
+    return embedInBatches(texts, this.robustness.maxBatch ?? DEFAULT_MAX_BATCH, (chunk) =>
+      this.embedChunk(chunk),
+    );
+  }
+
+  private async embedChunk(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
 
+    // Retry 5xx (and a hung request via timeout) with backoff. Ollama is local,
+    // but a restarting/overloaded sidecar returns 5xx that one retry often rides
+    // out. A non-2xx that is not 5xx (e.g. 404 bad model) is returned as-is →
+    // EmbeddingError below, so a config error fails fast rather than looping.
     let response: Response;
     try {
-      response = await this.fetchImpl(this.endpoint, {
+      response = await fetchEmbedding(this.endpoint, this.robustness, this.fetchImpl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: this.model, input: texts }),
@@ -122,12 +181,32 @@ export class OllamaEmbedder implements Embedder {
   }
 }
 
+/**
+ * Shared `fetch` wrapper for every embedder: applies the configured retry
+ * (429/5xx + transient throws, src/util/retry.ts) and per-request timeout. Kept
+ * as a free function so Ollama and the OpenAI-compatible base share one policy.
+ */
+function fetchEmbedding(
+  endpoint: string,
+  robustness: EmbedderRobustnessOptions,
+  fetchImpl: FetchLike,
+  init: RequestInit,
+): Promise<Response> {
+  return fetchWithRetry(endpoint, init, {
+    fetchImpl,
+    maxAttempts: robustness.maxRetries ?? 3,
+    timeoutMs: robustness.requestTimeoutMs ?? 60_000,
+    ...(robustness.sleep ? { sleep: robustness.sleep } : {}),
+    ...(robustness.random ? { random: robustness.random } : {}),
+  });
+}
+
 /** Default OpenAI embeddings base URL (`/v1/embeddings` appended by the client). */
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com";
 /** Default Voyage embeddings base URL (`/v1/embeddings` appended by the client). */
 export const DEFAULT_VOYAGE_BASE_URL = "https://api.voyageai.com";
 
-export interface OpenAICompatibleEmbedderOptions {
+export interface OpenAICompatibleEmbedderOptions extends EmbedderRobustnessOptions {
   /** API base URL (e.g. `https://api.openai.com`). `/v1/embeddings` is appended. */
   baseUrl: string;
   /** Model name (e.g. `text-embedding-3-small`). Pins the vector space. */
@@ -167,11 +246,13 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
   private readonly endpoint: string;
   private readonly apiKey: string;
   private readonly fetchImpl: FetchLike;
+  private readonly robustness: EmbedderRobustnessOptions;
   /** Provider label for error messages (e.g. `openai`, `voyage`). */
   protected abstract readonly provider: string;
 
   constructor(options: OpenAICompatibleEmbedderOptions) {
     this.model = options.model;
+    this.robustness = options;
     const base = options.baseUrl.replace(/\/$/, "");
     // Require TLS for external backends: the Bearer API key egresses with every
     // request (ADR-0003), so a non-https baseUrl would send the secret in
@@ -188,11 +269,20 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
   }
 
   async embed(texts: string[]): Promise<number[][]> {
+    // Split into ordered chunks so a large sync cannot 413 / overflow the model
+    // context in one request and lose every vector; results are concatenated in
+    // input order. Content is unchanged (ADR-0003) — only request shape.
+    return embedInBatches(texts, this.robustness.maxBatch ?? DEFAULT_MAX_BATCH, (chunk) =>
+      this.embedChunk(chunk),
+    );
+  }
+
+  private async embedChunk(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
 
     let response: Response;
     try {
-      response = await this.fetchImpl(this.endpoint, {
+      response = await fetchEmbedding(this.endpoint, this.robustness, this.fetchImpl, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -258,6 +348,52 @@ export class VoyageEmbedder extends OpenAICompatibleEmbedder {
   protected readonly provider = "voyage";
 }
 
+/**
+ * Decorator that fail-fasts on a dimension mismatch (Issue #267). The configured
+ * `[embedding].dim` sizes the vec0 table at DB creation; if the model actually
+ * returns a different dimension (e.g. `dim=1024` left at default while
+ * `backend=openai` model `text-embedding-3-small` returns 1536), every vector
+ * insert fails and recall silently degrades to empty with no signal.
+ *
+ * This wraps any {@link Embedder} and, on the **first** non-empty `embed`, checks
+ * the returned vector length against `expectedDim`. A mismatch throws an
+ * actionable {@link EmbeddingError} (which model/dim disagree, how to fix) so the
+ * failure surfaces loudly instead of as empty recall. Once a matching dimension
+ * is observed the check is disabled (no per-call overhead). The probe rides the
+ * real request — no extra egress.
+ */
+export class DimensionCheckedEmbedder implements Embedder {
+  readonly model: string;
+  readonly modelVersion?: string;
+  private readonly inner: Embedder;
+  private readonly expectedDim: number;
+  private verified = false;
+
+  constructor(inner: Embedder, expectedDim: number) {
+    this.inner = inner;
+    this.expectedDim = expectedDim;
+    this.model = inner.model;
+    if (inner.modelVersion !== undefined) this.modelVersion = inner.modelVersion;
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    const vectors = await this.inner.embed(texts);
+    if (!this.verified && vectors.length > 0) {
+      const actual = vectors[0]?.length ?? 0;
+      if (actual !== this.expectedDim) {
+        throw new EmbeddingError(
+          `embedding dimension mismatch: model "${this.model}" returned ${actual}-dim vectors ` +
+            `but [embedding].dim is ${this.expectedDim}. Set [embedding].dim = ${actual} to match ` +
+            "the model (a fresh DB or delete + rebuild + re-sync is needed since dim sizes vec0). " +
+            "See docs/guide/embedding.md.",
+        );
+      }
+      this.verified = true;
+    }
+    return vectors;
+  }
+}
+
 /** Default OpenAI embedding model (`text-embedding-3-small`, 1536-dim). */
 export const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 /** Default Voyage embedding model (`voyage-3`, 1024-dim). */
@@ -282,15 +418,39 @@ export const EXTERNAL_EMBEDDING_BACKENDS = new Set<EmbeddingBackend>(["openai", 
  * for the async wrapper that resolves the key first.
  */
 export function createEmbedder(
-  config: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> & { apiKey?: string | null },
+  config: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> &
+    Partial<Pick<EmbeddingConfig, "dim" | "maxBatch" | "requestTimeoutMs" | "maxRetries">> & {
+      apiKey?: string | null;
+    },
   fetchImpl?: FetchLike,
+  robustnessOverrides: Pick<EmbedderRobustnessOptions, "sleep" | "random"> = {},
 ): Embedder | null {
+  // Robustness knobs shared by every backend (Issue #267): batch/timeout/retry,
+  // plus injectable sleep/random for tests. Undefined values fall back to the
+  // embedder constructor defaults.
+  const robustness: EmbedderRobustnessOptions = {
+    ...(config.maxBatch !== undefined ? { maxBatch: config.maxBatch } : {}),
+    ...(config.requestTimeoutMs !== undefined ? { requestTimeoutMs: config.requestTimeoutMs } : {}),
+    ...(config.maxRetries !== undefined ? { maxRetries: config.maxRetries } : {}),
+    ...(robustnessOverrides.sleep ? { sleep: robustnessOverrides.sleep } : {}),
+    ...(robustnessOverrides.random ? { random: robustnessOverrides.random } : {}),
+  };
+
+  // Wrap with the dimension-mismatch guard when a `dim` is configured so a model
+  // whose output dimension disagrees with the vec0 table fails fast (loud) on the
+  // first embed rather than silently degrading recall to empty.
+  const guard = (embedder: Embedder): Embedder =>
+    config.dim !== undefined ? new DimensionCheckedEmbedder(embedder, config.dim) : embedder;
+
   if (config.backend === "ollama") {
-    return new OllamaEmbedder({
-      baseUrl: config.baseUrl,
-      model: config.model,
-      ...(fetchImpl ? { fetchImpl } : {}),
-    });
+    return guard(
+      new OllamaEmbedder({
+        baseUrl: config.baseUrl,
+        model: config.model,
+        ...(fetchImpl ? { fetchImpl } : {}),
+        ...robustness,
+      }),
+    );
   }
   if (config.backend === "openai" || config.backend === "voyage") {
     // External APIs egress body text (ADR-0003); only build when a key is
@@ -302,8 +462,11 @@ export function createEmbedder(
       model: config.model,
       apiKey: config.apiKey,
       ...(fetchImpl ? { fetchImpl } : {}),
+      ...robustness,
     };
-    return config.backend === "openai" ? new OpenAIEmbedder(options) : new VoyageEmbedder(options);
+    return guard(
+      config.backend === "openai" ? new OpenAIEmbedder(options) : new VoyageEmbedder(options),
+    );
   }
   // disabled (default) → no embedder → recall returns the embedding_disabled
   // signal and the host falls back to FTS.
@@ -333,12 +496,23 @@ export async function resolveEmbeddingApiKeyPresent(
  * synchronous, key-already-resolved / test paths.
  */
 export async function createEmbedderResolved(
-  config: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">,
-  options: { fetchImpl?: FetchLike; secrets?: SecretStoreOptions } = {},
+  config: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> &
+    Partial<Pick<EmbeddingConfig, "dim" | "maxBatch" | "requestTimeoutMs" | "maxRetries">>,
+  options: {
+    fetchImpl?: FetchLike;
+    secrets?: SecretStoreOptions;
+    /** Test seams threaded to the embedder's retry/backoff (no real waits). */
+    sleep?: SleepLike;
+    random?: () => number;
+  } = {},
 ): Promise<Embedder | null> {
+  const overrides: Pick<EmbedderRobustnessOptions, "sleep" | "random"> = {
+    ...(options.sleep ? { sleep: options.sleep } : {}),
+    ...(options.random ? { random: options.random } : {}),
+  };
   if (EXTERNAL_EMBEDDING_BACKENDS.has(config.backend)) {
     const apiKey = await resolveEmbeddingApiKey(config.backend, options.secrets ?? {});
-    return createEmbedder({ ...config, apiKey }, options.fetchImpl);
+    return createEmbedder({ ...config, apiKey }, options.fetchImpl, overrides);
   }
-  return createEmbedder(config, options.fetchImpl);
+  return createEmbedder(config, options.fetchImpl, overrides);
 }

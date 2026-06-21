@@ -287,6 +287,71 @@ describe("suasor doctor", () => {
     expect(warn?.detail).toContain("anthropic");
   });
 
+  // Issue #267: doctor probes the model's actual output dimension once and
+  // compares it to [embedding].dim (which sizes vec0). A mismatch is an error
+  // (vector inserts would fail → recall silently empty); a match is ok.
+  test("dimension mismatch (dim ≠ model output) is an error (#267)", async () => {
+    await run(["init"]);
+    // Local ollama-style sidecar returning 2-dim vectors while dim=4 is set.
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ embeddings: [[1, 2]] }), {
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    try {
+      await writeConfig(
+        `[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\ndim = 4\nbaseUrl = "http://localhost:${server.port}"\n`,
+      );
+      const { code, out } = await run(["doctor", "--json"]);
+      expect(code).toBe(1); // error fails the exit code
+      const report = JSON.parse(out) as DoctorReport;
+      const dim = report.checks.find((c) => c.name === "embedding.dim");
+      expect(dim?.status).toBe("error");
+      expect(dim?.detail).toContain("2-dim");
+      expect(dim?.detail).toContain("[embedding].dim is 4");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("matching dimension (dim == model output) is ok (#267)", async () => {
+    await run(["init"]);
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ embeddings: [[1, 2, 3]] }), {
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    try {
+      await writeConfig(
+        `[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\ndim = 3\nbaseUrl = "http://localhost:${server.port}"\n`,
+      );
+      const { code, out } = await run(["doctor", "--json"]);
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as DoctorReport;
+      const dim = report.checks.find((c) => c.name === "embedding.dim");
+      expect(dim?.status).toBe("ok");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("dim probe failure (unreachable sidecar) is a warning, not an error (#267)", async () => {
+    await run(["init"]);
+    // Port 1 is unbound → connection refused → probe fails fast (warn).
+    await writeConfig(
+      '[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\ndim = 1024\nbaseUrl = "http://localhost:1"\n',
+    );
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const dim = report.checks.find((c) => c.name === "embedding.dim");
+    expect(dim?.status).toBe("warn");
+    expect(dim?.detail).toContain("could not probe");
+  });
+
   test("implemented / inert backends emit no config warning (#235)", async () => {
     await run(["init"]);
     await writeConfig(
