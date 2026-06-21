@@ -61,6 +61,59 @@ suasor source forget gh:owner/repo#1 --reason "GDPR request" --yes
 - 既に forget 済みの id を再度 forget すると no-op（`already forgotten: <id>`・exit 0）
 - 一度も取り込まれていない id は `missing` として exit 1（タイプミスを暗黙に成功扱いしない）
 
+## バックアップと復元（`export backup`）
+
+local-first / event-sourced（event log が唯一の真実・[ADR-0002](../adr/0002-event-sourced-architecture.md)）のローカルストアを、整合した状態でバックアップする。
+
+```bash
+# DB と同ディレクトリに timestamped 名で出力（既定 sqlite 単一ファイル）
+suasor export backup
+# → backup written: ~/.config/suasor/suasor-backup-2026-06-21_12-00-00-000.db
+
+# 出力先を指定 / 圧縮アーカイブ（tgz）
+suasor export backup --out /backups/suasor.db
+suasor export backup --format tgz --out /backups/suasor.tgz
+```
+
+- スナップショットは SQLite `VACUUM INTO` で**読み取りロック下**に取得し WAL を畳み込むため、WAL/SHM の分断（torn copy）を生まない。**無副作用**（live DB は変更しない）
+- secret は含まれない（token は OS keychain・DB に載らない・NFR-PRV-4）。バックアップに資格情報は入らないので、token は別途 `auth set` で再投入する
+- 既存ファイルがあれば上書き拒否（明示的に別名 / 別パスを指定する）
+
+### 復元
+
+`sqlite` 形式は自己完結の単一 DB なので、停止中に `[storage].dbPath` を置き換えれば復元できる。
+
+```bash
+# 1. sqlite 形式: バックアップを所定の場所へコピー
+cp /backups/suasor.db ~/.config/suasor/suasor.db
+
+# 2. tgz 形式: 展開してから配置
+tar -xzf /backups/suasor.tgz -C ~/.config/suasor/
+# → suasor.db が展開される
+
+# 3. 健全性を確認
+suasor doctor
+suasor store info        # event 数 / projection 行数を確認
+```
+
+WAL/SHM サイドカーは復元不要（バックアップは単一ファイルに畳み込み済み）。projection / FTS / vec0 がずれた場合は `suasor projections rebuild` で event log から再構築できる。
+
+## 設定の検証と編集（`validate-config` / `config edit`）
+
+```bash
+# config.toml の構造検証（必須欠落 / invalid / dangling / typo）
+suasor validate-config
+# 安全な除去のみ自動修正（unknown/typo キー・存在しない local root）
+suasor validate-config --fix
+
+# $EDITOR で編集し、保存後に schema 検証（不正なら自動で差し戻し）
+suasor config edit
+suasor config edit --editor nano
+```
+
+- `validate-config --fix` は**除去のみ**の保守的修正で、値の捏造はしない（`missing-required` / `invalid-value` は報告のみ・HITL [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。コメント / 整形は保たれる
+- `config edit` は保存後に loader 同等の検証を走らせ、**不正な TOML / schema 違反なら元ファイルを復元**して非ゼロ終了する（壊れた config が残らない）
+
 ## 関連
 
 - [ADR-0026 source forgetting](../adr/0026-source-forgetting.md) — forget の設計・redaction 例外の根拠

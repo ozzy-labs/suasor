@@ -7,7 +7,7 @@
  *   <connector> sync · sync · sync status ·
  *   <connector> auth set/test (github/ms-graph/google/box) ·
  *   <connector> discovery verbs (github repos; ADR-0030) · connectors list ·
- *   config show ·
+ *   config show · config edit · validate-config · export backup ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
  *   skills install/list/search/info
@@ -25,6 +25,7 @@
 import { Builtins, Cli, type CommandClass } from "clipanion";
 import { VERSION } from "../version.ts";
 import { BriefCommand } from "./commands/brief.ts";
+import { ConfigEditCommand } from "./commands/config-edit.ts";
 import { ConfigShowCommand } from "./commands/config-show.ts";
 import { connectorAuthCommands } from "./commands/connector-auth.ts";
 import { connectorDiscoveryCommands } from "./commands/connector-discovery.ts";
@@ -33,6 +34,7 @@ import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
 import { DoctorCommand } from "./commands/doctor.ts";
 import { embeddingsCommands } from "./commands/embeddings.ts";
+import { ExportBackupCommand } from "./commands/export-backup.ts";
 import { ExtractionListPendingCommand, ExtractionStatusCommand } from "./commands/extraction.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
@@ -57,6 +59,7 @@ import {
 import { SourceForgetCommand, SourceListCommand } from "./commands/source.ts";
 import { StoreInfoCommand } from "./commands/store-info.ts";
 import { SyncAllCommand, SyncStatusCommand } from "./commands/sync-all.ts";
+import { ValidateConfigCommand } from "./commands/validate-config.ts";
 
 /** Build the configured CLI instance. */
 export function buildCli(): Cli {
@@ -88,8 +91,11 @@ export function buildCli(): Cli {
   }
   cli.register(ConnectorsListCommand);
   cli.register(ConfigShowCommand);
+  cli.register(ConfigEditCommand);
+  cli.register(ValidateConfigCommand);
   cli.register(DoctorCommand);
   cli.register(StoreInfoCommand);
+  cli.register(ExportBackupCommand);
   cli.register(ExtractionStatusCommand);
   cli.register(ExtractionListPendingCommand);
   for (const EmbeddingsCommand of embeddingsCommands as CommandClass[]) {
