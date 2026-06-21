@@ -1,8 +1,9 @@
 # 0030. Connector discovery verbs (generic discovery base + `github repos`)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-20
 - Deciders: Suasor maintainers
+- Implemented: #190 / #211 / #214（v0.1.11）
 - Related: [ADR-0007](0007-connector-contract.md)（connector 契約 — `sync()` 一本）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（Slack 運用 verb / `slack conversations` discovery）, [ADR-0029](0029-onboarding-wizard.md)（onboarding wizard / 非破壊 config append）, [ADR-0003](0003-local-first-and-content-minimization.md)（read-only）
 - Tracks: #190 / Epic #185
 

@@ -1,8 +1,9 @@
 # 0011. Slack operational verbs (auth test / conversations) and readiness
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
+- Implemented: #46
 - Related: [ADR-0007](0007-connector-contract.md)（connector contract — `sync()` 一本）, [ADR-0003](0003-local-first-and-content-minimization.md)（read 専用・書き戻し禁止）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP/HITL 境界）
 - Prior art: opshub の Slack 実装（`slack auth test` の readiness capability model = opshub ADR-0040、token principal/scope = opshub ADR-0018、conversations discovery = opshub ADR-0041 §366）
 
