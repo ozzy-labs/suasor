@@ -304,7 +304,8 @@ export class EmbeddingsListFailedCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    let limit = 50;
+    const { DEFAULT_LIST_LIMIT } = await import("../../mcp/queries.ts");
+    let limit = DEFAULT_LIST_LIMIT;
     if (this.limit !== undefined) {
       const parsed = Number(this.limit);
       if (!Number.isInteger(parsed) || parsed <= 0) {

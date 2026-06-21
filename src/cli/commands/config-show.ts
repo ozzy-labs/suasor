@@ -63,6 +63,17 @@ export class ConfigShowCommand extends Command {
   });
 
   override async execute(): Promise<number> {
+    // `--effective` is the only mode today; it is an explicit (default-true) flag
+    // reserving room for a future `--source` provenance view. `--no-effective`
+    // has no alternative behaviour yet, so reject it instead of silently
+    // ignoring the toggle (a silent no-op hides the unsupported request).
+    if (!this.effective) {
+      this.context.stderr.write(
+        "config show: --no-effective is not supported yet (effective view is the only mode)\n",
+      );
+      return 1;
+    }
+
     const [{ loadConfig, resolveConfigDir }, { maskSecrets }, { resolveSecret }, { join }] =
       await Promise.all([
         import("../../config/index.ts"),
