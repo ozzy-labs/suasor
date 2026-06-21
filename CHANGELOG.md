@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/ozzy-labs/suasor/compare/v0.1.12...v0.1.13) (2026-06-21)
+
+
+### Features
+
+* **retrieval:** implement openai / voyage embedding backends ([#263](https://github.com/ozzy-labs/suasor/issues/263)) ([2fe46f9](https://github.com/ozzy-labs/suasor/commit/2fe46f9ab14758f619c3c481e90d6f8112920c99))
+
 ## [0.1.12](https://github.com/ozzy-labs/suasor/compare/v0.1.11...v0.1.12) (2026-06-21)
 
 
