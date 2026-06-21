@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.14](https://github.com/ozzy-labs/suasor/compare/v0.1.13...v0.1.14) (2026-06-21)
+
+
+### Features
+
+* **cli:** store info --breakdown + troubleshooting guide ([#275](https://github.com/ozzy-labs/suasor/issues/275)) ([17f383c](https://github.com/ozzy-labs/suasor/commit/17f383cd507d9445675b3d4b67c681e97c03c33b))
+* **retrieval:** harden external embedding egress (retry/batch/dim-guard) ([#271](https://github.com/ozzy-labs/suasor/issues/271)) ([c0a053d](https://github.com/ozzy-labs/suasor/commit/c0a053dd8c815423f32b5f00df97b0e2b397d09e))
+
+
+### Performance
+
+* **connectors:** parallelize bulk sync + google/box/ms-graph backoff ([#274](https://github.com/ozzy-labs/suasor/issues/274)) ([86ad39a](https://github.com/ozzy-labs/suasor/commit/86ad39a66c9b8516bd18c4d510c4a5ab8b820a94))
+
 ## [0.1.13](https://github.com/ozzy-labs/suasor/compare/v0.1.12...v0.1.13) (2026-06-21)
 
 
