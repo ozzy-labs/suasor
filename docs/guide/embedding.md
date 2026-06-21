@@ -30,7 +30,7 @@ curl http://localhost:11434/api/tags
 
 ```toml
 [embedding]
-backend = "ollama"                  # disabled（既定）| ollama | openai | voyage
+backend = "ollama"                  # disabled（既定）| ollama | openai（未実装）| voyage（未実装）
 baseUrl = "http://localhost:11434"  # /api/embed は client が付与
 model = "bge-m3"                     # ingest と query で必ず同一（ベクトル空間整合）
 dim = 1024                           # model の出力次元と一致必須（bge-m3=1024、nomic-embed-text=768 等）
@@ -44,7 +44,9 @@ export SUASOR_EMBEDDING__MODEL=bge-m3
 # export SUASOR_EMBEDDING__BASEURL=http://sidecar:11434
 ```
 
-> **同一モデル必須**: 文書（ingest 時）とクエリ（query 時）の embedding は同じ `model` で生成する必要がある（ベクトル空間整合）。`model` を変えたら下記 4. で既存ベクトルを再生成する。現状 `ollama` のみ実装。`openai` / `voyage` は設定上受理されるが未実装で、`recall.search` は `embedding_disabled` に degrade する。
+> **同一モデル必須**: 文書（ingest 時）とクエリ（query 時）の embedding は同じ `model` で生成する必要がある（ベクトル空間整合）。`model` を変えたら下記 4. で既存ベクトルを再生成する。
+>
+> **backend の実装状況と egress**: 現状 **egress-free な `ollama`（ローカルサイドカー）が既定の実装経路**で、ローカル経路を埋めている。`openai` / `voyage` は設定上受理される **opt-in placeholder で未実装**であり、設定しても embedder が構築されず `recall.search` は `embedding_disabled` に degrade（FTS にフォールバック）する。これらは実装時に外部 API への **egress を伴う**点が `ollama`（ローカル完結・egress なし）と非対称になる（[ADR-0006](../adr/0006-ml-delegation.md) は不変条件には抵触しないが、egress-free な `ollama` を既定とする）。`openai` / `voyage` を設定すると、黙って無効化されないよう **起動時（`suasor mcp serve`）と `suasor doctor` が WARN を出す**（[Issue #235](https://github.com/ozzy-labs/suasor/issues/235)）。
 >
 > **次元一致必須**: `dim` は `model` の出力次元と一致させる（`bge-m3`=1024、`nomic-embed-text`=768 等）。`dim` は DB 作成時に vec0 テーブルのサイズを固定するため、後から変える場合は新規 DB か delete + rebuild + 再 sync が必要。不一致のままだとベクトル挿入が失敗し、recall は静かに空へ degrade する。
 

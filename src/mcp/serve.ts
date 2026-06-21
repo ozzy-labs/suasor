@@ -8,7 +8,7 @@
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { type Config, loadConfig } from "../config/index.ts";
+import { type Config, collectConfigWarnings, loadConfig } from "../config/index.ts";
 import { resolveSelfUserIds } from "../connectors/slack.ts";
 import { Store } from "../db/index.ts";
 import { McpToolError, verifyReadiness } from "./errors.ts";
@@ -107,6 +107,14 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
       throw new McpToolError("CONFIG_INVALID", "readiness check failed");
     }
     throw new McpToolError(first.code, first.message, first.hint);
+  }
+
+  // Non-fatal config warnings: keys accepted by the schema but silently dropped
+  // at runtime (unimplemented embedding backend → FTS fallback; set-but-unused
+  // [llm] backend). Surfaced on stderr (never the JSON-RPC stream) so the
+  // operator sees the no-op at boot rather than only via `doctor` (ADR-0007).
+  for (const warning of collectConfigWarnings(config)) {
+    log(`suasor mcp serve: config warning [${warning.key}]: ${warning.message}`);
   }
 
   // verifyReadiness guarantees dbPath is non-null here; assert for the type.

@@ -265,4 +265,36 @@ describe("suasor doctor", () => {
     expect(hint?.status).toBe("warn");
     expect(hint?.detail).toContain("local sync");
   });
+
+  test("unimplemented embedding backend (openai) is a config warning (#235)", async () => {
+    await run(["init"]);
+    await writeConfig('[embedding]\nbackend = "openai"\n');
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const warn = report.checks.find((c) => c.name === "embedding.backend");
+    expect(warn?.status).toBe("warn");
+    expect(warn?.detail).toContain("openai");
+    expect(warn?.detail).toContain("FTS");
+  });
+
+  test("set-but-unused [llm] backend is a config warning (#235)", async () => {
+    await run(["init"]);
+    await writeConfig('[llm]\nbackend = "anthropic"\n');
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const warn = report.checks.find((c) => c.name === "llm.backend");
+    expect(warn?.status).toBe("warn");
+    expect(warn?.detail).toContain("anthropic");
+  });
+
+  test("implemented / inert backends emit no config warning (#235)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      '[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\n[llm]\nbackend = "disabled"\n',
+    );
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "embedding.backend")).toBe(false);
+    expect(report.checks.some((c) => c.name === "llm.backend")).toBe(false);
+  });
 });
