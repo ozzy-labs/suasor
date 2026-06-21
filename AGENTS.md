@@ -74,6 +74,14 @@ bun test                   # テスト
 2. `bun test` — テスト通過
 3. `mise exec -- lefthook run pre-commit --all-files` — lint/format/secret scan 通過
 
+### CI 品質ゲート
+
+`.github/workflows/ci.yaml` が PR / `main` push で以下を実行する。ローカル lefthook をバイパスした PR（`--no-verify` / Web 編集等）でも CI 側が正本としてガードする:
+
+- `check`: typecheck + test（`bun test --coverage` でカバレッジ計測。**現状は計測のみで閾値ゲートなし**）+ build
+- `lint`: Biome + markdownlint
+- `security`: gitleaks（秘密情報、履歴全走査）/ Trivy（`fs` 脆弱性 + 秘密情報）/ actionlint（workflow lint）。ツールは `.mise.toml` のピン版を `jdx/mise-action` で導入する
+
 ## コーディング規約
 
 - インデント: 2 スペース / 改行コード: LF / ファイル末尾: 改行あり

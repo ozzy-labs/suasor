@@ -91,7 +91,7 @@ bun run src/index.ts doctor          # same diagnostics as `suasor doctor`
 bun run src/index.ts sync            # same bulk ingest as `suasor sync`
 ```
 
-`bun run dev` is a shorthand for `bun run src/index.ts`. See [AGENTS.md](AGENTS.md) for the development and verification workflow (`bun test` / `bun run typecheck` / lint).
+`bun run dev` is a shorthand for `bun run src/index.ts`. See [AGENTS.md](AGENTS.md) for the development and verification workflow (`bun test` / `bun run typecheck` / lint). CI (`.github/workflows/ci.yaml`) is the source of truth for quality gates: typecheck + test (with coverage) + build, Biome + markdownlint, and security scans (gitleaks / Trivy / actionlint) — so PRs that bypass local hooks are still guarded.
 
 ### Periodic sync
 
