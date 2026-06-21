@@ -22,7 +22,8 @@ export class ExtractionStatusCommand extends Command {
       the extraction_meta sidecar (ADR-0024): extracted, unsupported, too-large,
       stale (recorded version differs → re-extracted on the next sync), and
       pending (extractable sources never attempted, e.g. extraction newly
-      enabled — run \`suasor local sync\` to backfill). Use --json for machine output.
+      enabled — run the owning connector's sync, e.g. \`suasor local sync\` /
+      \`suasor box sync\`, to backfill). Use --json for machine output.
     `,
     examples: [
       ["Human-readable coverage", "suasor extraction status"],
@@ -74,7 +75,8 @@ export class ExtractionStatusCommand extends Command {
         );
       } else if (t.pending > 0 || t.stale > 0) {
         this.context.stdout.write(
-          "  run `suasor local sync` to (re)extract pending / stale sources\n",
+          "  run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync`) " +
+            "to (re)extract pending / stale sources\n",
         );
       }
       return 0;
@@ -92,9 +94,10 @@ export class ExtractionListPendingCommand extends Command {
     description: "List sources awaiting (re)extraction (pending / stale).",
     details: `
       Drilldown behind the pending / stale roll-ups of \`extraction status\`
-      (Issue #202): lists the actual local_file sources awaiting (re)extraction.
-      \`pending\` rows are extractable but never attempted; \`stale\` rows were
-      extracted under a different version (drift). Run \`suasor local sync\` to
+      (Issue #202): lists the actual sources awaiting (re)extraction (local_file /
+      box_file). \`pending\` rows are extractable but never attempted; \`stale\`
+      rows were extracted under a different version (drift). Run the owning
+      connector's sync (e.g. \`suasor local sync\` / \`suasor box sync\`) to
       backfill them. Use --limit to cap the listing (default 50).
     `,
     examples: [
@@ -160,7 +163,10 @@ export class ExtractionListPendingCommand extends Command {
           "  backend disabled — set [extraction].backend to extract (see docs/guide/extraction.md)\n",
         );
       } else {
-        this.context.stdout.write("  run `suasor local sync` to (re)extract these sources\n");
+        this.context.stdout.write(
+          "  run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync`) " +
+            "to (re)extract these sources\n",
+        );
       }
       return 0;
     } finally {

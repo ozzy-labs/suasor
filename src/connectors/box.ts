@@ -2,27 +2,34 @@
  * Box connector (ADR-0007). Read-only ingest of files under the configured Box
  * folders into `SourceRecord`s.
  *
- * - **filename-only ingest** — the record `body` is the file **name** (Box file
- *   content is not downloaded). Box ingest therefore makes a file discoverable by
- *   name; it does not index file contents (text extraction is future work).
- * - **read-only** — only Box `GET` folder-item listings are called; nothing is
- *   written back (ADR-0003).
+ * - **body** — the record `body` is the file **name**. Office/PDF files
+ *   (`.docx`/`.xlsx`/`.pptx`/`.pdf`) additionally carry an `extractable` handle
+ *   so the shared sync extraction stage (ADR-0024) can fetch their content via
+ *   the Box API and replace the body with sidecar-extracted text. Non-extractable
+ *   files stay name-only. Fetch/extraction is best-effort: a download or sidecar
+ *   failure degrades back to name-only and ingest still succeeds (ADR-0024 §3).
+ * - **read-only** — only Box `GET` folder-item listings and file **downloads**
+ *   are called; nothing is written back (ADR-0003).
  * - **delta** — folder items are paged via a marker/offset. The connector walks
- *   every page each run and relies on the body fingerprint for change detection
- *   (FR-ING-3). The connector supplies no fingerprint, so the sync service's
- *   default SHA-256-over-body drives delta detection — body and fingerprint track
- *   the **same** content (the filename), so a file's content changing without a
- *   rename produces no redundant `SourceBodyUpdated`. `finalize` returns
- *   `cursor: null`.
+ *   every page each run and supplies a content fingerprint when Box reports the
+ *   file `sha1` (content hash). The content sha1 (not the filename) drives delta
+ *   detection (FR-ING-3), so a file's content changing — even without a rename —
+ *   surfaces as a `SourceBodyUpdated` and triggers re-extraction (ADR-0024 §6,
+ *   the content-fingerprint prerequisite for API connectors). When `sha1` is
+ *   absent the connector omits the fingerprint and the sync service falls back to
+ *   SHA-256-over-body (the filename). `finalize` returns `cursor: null`.
  * - **identity** — `box:file:<id>` (cross-source-unique, ADR-0007).
  *   `source_type` is `box_file`.
  * - **import-clean** — `box-typescript-sdk-gen` is **lazy-imported inside `sync`**,
  *   so building the connector / registry never pulls the SDK (ADR-0007,
- *   NFR-PRF-1). Top-level imports are limited to `zod` + the contract types.
+ *   NFR-PRF-1). Top-level imports are limited to `zod` + the contract + extraction
+ *   extension set (a pure `Set`, no SDK).
  * - **secrets** — the developer / OAuth access token comes from
  *   `ctx.secret("token")` (keychain + env override, NFR-PRV-4).
  */
+import { extname } from "node:path";
 import { z } from "zod";
+import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
   ConnectorConfig,
@@ -48,6 +55,14 @@ export interface BoxFileItem {
   /** Extracted description / representation text held locally. */
   description?: string;
   modifiedAt?: string;
+  /** File size in bytes (drives the extraction size guard, ADR-0024 §5). */
+  size?: number;
+  /**
+   * Box content SHA-1 (the file's content hash). Used as the delta fingerprint so
+   * a content change is detected even without a rename (ADR-0024 §6). Absent ⇒
+   * the connector omits the fingerprint (sync falls back to SHA-256-over-body).
+   */
+  sha1?: string;
 }
 
 /** One page of a Box folder listing. */
@@ -60,29 +75,53 @@ export interface BoxPage {
 /**
  * Build a `SourceRecord` for one Box file.
  *
- * No `fingerprint` is supplied: the sync service computes a SHA-256 over the
- * body (the filename), so delta detection keys off the same content the body
- * carries. Keeping these aligned means a content-only change with an unchanged
- * filename does NOT emit a redundant `SourceBodyUpdated` (issue #36).
+ * The `body` is the filename (name-only). Office/PDF files additionally carry an
+ * `extractable` handle whose `readBytes` lazily downloads the file content via
+ * the Box API; the shared sync extraction stage (ADR-0024) replaces the body with
+ * the sidecar's extracted text for new/changed records. `readBytes` is only
+ * called when extraction actually runs, so non-extractable files and unchanged
+ * records pay no download cost.
+ *
+ * The `fingerprint` is the Box content `sha1` when available, so a content-only
+ * change (same filename) surfaces as `SourceBodyUpdated` and re-extracts (the
+ * content-fingerprint prerequisite for API connectors, ADR-0024 §6). When Box
+ * does not report `sha1` the fingerprint is omitted and the sync service falls
+ * back to SHA-256-over-body (the filename).
  */
-function toRecord(item: BoxFileItem): SourceRecord {
+function toRecord(item: BoxFileItem, client: BoxClientLike): SourceRecord {
   const body = item.name && item.description ? `${item.name}\n\n${item.description}` : item.name;
+  const ext = extname(item.name).toLowerCase();
+  // Office/PDF binaries are offered to the extraction sidecar via the Box API
+  // (ADR-0024). Lazy download: readBytes is called at most once, only for
+  // new/changed records when an extractor is configured.
+  const extractable =
+    EXTRACTABLE_EXTENSIONS.has(ext) && item.size !== undefined
+      ? {
+          filename: item.name,
+          byteSize: item.size,
+          readBytes: (): Promise<Uint8Array> => client.downloadFile(item.id),
+        }
+      : undefined;
   return {
     externalId: `box:file:${item.id}`,
     sourceType: "box_file",
     body,
     observedAt: item.modifiedAt ?? new Date(0).toISOString(),
     meta: { id: item.id, name: item.name },
+    ...(item.sha1 ? { fingerprint: item.sha1 } : {}),
+    ...(extractable !== undefined ? { extractable } : {}),
   };
 }
 
 /**
- * The Box client surface we depend on: list one page of files in a folder.
- * Declared structurally (already normalized to `BoxFileItem`) so tests inject a
- * fake without the SDK and so the real client is lazy-loaded.
+ * The Box client surface we depend on: list one page of files in a folder, and
+ * download one file's bytes. Declared structurally (already normalized) so tests
+ * inject a fake without the SDK and so the real client is lazy-loaded.
  */
 export interface BoxClientLike {
   listFolder(folderId: string, marker?: string): Promise<BoxPage>;
+  /** Download one file's raw bytes (read-only; used by the extraction handle). */
+  downloadFile(fileId: string): Promise<Uint8Array>;
 }
 
 /** How the connector obtains a Box client (overridable in tests). */
@@ -102,7 +141,9 @@ const defaultBoxClientFactory: BoxClientFactory = async (token) => {
       const res = await client.folders.getFolderItems(folderId, {
         queryParams: {
           usemarker: true,
-          fields: ["id", "name", "modified_at", "type"],
+          // `size` + `sha1` drive the extraction size guard and content
+          // fingerprint (ADR-0024 §5/§6) on top of the name-only ingest.
+          fields: ["id", "name", "modified_at", "type", "size", "sha1"],
           ...(marker ? { marker } : {}),
         },
       });
@@ -111,6 +152,8 @@ const defaultBoxClientFactory: BoxClientFactory = async (token) => {
         id?: string;
         name?: string;
         modified_at?: string;
+        size?: number;
+        sha1?: string;
       }>;
       const files: BoxFileItem[] = entries
         .filter((e) => e.type === "file")
@@ -118,8 +161,35 @@ const defaultBoxClientFactory: BoxClientFactory = async (token) => {
           id: e.id ?? "",
           name: e.name ?? "",
           modifiedAt: e.modified_at,
+          ...(typeof e.size === "number" ? { size: e.size } : {}),
+          ...(e.sha1 ? { sha1: e.sha1 } : {}),
         }));
       return { files, nextMarker: res.nextMarker ?? undefined };
+    },
+    async downloadFile(fileId) {
+      // Read-only content fetch for extraction (ADR-0024). Box returns a Node
+      // `Readable` (its `ByteStream`); drain it via the standard async iterator
+      // (Buffer chunks) and concatenate — no dependency on an SDK-internal
+      // helper. `undefined` (no content) degrades to an empty buffer so the
+      // caller falls back to name-only.
+      const stream = (await client.downloads.downloadFile(fileId)) as
+        | AsyncIterable<Uint8Array>
+        | undefined;
+      if (!stream) return new Uint8Array(0);
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for await (const chunk of stream) {
+        const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        chunks.push(bytes);
+        total += bytes.byteLength;
+      }
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return out;
     },
   };
 };
@@ -165,7 +235,7 @@ class BoxConnector implements Connector {
         do {
           const page = await client.listFolder(folder, marker);
           for (const item of page.files) {
-            yield toRecord(item);
+            yield toRecord(item, client);
           }
           marker = page.nextMarker;
         } while (marker);

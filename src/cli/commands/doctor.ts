@@ -299,7 +299,7 @@ export class DoctorCommand extends Command {
               status: "warn",
               detail:
                 `extraction version drift: ${status.totals.stale} source(s) at an older version — ` +
-                "run `suasor local sync` to re-extract",
+                "run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync`) to re-extract",
             });
           }
           if (status.totals.pending > 0) {
@@ -308,7 +308,8 @@ export class DoctorCommand extends Command {
               status: "warn",
               detail:
                 `pending extractions: ${status.totals.pending} — ` +
-                "run `suasor local sync` (`extraction list-pending` to inspect)",
+                "run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync`); " +
+                "`extraction list-pending` to inspect",
             });
           }
         }

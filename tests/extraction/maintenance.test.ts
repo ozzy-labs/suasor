@@ -39,10 +39,10 @@ function fakeConnector(records: SourceRecord[]): Connector {
   };
 }
 
-function docRecord(id: string, filename: string): SourceRecord {
+function docRecord(id: string, filename: string, sourceType = "local_file"): SourceRecord {
   return {
     externalId: id,
-    sourceType: "local_file",
+    sourceType,
     body: filename,
     observedAt: "2026-06-14T00:00:00.000Z",
     meta: { name: filename },
@@ -82,6 +82,23 @@ describe("extractionStatus (ADR-0024)", () => {
     expect(status.totals.unsupported).toBe(1);
     expect(status.totals.pending).toBe(1); // d3 never attempted
     expect(status.totals.stale).toBe(0);
+  });
+
+  test("box_file sources are tracked for pending/extracted (cross-connector base, #241)", async () => {
+    // A Box Office file extracts; another is ingested name-only → pending.
+    await syncConnector(store, fakeConnector([docRecord("b1", "spec.docx", "box_file")]), {
+      extractor: extractor("1", { "spec.docx": "box text" }),
+    });
+    await syncConnector(store, fakeConnector([docRecord("b2", "deck.pptx", "box_file")])); // no extractor
+
+    const status = extractionStatus(store.connection.sqlite, {
+      backend: "markitdown",
+      version: "1",
+    });
+    expect(status.totals.extracted).toBe(1);
+    expect(status.totals.pending).toBe(1); // b2 box_file never attempted
+    const rows = listPendingExtractions(store.connection.sqlite, { version: "1" });
+    expect(rows).toEqual([{ externalId: "b2", name: "deck.pptx", reason: "pending" }]);
   });
 
   test("a recorded version different from the current counts as stale", async () => {
