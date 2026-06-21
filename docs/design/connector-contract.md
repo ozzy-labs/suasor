@@ -49,7 +49,7 @@ interface SyncResult {
 - 既存行あり・fingerprint 一致 → skip（unchanged）
 - 既存行あり・fingerprint 不一致 → `SourceBodyUpdated` を append（変更）
 
-**文書抽出（ADR-0024）**: extractor 供給時、新規/変更 record が `extractable` を持てば、event append・embedding の前に本文をサイドカー抽出テキストへ差し替える（共通段。初期スコープ `local`）。`fingerprint` はファイル実体ベースのまま（抽出は差分検知に影響しない）。best-effort で unsupported / oversized / 失敗は name-only に degrade。`readBytes` は新規/変更かつ extractor 有効時のみ呼ばれる（unchanged では読まない）。
+**文書抽出（ADR-0024 / [ADR-0034](../adr/0034-api-connector-extraction.md)）**: extractor 供給時、新規/変更 record が `extractable` を持てば、event append・embedding の前に本文をサイドカー抽出テキストへ差し替える（共通段。`local` 先行、API connector（box / google(Drive) / ms-graph(OneDrive)）は同じ `extractable` ハンドルに API download を実装して相乗り・ADR-0034）。`fingerprint` はファイル実体ベース（`local` は `mtime:size`、API connector は `sha1` / `md5Checksum` / `quickXorHash` 等の内容 hash・ADR-0034）で、抽出は差分検知に影響しない。best-effort で unsupported / oversized / 失敗は name-only に degrade。`readBytes` は新規/変更かつ extractor 有効時のみ呼ばれる（unchanged では読まない）。
 
 run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。append は `Store.record`（event append + projection 畳み込みを 1 トランザクション）経由なので、検索は取り込み直後に反映される（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 
