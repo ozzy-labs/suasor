@@ -1,8 +1,9 @@
 # 0031. MCP structured errors (code/hint) + startup config readiness
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-21
 - Deciders: Suasor maintainers
+- Implemented: #196 / #215（v0.1.11）
 - Related: [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP = agent boundary / HITL write）, [ADR-0025](0025-local-draft-export.md)（`draft.export` / `[export].dir` sandbox）, [ADR-0007](0007-connector-contract.md)（connector 契約 — no silent wrong answer）, [ADR-0029](0029-onboarding-wizard.md)（onboarding wizard / config scaffold）
 - Tracks: #196 / Phase 3 / Epic #185
 
