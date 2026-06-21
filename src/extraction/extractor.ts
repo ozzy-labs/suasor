@@ -7,9 +7,10 @@
  * markitdown-style sidecar. No docx/xlsx/pptx/pdf parser in `src/`.
  *
  * The client is format-agnostic (it extracts whatever bytes it is given); the
- * sync wiring (ADR-0024 §3, a follow-up PR) decides which entries to send based
- * on extension and the `local`-first scope. Failures raise `ExtractionError` so
- * the caller degrades to name-only (best-effort, ingest still succeeds).
+ * connector-agnostic sync wiring (ADR-0024 §3) decides which entries to send
+ * based on the `extractable` handle a connector attaches (`local` via FS reads,
+ * `box` via API content fetch — #241). Failures raise `ExtractionError` so the
+ * caller degrades to name-only (best-effort, ingest still succeeds).
  */
 import type { ExtractionConfig } from "../config/schema.ts";
 

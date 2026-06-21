@@ -11,6 +11,17 @@ import type { Database } from "bun:sqlite";
 import { extname } from "node:path";
 import { EXTRACTABLE_EXTENSIONS } from "./extractor.ts";
 
+/**
+ * `source_type`s that can carry an `extractable` handle (ADR-0024). `pending` /
+ * `stale` backfill is tracked for these. `local_file` is the initial scope;
+ * `box_file` joins as the Box API connector grows content fetch (PR-2 / #241).
+ * Drive / OneDrive extend this set in their follow-ups (#242 / #243).
+ */
+export const EXTRACTABLE_SOURCE_TYPES = ["local_file", "box_file"] as const;
+
+/** SQL `IN (...)` placeholder list + bound params for {@link EXTRACTABLE_SOURCE_TYPES}. */
+const SOURCE_TYPE_IN = EXTRACTABLE_SOURCE_TYPES.map(() => "?").join(", ");
+
 /** Coverage snapshot for the extraction layer. */
 export interface ExtractionStatus {
   /** Configured backend (`disabled` keeps Office/PDF name-only). */
@@ -38,8 +49,9 @@ interface MetaRow {
 
 /**
  * Compute extraction coverage from `extraction_meta` + `sources`. `pending`
- * counts `local_file` sources whose filename extension is extractable but which
- * have no `extraction_meta` row yet (the backfill the next sync will pick up).
+ * counts sources of an {@link EXTRACTABLE_SOURCE_TYPES} type whose filename
+ * extension is extractable but which have no `extraction_meta` row yet (the
+ * backfill the next sync will pick up).
  */
 export function extractionStatus(
   sqlite: Database,
@@ -65,10 +77,10 @@ export function extractionStatus(
       .map((r) => r.external_id),
   );
   const candidates = sqlite
-    .query<{ external_id: string; name: string | null }, []>(
-      "SELECT external_id, json_extract(meta, '$.name') AS name FROM sources WHERE source_type = 'local_file'",
+    .query<{ external_id: string; name: string | null }, string[]>(
+      `SELECT external_id, json_extract(meta, '$.name') AS name FROM sources WHERE source_type IN (${SOURCE_TYPE_IN})`,
     )
-    .all();
+    .all(...EXTRACTABLE_SOURCE_TYPES);
   let pending = 0;
   for (const row of candidates) {
     if (row.name === null) continue;
@@ -105,8 +117,9 @@ export interface PendingExtraction {
  * List sources awaiting (re)extraction — the drilldown behind the `pending` /
  * `stale` roll-ups in {@link extractionStatus} (Issue #202).
  *
- * `pending` rows are `local_file` sources whose extension is extractable but
- * which have no `extraction_meta` row (the backfill the next sync picks up);
+ * `pending` rows are {@link EXTRACTABLE_SOURCE_TYPES} sources whose extension is
+ * extractable but which have no `extraction_meta` row (backfill the next sync
+ * picks up);
  * `stale` rows were extracted under a different `version` (drift → re-extracted
  * next sync). Returns at most `limit` rows (default 50), pending first then
  * stale, each group ordered by `external_id`. Read-only (SELECTs only).
@@ -125,10 +138,10 @@ export function listPendingExtractions(
       .map((r) => [r.external_id, r.version] as const),
   );
   const candidates = sqlite
-    .query<{ external_id: string; name: string | null }, []>(
-      "SELECT external_id, json_extract(meta, '$.name') AS name FROM sources WHERE source_type = 'local_file' ORDER BY external_id ASC",
+    .query<{ external_id: string; name: string | null }, string[]>(
+      `SELECT external_id, json_extract(meta, '$.name') AS name FROM sources WHERE source_type IN (${SOURCE_TYPE_IN}) ORDER BY external_id ASC`,
     )
-    .all();
+    .all(...EXTRACTABLE_SOURCE_TYPES);
 
   const pending: PendingExtraction[] = [];
   const stale: PendingExtraction[] = [];
