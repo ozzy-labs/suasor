@@ -4,7 +4,7 @@
 
 > 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
-## Read 系（自律 OK・17）
+## Read 系（自律 OK・20）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -15,6 +15,9 @@
 | [`research`](research/SKILL.md) | 「`<X>`について調べて」「網羅的に」 | recall.search + search + graph.related + brief |
 | [`meeting-prep`](meeting-prep/SKILL.md) | 「次の会議準備」「明日のMTG前確認」 | source.list(calendar) / recall.search / graph.related |
 | [`decision-rationale`](decision-rationale/SKILL.md) | 「あの決定はなぜ」「Xを選んだ理由」 | decision.list / graph.related / recall.search |
+| [`decision-log`](decision-log/SKILL.md) | 「今月の決定」「[topic] の決定履歴」 | decision.list / graph.related / brief |
+| [`action-item-status`](action-item-status/SKILL.md) | 「あの会議から何が実装されたか」 | source.list(calendar) / graph.related / task.list |
+| [`health-check`](health-check/SKILL.md) | 「健全性チェック」「滞留してるもの数えて」 | task.list / propose.list / inbox.list / commitment.list |
 | [`external-brief`](external-brief/SKILL.md) | 「上司向け週次」「クライアント向け進捗」 | task.list(completed) / decision.list / brief |
 | [`pr-review`](pr-review/SKILL.md) | 「PR #N レビューして」 | recall.search (+ gh diff) |
 | [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / recall.search（text-only・persist なし） |
