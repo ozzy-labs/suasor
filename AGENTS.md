@@ -78,7 +78,7 @@ bun test                   # テスト
 
 `.github/workflows/ci.yaml` が PR / `main` push で以下を実行する。ローカル lefthook をバイパスした PR（`--no-verify` / Web 編集等）でも CI 側が正本としてガードする:
 
-- `check`: typecheck + test（`bun test --coverage` でカバレッジ計測。**現状は計測のみで閾値ゲートなし**）+ build
+- `check`: typecheck + test + build。テストは `bun run test:coverage`（`scripts/coverage-gate.mjs`）で **overall の line/function カバレッジ閾値ゲート**を適用する（floor 未達は CI fail）。ローカルでも `bun run test:coverage` で同じゲートを再現できる（閾値は `COVERAGE_MIN_LINE` / `COVERAGE_MIN_FUNCTION` で上書き可）
 - `lint`: Biome + markdownlint
 - `security`: gitleaks（秘密情報、履歴全走査）/ Trivy（`fs` 脆弱性 + 秘密情報）/ actionlint（workflow lint）。ツールは `.mise.toml` のピン版を `jdx/mise-action` で導入する
 
