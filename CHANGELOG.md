@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.12](https://github.com/ozzy-labs/suasor/compare/v0.1.11...v0.1.12) (2026-06-21)
+
+
+### Features
+
+* **config:** warn on accepted-but-dropped backend keys (openai/voyage, [llm]) ([#247](https://github.com/ozzy-labs/suasor/issues/247)) ([d845d26](https://github.com/ozzy-labs/suasor/commit/d845d26b1ee055d14e765bd9f785484b49ba9177))
+* **extraction:** box API 本文抽出 + connector 横断の共通基盤 ([#252](https://github.com/ozzy-labs/suasor/issues/252)) ([f889964](https://github.com/ozzy-labs/suasor/commit/f889964d3d0460405a84cbf4963f41c000ed4c19))
+* **extraction:** Google Drive API 本文抽出 ([#256](https://github.com/ozzy-labs/suasor/issues/256)) ([b550fdc](https://github.com/ozzy-labs/suasor/commit/b550fdc8e5ffa569b7faf8c5df01de6de2e3b7d9))
+* **extraction:** onedrive (ms-graph) API 本文抽出 ([#254](https://github.com/ozzy-labs/suasor/issues/254)) ([cf5bca9](https://github.com/ozzy-labs/suasor/commit/cf5bca98c93ca453b0e12e34a9495901cb2fb2dd))
+
 ## [0.1.11](https://github.com/ozzy-labs/suasor/compare/v0.1.10...v0.1.11) (2026-06-20)
 
 
