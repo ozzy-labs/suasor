@@ -9,7 +9,7 @@ Connector はソースから **read 専用**で取り込む共通実装（[ADR-0
 
 ## 空構成（no-op config）は sync 前に warn される
 
-connector が **有効**（`[connectors.X]` があり `enabled = false` でない）でも、取り込み対象が空（github が `repos` 未設定かつ `notifications = "off"`、box が `folders` 未設定、local が `roots` 未設定、web が `urls` 未設定、google / ms-graph が `resources` 空、slack がどの workspace も `channels` 未設定）だと sync は黙って 0 件で終わり、DB を覗くまで気づけない（[#187](https://github.com/ozzy-labs/suasor/issues/187)）。これを防ぐため、sync は実行前に空構成を検出して stderr に warning を出す（例: `warning: github: repos 未設定かつ notifications=off — 取り込み対象なし（config の repos を設定するか notifications を all/repos に）`）。
+connector が **有効**（`[connectors.X]` があり `enabled = false` でない）でも、取り込み対象が空（github が `repos` 未設定かつ `notifications = "off"`、box が `folders` 未設定、local が `roots` 未設定、web が `urls` 未設定、google / ms-graph が **明示的に** `resources = []` を書いた場合、notion が `databases` 未設定かつ `pages = false`、jira が `projects` 未設定かつ `jql` 未設定、slack がどの workspace も `channels` 未設定）だと sync は黙って 0 件で終わり、DB を覗くまで気づけない（[#187](https://github.com/ozzy-labs/suasor/issues/187)）。これを防ぐため、sync は実行前に空構成を検出して stderr に warning を出す（例: `warning: github: repos 未設定かつ notifications=off — 取り込み対象なし（config の repos を設定するか notifications を all/repos に）`）。
 
 - 単体 sync（`suasor <connector> sync`）と一括 sync（`suasor sync`、[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）の両経路で同じ warning が出る
 - **warn 止まり**で exit code は変えない（空構成は失敗ではない。`0 observed` で正常終了する）
@@ -32,7 +32,7 @@ suasor onboard --connector box --skip-auth   # token は env override 前提（h
 
 ### discovery 連携（非 Slack connector の id 自動発見、[ADR-0030](../adr/0030-connector-discovery-verbs.md) / #195）
 
-discovery verb を持つ connector（**github** = `repos` / **google** = `calendars` / **box** = `folders`）を onboard すると、ウィザードは `auth test` 後にその discovery probe を実行し、token から見える id を列挙して `[connectors.X]` ブロック（`repos = [...]` 等の id 配列入り）を生成し、そのまま非破壊追記する。`config.toml` に `enabled = true` だけでなく**取り込み対象 id まで**が入るため、id を手探りせず（typo による silent 0 件を回避して）setup が完結する。
+discovery verb を持つ connector（**github** = `repos` / **google** = `calendars` / **box** = `folders` / **notion** = `databases` / **jira** = `projects`）を onboard すると、ウィザードは `auth test` 後にその discovery probe を実行し、token から見える id を列挙して `[connectors.X]` ブロック（`repos = [...]` 等の id 配列入り）を生成し、そのまま非破壊追記する。`config.toml` に `enabled = true` だけでなく**取り込み対象 id まで**が入るため、id を手探りせず（typo による silent 0 件を回避して）setup が完結する。
 
 - discovery 対応 connector で **token が解決できる**（keychain / env override）場合 → discovery を実行し、発見した id 入りブロックを追記（`--json` の `configSource` は `"discovery"`、`discovered` に件数）
 - discovery 対応でも **token が無い / probe が失敗した**場合 → 最小の雛形 slice（必須キーはコメント雛形）を追記してフォールバックし、理由を stderr に表示（`configSource` は `"template"`）。あとで `suasor <connector> <verb>` を手で実行して貼り替えればよい
@@ -154,7 +154,7 @@ MCP 経由では `search` read tool で同じ検索ができる（[retrieval](..
 複数リソース（github=repo / google=resource family / box=folder / ms-graph=resource family / notion=database + pages / jira=project）を 1 pass で走査する connector は、**1 リソースの失敗が他リソースの取り込みを巻き添えにしない**（[ADR-0014](../adr/0014-slack-multi-workspace.md) の per-workspace エラー分離を Slack 以外へ一般化、[#193](https://github.com/ozzy-labs/suasor/issues/193)）。従来は 1 repo の `403` が同 pass の他 repo の取り込みも止めていた。
 
 - **失敗リソースは skip して continue**：fetch 途中で失敗したリソースは warning に集約し、残りのリソースの取り込みは止めない。
-- **warn は 1 本に集約**：`github: 2 repo OK, 1 failed (cursor preserved) — owner/x (403)` の形式で、どのリソースがなぜ失敗したかを明示する（kind は connector ごとに `repo` / `resource` / `folder`）。
+- **warn は 1 本に集約**：`github: 2 repo OK, 1 failed (cursor preserved) — owner/x (403)` の形式で、どのリソースがなぜ失敗したかを明示する（kind は connector ごとに `repo`（github）/ `resource`（google / ms-graph）/ `folder`（box）/ `project`（jira）/ `database`（notion））。
 - **cursor 非リセット**：失敗リソースの prior cursor は保持する（reset しない）。github は **共有 `since` cursor を失敗 repo の最新 `updated_at` まで前進させない**ため、失敗 repo の gap が次回 silent に skip されない（成功 repo のみが共有 floor を前進させる）。google / box / ms-graph は fingerprint ベース（cursor `null`）なので前進そのものが無く、次回再走査で復旧する。
 - **全リソース失敗時のみ throw**：すべてのリソースが失敗した pass は「無音の空成功」ではなく **error** として終了する（最後のエラーを再 throw）。
 - **部分失敗の exit code + サマリ**：一部だけ失敗した部分失敗は `partialFailure` を立て、sync 末尾に **リソース別サマリ行**（例: `repos: owner/a=ok, owner/b=failed (cursor preserved)`）を 1 本出し、cron / CI が exit code を gate に検知できるよう **exit 1** で終了する（取り込めたリソースのレコードは保持される、[ADR-0027](../adr/0027-bulk-sync-orchestration.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)）。Slack の per-workspace 分離と同じセマンティクス。
@@ -377,7 +377,7 @@ projects = ["PROJ"]                       # 取り込み対象 project key（iss
 - **identity**: `jira:<host>:<project>:<issue-key>`（issue）/ `jira:<host>:<project>:<issue-key>:comment:<id>`（comment）。host + project スコープの identity なので、同じ issue key が別 host にあっても衝突しない / **source_type**: `jira_issue` / `jira_comment`
 - **本文**: issue は `summary` + `description`（ADF / HTML → text 正規化は最小限）。comment は本文テキスト。`description` カスタムフィールドが欠如していても summary 単独に degrade して throw しない
 - **差分検知**（FR-ING-3）: JQL `project = <key> AND updated >= "<ts>" ORDER BY updated ASC` で、各 project の最新 `updated` を **per-project cursor**（`{ "<project>": "<iso-ts>" }` の JSON）として保存し、次回はその high-water mark から再開する（Slack の per-channel パターン）。`jql` モードでは `__jql__` キー 1 本で同様に再開する。ページングは `startAt` / `maxResults`
-- **per-project エラー分離**（[#193](https://github.com/ozzy-labs/suasor/issues/193)）: 1 project の失敗（404 / 403 等）は warn に集約して skip し、他 project の取り込みは継続する。失敗 project の cursor は保持（リセットしない）。全 project 失敗時のみ throw。partial failure は `partialFailure` + summary line で非ゼロ終了（[ADR-0027](../adr/0027-exit-code-parity.md)）
+- **per-project エラー分離**（[#193](https://github.com/ozzy-labs/suasor/issues/193)）: 1 project の失敗（404 / 403 等）は warn に集約して skip し、他 project の取り込みは継続する。失敗 project の cursor は保持（リセットしない）。全 project 失敗時のみ throw。partial failure は `partialFailure` + summary line で非ゼロ終了（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）
 - **onboarding**（Issue #85）: `suasor jira auth set`（API token / PAT を keychain に保存）/ `suasor jira auth test`（`GET /rest/api/3/myself` で資格情報の有効性を検証し account 名 / email を出力）。
 - **discovery**（[ADR-0030](../adr/0030-connector-discovery-verbs.md)）: `suasor jira projects [--filter S] [--json]`。`GET /rest/api/3/project/search`（`startAt` ページング）を `fetch` のみで列挙し、paste-ready な `[connectors.jira]` ブロック（`host` / `email` プレースホルダ + `projects = [...]`、各行 `# <name>` ラベル）を出力する。`--filter` は key / name の部分一致、`--json` は `{items, configBlock}` を出力（token は出さない）。project key 手写し typo による silent 0 件（[ADR-0007](../adr/0007-connector-contract.md)）を回避する。
 - **feature readiness**（Issue #194）: Jira の `/myself` は scope リストを持たない（capability は token scope ではなく **認証アカウントの project 権限**で決まる）ため、`features:` は `Jira issue / comment read: READY` の 1 行。

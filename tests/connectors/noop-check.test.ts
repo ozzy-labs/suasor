@@ -52,6 +52,17 @@ describe("noopWarning — empty/no-op slices warn", () => {
     expect(warn).toContain("workspaces");
     expect(warn).toContain("取り込み対象なし");
   });
+
+  test("notion: no databases + pages disabled", () => {
+    expect(noopWarning("notion", { databases: [], pages: false })).toContain("取り込み対象なし");
+    expect(noopWarning("notion", { databases: [], pages: false })).toContain("pages=false");
+  });
+
+  test("jira: no projects + no jql", () => {
+    expect(noopWarning("jira", { projects: [] })).toContain("取り込み対象なし");
+    // Default slice (no fields) resolves to projects=[] + jql unset.
+    expect(noopWarning("jira", {})).toContain("projects");
+  });
 });
 
 describe("noopWarning — configured slices do not warn", () => {
@@ -89,6 +100,18 @@ describe("noopWarning — configured slices do not warn", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  test("notion: databases configured, or pages discovery on (default)", () => {
+    expect(noopWarning("notion", { databases: ["db1"], pages: false })).toBeNull();
+    // pages defaults to true, so a bare slice has a target (standalone pages).
+    expect(noopWarning("notion", {})).toBeNull();
+    expect(noopWarning("notion", { databases: [], pages: true })).toBeNull();
+  });
+
+  test("jira: projects configured, or an explicit jql", () => {
+    expect(noopWarning("jira", { projects: ["PROJ"] })).toBeNull();
+    expect(noopWarning("jira", { projects: [], jql: "assignee = currentUser()" })).toBeNull();
   });
 });
 

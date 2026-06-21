@@ -123,9 +123,38 @@ describe("hasConnectorSlice", () => {
 
 describe("connectorSliceTemplate", () => {
   test("every template includes enabled = true as the first body line", () => {
-    for (const name of ["github", "slack", "ms-graph", "google", "box", "web", "local"]) {
+    for (const name of [
+      "github",
+      "slack",
+      "ms-graph",
+      "google",
+      "box",
+      "notion",
+      "jira",
+      "web",
+      "local",
+    ]) {
       expect(connectorSliceTemplate(name).body[0]).toBe("enabled = true");
     }
+  });
+
+  test("box template uses the real `folders` key (not the legacy `folderId`)", () => {
+    const body = connectorSliceTemplate("box").body.join("\n");
+    expect(body).toContain("# folders =");
+    expect(body).not.toContain("folderId");
+  });
+
+  test("notion template hints databases + pages placeholder keys", () => {
+    const body = connectorSliceTemplate("notion").body.join("\n");
+    expect(body).toContain("# databases =");
+    expect(body).toContain("# pages =");
+  });
+
+  test("jira template hints host / email / projects placeholder keys", () => {
+    const body = connectorSliceTemplate("jira").body.join("\n");
+    expect(body).toContain("# host =");
+    expect(body).toContain("# email =");
+    expect(body).toContain("# projects =");
   });
 
   test("an unknown connector falls back to an enabled-only slice", () => {
