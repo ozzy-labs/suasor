@@ -1,5 +1,10 @@
 # Suasor
 
+[![npm version](https://img.shields.io/npm/v/@ozzylabs/suasor)](https://www.npmjs.com/package/@ozzylabs/suasor)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/ozzy-labs/suasor/actions/workflows/ci.yaml/badge.svg)](https://github.com/ozzy-labs/suasor/actions/workflows/ci.yaml)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-ozzy--labs%2Fsuasor-blue?logo=docker)](https://github.com/ozzy-labs/suasor/pkgs/container/suasor)
+
 **Gathers, remembers, advises - you decide.**
 
 Suasor is a local-first AI secretary. It gathers your scattered work context - chat, email, calendar, documents, code, the web - into private memory on your own machine, so you and your AI agents can search and summarize it over MCP. It advises you, and proposes replies, tasks, and decisions. Nothing is sent or saved without your approval.
@@ -12,6 +17,16 @@ Suasor is a local-first AI secretary. It gathers your scattered work context - c
 - **Remembers** — keeps it as searchable, queryable memory on your own machine.
 - **Advises** — surfaces, summarizes, and proposes replies, tasks, and decisions over MCP. You and your AI agents query it; you approve everything. Nothing is sent or saved without your say.
 
+## What it is not (Boundaries)
+
+These boundaries keep Suasor a local-first, human-in-the-loop advisor (see [docs/requirements/scope.md](docs/requirements/scope.md)):
+
+- **No auto write-back / auto-send** — it never writes to your sources or sends on your behalf; you apply proposals yourself ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)).
+- **No always-on proactive agent** — no daemon and no unsolicited notifications; everything is human/agent-initiated.
+- **No heavy in-process ML** — model training/inference is delegated, not run in-process ([ADR-0006](docs/adr/0006-ml-delegation.md)).
+- **Single-user, local-only** — no multi-user, team sharing, or server-side aggregation.
+- **No web / mobile UI** — the boundary is the CLI and MCP.
+
 ## Status
 
 Early development — **published** on npm / standalone binaries / Docker. Built spec-first.
@@ -22,7 +37,7 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 
 - **Standalone binary** *(no runtime needed)* — download per OS/arch from [Releases](https://github.com/ozzy-labs/suasor/releases). Bun is compiled in. Core + a few native bits; the heavier connector SDKs are external (use npm/Docker for the full connector set).
 - **Docker (batteries-included + Ollama)** *(no runtime needed)* — `docker run ghcr.io/ozzy-labs/suasor`. Local embedding with no external egress.
-- **npm — for Bun users** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Requires **Bun ≥ 1.1** ([install Bun](https://bun.sh)) — uses `bun:sqlite`, so `npx`/Node won't run it; pnpm/npm can fetch it but Bun runs it. OIDC-published with provenance.
+- **npm — for Bun users** — `bunx @ozzylabs/suasor mcp serve` (or `bun add -g @ozzylabs/suasor`). Requires **Bun ≥ 1.2** ([install Bun](https://bun.sh)) — uses `bun:sqlite`, so `npx`/Node won't run it; pnpm/npm can fetch it but Bun runs it. OIDC-published with provenance.
 - **MCP registry** — discoverable via [`server.json`](server.json).
 
 > Published on npm / binaries / Docker. Contributors can also run [from source](#from-source).
@@ -56,7 +71,7 @@ suasor onboard --connector github   # interactive on a TTY; --json for a summary
 # Verify config / DB / connector readiness (diagnostic only; creates nothing).
 suasor doctor
 
-# Ingest read-only from a connector (github / slack / ms-graph / google / box / notion / jira / web / local).
+# Ingest read-only from a connector (github / slack / ms-graph / google / box / web / local / notion / jira).
 suasor github sync
 
 # Or ingest from every enabled connector in one read-only pass (one-shot).
@@ -77,11 +92,11 @@ suasor config edit           # edit config.toml in $EDITOR, validate on save
 suasor validate-config       # check config.toml (--fix applies safe repairs)
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). Edit it with `suasor config edit` (validates on save, rolls back a bad edit) and check it with `suasor validate-config [--fix]`. `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / notion / jira / web / local — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Back up your local store with `suasor export backup` and audit / purge ingested data with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). Edit it with `suasor config edit` (validates on save, rolls back a bad edit) and check it with `suasor validate-config [--fix]`. `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local / notion / jira — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Back up your local store with `suasor export backup` and audit / purge ingested data with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ### From source
 
-Contributors and anyone running from a clone use Bun directly — `bun run src/index.ts` replaces `suasor` in every command above. Requires [Bun](https://bun.sh) 1.1+.
+Contributors and anyone running from a clone use Bun directly — `bun run src/index.ts` replaces `suasor` in every command above. Requires [Bun](https://bun.sh) 1.2+.
 
 ```bash
 git clone https://github.com/ozzy-labs/suasor.git
