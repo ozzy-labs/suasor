@@ -35,7 +35,7 @@
 
 ## Projections（読みモデル・再構築可能）
 
-- Drizzle 管理のテーブル（`src/db/schema.ts`）。event を reducer（`src/projections/reducer.ts`）で畳んで生成
+- projection テーブル（runtime DDL の正本は `src/db/connection.ts` の `initSchema`。`src/db/schema.ts` は同じ形を drizzle ORM 型として写したもの。両者の正本関係は「Migrations」節を参照）。event を reducer（`src/projections/reducer.ts`）で畳んで生成
 - 確定テーブル:
   - `sources` — `external_id`(PK) / `source_type` / `body` / `fingerprint` / `observed_at` / `meta`(JSON)
   - `tasks` — `id`(PK) / `title` / `state`（`proposed` → `open` / `in_progress` / `completed` / `dropped`、`task.update` で遷移）/ `due_date` / `priority`（scheduling fields、[ADR-0028](../adr/0028-task-scheduling-fields.md) / #147。null 可。**overdue は焼かない**＝`due_date < now AND state ∈ {open, in_progress}` を `task.list` の read 時に派生）/ `created_at` / `updated_at`
@@ -47,7 +47,7 @@
   - `links` — `id`(PK, autoinc) / `from_kind` / `from_id` / `to_kind` / `to_id` / `relation` / `link_id`（関連グラフ・provenance）。reducer 由来エッジ（`derived_from` / `replies_to` / `references`）は `link_id` が NULL、手動 link（`manual_link`、`link.add` / `link.remove`、[ADR-0018](../adr/0018-knowledge-graph-traversal.md) 追補 / #90）は安定 `link_id` を持ち id 指定で削除可能
   - `persons` — `id`(PK) / `display_name` / `identity_count` / `created_at` / `updated_at`（person 解決、[ADR-0022](../adr/0022-person-identity-resolution.md) / #92）。merge で空になった person は `identity_count = 0` で `person.list` から除外
   - `person_identities` — `identity_key`(PK = `<connector>:<handle>`) / `person_id` / `connector` / `handle` / `display_name` / `observed_at`（connector author handle → person。`person.merge` / `person.split` が `person_id` を付け替え）
-- `sources_fts`（FTS5 仮想テーブル、`tokenize='trigram'` で JA/EN substring）/ `embeddings_vec_default`（`sqlite-vec` vec0、任意）/ `embeddings_meta`（vec0 と並ぶ provenance サイドカー: `external_id`(PK) / `model_id` / `model_version` / `embedded_at`。各ベクトルを生成した model を記録し、`embeddings status` / `rebuild` / `drain`（#87）の drift 検出に使う・[ADR-0006](../adr/0006-ml-delegation.md)）。いずれも init 時に raw DDL で作成（drizzle-kit 管理外・event ではない派生 substrate）
+- `sources_fts`（FTS5 仮想テーブル、`tokenize='trigram'` で JA/EN substring）/ `embeddings_vec_default`（`sqlite-vec` vec0、任意）/ `embeddings_meta`（vec0 と並ぶ provenance サイドカー: `external_id`(PK) / `model_id` / `model_version` / `embedded_at`。各ベクトルを生成した model を記録し、`embeddings status` / `rebuild` / `drain`（#87）の drift 検出に使う・[ADR-0006](../adr/0006-ml-delegation.md)）/ `extraction_meta`（document extraction の provenance サイドカー: `external_id`(PK) / `version` / `state`（per-source outcome: extracted / unsupported / too_large）/ `updated_at`。各 source の抽出本文を生成した extractor の version を記録し、後続の extractor upgrade（version bump）や新規 backend 有効化を drift として検知して次回 sync で再抽出する・[ADR-0024](../adr/0024-document-extraction-sidecar.md)。`source.forget` の purge 対象）。いずれも init 時に raw DDL で作成（drizzle-kit 管理外・event ではない派生 substrate）
 - **`suasor projections rebuild`** で全 event を replay し projection を同値復元（rebuild idempotence、FR-MNT-1）
 
 ## Identity
@@ -57,6 +57,7 @@
 
 ## Migrations
 
-- projection スキーマ変更は drizzle-kit（`drizzle.config.ts` / `bun run db:generate` → `drizzle/`）。`events` 表・FTS5・vec0 仮想テーブル・`embeddings_meta` サイドカーは drizzle-kit 管理外（init 時 raw DDL）
+- **正本は `src/db/connection.ts` の `initSchema` raw DDL（`CREATE TABLE IF NOT EXISTS` + `ensureColumn` additive migration）。`suasor db migrate` はこれを呼び、runtime schema を作る唯一の経路**。projection table・FTS5・vec0・`embeddings_meta`・`extraction_meta` の全 substrate はここで作成される（[ADR-0002](../adr/0002-event-sourced-architecture.md)）
+- **`drizzle/` artifact（`drizzle.config.ts` / `bun run db:generate` で `src/db/schema.ts` から生成）は適用されない参考成果物**。`suasor db migrate` は drizzle migration を一切実行しないため、`drizzle/*.sql` は型・スキーマ意図の確認用にとどまる（drift が生じ得るので runtime 正本として読まない）。`src/db/schema.ts` は drizzle ORM クライアントの型付け（`drizzle(sqlite, { schema })`）にのみ使い、ここでも DDL の正本は `connection.ts`
 - 原則 **drop + rebuild**（replay）で吸収できるため in-place migration の比重は低い
 - 既存 DB への**列追加**（例: tasks の `due_date` / `priority`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）は init 時に冪等な `ALTER TABLE ... ADD COLUMN`（`PRAGMA table_info` で存在確認）で吸収する（SQLite に `ADD COLUMN IF NOT EXISTS` がないため）。`suasor db migrate` で適用、非破壊・冪等

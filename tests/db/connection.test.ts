@@ -30,9 +30,27 @@ describe("schema init", () => {
   });
 
   test("creates all projection tables", () => {
-    for (const t of ["sources", "tasks", "sync_runs", "decisions", "inbox", "links"]) {
+    for (const t of [
+      "sources",
+      "tasks",
+      "sync_runs",
+      "decisions",
+      "inbox",
+      "proposals",
+      "commitments",
+      "links",
+      "persons",
+      "person_identities",
+    ]) {
       expect(tableExists(db, t)).toBe(true);
     }
+  });
+
+  test("creates the derived substrate sidecars (extraction_meta + embeddings_meta)", () => {
+    // ADR-0024 extraction provenance + ADR-0006 embedding provenance are raw-DDL
+    // substrate (not events, not drizzle-managed) but must exist after migrate.
+    expect(tableExists(db, "extraction_meta")).toBe(true);
+    expect(tableExists(db, "embeddings_meta")).toBe(true);
   });
 
   test("creates the sources_fts FTS5 virtual table (trigram)", () => {
@@ -113,5 +131,80 @@ describe("vec disabled", () => {
     expect(tableExists(noVec, "events")).toBe(true);
     expect(tableExists(noVec, DEFAULT_VEC_TABLE)).toBe(false);
     noVec.close();
+  });
+});
+
+/**
+ * The drizzle artifact (drizzle/0000_init_projections.sql) is a non-applied
+ * reference (data-model.md "Migrations": the raw DDL in connection.ts is the
+ * runtime source of truth). This guards against the two drifting: the artifact's
+ * table/column set must equal the runtime drizzle-managed projection schema, so a
+ * stale artifact (the original bug — missing 5 tables and columns) can't recur.
+ */
+describe("drizzle artifact ⇄ runtime schema parity", () => {
+  // Tables drizzle-kit manages (src/db/schema.ts). The raw-DDL-only substrate
+  // (events / sources_fts / vec0 / embeddings_meta / extraction_meta) is
+  // intentionally out of drizzle scope and excluded from this parity check.
+  const DRIZZLE_MANAGED = [
+    "commitments",
+    "decisions",
+    "inbox",
+    "links",
+    "person_identities",
+    "persons",
+    "proposals",
+    "sources",
+    "sync_runs",
+    "tasks",
+  ] as const;
+
+  function parseDrizzleSql(sql: string): Map<string, Set<string>> {
+    const tables = new Map<string, Set<string>>();
+    // Split on the statement-breakpoint markers drizzle emits between CREATEs.
+    for (const stmt of sql.split("--> statement-breakpoint")) {
+      const head = stmt.match(/CREATE TABLE `([^`]+)`\s*\(([\s\S]*)\)\s*;/);
+      const table = head?.[1];
+      const cols = head?.[2];
+      if (!table || cols === undefined) continue;
+      const columns = new Set<string>();
+      for (const line of cols.split("\n")) {
+        const col = line.trim().match(/^`([^`]+)`/);
+        if (col?.[1]) columns.add(col[1]);
+      }
+      tables.set(table, columns);
+    }
+    return tables;
+  }
+
+  function runtimeColumns(sqlite: Database, table: string): Set<string> {
+    return new Set(
+      sqlite
+        .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+        .all()
+        .map((c) => c.name),
+    );
+  }
+
+  test("the committed migration covers every drizzle-managed table with matching columns", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const sql = readFileSync(
+      join(import.meta.dir, "../../drizzle/0000_init_projections.sql"),
+      "utf8",
+    );
+    const artifact = parseDrizzleSql(sql);
+
+    // Every drizzle-managed table is present in the artifact (no missing tables).
+    expect([...artifact.keys()].sort()).toEqual([...DRIZZLE_MANAGED].sort());
+
+    // Each table's column set matches the runtime DDL exactly (no missing/extra).
+    const sqlite = new Database(":memory:");
+    initSchema(sqlite);
+    for (const table of DRIZZLE_MANAGED) {
+      const artifactCols = [...(artifact.get(table) ?? new Set())].sort();
+      const runtimeCols = [...runtimeColumns(sqlite, table)].sort();
+      expect(artifactCols).toEqual(runtimeCols);
+    }
+    sqlite.close();
   });
 });
