@@ -192,4 +192,55 @@ describe("syncConnector — run history (ADR-0033)", () => {
     expect(row?.status).toBe("error");
     expect(row?.last_error).toBe("upstream 500");
   });
+
+  test("a partial failure records SyncRunEnded(status=partial) but keeps the collected counts", async () => {
+    // A connector that collected a record yet reports an internal partial failure
+    // (e.g. one of several resources/workspaces failed, ADR-0014). The run-history
+    // row must show status=partial so `sync status` surfaces the degraded run,
+    // while the observed counts reflect the records that did land (ADR-0033).
+    const partial: Connector = {
+      name: "fake",
+      sourceType: "fake",
+      async *sync(): AsyncIterable<SourceRecord> {
+        yield rec("gh:1", "from the ok resource");
+      },
+      finalize(): SyncResult {
+        return {
+          cursor: null,
+          partialFailure: true,
+          summaryLines: ["repos: a=ok, b=failed (cursor preserved)"],
+        };
+      },
+    };
+    const out = await syncConnector(store, partial);
+    expect(out.partialFailure).toBe(true);
+    expect(out.observed).toBe(1); // the ok record was kept
+    const row = syncRun("fake");
+    expect(row?.status).toBe("partial");
+    expect(row?.observed).toBe(1);
+    expect(row?.ended_at).not.toBeNull();
+    expect(row?.last_error).toBeNull(); // partial is not an outright error
+  });
+
+  test("a later clean run replaces a prior partial run's history row", async () => {
+    const partial: Connector = {
+      name: "fake",
+      sourceType: "fake",
+      async *sync(): AsyncIterable<SourceRecord> {
+        yield rec("gh:1", "body v1");
+      },
+      finalize: (): SyncResult => ({ cursor: null, partialFailure: true }),
+    };
+    await syncConnector(store, partial);
+    expect(syncRun("fake")?.status).toBe("partial");
+    // Re-run cleanly: same record (unchanged), no partial failure → status flips ok.
+    await syncConnector(store, fakeConnector([rec("gh:1", "body v1")]));
+    const row = syncRun("fake");
+    expect(row?.status).toBe("ok");
+    // 1 row per connector (latest-run projection, ADR-0033).
+    const n = store.connection.sqlite
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sync_runs")
+      .get();
+    expect(n?.n).toBe(1);
+  });
 });

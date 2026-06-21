@@ -185,3 +185,72 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
     expect(stale).toHaveLength(0);
   });
 });
+
+describe("replay equivalence (incremental == full rebuild)", () => {
+  /** Insert a raw event row directly into the log (bypasses live apply). */
+  function appendRaw(event: NewEvent & Record<string, unknown>, id: string, recordedAt: string) {
+    const payload = JSON.stringify({ ...event, id, recordedAt, schemaVersion: 1 });
+    store.connection.sqlite
+      .query(
+        "INSERT INTO events (id, type, schema_version, recorded_at, payload) VALUES (?, ?, 1, ?, ?)",
+      )
+      .run(id, event.type, recordedAt, payload);
+  }
+
+  test("a duplicated event in the log replays to the same projection (idempotent rebuild)", () => {
+    // Append the SourceObserved + a TaskProposed twice as raw rows, then rebuild.
+    // The reducer's content-keyed upserts must converge the duplicates to one row.
+    appendRaw(
+      SCRIPT[0]?.event as NewEvent & Record<string, unknown>,
+      "01A",
+      "2026-06-14T00:00:01.000Z",
+    );
+    appendRaw(
+      SCRIPT[0]?.event as NewEvent & Record<string, unknown>,
+      "01B",
+      "2026-06-14T00:00:02.000Z",
+    );
+    const taskEvent: NewEvent = {
+      type: "TaskProposed",
+      taskId: "t1",
+      title: "dup task",
+      sourceExternalIds: ["gh:1"],
+    };
+    appendRaw(taskEvent as NewEvent & Record<string, unknown>, "02A", "2026-06-14T02:00:00.000Z");
+    appendRaw(taskEvent as NewEvent & Record<string, unknown>, "02B", "2026-06-14T02:00:01.000Z");
+
+    const result = store.rebuild();
+    expect(result.events).toBe(4); // four raw rows replayed
+    const snap = snapshotProjections(store);
+    expect(snap.sources).toHaveLength(1);
+    expect(snap.tasks).toHaveLength(1);
+    expect(snap.links).toHaveLength(1); // the duplicate proposal does not duplicate the link
+  });
+
+  test("rebuild is stable regardless of how the same events were recorded live", () => {
+    // Record the script live, snapshot, then rebuild from the log — they match.
+    for (const { event, at } of SCRIPT) {
+      store.record(event, new Date(at));
+    }
+    const live = snapshotProjections(store);
+    store.rebuild();
+    const replayed = snapshotProjections(store);
+    expect(replayed).toEqual(live);
+    // And a second rebuild remains the fixed point.
+    store.rebuild();
+    expect(snapshotProjections(store)).toEqual(replayed);
+  });
+
+  test("a partial state (proposal without its later apply) rebuilds consistently", () => {
+    store.record(SCRIPT[0]?.event as NewEvent, new Date("2026-06-14T00:00:01.000Z"));
+    store.record(
+      { type: "TaskProposed", taskId: "t1", title: "open task", sourceExternalIds: ["gh:1"] },
+      new Date("2026-06-14T02:00:00.000Z"),
+    );
+    const before = snapshotProjections(store);
+    store.rebuild();
+    expect(snapshotProjections(store)).toEqual(before);
+    const task = (before.tasks as Array<{ state: string }>)[0];
+    expect(task?.state).toBe("proposed"); // no apply → stays proposed
+  });
+});
