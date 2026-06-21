@@ -581,6 +581,91 @@ describe("MCP read surface", () => {
     expect(parsed.commitments.map((c) => c.id)).toEqual(["c1"]);
   });
 
+  // Truncation transparency (ADR-0007 "no silent wrong answer", Issue #290): a
+  // list tool returning exactly `limit` rows must say whether more matched.
+  test("source.list reports truncated:true at the limit, false below it", async () => {
+    seedSource("gh:1", "a");
+    seedSource("gh:2", "b");
+    seedSource("gh:3", "c");
+    const client = await connect();
+
+    // 3 rows, limit 2 → a full page that hides a 3rd row ⇒ truncated.
+    const cut = parseResult(
+      (await client.callTool({ name: "source.list", arguments: { limit: 2 } })) as never,
+    ) as { sources: { externalId: string }[]; truncated: boolean };
+    expect(cut.sources).toHaveLength(2);
+    expect(cut.truncated).toBe(true);
+
+    // 3 rows, limit 5 → the whole set fits ⇒ complete.
+    const whole = parseResult(
+      (await client.callTool({ name: "source.list", arguments: { limit: 5 } })) as never,
+    ) as { sources: { externalId: string }[]; truncated: boolean };
+    expect(whole.sources).toHaveLength(3);
+    expect(whole.truncated).toBe(false);
+  });
+
+  test("task.list / decision.list / inbox.list carry the truncated flag", async () => {
+    seedSource("gh:1");
+    for (const id of ["t1", "t2"]) {
+      store.record({ type: "TaskProposed", taskId: id, title: id, sourceExternalIds: [] });
+    }
+    for (const id of ["d1", "d2"]) {
+      store.record({ type: "DecisionRecorded", decisionId: id, title: id, rationale: "" });
+    }
+    store.record({
+      type: "InboxItemTriaged",
+      inboxId: "i1",
+      sourceExternalId: "gh:1",
+      state: "open",
+    });
+    const client = await connect();
+
+    const tasks = parseResult(
+      (await client.callTool({ name: "task.list", arguments: { limit: 1 } })) as never,
+    ) as { tasks: unknown[]; truncated: boolean };
+    expect(tasks.tasks).toHaveLength(1);
+    expect(tasks.truncated).toBe(true);
+
+    const decisions = parseResult(
+      (await client.callTool({ name: "decision.list", arguments: { limit: 2 } })) as never,
+    ) as { decisions: unknown[]; truncated: boolean };
+    expect(decisions.decisions).toHaveLength(2);
+    expect(decisions.truncated).toBe(false);
+
+    // Only one inbox item exists, so a generous limit is never truncated.
+    const inbox = parseResult(
+      (await client.callTool({ name: "inbox.list", arguments: {} })) as never,
+    ) as { items: unknown[]; truncated: boolean };
+    expect(inbox.items).toHaveLength(1);
+    expect(inbox.truncated).toBe(false);
+  });
+
+  test("task.list truncation holds under the overdue post-filter", async () => {
+    // overdue is a read-time post-filter (not a SQL column): truncation must
+    // count the filtered set, not the raw SELECT (queries.ts limit deferral).
+    const past = "2000-01-01T00:00:00.000Z";
+    for (const id of ["o1", "o2", "o3"]) {
+      store.record({
+        type: "TaskProposed",
+        taskId: id,
+        title: id,
+        dueDate: past,
+        sourceExternalIds: [],
+      });
+      store.record({ type: "TaskApplied", taskId: id, state: "open" });
+    }
+    const client = await connect();
+    const res = parseResult(
+      (await client.callTool({
+        name: "task.list",
+        arguments: { overdue: true, limit: 2 },
+      })) as never,
+    ) as { tasks: { overdue: boolean }[]; truncated: boolean };
+    expect(res.tasks).toHaveLength(2);
+    expect(res.tasks.every((t) => t.overdue)).toBe(true);
+    expect(res.truncated).toBe(true);
+  });
+
   test("read tools have no side effects (event/projection counts unchanged)", async () => {
     seedSource("gh:1");
     const sqlite = store.connection.sqlite;

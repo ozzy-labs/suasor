@@ -47,6 +47,24 @@ import {
 } from "./queries.ts";
 import { isoDateTime, jsonResult, limitShape, type McpServerDeps } from "./server-shared.ts";
 
+/**
+ * Apply `search`'s truncation-transparency contract (ADR-0007 "no silent wrong
+ * answer") to a `limit`-bounded list query. `fetch` runs the underlying query
+ * with one extra row requested (`limit + 1`); if it comes back, the result was
+ * cut off, so we drop the sentinel and report `truncated: true`. Returns the
+ * trimmed rows plus a `truncated` boolean the caller folds into its response.
+ *
+ * `limit` is the *effective* cap (the tool's default when the arg is omitted).
+ */
+function listWithTruncation<T>(
+  limit: number,
+  fetch: (probeLimit: number) => T[],
+): { rows: T[]; truncated: boolean } {
+  const rows = fetch(limit + 1);
+  if (rows.length > limit) return { rows: rows.slice(0, limit), truncated: true };
+  return { rows, truncated: false };
+}
+
 /** Context the read tools close over (built once by the factory). */
 export interface ReadToolContext {
   sqlite: Database;
@@ -213,7 +231,9 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       title: "List sources",
       description:
         "List ingested sources newest-first (by observed_at), optionally filtered " +
-        "by source_type and an observed_after/observed_before time window.",
+        "by source_type and an observed_after/observed_before time window. Returns " +
+        "`truncated: true` when more rows match than `limit` returned (ADR-0007 — " +
+        "page with a tighter window rather than trusting a full page is complete).",
       inputSchema: {
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
@@ -223,12 +243,15 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ sourceType, observedAfter, observedBefore, limit }) => {
-      const sources = listSources(sqlite, {
-        sourceType,
-        observed: { after: observedAfter, before: observedBefore },
-        limit,
-      });
-      return jsonResult({ sources });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: sources, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listSources(sqlite, {
+          sourceType,
+          observed: { after: observedAfter, before: observedBefore },
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ sources, truncated });
     },
   );
 
@@ -305,7 +328,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "List tasks most-recently-updated first, optionally filtered by state, an " +
         "updated_after/updated_before time window, dueBefore, dueWithinDays (today/this " +
         "week's priority), or overdue. Each task carries dueDate / priority and a " +
-        "read-time-derived overdue flag (ADR-0028).",
+        "read-time-derived overdue flag (ADR-0028). Returns `truncated: true` when " +
+        "more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         state: z.string().min(1).optional().describe("Filter by lifecycle state."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
@@ -330,15 +354,18 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ state, updatedAfter, updatedBefore, dueBefore, dueWithinDays, overdue, limit }) => {
-      const tasks = listTasks(sqlite, {
-        state,
-        updated: { after: updatedAfter, before: updatedBefore },
-        dueBefore,
-        ...(dueWithinDays !== undefined ? { dueWithinDays } : {}),
-        overdue,
-        limit,
-      });
-      return jsonResult({ tasks });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: tasks, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listTasks(sqlite, {
+          state,
+          updated: { after: updatedAfter, before: updatedBefore },
+          dueBefore,
+          ...(dueWithinDays !== undefined ? { dueWithinDays } : {}),
+          overdue,
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ tasks, truncated });
     },
   );
 
@@ -349,7 +376,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       title: "List decisions",
       description:
         "List recorded decisions most-recently-recorded first, optionally filtered " +
-        "by a recorded_after/recorded_before time window.",
+        "by a recorded_after/recorded_before time window. Returns `truncated: true` " +
+        "when more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         recordedAfter: isoDateTime.optional().describe("Inclusive lower bound on recorded_at."),
         recordedBefore: isoDateTime.optional().describe("Exclusive upper bound on recorded_at."),
@@ -358,11 +386,14 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ recordedAfter, recordedBefore, limit }) => {
-      const decisions = listDecisions(sqlite, {
-        recorded: { after: recordedAfter, before: recordedBefore },
-        limit,
-      });
-      return jsonResult({ decisions });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: decisions, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listDecisions(sqlite, {
+          recorded: { after: recordedAfter, before: recordedBefore },
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ decisions, truncated });
     },
   );
 
@@ -374,7 +405,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       description:
         "List unread-worthy Slack signals — @mentions of you and DMs — newest first, " +
         "derived (read-only, FTS-first) from ingested slack_message sources (ADR-0012). " +
-        "Use as a priority signal in next-actions / personal-brief.",
+        "Use as a priority signal in next-actions / personal-brief. Returns " +
+        "`truncated: true` when more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         selfUserId: z
           .string()
@@ -393,13 +425,16 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     },
     async ({ selfUserId, kinds, observedAfter, observedBefore, limit }) => {
       const selfUserIds = selfUserId ? [selfUserId] : (deps.slackSelfUserIds ?? []);
-      const demand = listSlackDemand(sqlite, {
-        selfUserIds,
-        ...(kinds ? { kinds } : {}),
-        observed: { after: observedAfter, before: observedBefore },
-        limit,
-      });
-      return jsonResult({ demand });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: demand, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listSlackDemand(sqlite, {
+          selfUserIds,
+          ...(kinds ? { kinds } : {}),
+          observed: { after: observedAfter, before: observedBefore },
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ demand, truncated });
     },
   );
 
@@ -560,7 +595,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       description:
         "List inbox items most-recently-updated first, optionally filtered by state, " +
         "the underlying source's sourceType (e.g. slack_message), and an " +
-        "updated_after/updated_before time window.",
+        "updated_after/updated_before time window. Returns `truncated: true` when " +
+        "more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         state: z.string().min(1).optional().describe("Filter by triage state."),
         sourceType: z
@@ -575,13 +611,16 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ state, sourceType, updatedAfter, updatedBefore, limit }) => {
-      const items = listInbox(sqlite, {
-        state,
-        ...(sourceType !== undefined ? { sourceType } : {}),
-        updated: { after: updatedAfter, before: updatedBefore },
-        limit,
-      });
-      return jsonResult({ items });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: items, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listInbox(sqlite, {
+          state,
+          ...(sourceType !== undefined ? { sourceType } : {}),
+          updated: { after: updatedAfter, before: updatedBefore },
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ items, truncated });
     },
   );
 
@@ -599,7 +638,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "(task / decision / reply_draft / triage / commitment). Each row carries " +
         "its `reason` (populated for rejected candidates). Read-only: the " +
         "visibility half of the propose approve/reject loop (apply/reject/batch " +
-        "are separate write tools).",
+        "are separate write tools). Returns `truncated: true` when more rows match " +
+        "than `limit` returned (ADR-0007).",
       inputSchema: {
         state: z
           .enum(["pending", "applied", "rejected"])
@@ -616,13 +656,16 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ state, kind, updatedAfter, updatedBefore, limit }) => {
-      const proposals = listProposals(sqlite, {
-        ...(state ? { state } : {}),
-        ...(kind ? { kind } : {}),
-        updated: { after: updatedAfter, before: updatedBefore },
-        ...(limit !== undefined ? { limit } : {}),
-      });
-      return jsonResult({ proposals });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: proposals, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listProposals(sqlite, {
+          ...(state ? { state } : {}),
+          ...(kind ? { kind } : {}),
+          updated: { after: updatedAfter, before: updatedBefore },
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ proposals, truncated });
     },
   );
 
@@ -640,7 +683,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "owed_to_me), and the related person (exact match — chase a specific " +
         "person). Read-only: the visibility half of the commitment ledger " +
         "(ADR-0021). Use as a priority signal in next-actions / personal-brief; " +
-        "the resolve/dismiss/reopen lifecycle lives in separate write tools.",
+        "the resolve/dismiss/reopen lifecycle lives in separate write tools. " +
+        "Returns `truncated: true` when more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         state: z
           .enum(["open", "resolved", "dismissed"])
@@ -662,14 +706,17 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ state, direction, person, updatedAfter, updatedBefore, limit }) => {
-      const commitments = listCommitments(sqlite, {
-        ...(state ? { state } : {}),
-        ...(direction ? { direction } : {}),
-        ...(person !== undefined ? { person } : {}),
-        updated: { after: updatedAfter, before: updatedBefore },
-        ...(limit !== undefined ? { limit } : {}),
-      });
-      return jsonResult({ commitments });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: commitments, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listCommitments(sqlite, {
+          ...(state ? { state } : {}),
+          ...(direction ? { direction } : {}),
+          ...(person !== undefined ? { person } : {}),
+          updated: { after: updatedAfter, before: updatedBefore },
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ commitments, truncated });
     },
   );
 
@@ -686,7 +733,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "List resolved persons most-recently-updated first, each with the connector " +
         "author identities (github login / slack Uxxxx / …) bound to it (ADR-0022). " +
         "Initial resolution is 1 handle = 1 person; operators collapse duplicates via " +
-        "the person.merge / person.split write tools. Read-only.",
+        "the person.merge / person.split write tools. Read-only. Returns " +
+        "`truncated: true` when more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         includeEmpty: z
           .boolean()
@@ -697,11 +745,14 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ includeEmpty, limit }) => {
-      const persons = listPersons(sqlite, {
-        ...(includeEmpty !== undefined ? { includeEmpty } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-      });
-      return jsonResult({ persons });
+      const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+      const { rows: persons, truncated } = listWithTruncation(effLimit, (probeLimit) =>
+        listPersons(sqlite, {
+          ...(includeEmpty !== undefined ? { includeEmpty } : {}),
+          limit: probeLimit,
+        }),
+      );
+      return jsonResult({ persons, truncated });
     },
   );
 }
