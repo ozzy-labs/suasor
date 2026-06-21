@@ -6,11 +6,11 @@ bun = "1.2.23"    # Suasor runtime + package manager + bundler (ADR-0001); pinne
 uv = "0.11.10"
 
 # Linters & formatters
-biome = "2"
+biome = "2.5"
 shellcheck = "0.11"
 shfmt = "3"
 taplo = "0.10"
-"npm:markdownlint-cli2" = "0.21"
+"npm:markdownlint-cli2" = "0.22"
 "pipx:yamllint" = "1"
 yamlfmt = "0.21"
 actionlint = "1"
