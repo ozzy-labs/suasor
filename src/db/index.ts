@@ -21,6 +21,7 @@ export {
   loadVecExtension,
   type OpenOptions,
   openDatabase,
+  readVecDim,
   type SuasorDb,
 } from "./connection.ts";
 export { countEventRows, createEventsTable, readAllEventRows } from "./events-table.ts";

@@ -58,7 +58,13 @@ export class ValidateConfigCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ resolveConfigDir }, { validateConfig }, tomlEdit, { join }, fs] = await Promise.all([
+    const [
+      { resolveConfigDir, loadConfig, collectConfigWarnings },
+      { validateConfig, checkEmbeddingDim },
+      tomlEdit,
+      { join },
+      fs,
+    ] = await Promise.all([
       import("../../config/index.ts"),
       import("../../config/validate.ts"),
       import("../../config/toml-edit.ts"),
@@ -90,10 +96,62 @@ export class ValidateConfigCommand extends Command {
       return 1;
     }
 
-    const { findings } = await validateConfig(raw, false);
+    const { findings: structural } = await validateConfig(raw, false);
+
+    // Readiness layer (Issue #294): beyond "is the file well-formed", surface two
+    // classes of footgun the schema accepts but that break or no-op at runtime.
+    //  - DB dim guard: a hard ERROR finding (appended to `findings`, gates exit) —
+    //    `[embedding].dim` disagreeing with the existing DB's vec0 table silently
+    //    breaks every vector insert. Pure local DB read (no egress) so it works
+    //    with any backend / no key. Only attempted when the file already parses
+    //    into a valid config (else the structural findings come first).
+    //  - Advisory warnings: accepted-but-not-honored keys (external embedding
+    //    backend with no key → recall degrades to FTS; a set-but-unused [llm]
+    //    backend → inference is host-delegated, ADR-0006). Advisory only: printed
+    //    but never gating the exit code (the degrade is intentional).
+    const dimFindings: typeof structural = [];
+    const advisories: { key: string; message: string }[] = [];
+    let config: Awaited<ReturnType<typeof loadConfig>> | null = null;
+    if (structural.length === 0) {
+      try {
+        config = await loadConfig();
+      } catch {
+        // The loader can still reject a tree the structural pass tolerates; in
+        // that case skip readiness checks (the structural "valid" path stands).
+        config = null;
+      }
+    }
+    if (config !== null) {
+      // DB dim guard — read the existing store's vec0 dimension (null when absent).
+      const dbPath = config.storage.dbPath;
+      if (dbPath !== null) {
+        const { existsSync } = await import("node:fs");
+        if (existsSync(dbPath)) {
+          const { Database } = await import("bun:sqlite");
+          const { loadVecExtension, readVecDim } = await import("../../db/index.ts");
+          const sqlite = new Database(dbPath, { readonly: true });
+          try {
+            loadVecExtension(sqlite);
+            dimFindings.push(...checkEmbeddingDim(config.embedding.dim, readVecDim(sqlite)));
+          } catch {
+            // sqlite-vec unavailable / unreadable store: skip the dim guard rather
+            // than fail validation (doctor's probe covers the wired-backend case).
+          } finally {
+            sqlite.close();
+          }
+        }
+      }
+      // Advisory readiness warnings (do not affect exit code).
+      const { resolveEmbeddingApiKeyPresent } = await import("../../retrieval/embedding/index.ts");
+      const embeddingApiKeyPresent = await resolveEmbeddingApiKeyPresent(config.embedding.backend);
+      advisories.push(...collectConfigWarnings({ ...config, embeddingApiKeyPresent }));
+    }
+
+    const findings = [...structural, ...dimFindings];
 
     if (findings.length === 0) {
       this.context.stdout.write(`config is valid: ${configPath}\n`);
+      this.writeAdvisories(advisories);
       return 0;
     }
 
@@ -110,6 +168,7 @@ export class ValidateConfigCommand extends Command {
         `\n${findings.length} finding(s)` +
           (fixableCount > 0 ? `, ${fixableCount} fixable — re-run with --fix\n` : "\n"),
       );
+      this.writeAdvisories(advisories);
       return 1;
     }
 
@@ -145,6 +204,7 @@ export class ValidateConfigCommand extends Command {
 
     if (applied.length === 0) {
       this.context.stdout.write("\nno safe repairs to apply.\n");
+      this.writeAdvisories(advisories);
       return 1; // findings remain
     }
 
@@ -175,9 +235,27 @@ export class ValidateConfigCommand extends Command {
       for (const f of remaining) {
         this.context.stdout.write(`  [${f.kind}] ${f.path}: ${f.message}\n`);
       }
+      this.writeAdvisories(advisories);
       return 1;
     }
     this.context.stdout.write("\nconfig is now valid.\n");
+    this.writeAdvisories(advisories);
     return 0;
+  }
+
+  /**
+   * Print the advisory readiness section (accepted-but-not-honored keys). These
+   * are warnings, never errors: the runtime degrade is intentional, so they are
+   * surfaced for the operator but never change the exit code. Hard readiness like
+   * an `[embedding].dim`/DB mismatch is a finding (gates exit), not an advisory.
+   */
+  private writeAdvisories(advisories: { key: string; message: string }[]): void {
+    if (advisories.length === 0) return;
+    this.context.stdout.write(
+      `\nreadiness advisories (config valid, but these settings are not honored at runtime):\n`,
+    );
+    for (const a of advisories) {
+      this.context.stdout.write(`  [advisory] ${a.key}: ${a.message}\n`);
+    }
   }
 }
