@@ -168,6 +168,27 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
       return { items, configBlock: renderConfigBlock(result), listing: renderTree(result) };
     },
   },
+  notion: {
+    connector: "notion",
+    verb: "databases",
+    summary: "List databases the token can see and print a paste-ready config block.",
+    itemNoun: "database",
+    async discover({ secret, filter, onProgress }) {
+      const token = await secret("token");
+      if (!token) throw new Error("no notion token configured");
+      const { listDatabases, renderConfigBlock } = await import("./notion/databases.ts");
+      const result = await listDatabases(token, {
+        ...(filter ? { filter } : {}),
+        ...(onProgress ? { onProgress } : {}),
+      });
+      const items: DiscoveryItem[] = result.databases.map((d) => ({
+        value: d.id,
+        label: d.title || "(untitled)",
+        attrs: { title: d.title },
+      }));
+      return { items, configBlock: renderConfigBlock(result) };
+    },
+  },
 };
 
 /** Connectors that expose a discovery verb (sorted). */

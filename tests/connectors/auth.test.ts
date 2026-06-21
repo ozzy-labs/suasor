@@ -16,6 +16,7 @@ import { testBoxAuth } from "../../src/connectors/box/auth.ts";
 import { testGithubAuth } from "../../src/connectors/github/auth.ts";
 import { testGoogleAuth } from "../../src/connectors/google/auth.ts";
 import { testMsGraphAuth } from "../../src/connectors/ms-graph/auth.ts";
+import { testNotionAuth } from "../../src/connectors/notion/auth.ts";
 
 const SECRET = "super-secret-token-value";
 
@@ -281,5 +282,37 @@ describe("google features", () => {
     expect(googleFeatures(new Set(), "drive")).toEqual([
       { label: "ingestion", status: "N/A (no resources configured)" },
     ]);
+  });
+});
+
+describe("notion auth probe", () => {
+  test("resolves the bot name + workspace from a 200 users/me", async () => {
+    const result = await testNotionAuth(SECRET, async (token) => {
+      expect(token).toBe(SECRET);
+      return {
+        status: 200,
+        body: { name: "Suasor Bot", bot: { workspace_name: "Acme" } },
+      };
+    });
+    expect(result.name).toBe("Suasor Bot");
+    expect(result.workspaceName).toBe("Acme");
+  });
+
+  test("non-2xx throws with the Notion message, never the token", async () => {
+    const probe = testNotionAuth(SECRET, async () => ({
+      status: 401,
+      body: { message: "API token is invalid." },
+    }));
+    await expect(probe).rejects.toThrow(/401 API token is invalid/);
+    await probe.catch((e: Error) => expect(e.message).not.toContain(SECRET));
+  });
+
+  test("missing bot.workspace_name degrades gracefully", async () => {
+    const result = await testNotionAuth(SECRET, async () => ({
+      status: 200,
+      body: { name: "Bot only" },
+    }));
+    expect(result.name).toBe("Bot only");
+    expect(result.workspaceName).toBe("");
   });
 });
