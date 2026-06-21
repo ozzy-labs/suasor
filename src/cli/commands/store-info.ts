@@ -1,5 +1,6 @@
 /**
- * `suasor store info [--json]` — store size / health snapshot (Issue #202).
+ * `suasor store info [--breakdown] [--json]` — store size / health snapshot
+ * (Issue #202; --breakdown event-type histogram, Issue #270).
  *
  * Complements `suasor doctor` (which reports *whether* things are wired) with
  * the *magnitudes* of the local store: event-log size, projection row counts,
@@ -22,9 +23,14 @@ export class StoreInfoCommand extends Command {
       count, per-projection-table row counts, DB file size on disk (incl. WAL),
       vec0 vector count, and the FTS5 index scale. Read-only (never creates the
       database — that is \`suasor init\`'s job). Use --json for machine output.
+
+      With --breakdown, additionally lists the event-log count grouped by event
+      type (COUNT(*) GROUP BY type) — useful for rebuild/replay debugging and to
+      see the source mix at a glance.
     `,
     examples: [
       ["Human-readable store size", "suasor store info"],
+      ["Event-type histogram of the log", "suasor store info --breakdown"],
       ["Machine-readable", "suasor store info --json"],
     ],
   });
@@ -33,11 +39,13 @@ export class StoreInfoCommand extends Command {
     description: "Emit the snapshot as JSON instead of a human-readable report.",
   });
 
+  breakdown = Option.Boolean("--breakdown", false, {
+    description: "Also show the event-log count grouped by event type.",
+  });
+
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { Store, storeInfo, formatBytes }] = await Promise.all([
-      import("../../config/index.ts"),
-      import("../../db/index.ts"),
-    ]);
+    const [{ loadConfig }, { Store, storeInfo, eventTypeBreakdown, formatBytes }] =
+      await Promise.all([import("../../config/index.ts"), import("../../db/index.ts")]);
 
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
@@ -55,8 +63,10 @@ export class StoreInfoCommand extends Command {
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const info = storeInfo(store.connection.sqlite, dbPath);
+      const breakdown = this.breakdown ? eventTypeBreakdown(store.connection.sqlite) : undefined;
       if (this.json) {
-        this.context.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+        const payload = breakdown === undefined ? info : { ...info, eventBreakdown: breakdown };
+        this.context.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
         return 0;
       }
 
@@ -73,6 +83,16 @@ export class StoreInfoCommand extends Command {
       const fts = info.ftsRows === null ? "(no FTS table)" : String(info.ftsRows);
       this.context.stdout.write(`  vec0:       ${vectors} vector(s), meta rows: ${meta}\n`);
       this.context.stdout.write(`  fts:        ${fts} row(s)\n`);
+      if (breakdown !== undefined) {
+        this.context.stdout.write("  events by type:\n");
+        if (breakdown.length === 0) {
+          this.context.stdout.write("    (none)\n");
+        } else {
+          for (const e of breakdown) {
+            this.context.stdout.write(`    ${e.type.padEnd(24)} ${e.count}\n`);
+          }
+        }
+      }
       return 0;
     } finally {
       store.close();

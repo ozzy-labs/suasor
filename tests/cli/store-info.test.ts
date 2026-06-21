@@ -95,6 +95,38 @@ describe("suasor store info", () => {
     expect(out).toContain("fts:");
   });
 
+  test("--breakdown lists events grouped by type", async () => {
+    await run(["init"]);
+    await seed("gh:1", "alpha");
+    await seed("gh:2", "beta");
+    const { code, out } = await run(["store", "info", "--breakdown"]);
+    expect(code).toBe(0);
+    expect(out).toContain("events by type:");
+    expect(out).toContain("SourceObserved");
+  });
+
+  test("--breakdown --json adds an eventBreakdown array", async () => {
+    await run(["init"]);
+    await seed("gh:1", "alpha");
+    await seed("gh:2", "beta");
+    const { code, out } = await run(["store", "info", "--breakdown", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out);
+    const observed = parsed.eventBreakdown.find(
+      (e: { type: string }) => e.type === "SourceObserved",
+    );
+    expect(observed.count).toBe(2);
+  });
+
+  test("--json without --breakdown omits eventBreakdown", async () => {
+    await run(["init"]);
+    await seed("gh:1", "alpha");
+    const { code, out } = await run(["store", "info", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out);
+    expect(parsed.eventBreakdown).toBeUndefined();
+  });
+
   test("--json emits a machine-readable snapshot", async () => {
     await run(["init"]);
     await seed("gh:1", "alpha");

@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../../src/db/index.ts";
-import { formatBytes, storeInfo } from "../../src/db/store-info.ts";
+import { eventTypeBreakdown, formatBytes, storeInfo } from "../../src/db/store-info.ts";
 
 let dir: string;
 
@@ -79,6 +79,45 @@ describe("storeInfo", () => {
       expect(info.embeddingsMeta).toBeNull();
       // FTS is created by initSchema regardless of vec.
       expect(info.ftsRows).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("eventTypeBreakdown", () => {
+  test("counts events grouped by type, ordered by count desc then type asc", () => {
+    const store = Store.open({ path: ":memory:" });
+    try {
+      // Two SourceObserved + one SourceBodyUpdated on an existing source.
+      seed(store, "gh:1", "alpha");
+      seed(store, "gh:2", "beta");
+      store.record({
+        type: "SourceBodyUpdated",
+        externalId: "gh:1",
+        body: "alpha v2",
+        observedAt: "2026-06-15T00:00:00.000Z",
+        fingerprint: "gh:1#2",
+        meta: {},
+      });
+
+      const breakdown = eventTypeBreakdown(store.connection.sqlite);
+      expect(breakdown).toEqual([
+        { type: "SourceObserved", count: 2 },
+        { type: "SourceBodyUpdated", count: 1 },
+      ]);
+      // Sum of per-type counts equals the total event count.
+      const total = breakdown.reduce((acc, e) => acc + e.count, 0);
+      expect(total).toBe(storeInfo(store.connection.sqlite, ":memory:").events);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("returns an empty array on a fresh store", () => {
+    const store = Store.open({ path: ":memory:" });
+    try {
+      expect(eventTypeBreakdown(store.connection.sqlite)).toEqual([]);
     } finally {
       store.close();
     }
