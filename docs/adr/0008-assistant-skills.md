@@ -18,7 +18,7 @@
 Suasor は **アシスタント skill 群（初期 15 想定）** を提供する:
 
 - **SSOT は `docs/skills/<name>/SKILL.md`**。発火条件は自然文（skill description）で表現
-- 配信は **Suasor パッケージ同梱 + `suasor skills install`**（`.claude/skills/` / `.agents/skills/` に展開）。in-repo では dogfood として commit
+- 配信は **Suasor パッケージ同梱 + `suasor skills install`**（`.claude/skills/` / `.agents/skills/` に展開）。展開された mirror は commit しない（[ADR-0035](0035-project-skills-vendor-dev-skills.md) で `.gitignore` 化したローカル install 物。当初の dogfood-commit 方針は撤回）
 - skill は read 系（personal-brief / next-actions / find-document / research 等）と **HITL write 系**（reply-draft / inbox-triage / source-extract / meeting-followup 等）に分かれ、write は [ADR-0004](0004-mcp-agent-boundary-and-hitl.md) の HITL 境界に従う（auto-apply なし）
 - エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）
 
