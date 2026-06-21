@@ -77,7 +77,7 @@ usage-guard の取り扱い:
 
 #### 粒度と二重化
 
-- orchestration の停止は **wave 境界 / worker dispatch 境界の粒度**。一度起動した worker の**走行中（mid-unit）の超過**はこのフラグでは止められない。長い unit 内の ceiling は #123 の **PreToolUse hook**（全 tool 呼び出し前に効き、subagent 内にも届く）が担う（推奨併用）。
+- orchestration の停止は **wave 境界 / worker dispatch 境界の粒度**。一度起動した worker の**走行中（mid-unit）の超過**はこのフラグでは止められない。長い unit 内の ceiling は #123 の **PreToolUse hook**（全 tool 呼び出し前に効き、subagent 内にも届く）が担う（推奨併用）。一過性異常値で hook が誤 deny し session が hard-stop した場合は **`touch ~/.claude/usage-guard/DISABLE`** で即解除できる（#139、usage-guard SKILL.md §無効化）。
 - worker（subagent）に渡す prompt 自体は無改変でよい。worker は単一モードを実行するため、**親が（既定 ON で）worker dispatch 前に checkpoint を挟む**ことで wave 粒度の予算対応になる。
 
 #### fail-open（劣化可視化）
