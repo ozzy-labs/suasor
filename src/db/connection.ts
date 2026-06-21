@@ -244,6 +244,32 @@ export function initVecTable(sqlite: Database, dim: number = DEFAULT_EMBEDDING_D
 }
 
 /**
+ * Read the vector dimension the default vec0 table was created with, by parsing
+ * the `float[N]` width out of its stored `CREATE VIRTUAL TABLE` SQL in
+ * `sqlite_master`. Returns `null` when the table is absent (a fresh / FTS-only
+ * store) — the caller treats that as "nothing to mismatch against".
+ *
+ * The vec0 dim is fixed at DB creation (it sizes the table); changing
+ * `[embedding].dim` afterwards does NOT resize it, so a config `dim` that differs
+ * from this value silently breaks every vector insert (recall degrades to empty,
+ * Issue #267 / #294). This read lets validate-config / doctor surface that drift
+ * without needing the embedding backend (it is a pure DB read, no egress).
+ */
+export function readVecDim(sqlite: Database): number | null {
+  const row = sqlite
+    .query<{ sql: string | null }, [string]>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .get(DEFAULT_VEC_TABLE);
+  if (!row?.sql) return null;
+  // sqlite-vec records the column as `embedding float[1024]`; pull the width out.
+  const match = row.sql.match(/float\s*\[\s*(\d+)\s*\]/i);
+  if (!match) return null;
+  const dim = Number(match[1]);
+  return Number.isInteger(dim) && dim > 0 ? dim : null;
+}
+
+/**
  * Open a database, apply pragmas, load extensions, and initialize the schema.
  */
 export function openDatabase(options: OpenOptions): SuasorDb {

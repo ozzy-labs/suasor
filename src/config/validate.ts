@@ -243,6 +243,38 @@ export async function validateConfig(
   return { findings, fixed, applied };
 }
 
+/**
+ * Guard `[embedding].dim` against the dimension an existing DB's vec0 table was
+ * created with (Issue #294). The vec0 width is fixed at DB creation; changing
+ * `dim` in config afterwards does NOT resize it, so a mismatch makes every vector
+ * insert fail and recall silently degrades to empty. Unlike `doctor`'s probe
+ * (which embeds a string to check the *model* output), this is a pure local DB
+ * read — no embedding backend, no egress — so it works even when the backend is
+ * disabled or no API key is set.
+ *
+ * @param configDim the resolved `[embedding].dim` (after defaults).
+ * @param dbDim     the vec0 table's dimension, or `null` when the table is absent
+ *   (a fresh / FTS-only store — nothing to mismatch against).
+ * @returns a single `invalid-value` finding on `embedding.dim` when the two
+ *   disagree, else an empty array. Never auto-fixed (the remedy is a fresh DB /
+ *   re-sync, not a config rewrite — HITL, ADR-0004).
+ */
+export function checkEmbeddingDim(configDim: number, dbDim: number | null): Finding[] {
+  if (dbDim === null || dbDim === configDim) return [];
+  return [
+    {
+      path: "embedding.dim",
+      kind: "invalid-value",
+      message:
+        `[embedding].dim is ${configDim} but the existing DB's vec0 table is ${dbDim}-dim; ` +
+        "vector inserts fail and recall degrades to empty. Either set [embedding].dim = " +
+        `${dbDim} to match the store, or start a fresh DB / delete + rebuild + re-sync ` +
+        "to adopt the new dimension. See docs/guide/embedding.md.",
+      fixable: false,
+    },
+  ];
+}
+
 /** Narrow an unknown to a plain object record. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

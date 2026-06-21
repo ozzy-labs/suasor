@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
+import { openDatabase } from "../../src/db/index.ts";
 
 let dir: string;
 let configPath: string;
@@ -167,5 +168,64 @@ roots = [
     expect(out).toContain("finding(s) remain");
     expect(out).toContain("embedding.backend");
     expect(existsSync(configPath)).toBe(true);
+  });
+
+  // Readiness layer (Issue #294): DB vec0-dim guard + advisory warnings.
+  describe("readiness checks (#294)", () => {
+    test("ERRORs when [embedding].dim disagrees with the existing DB's vec0 dim", async () => {
+      // Create a DB whose vec0 table is 1536-dim, then point config at it with
+      // dim = 1024 — the classic silent-recall-break footgun.
+      const dbPath = join(dir, "mismatch.db");
+      openDatabase({ path: dbPath, embeddingDim: 1536 }).close();
+      writeFileSync(
+        configPath,
+        `[storage]\ndbPath = "${dbPath}"\n[embedding]\nbackend = "disabled"\ndim = 1024\n`,
+        "utf8",
+      );
+      const { code, out } = await run(["validate-config"]);
+      expect(code).toBe(1);
+      expect(out).toContain("embedding.dim");
+      expect(out).toContain("1536");
+      expect(out).toContain("invalid-value");
+    });
+
+    test("passes when [embedding].dim matches the existing DB's vec0 dim", async () => {
+      const dbPath = join(dir, "match.db");
+      openDatabase({ path: dbPath, embeddingDim: 1024 }).close();
+      writeFileSync(
+        configPath,
+        `[storage]\ndbPath = "${dbPath}"\n[embedding]\nbackend = "disabled"\ndim = 1024\n`,
+        "utf8",
+      );
+      const { code, out } = await run(["validate-config"]);
+      expect(code).toBe(0);
+      expect(out).toContain("config is valid");
+    });
+
+    test("no dim finding when the DB does not exist yet (fresh install)", async () => {
+      writeFileSync(
+        configPath,
+        `[storage]\ndbPath = "${join(dir, "absent.db")}"\n[embedding]\nbackend = "disabled"\ndim = 768\n`,
+        "utf8",
+      );
+      const { code, out } = await run(["validate-config"]);
+      expect(code).toBe(0);
+      expect(out).toContain("config is valid");
+    });
+
+    test("surfaces an [llm] backend as a readiness advisory (does not gate exit)", async () => {
+      // A well-formed config whose [llm].backend is set: accepted but unused at
+      // runtime (host-delegated, ADR-0006). Advisory only — exit stays 0.
+      writeFileSync(
+        configPath,
+        `[storage]\ndbPath = "${join(dir, "advisory.db")}"\n[embedding]\nbackend = "disabled"\n[llm]\nbackend = "anthropic"\n`,
+        "utf8",
+      );
+      const { code, out } = await run(["validate-config"]);
+      expect(code).toBe(0);
+      expect(out).toContain("config is valid");
+      expect(out).toContain("readiness advisories");
+      expect(out).toContain("llm.backend");
+    });
   });
 });

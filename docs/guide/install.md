@@ -87,8 +87,13 @@ docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
 
 - Config + DB live under `/data` (`SUASOR_CONFIG_DIR=/data`); mount a volume to persist.
 - `SUASOR_EMBEDDING__BACKEND=ollama` is preset; the entrypoint starts `ollama serve`
-  before Suasor. Pull a model on first use (e.g. `ollama pull bge-m3`) inside the
-  container or a mounted Ollama volume.
+  and then **best-effort pulls the embedding model** (`SUASOR_EMBEDDING__MODEL`,
+  default `bge-m3`) on first run so the first `sync` / `recall.search` does not
+  silently degrade to FTS. A failed pull is a warning (Suasor still starts); set
+  `SUASOR_DOCKER_SKIP_MODEL_PULL=1` to skip it for an air-gapped run or a volume
+  with the model already baked in. To pre-pull into a persistent Ollama volume,
+  mount it (e.g. `-v ollama-models:/root/.ollama`) so the model survives restarts;
+  you can also pull manually with `docker run ... ollama pull bge-m3`.
 - Larger than the other channels (Ollama runtime included). Stay on npm/binary if
   you only need FTS or already run Ollama.
 - The image's base layers (`oven/bun` and `ollama/ollama`) are pinned by tag +

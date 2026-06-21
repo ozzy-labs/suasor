@@ -80,6 +80,21 @@ describe("suasor init", () => {
     expect(seeded).toContain('backend = "disabled"');
   });
 
+  test("the seeded template's comments do not mislead (Issue #294)", async () => {
+    const { code } = await run(["init"]);
+    expect(code).toBe(0);
+    const seeded = readFileSync(join(dir, "config.toml"), "utf8");
+    // [llm].backend is documented as accepted-but-unused (host-delegated, ADR-0006).
+    expect(seeded).toContain("NOT read by the runtime");
+    expect(seeded).toContain("ADR-0006");
+    // The embedding dim comment lists the per-backend model dimensions so a backend
+    // switch does not silently degrade recall.
+    expect(seeded).toContain("text-embedding-3-small=1536");
+    expect(seeded).toContain("voyage-3=1024");
+    // …and warns that dim must match the existing DB's vec0 width.
+    expect(seeded).toContain("vec0 width");
+  });
+
   test("re-running is idempotent: keeps the existing config, still exits 0", async () => {
     const first = await run(["init"]);
     expect(first.code).toBe(0);
