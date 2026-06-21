@@ -323,6 +323,33 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
       };
     },
   },
+  jira: {
+    connector: "jira",
+    secretName: "token",
+    secretLabel: "API token / PAT",
+    async test({ secret, config }) {
+      const token = await secret("token");
+      if (!token) throw new Error("no jira token configured");
+      const host = asString(config.host);
+      if (!host) throw new Error("jira: host is required in config");
+      const scheme = asString(config.auth) === "bearer" ? "bearer" : "basic";
+      const email = asString(config.email) || undefined;
+      const { buildJiraAuth, testJiraAuth } = await import("./jira/auth.ts");
+      const auth = buildJiraAuth({ scheme, host, ...(email ? { email } : {}), token });
+      const result = await testJiraAuth(auth);
+      const who =
+        result.displayName && result.email
+          ? `${result.displayName} <${result.email}>`
+          : result.displayName || result.email || "(unknown account)";
+      return {
+        principal: who,
+        // Jira's /myself carries no scope list; capability is gated by project
+        // permissions for the authenticating account, not by token scopes.
+        scopes: null,
+        features: [{ label: "Jira issue / comment read", status: "READY" }],
+      };
+    },
+  },
 };
 
 /** Connectors that expose the generic `auth set` / `auth test` verbs (sorted). */

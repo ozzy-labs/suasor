@@ -17,6 +17,7 @@ const SECRET_ENVS = [
   "SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN",
   "SUASOR_CONNECTOR_BOX_TOKEN",
   "SUASOR_CONNECTOR_NOTION_TOKEN",
+  "SUASOR_CONNECTOR_JIRA_TOKEN",
 ];
 
 /** Run the CLI capturing stdout/stderr (connector secret envs cleared). */
@@ -60,7 +61,7 @@ describe("suasor <connector> auth — wiring + arg validation (no network)", () 
   test("all connectors register auth set + auth test in --help", async () => {
     const { code, out } = await run(["--help"]);
     expect(code).toBe(0);
-    for (const name of ["github", "ms-graph", "google", "box", "notion"]) {
+    for (const name of ["github", "ms-graph", "google", "box", "notion", "jira"]) {
       expect(out).toContain(`${name} auth set`);
       expect(out).toContain(`${name} auth test`);
     }
@@ -97,11 +98,18 @@ describe("suasor <connector> auth — wiring + arg validation (no network)", () 
     expect(err).toContain("no notion token configured");
     expect(err).toContain("notion auth set");
   });
+
+  test("jira auth test without a token exits 1 with onboarding guidance", async () => {
+    const { code, err } = await run(["jira", "auth", "test"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no jira token configured");
+    expect(err).toContain("jira auth set");
+  });
 });
 
 describe("AUTH_SPECS table (SSOT)", () => {
-  test("covers exactly github / ms-graph / google / box / notion (Slack keeps its own)", () => {
-    expect(authConnectorNames()).toEqual(["box", "github", "google", "ms-graph", "notion"]);
+  test("covers exactly github / ms-graph / google / box / notion / jira (Slack keeps its own)", () => {
+    expect(authConnectorNames()).toEqual(["box", "github", "google", "jira", "ms-graph", "notion"]);
     expect(AUTH_SPECS.slack).toBeUndefined();
   });
 
@@ -111,6 +119,7 @@ describe("AUTH_SPECS table (SSOT)", () => {
     expect(AUTH_SPECS.google?.secretName).toBe("refreshToken");
     expect(AUTH_SPECS.box?.secretName).toBe("token");
     expect(AUTH_SPECS.notion?.secretName).toBe("token");
+    expect(AUTH_SPECS.jira?.secretName).toBe("token");
   });
 
   test("each spec's secretName matches the registry SECRET_NAMES SSOT (no drift)", () => {
@@ -159,5 +168,17 @@ describe("AUTH_SPECS.test probe wiring (injected secret resolver)", () => {
     await expect(AUTH_SPECS.box?.test({ secret: noSecret, config: {} })).rejects.toThrow(
       /no box token configured/,
     );
+  });
+
+  test("jira test throws the no-token error when the secret is absent", async () => {
+    await expect(
+      AUTH_SPECS.jira?.test({ secret: noSecret, config: { host: "h" } }),
+    ).rejects.toThrow(/no jira token configured/);
+  });
+
+  test("jira test requires host in config", async () => {
+    await expect(
+      AUTH_SPECS.jira?.test({ secret: async (n) => (n === "token" ? "tok" : null), config: {} }),
+    ).rejects.toThrow(/host is required/);
   });
 });

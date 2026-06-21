@@ -50,12 +50,13 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
 }
 
 describe("DISCOVERY_SPECS table (SSOT)", () => {
-  test("exposes box folders + github repos + google calendars + notion databases", () => {
-    expect(discoveryConnectorNames()).toEqual(["box", "github", "google", "notion"]);
+  test("exposes box folders + github repos + google calendars + notion databases + jira projects", () => {
+    expect(discoveryConnectorNames()).toEqual(["box", "github", "google", "jira", "notion"]);
     expect(DISCOVERY_SPECS.github?.verb).toBe("repos");
     expect(DISCOVERY_SPECS.google?.verb).toBe("calendars");
     expect(DISCOVERY_SPECS.box?.verb).toBe("folders");
     expect(DISCOVERY_SPECS.notion?.verb).toBe("databases");
+    expect(DISCOVERY_SPECS.jira?.verb).toBe("projects");
     expect(DISCOVERY_SPECS.slack).toBeUndefined(); // Slack keeps its own conversations
   });
 });

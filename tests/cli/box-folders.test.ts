@@ -65,8 +65,8 @@ function treeTransport(tree: Record<string, { id: string; name: string }[]>): Bo
 }
 
 describe("DISCOVERY_SPECS table (SSOT)", () => {
-  test("exposes box folders alongside github + google + notion", () => {
-    expect(discoveryConnectorNames()).toEqual(["box", "github", "google", "notion"]);
+  test("exposes box folders alongside github + google + notion + jira", () => {
+    expect(discoveryConnectorNames()).toEqual(["box", "github", "google", "jira", "notion"]);
     expect(DISCOVERY_SPECS.box?.verb).toBe("folders");
     expect(DISCOVERY_SPECS.box?.acceptsRoot).toBe(true);
   });
