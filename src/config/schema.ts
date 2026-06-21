@@ -57,21 +57,32 @@ const DEFAULT_EXTRACTION_MAX_BYTES = 5_000_000;
 export const DEFAULT_PANDOC_BASE_URL = "http://localhost:8930";
 
 /**
- * `[embedding]` — optional sidecar (ADR-0005/0006). Default disabled so the
+ * `[embedding]` — optional sidecar/API (ADR-0005/0006). Default disabled so the
  * base install stays light; ML is always delegated to a sidecar/API (no
  * in-process torch). `model` pins the embedding model so that document
  * embeddings (ingest) and query embeddings (recall) share one vector space —
  * mixing models silently degrades recall, so the same `model` value drives both.
  *
- * Unknown keys are preserved (`passthrough`) for backend-specific options not
- * yet modeled. `baseUrl` / `model` apply to the Ollama backend (the only
- * sidecar implemented here; openai/voyage remain config-accepted placeholders
- * that recall treats as `embedding_disabled` until implemented).
+ * Three backends are implemented: `ollama` (local sidecar, egress-free, the
+ * default `baseUrl`/`model` below), and the external `openai` / `voyage` APIs.
+ * The external backends **egress body text** to a remote API (ADR-0003), so they
+ * are opt-in and gated on an API key resolved from the OS keychain / env (never
+ * config — see src/connectors/secrets.ts `resolveEmbeddingApiKey`); without a key
+ * recall degrades to FTS. When using an external backend, set `baseUrl` / `model`
+ * / `dim` for that provider (e.g. openai `text-embedding-3-small` = 1536-dim;
+ * voyage `voyage-3` = 1024-dim) — see docs/guide/embedding.md.
+ *
+ * Unknown keys are preserved (`passthrough`) for backend-specific options not yet
+ * modeled. The defaults below target the Ollama backend.
  */
 export const EmbeddingConfig = z
   .object({
     backend: EmbeddingBackend.default("disabled"),
-    /** Sidecar base URL (Ollama). `/api/embed` is appended by the client. */
+    /**
+     * API/sidecar base URL. Ollama: `/api/embed` is appended (default below).
+     * openai/voyage: `/v1/embeddings` is appended — set the provider host
+     * (`https://api.openai.com` / `https://api.voyageai.com`).
+     */
     baseUrl: z.string().url().default(DEFAULT_OLLAMA_BASE_URL),
     /** Embedding model name. Must be identical for ingest and query (one space). */
     model: z.string().min(1).default(DEFAULT_OLLAMA_MODEL),

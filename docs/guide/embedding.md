@@ -2,7 +2,9 @@
 
 Suasor の既定の検索は SQLite FTS5 の全文検索（`search` / `suasor search`）で、追加の依存なしで動く（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。embedding は **任意の上乗せ** で、FTS が原理的に越えられない壁（言語跨ぎ JA↔EN・語彙ミスマッチ）を `recall.search` の意味検索で埋める。
 
-ML はプロセス内で計算せず、**ローカルサイドカー（Ollama）または API に委譲**する（[ADR-0006](../adr/0006-ml-delegation.md)）。Suasor 本体に torch 等の重い依存は入らない。
+ML はプロセス内で計算せず、**ローカルサイドカー（Ollama）または外部 API（OpenAI / Voyage）に委譲**する（[ADR-0006](../adr/0006-ml-delegation.md)）。Suasor 本体に torch 等の重い依存は入らない。
+
+> **egress 注意（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）**: `ollama` はローカルサイドカーで **egress なし**（既定の推奨経路）。`openai` / `voyage` は本文（文書・クエリ）を外部 API に**送信する egress** を伴い、local-first / content-minimization の境界を跨ぐ。**明示的な opt-in**（backend 設定 + API キー設定）でのみ有効化され、API キーは config に平文で書かず **OS キーチェーン / 環境変数** で解決する（後述）。外部送信のプライバシー・コストを許容できる場合にのみ使う。
 
 - 無効（既定）でも `search` は完全に動く。`recall.search` は空 + `embedding_disabled` シグナルを返し、host は `search` に寄る（graceful degradation）
 - 有効化すると、取り込み時に新規 / 本文変更 source が埋め込まれて `recall.search` の対象になる
@@ -30,7 +32,7 @@ curl http://localhost:11434/api/tags
 
 ```toml
 [embedding]
-backend = "ollama"                  # disabled（既定）| ollama | openai（未実装）| voyage（未実装）
+backend = "ollama"                  # disabled（既定）| ollama | openai | voyage（openai/voyage は egress・要 API キー）
 baseUrl = "http://localhost:11434"  # /api/embed は client が付与
 model = "bge-m3"                     # ingest と query で必ず同一（ベクトル空間整合）
 dim = 1024                           # model の出力次元と一致必須（bge-m3=1024、nomic-embed-text=768 等）
@@ -46,7 +48,7 @@ export SUASOR_EMBEDDING__MODEL=bge-m3
 
 > **同一モデル必須**: 文書（ingest 時）とクエリ（query 時）の embedding は同じ `model` で生成する必要がある（ベクトル空間整合）。`model` を変えたら下記 4. で既存ベクトルを再生成する。
 >
-> **backend の実装状況と egress**: 現状 **egress-free な `ollama`（ローカルサイドカー）が既定の実装経路**で、ローカル経路を埋めている。`openai` / `voyage` は設定上受理される **opt-in placeholder で未実装**であり、設定しても embedder が構築されず `recall.search` は `embedding_disabled` に degrade（FTS にフォールバック）する。これらは実装時に外部 API への **egress を伴う**点が `ollama`（ローカル完結・egress なし）と非対称になる（[ADR-0006](../adr/0006-ml-delegation.md) は不変条件には抵触しないが、egress-free な `ollama` を既定とする）。`openai` / `voyage` を設定すると、黙って無効化されないよう **起動時（`suasor mcp serve`）と `suasor doctor` が WARN を出す**（[Issue #235](https://github.com/ozzy-labs/suasor/issues/235)）。
+> **backend の実装状況と egress**: 3 backend が実装済み — **egress-free な `ollama`（ローカルサイドカー）が既定の推奨経路**、加えて外部 API の `openai` / `voyage`。後者は本文を外部に送信する **egress を伴う**点で `ollama`（ローカル完結・egress なし）と非対称（[ADR-0003](../adr/0003-local-first-and-content-minimization.md) の境界を跨ぐ。[ADR-0006](../adr/0006-ml-delegation.md) の thin-client 不変条件には抵触しない）。`openai` / `voyage` は **API キー（OS キーチェーン / 環境変数）でゲート**され、キー未設定なら embedder は構築されず `recall.search` は `embedding_disabled` に degrade（FTS にフォールバック）し、**起動時（`suasor mcp serve`）と `suasor doctor` が「キー未設定」WARN を出す**（[Issue #235](https://github.com/ozzy-labs/suasor/issues/235) / [Issue #259](https://github.com/ozzy-labs/suasor/issues/259)）。外部 backend のセットアップは後述。
 >
 > **次元一致必須**: `dim` は `model` の出力次元と一致させる（`bge-m3`=1024、`nomic-embed-text`=768 等）。`dim` は DB 作成時に vec0 テーブルのサイズを固定するため、後から変える場合は新規 DB か delete + rebuild + 再 sync が必要。不一致のままだとベクトル挿入が失敗し、recall は静かに空へ degrade する。
 
@@ -72,6 +74,50 @@ suasor github sync --full   # 全 source を再取り込み → 再 embedding
 ### 5. 意味検索
 
 MCP `recall.search` read tool で意味検索ができる（[mcp-surface](../design/mcp-surface.md) / [retrieval](../design/retrieval.md)）。最近傍順（L2 distance 昇順）で hits を返す。embedding 無効・サイドカー到達不能のときは空 + `embedding_disabled` シグナルで FTS にフォールバックする。
+
+## 外部 API バックエンド（OpenAI / Voyage）
+
+Ollama サイドカーを用意できない環境向けに、外部 embedding API も使える。**本文を外部に送信する egress を伴う**ため（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）、明示的 opt-in（backend 設定 + API キー設定）でのみ有効化される。送信のプライバシー・コストを許容できる場合に限定して使うこと。
+
+両 backend とも OpenAI 互換の `POST {baseUrl}/v1/embeddings`（`Authorization: Bearer <key>`、`{ model, input: string[] }` → `{ data: [{ index, embedding }] }`）を叩く thin client（[ADR-0006](../adr/0006-ml-delegation.md)・in-process ML 禁止）。
+
+### モデル / 次元の対応表
+
+| backend | 既定 model | dim | baseUrl 既定 | API キー env |
+| --- | --- | --- | --- | --- |
+| `openai` | `text-embedding-3-small` | 1536 | `https://api.openai.com` | `SUASOR_EMBEDDING_OPENAI_API_KEY` |
+| `voyage` | `voyage-3` | 1024 | `https://api.voyageai.com` | `SUASOR_EMBEDDING_VOYAGE_API_KEY` |
+
+> `model` を変えると次元が変わりうる（例 OpenAI `text-embedding-3-large` = 3072）。`[embedding].dim` を **その model の出力次元に必ず一致**させること。Ollama と同じく `dim` は DB 作成時に vec0 テーブルサイズを固定するので、後から変える場合は新規 DB か delete + rebuild + 再 sync が必要。ingest / query で同一 `model` を保つ不変条件も同じ（混在すると recall が壊れる）。
+
+### 1. backend を設定する
+
+`config.toml`（`model` / `dim` は使う provider に合わせる。API キーはここに**書かない**）:
+
+```toml
+[embedding]
+backend = "openai"                  # または "voyage"
+baseUrl = "https://api.openai.com"  # /v1/embeddings は client が付与（voyage は https://api.voyageai.com）
+model = "text-embedding-3-small"    # ingest と query で必ず同一
+dim = 1536                           # model の出力次元と一致必須（上表参照）
+```
+
+### 2. API キーを設定する（keyring または env）
+
+API キーは **config に平文で書かず**、connector secret と同じく **OS キーチェーン（`@napi-rs/keyring`）/ 環境変数**で解決する（NFR-PRV-4）。解決の優先順位は env override → OS キーチェーン。
+
+env override（headless / Docker 用。最も手軽）:
+
+```bash
+export SUASOR_EMBEDDING_OPENAI_API_KEY=sk-...     # openai
+export SUASOR_EMBEDDING_VOYAGE_API_KEY=pa-...     # voyage
+```
+
+OS キーチェーンに保存する場合は service `suasor` / account `embedding:<backend>:apiKey`（例 `embedding:openai:apiKey`）へ格納する。キー未設定だと embedder は構築されず `recall.search` は FTS にフォールバックし、`suasor mcp serve` 起動時 / `suasor doctor` が「キー未設定」WARN を出す。
+
+### 3. 取り込み・意味検索
+
+以降は Ollama backend と同じ。`suasor <connector> sync` で新規 / 本文変更 source が外部 API で埋め込まれ（best-effort：API 失敗時も取り込みは成功し warning のみ）、`recall.search` の対象になる。既存データの後付け・model 変更時の再生成も同様に `suasor <connector> sync --full` / `suasor embeddings rebuild`。
 
 ## 保守 verb（status / rebuild / drain / list-failed / find-duplicates）
 

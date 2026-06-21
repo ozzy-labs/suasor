@@ -106,3 +106,55 @@ export function makeSecretResolver(
 ): (name: string) => Promise<string | null> {
   return (name) => resolveSecret(connector, name, options);
 }
+
+/**
+ * Keychain account for an embedding-backend API key: `embedding:<backend>:apiKey`.
+ * Kept in a namespace separate from connector secrets (`connector:…`) so an
+ * embedding key never collides with a same-named connector token.
+ */
+export function embeddingKeychainAccount(backend: string): string {
+  return `embedding:${backend}:apiKey`;
+}
+
+/**
+ * Env var name for an embedding-backend API-key override.
+ * `openai` → `SUASOR_EMBEDDING_OPENAI_API_KEY`.
+ */
+export function embeddingApiKeyEnvName(backend: string): string {
+  const norm = backend.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  return `SUASOR_EMBEDDING_${norm}_API_KEY`;
+}
+
+/**
+ * Resolve an external embedding backend's API key (OpenAI / Voyage). Same
+ * precedence as connector secrets — env override first, then the OS keychain —
+ * so a headless / Docker deploy can inject the key without a keychain. The key
+ * is never read from `config.toml` (NFR-PRV-4): sending body text to a remote
+ * embedding API is an egress (ADR-0003), gated behind an explicit, securely
+ * stored key.
+ *
+ * Returns `null` when configured by neither (the caller degrades to no embedder,
+ * i.e. recall falls back to FTS, and a readiness warning is surfaced).
+ */
+export async function resolveEmbeddingApiKey(
+  backend: string,
+  options: SecretStoreOptions = {},
+): Promise<string | null> {
+  const env = options.env ?? process.env;
+  const fromEnv = env[embeddingApiKeyEnvName(backend)];
+  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
+
+  const keychain = options.keychain ?? (await loadKeyringBackend());
+  const value = keychain.get(KEYCHAIN_SERVICE, embeddingKeychainAccount(backend));
+  return value && value.length > 0 ? value : null;
+}
+
+/** Persist an embedding-backend API key to the OS keychain (setup tooling). */
+export async function storeEmbeddingApiKey(
+  backend: string,
+  value: string,
+  options: SecretStoreOptions = {},
+): Promise<void> {
+  const keychain = options.keychain ?? (await loadKeyringBackend());
+  keychain.set(KEYCHAIN_SERVICE, embeddingKeychainAccount(backend), value);
+}

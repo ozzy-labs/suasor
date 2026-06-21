@@ -9,8 +9,14 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Config, collectConfigWarnings, loadConfig } from "../config/index.ts";
+import type { SecretStoreOptions } from "../connectors/secrets.ts";
 import { resolveSelfUserIds } from "../connectors/slack.ts";
 import { Store } from "../db/index.ts";
+import {
+  createEmbedderResolved,
+  type Embedder,
+  resolveEmbeddingApiKeyPresent,
+} from "../retrieval/embedding/index.ts";
 import { McpToolError, verifyReadiness } from "./errors.ts";
 import { buildMcpServer } from "./server.ts";
 
@@ -41,7 +47,17 @@ export interface ServeOptions {
    * Test seam: build the MCP server from the open store + config. Defaults to
    * {@link buildMcpServer}.
    */
-  buildServer?: (args: { store: ServeStore; config: Config }) => ServeServer;
+  buildServer?: (args: {
+    store: ServeStore;
+    config: Config;
+    embedder?: Embedder | null;
+  }) => ServeServer;
+  /**
+   * Test seam: secret store options (env / keychain) for resolving an external
+   * embedding backend's API key. Defaults to the real env + OS keychain; tests
+   * inject an in-memory keychain so boot never touches the native keyring.
+   */
+  secrets?: SecretStoreOptions;
   /**
    * Test seam: the transport to connect. Defaults to a real
    * `StdioServerTransport`; tests inject a fake so stdio is never touched.
@@ -55,12 +71,24 @@ function defaultOpenStore(options: { path: string; embeddingDim: number }): Serv
 }
 
 /** Default server builder — wires the open store + config into the tool surface. */
-function defaultBuildServer({ store, config }: { store: ServeStore; config: Config }): ServeServer {
+function defaultBuildServer({
+  store,
+  config,
+  embedder,
+}: {
+  store: ServeStore;
+  config: Config;
+  embedder?: Embedder | null;
+}): ServeServer {
   return buildMcpServer({
     sqlite: store.connection.sqlite,
     // Full [embedding] config drives recall.search (real vec0 search when a
     // backend is enabled, else graceful degrade to FTS — ADR-0005/0006).
     embedding: config.embedding,
+    // Pre-resolved embedder: for external backends (openai/voyage) the API key
+    // is resolved (keychain/env) before boot, so `recall.search` runs real
+    // semantic search; `undefined` lets buildMcpServer build from `embedding`.
+    ...(embedder !== undefined ? { embedder } : {}),
     // Operator user ids for slack.demand.list @mention detection (ADR-0012).
     slackSelfUserIds: resolveSelfUserIds(config.connectors.slack ?? {}),
     // Whether [connectors.slack] is configured at all — drives the brief
@@ -109,18 +137,32 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
     throw new McpToolError(first.code, first.message, first.hint);
   }
 
+  // Resolve the embedder + the external-backend key presence once, in parallel,
+  // before wiring the transport (a single await point keeps boot ordering tight).
+  // For external backends `createEmbedderResolved` reads the API key (keychain/
+  // env) so recall.search runs real semantic search; a missing key yields a null
+  // embedder (FTS fallback). `resolveEmbeddingApiKeyPresent` is `true` for
+  // non-external backends (no key needed), so the warning below only fires for an
+  // external backend with no key.
+  const secrets = options.secrets ?? {};
+  const [embedder, embeddingApiKeyPresent] = await Promise.all([
+    createEmbedderResolved(config.embedding, { secrets }),
+    resolveEmbeddingApiKeyPresent(config.embedding.backend, secrets),
+  ]);
+
   // Non-fatal config warnings: keys accepted by the schema but silently dropped
-  // at runtime (unimplemented embedding backend → FTS fallback; set-but-unused
-  // [llm] backend). Surfaced on stderr (never the JSON-RPC stream) so the
-  // operator sees the no-op at boot rather than only via `doctor` (ADR-0007).
-  for (const warning of collectConfigWarnings(config)) {
+  // at runtime (external embedding backend with no API key → FTS fallback;
+  // set-but-unused [llm] backend). Surfaced on stderr (never the JSON-RPC stream)
+  // so the operator sees the no-op at boot rather than only via `doctor`
+  // (ADR-0007).
+  for (const warning of collectConfigWarnings({ ...config, embeddingApiKeyPresent })) {
     log(`suasor mcp serve: config warning [${warning.key}]: ${warning.message}`);
   }
 
   // verifyReadiness guarantees dbPath is non-null here; assert for the type.
   const dbPath = config.storage.dbPath as string;
   const store = openStore({ path: dbPath, embeddingDim: config.embedding.dim });
-  const server = buildServer({ store, config });
+  const server = buildServer({ store, config, embedder });
   const transport = options.transport ?? new StdioServerTransport();
 
   // Resolve when the transport tears down (host disconnect / stdin EOF). The

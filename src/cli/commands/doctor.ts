@@ -101,13 +101,16 @@ export class DoctorCommand extends Command {
     }
 
     // 1b. config warnings — keys accepted by the schema but silently dropped at
-    //    runtime (ADR-0007 silent-error eradication): an unimplemented embedding
-    //    backend (openai/voyage → recall falls back to FTS) or a set-but-unused
-    //    [llm] backend (inference is delegated to the host LLM). Degrade behavior
-    //    is unchanged; this just makes the no-op visible.
+    //    runtime (ADR-0007 silent-error eradication): an external embedding
+    //    backend (openai/voyage) with no API key resolved (→ recall falls back to
+    //    FTS) or a set-but-unused [llm] backend (inference is delegated to the
+    //    host LLM). Degrade behavior is unchanged; this just makes the no-op
+    //    visible. The external-backend key is resolved here (keychain/env).
     if (config !== null) {
       const { collectConfigWarnings } = await import("../../config/index.ts");
-      for (const warning of collectConfigWarnings(config)) {
+      const { resolveEmbeddingApiKeyPresent } = await import("../../retrieval/embedding/index.ts");
+      const embeddingApiKeyPresent = await resolveEmbeddingApiKeyPresent(config.embedding.backend);
+      for (const warning of collectConfigWarnings({ ...config, embeddingApiKeyPresent })) {
         checks.push({ name: warning.key, status: "warn", detail: warning.message });
       }
     }
@@ -262,10 +265,13 @@ export class DoctorCommand extends Command {
         const sqlite = store.connection.sqlite;
         // Embeddings: pending (no vector) / stale (different model) backlog.
         if (config.embedding.backend !== "disabled") {
-          const { createEmbedder, embeddingStatus } = await import(
+          const { createEmbedderResolved, embeddingStatus } = await import(
             "../../retrieval/embedding/index.ts"
           );
-          const embedder = createEmbedder(config.embedding);
+          // Resolve the API key for external backends so the active model is
+          // known and drift (stale) is computed against it (null only when no key
+          // → everything reads as pending, matching the no-embedder degrade).
+          const embedder = await createEmbedderResolved(config.embedding);
           const status = embeddingStatus(sqlite, embedder, config.embedding.backend);
           if (status.totals.pending > 0) {
             checks.push({

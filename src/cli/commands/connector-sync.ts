@@ -53,7 +53,7 @@ class ConnectorSyncCommand extends Command {
       { ConfigError, loadConfig },
       { Store },
       { loadConnector, syncConnector },
-      { createEmbedder },
+      { createEmbedderResolved },
       { createExtractor },
     ] = await Promise.all([
       import("../../config/index.ts"),
@@ -108,7 +108,7 @@ class ConnectorSyncCommand extends Command {
     // ingest (re)populates vec0 with the same model recall queries with
     // (ADR-0005/0006); embedding failures are surfaced as a warning (stderr) and
     // never fail the ingest — FTS still reflects the data.
-    const embedder = createEmbedder(config.embedding);
+    const embedder = await createEmbedderResolved(config.embedding);
 
     // Extractor from [extraction] (null when disabled). When enabled, Office/PDF
     // bodies are converted to text at ingest (best-effort, ADR-0024); failures
