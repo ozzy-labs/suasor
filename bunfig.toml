@@ -13,7 +13,8 @@
 #   - the lcov reporter's line counts disagree with the text reporter (the
 #     numbers humans see), so gating on lcov is misleading.
 # Instead the gate lives in scripts/coverage-gate.mjs, which runs the tests and
-# enforces an overall line/function floor parsed from the text reporter. CI calls
+# enforces an overall line/function floor (line ≥ 92%, function ≥ 88%; #258 →
+# #265) parsed from the text reporter. CI calls
 # that script (see .github/workflows/ci.yaml); it is the source of truth, so PRs
 # that bypass local lefthook (`--no-verify`, web edits) or land via an autonomous
 # run are still gated.

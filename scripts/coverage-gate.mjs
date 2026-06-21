@@ -12,10 +12,10 @@
  *   - the lcov reporter's line counts disagree with the text reporter.
  * See bunfig.toml for the full note.
  *
- * The thresholds are set a few points below the measured floor (line ~94%,
- * function ~90% as of 0.1.12) so routine churn does not break the gate; ratchet
- * them upward as coverage rises (see #260). Override per-run with env vars
- * COVERAGE_MIN_LINE / COVERAGE_MIN_FUNCTION (percent, e.g. 92).
+ * The thresholds are set a couple of points below the measured floor (line ~94%,
+ * function ~90% on integrated main) so routine churn does not break the gate;
+ * ratchet them upward as coverage rises (#258 → #265). Override per-run with env
+ * vars COVERAGE_MIN_LINE / COVERAGE_MIN_FUNCTION (percent, e.g. 95).
  *
  * The coverage table is emitted by Bun on STDERR; this script captures it,
  * streams the full output through so CI logs are unchanged, propagates a real
@@ -23,8 +23,8 @@
  */
 import { spawnSync } from "node:child_process";
 
-const MIN_LINE = Number(process.env.COVERAGE_MIN_LINE ?? "90");
-const MIN_FUNCTION = Number(process.env.COVERAGE_MIN_FUNCTION ?? "87");
+const MIN_LINE = Number(process.env.COVERAGE_MIN_LINE ?? "92");
+const MIN_FUNCTION = Number(process.env.COVERAGE_MIN_FUNCTION ?? "88");
 
 const run = spawnSync("bun", ["test", "--coverage"], { encoding: "utf8" });
 

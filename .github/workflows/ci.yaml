@@ -36,7 +36,8 @@ jobs:
       # (Bun 1.2.23's native coverageThreshold can't express an overall floor for
       # this repo — see bunfig.toml / scripts/coverage-gate.mjs). A failing test
       # still fails the step via bun's own exit code; CI is the source of truth so
-      # a PR that bypasses local hooks is gated here. Floors ratchet up in #260.
+      # a PR that bypasses local hooks is gated here. Floor: line ≥ 92%,
+      # function ≥ 88% (ratcheted in #265; raise further as coverage rises).
       - name: Test (coverage gate)
         run: bun run test:coverage
 
