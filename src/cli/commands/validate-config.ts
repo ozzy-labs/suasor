@@ -126,12 +126,16 @@ export class ValidateConfigCommand extends Command {
           edited = r.text;
           applied.push(f.path);
         }
-      } else if (f.kind === "dangling-reference" && f.path.startsWith("connectors.local.roots.")) {
-        // Recover the offending root value from the message ("…: <value>").
-        const value = f.message.slice(f.message.lastIndexOf(": ") + 2);
+      } else if (
+        f.kind === "dangling-reference" &&
+        f.path.startsWith("connectors.local.roots.") &&
+        f.value !== undefined
+      ) {
+        // The exact root string to drop is carried on the finding (not re-parsed
+        // from the message), so values containing ": " are handled correctly.
         // Element path for the array is the dotted prefix without the index.
         const arrayPath = f.path.replace(/\.\d+$/, "");
-        const r = tomlEdit.removeArrayElement(edited, arrayPath, value);
+        const r = tomlEdit.removeArrayElement(edited, arrayPath, f.value);
         if (r.changed) {
           edited = r.text;
           applied.push(f.path);

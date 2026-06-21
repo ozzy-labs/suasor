@@ -137,6 +137,33 @@ export async function backupStore(
 }
 
 /**
+ * Back up a store *file* without mutating it (no side effects, per the Issue's
+ * invariant). Unlike `Store.open`, this opens the source database **read-only**
+ * and does NOT run schema init / column migrations / vec-extension load — those
+ * would write DDL (e.g. `ALTER TABLE ... ADD COLUMN`, `CREATE TABLE`) to a
+ * legacy store before the snapshot, contradicting "the live database is never
+ * mutated". `VACUUM INTO` works fine over a read-only handle. The CLI uses this
+ * (rather than opening through the Store service) so a backup is strictly read.
+ *
+ * @param dbPath   path to the source SQLite database file.
+ * @param outPath  destination file path. Must not already exist.
+ * @param format   `sqlite` or `tgz`.
+ */
+export async function backupStoreFile(
+  dbPath: string,
+  outPath: string,
+  format: BackupFormat = "sqlite",
+): Promise<BackupResult> {
+  const { Database: Db } = await import("bun:sqlite");
+  const sqlite = new Db(dbPath, { readonly: true });
+  try {
+    return await backupStore(sqlite, outPath, format);
+  } finally {
+    sqlite.close();
+  }
+}
+
+/**
  * Default backup file name for a given format, timestamped to the current time
  * (UTC, filesystem-safe). The CLI uses this when `--out` is omitted, writing
  * into the database's directory.

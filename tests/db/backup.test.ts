@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   backupBasename,
   backupStore,
+  backupStoreFile,
   defaultBackupDir,
   defaultBackupName,
 } from "../../src/db/backup.ts";
@@ -115,6 +116,46 @@ describe("backupStore", () => {
     bogus.exec("CREATE TABLE foo (x);");
     await expect(backupStore(bogus, join(dir, "out.db"), "sqlite")).rejects.toThrow();
     bogus.close();
+  });
+});
+
+describe("backupStoreFile (read-only, no side effects)", () => {
+  test("backs up a store file without mutating it", async () => {
+    const store = seededStore();
+    store.close();
+    const out = join(dir, "b.db");
+    const result = await backupStoreFile(join(dir, "suasor.db"), out, "sqlite");
+    expect(result.events).toBe(3);
+    const restored = Store.open({ path: out });
+    expect(
+      restored.connection.sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sources").get()
+        ?.n,
+    ).toBe(3);
+    restored.close();
+  });
+
+  test("does not run schema migrations on a legacy store (no ADD COLUMN side effect)", async () => {
+    // Build a legacy `tasks` table missing the ADR-0028 due_date/priority columns
+    // plus a minimal events table, then back it up read-only and assert the source
+    // schema is unchanged (Store.open would have ALTER'd it; backupStoreFile must not).
+    const legacy = new Database(join(dir, "legacy.db"), { create: true });
+    legacy.exec("CREATE TABLE events (seq INTEGER PRIMARY KEY, type TEXT NOT NULL);");
+    legacy.exec("INSERT INTO events (type) VALUES ('SourceObserved');");
+    legacy.exec("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL);");
+    legacy.close();
+
+    const result = await backupStoreFile(join(dir, "legacy.db"), join(dir, "legacy-bk.db"));
+    expect(result.events).toBe(1);
+
+    // Re-open the SOURCE and confirm tasks still lacks due_date/priority.
+    const after = new Database(join(dir, "legacy.db"), { readonly: true });
+    const cols = after
+      .query<{ name: string }, []>("PRAGMA table_info(tasks)")
+      .all()
+      .map((c) => c.name);
+    after.close();
+    expect(cols).toEqual(["id", "title"]);
+    expect(cols).not.toContain("due_date");
   });
 });
 

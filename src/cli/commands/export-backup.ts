@@ -57,7 +57,7 @@ export class ExportBackupCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { Store, formatBytes }, backup, { join }] = await Promise.all([
+    const [{ loadConfig }, { formatBytes }, backup, { join }] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
       import("../../db/backup.ts"),
@@ -92,9 +92,10 @@ export class ExportBackupCommand extends Command {
       return 1;
     }
 
-    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    // Open the source read-only (no schema init / migrations) so the backup is
+    // strictly read with no side effects on the live store (Issue invariant).
     try {
-      const result = await backup.backupStore(store.connection.sqlite, outPath, format);
+      const result = await backup.backupStoreFile(dbPath, outPath, format);
       this.context.stdout.write(
         `backup written: ${result.outPath}\n` +
           `  format: ${result.format}\n` +
@@ -107,8 +108,6 @@ export class ExportBackupCommand extends Command {
         `error: backup failed: ${err instanceof Error ? err.message : String(err)}\n`,
       );
       return 1;
-    } finally {
-      store.close();
     }
   }
 }

@@ -69,10 +69,12 @@ export function removeKeyLine(text: string, dotted: string): TomlEditResult {
     const km = KEY_RE.exec(line);
     if (km && current === section && km[1] === key) {
       changed = true;
-      // If the value opens a multi-line array (no closing `]` on this line),
-      // swallow subsequent lines until the array closes.
-      const afterEq = line.slice(line.indexOf("=") + 1);
-      const opensArray = afterEq.includes("[") && !/]\s*(#.*)?$/.test(line);
+      // If the value opens a multi-line array (the value position starts with `[`
+      // and there is no closing `]` on this line), swallow subsequent lines until
+      // the array closes. Requiring the *value* to start with `[` avoids misfiring
+      // on a scalar string that merely contains `[` (e.g. `k = "a[b"`).
+      const afterEq = line.slice(line.indexOf("=") + 1).trim();
+      const opensArray = afterEq.startsWith("[") && !/]\s*(#.*)?$/.test(line);
       if (opensArray) skipUntilArrayClose = true;
       continue; // drop this line
     }

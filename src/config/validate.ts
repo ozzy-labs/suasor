@@ -54,6 +54,12 @@ export interface Finding {
   message: string;
   /** Whether `--fix` can safely repair this finding. */
   fixable: boolean;
+  /**
+   * For a fixable array-element removal (a dangling local root), the exact string
+   * value to remove — carried structurally so the CLI `--fix` does not have to
+   * re-parse it out of `message` (brittle for values containing `: `).
+   */
+  value?: string;
 }
 
 /** Result of validating (and optionally fixing) a config tree. */
@@ -190,6 +196,7 @@ export async function validateConfig(
           kind: "dangling-reference",
           message: `local root does not exist or is not a directory: ${String(root)}`,
           fixable: true,
+          ...(typeof root === "string" ? { value: root } : {}),
         });
         if (applyFix) {
           danglingLocalRoots.push(index);

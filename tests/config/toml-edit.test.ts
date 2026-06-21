@@ -64,6 +64,20 @@ repos = ["c/d"]
     expect(r.changed).toBe(false);
     expect(r.text).toBe(toml);
   });
+
+  test("a scalar string value containing '[' does not swallow following lines", () => {
+    // The removed key's value is a scalar string with a stray '[' and no ']'.
+    // Only that one line must be dropped — the following key must survive.
+    const toml = `[connectors.github]
+bogus = "weird[value"
+repos = ["a/b"]
+`;
+    const r = removeKeyLine(toml, "connectors.github.bogus");
+    expect(r.changed).toBe(true);
+    expect(r.text).not.toContain("bogus");
+    expect(r.text).toContain('repos = ["a/b"]'); // not swallowed
+    expect(() => Bun.TOML.parse(r.text)).not.toThrow();
+  });
 });
 
 describe("removeArrayElement", () => {

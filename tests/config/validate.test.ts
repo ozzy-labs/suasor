@@ -72,15 +72,17 @@ describe("validateConfig", () => {
     expect(f?.fixable).toBe(false); // dbPath is never auto-dropped
   });
 
-  test("classifies a missing local root as a fixable dangling-reference", async () => {
+  test("classifies a missing local root as a fixable dangling-reference carrying its value", async () => {
+    const missing = join(tmp, "missing");
     const { findings } = await validateConfig(
-      { connectors: { local: { roots: ["/missing"] } } },
+      { connectors: { local: { roots: [missing] } } },
       false,
-      probe([]),
     );
     const f = findings.find((x) => x.path === "connectors.local.roots.0");
     expect(f?.kind).toBe("dangling-reference");
     expect(f?.fixable).toBe(true);
+    // The exact root value is carried structurally (not parsed from the message).
+    expect(f?.value).toBe(missing);
   });
 
   test("--fix drops typo keys and dangling roots without index drift", async () => {
