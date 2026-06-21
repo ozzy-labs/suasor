@@ -21,6 +21,7 @@
   - `InboxItemTriaged` — inbox item の仕分け（`state`: open / snoozed / done / dismissed）
   - `ProposalGenerated` — 提案候補の生成（`proposals` ledger に `pending` 記録、#89）
   - `ProposalRejected` — pending 候補の却下（`reason` 付き、#89）
+  - `ProposalFeedback` — pending 候補への再生成ヒント記録（`reason` 更新・state は `pending` 据え置き、#279）
   - `LinkAdded` — 手動 link の作成（`linkId` + 端点。relation `manual_link`、[ADR-0018](../adr/0018-knowledge-graph-traversal.md) 追補 / #90）
   - `LinkRemoved` — 手動 link の削除（`linkId` 指定・監査可能）
   - `PersonIdentityObserved` — connector author handle を person に紐付け（1 handle = 1 person、[ADR-0022](../adr/0022-person-identity-resolution.md) / #92。sync が author から自動発行）

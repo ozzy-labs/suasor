@@ -10,6 +10,7 @@ triggers:
   - 打ち合わせのフォロー
 pairs:
   - meeting-prep
+  - action-item-status
 mcp_tools_read:
   - source.list
   - source.get

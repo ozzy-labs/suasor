@@ -26,6 +26,7 @@ import {
 } from "../propose/candidates.ts";
 import { commitmentDismiss, commitmentReopen, commitmentResolve } from "../propose/commitment.ts";
 import { decisionRecord } from "../propose/decision-record.ts";
+import { proposeFeedback } from "../propose/feedback.ts";
 import { persistProposals } from "../propose/generate.ts";
 import { inboxAdd } from "../propose/inbox-add.ts";
 import { inboxTriage, TRIAGE_ACTIONS, TriageError } from "../propose/inbox-triage.ts";
@@ -227,6 +228,35 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
             : op,
         ),
       });
+      return jsonResult(result);
+    },
+  );
+
+  // --- proposal.feedback: record a regeneration hint on a pending candidate. ---
+  // Write tool (HITL): the third option beyond apply/reject (Issue #279). Records
+  // a human's note on a still-pending candidate WITHOUT changing its state (stays
+  // pending), so the next propose.generate can use it as a hint. Appends
+  // ProposalFeedback; acts only on a pending row (applied/rejected/missing are
+  // reported in the result, not mutated). Re-recording overwrites (latest wins).
+  server.registerTool(
+    "proposal.feedback",
+    {
+      title: "Propose (feedback on candidate)",
+      description:
+        "Record a regeneration hint (reason) on a pending proposal candidate " +
+        "without applying or rejecting it (Issue #279) — the candidate stays " +
+        "`pending` and the host can use the recorded reason to steer the next " +
+        "propose.generate. Write tool: requires human approval — no auto-apply " +
+        "(ADR-0004). Acts only on a pending candidate; an applied / rejected / " +
+        "missing one is reported, not changed. Re-recording overwrites (latest wins).",
+      inputSchema: {
+        candidateId: z.string().min(1).describe("Candidate id from propose.generate."),
+        reason: z.string().min(1).describe("Feedback note for the next regeneration."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: false },
+    },
+    async ({ candidateId, reason }) => {
+      const result = proposeFeedback(write.store, { candidateId, reason });
       return jsonResult(result);
     },
   );

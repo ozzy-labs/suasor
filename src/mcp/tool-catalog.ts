@@ -42,6 +42,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
   { name: "source.list", readOnlyHint: true, summary: "List ingested sources newest-first." },
   { name: "source.get", readOnlyHint: true, summary: "Fetch one source (with body) by id." },
   {
+    name: "source.get.full",
+    readOnlyHint: true,
+    summary: "Bundle a source's body + outgoing provenance links + extraction_meta in one call.",
+  },
+  {
     name: "source.history",
     readOnlyHint: true,
     summary: "List a source's body versions from the event log (newest first).",
@@ -72,6 +77,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     readOnlyHint: true,
     summary:
       "Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.",
+  },
+  {
+    name: "activity.timeline",
+    readOnlyHint: true,
+    summary: "Entity-axis merged source/task/decision timeline (newest-first) for one entity.",
   },
   {
     name: "inbox.list",
@@ -119,6 +129,11 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     name: "propose.reject",
     readOnlyHint: false,
     summary: "Reject a pending candidate with a reason (idempotent).",
+  },
+  {
+    name: "proposal.feedback",
+    readOnlyHint: false,
+    summary: "Record a regeneration hint on a pending candidate without applying/rejecting it.",
   },
   {
     name: "propose.batch",

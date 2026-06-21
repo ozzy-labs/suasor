@@ -8,7 +8,7 @@ import {
 } from "../../src/connectors/registry.ts";
 
 /** Every connector that must resolve from the registry, in sorted order. */
-const EXPECTED = ["box", "github", "google", "local", "ms-graph", "slack", "web"];
+const EXPECTED = ["box", "github", "google", "local", "ms-graph", "notion", "slack", "web"];
 
 describe("connector registry", () => {
   test("connectorNames returns the full registered set, sorted", () => {
