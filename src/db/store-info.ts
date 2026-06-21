@@ -38,6 +38,14 @@ export interface ProjectionCount {
   rows: number;
 }
 
+/** Per-event-type count in the append-only log (Issue #270). */
+export interface EventTypeCount {
+  /** Event discriminator (`events.type`, e.g. `SourceObserved`). */
+  type: string;
+  /** Number of events of this type in the log. */
+  count: number;
+}
+
 /** Store health snapshot returned by {@link storeInfo}. */
 export interface StoreInfo {
   /** Absolute path of the SQLite database file (`null` for an in-memory DB). */
@@ -54,6 +62,22 @@ export interface StoreInfo {
   embeddingsMeta: number | null;
   /** Rows in the FTS5 index over source bodies (`null` when the table is absent). */
   ftsRows: number | null;
+}
+
+/**
+ * Count events grouped by their discriminator (`events.type`), descending by
+ * count then ascending by type for a stable, readable order (Issue #270).
+ *
+ * Read-only: a single `COUNT(*) ... GROUP BY type` over the append-only log
+ * (ADR-0002). Useful for rebuild/replay debugging and for seeing the source
+ * mix at a glance without parsing payloads. Backed by `idx_events_type`.
+ */
+export function eventTypeBreakdown(sqlite: Database): EventTypeCount[] {
+  return sqlite
+    .query<EventTypeCount, []>(
+      "SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY count DESC, type ASC",
+    )
+    .all();
 }
 
 /** Count rows in a table, returning `null` if the table does not exist. */

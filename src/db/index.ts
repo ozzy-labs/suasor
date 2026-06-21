@@ -26,6 +26,8 @@ export {
 export { countEventRows, createEventsTable, readAllEventRows } from "./events-table.ts";
 export * as schema from "./schema.ts";
 export {
+  type EventTypeCount,
+  eventTypeBreakdown,
   formatBytes,
   type ProjectionCount,
   type StoreInfo,
