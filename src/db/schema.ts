@@ -89,8 +89,11 @@ export const inbox = sqliteTable("inbox", {
  *   - `pending`  — generated, awaiting human decision (propose.list shows it)
  *   - `applied`  — a human approved it and propose.apply persisted the entity
  *   - `rejected` — a human rejected it via propose.reject (carries a reason)
- * Folded from `ProposalGenerated` / `ProposalRejected` plus the entity events
- * propose.apply appends (matched back by `entity_id`). Rebuildable (ADR-0002).
+ * A still-`pending` row can also carry a `reason` from proposal.feedback (Issue
+ * #279) — a regeneration hint that does NOT change its state.
+ * Folded from `ProposalGenerated` / `ProposalRejected` / `ProposalFeedback` plus
+ * the entity events propose.apply appends (matched back by `entity_id`).
+ * Rebuildable (ADR-0002).
  */
 export const proposals = sqliteTable("proposals", {
   candidateId: text("candidate_id").primaryKey(),

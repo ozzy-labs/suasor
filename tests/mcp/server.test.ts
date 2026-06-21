@@ -67,6 +67,7 @@ describe("MCP read surface", () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
+        "activity.timeline",
         "brief",
         "commitment.list",
         "decision.list",
@@ -80,6 +81,7 @@ describe("MCP read surface", () => {
         "search.hybrid",
         "slack.demand.list",
         "source.get",
+        "source.get.full",
         "source.history",
         "source.list",
         "task.list",
@@ -610,6 +612,75 @@ describe("MCP read surface", () => {
     expect(res.isError).toBe(true);
     expect(res.content[0]?.text).toContain("validation");
   });
+
+  test("source.get.full bundles body + outgoing links + extraction_meta (#279)", async () => {
+    seedSource("s1", "rocket plans");
+    store.record({
+      type: "LinkAdded",
+      linkId: "ln1",
+      fromKind: "source",
+      fromId: "s1",
+      toKind: "decision",
+      toId: "d1",
+    });
+    const client = await connect();
+    const res = await client.callTool({
+      name: "source.get.full",
+      arguments: { externalId: "s1" },
+    });
+    const full = parseResult(res as never) as {
+      source: { externalId: string; body: string } | null;
+      links: { kind: string; id: string; relation: string; direction: string; linkId?: string }[];
+      extractionMeta: unknown;
+    };
+    expect(full.source?.externalId).toBe("s1");
+    expect(full.source?.body).toBe("rocket plans");
+    expect(full.links).toEqual([
+      { kind: "decision", id: "d1", relation: "manual_link", direction: "out", linkId: "ln1" },
+    ]);
+    expect(full.extractionMeta).toBeNull();
+  });
+
+  test("source.get.full rejects an empty externalId (input validation)", async () => {
+    const client = await connect();
+    const res = (await client.callTool({
+      name: "source.get.full",
+      arguments: { externalId: "" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("validation");
+  });
+
+  test("activity.timeline merges connected entities newest-first (#279)", async () => {
+    seedSource("s1", "source body"); // observedAt 2026-06-14
+    store.record({
+      type: "TaskProposed",
+      taskId: "t1",
+      title: "derived task",
+      sourceExternalIds: ["s1"],
+    });
+    const client = await connect();
+    const res = await client.callTool({
+      name: "activity.timeline",
+      arguments: { kind: "source", id: "s1" },
+    });
+    const timeline = parseResult(res as never) as {
+      origin: { kind: string; id: string };
+      items: { kind: string; id: string; at: string }[];
+    };
+    expect(timeline.origin).toEqual({ kind: "source", id: "s1" });
+    expect(timeline.items.map((i) => i.kind).sort()).toEqual(["source", "task"]);
+  });
+
+  test("activity.timeline rejects an empty id (input validation)", async () => {
+    const client = await connect();
+    const res = (await client.callTool({
+      name: "activity.timeline",
+      arguments: { kind: "person", id: "" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("validation");
+  });
 });
 
 describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
@@ -640,6 +711,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         // read
+        "activity.timeline",
         "brief",
         "commitment.list",
         "decision.list",
@@ -653,6 +725,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "search.hybrid",
         "slack.demand.list",
         "source.get",
+        "source.get.full",
         "source.history",
         "source.list",
         "task.list",
@@ -662,6 +735,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "propose.apply",
         "propose.reject",
         "propose.batch",
+        "proposal.feedback",
         "task.create",
         "task.update",
         "decision.record",
@@ -689,6 +763,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "propose.apply",
       "propose.reject",
       "propose.batch",
+      "proposal.feedback",
       "task.create",
       "task.update",
       "decision.record",
@@ -918,6 +993,60 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       (await client.callTool({ name: "commitment.list", arguments: { state: "open" } })) as never,
     ) as { commitments: unknown[] };
     expect(stillOpen.commitments).toHaveLength(0);
+  });
+
+  test("proposal.feedback records a reason and keeps the candidate pending (#279)", async () => {
+    const client = await connectWrite();
+    const gen = parseResult(
+      (await client.callTool({
+        name: "propose.generate",
+        arguments: {
+          mode: "source_extract",
+          candidates: [{ kind: "task", title: "needs work" }],
+        },
+      })) as never,
+    ) as { candidates: { candidateId: string }[] };
+    const candidateId = gen.candidates[0]?.candidateId as string;
+
+    const fb = parseResult(
+      (await client.callTool({
+        name: "proposal.feedback",
+        arguments: { candidateId, reason: "make it concrete" },
+      })) as never,
+    ) as { status: string; candidateId: string };
+    expect(fb.status).toBe("recorded");
+
+    // Still pending, with the recorded reason surfaced via propose.list.
+    const pending = parseResult(
+      (await client.callTool({
+        name: "propose.list",
+        arguments: { state: "pending" },
+      })) as never,
+    ) as { proposals: { candidateId: string; state: string; reason: string }[] };
+    expect(pending.proposals).toHaveLength(1);
+    expect(pending.proposals[0]?.candidateId).toBe(candidateId);
+    expect(pending.proposals[0]?.reason).toBe("make it concrete");
+  });
+
+  test("proposal.feedback reports missing for an unknown candidate (#279)", async () => {
+    const client = await connectWrite();
+    const fb = parseResult(
+      (await client.callTool({
+        name: "proposal.feedback",
+        arguments: { candidateId: "cand_nope", reason: "x" },
+      })) as never,
+    ) as { status: string };
+    expect(fb.status).toBe("missing");
+  });
+
+  test("proposal.feedback rejects an empty reason (input validation)", async () => {
+    const client = await connectWrite();
+    const res = (await client.callTool({
+      name: "proposal.feedback",
+      arguments: { candidateId: "cand_x", reason: "" },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect(res.content[0]?.text).toContain("validation");
   });
 });
 
