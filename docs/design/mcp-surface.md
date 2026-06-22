@@ -232,8 +232,8 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `proposal.feedback` | pending 候補に「修正して再生成」用の reason を記録（state は `pending` のまま、次 generate のヒント） | 実装済み（#279。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
 | `task.update` | task の lifecycle 状態遷移（open / in_progress / completed / dropped） | 実装済み（下記参照） |
-| `task.publish` | task を単一の外部ホーム（GitHub Issues / GitHub Projects v2 / Jira / Slack List）へ起票（egress・`openWorldHint: true`・[ADR-0036](../adr/0036-task-external-home.md)） | 実装済み（GitHub Issues / Projects v2 先行。下記参照） |
-| `task.act` | 公開済み task への状態操作を外部ホームへ発行（complete / reopen / comment・egress・`openWorldHint: true`） | 実装済み（GitHub Issues / Projects v2 先行。下記参照） |
+| `task.publish` | task を単一の外部ホーム（GitHub Issues（任意で Projects v2 board）/ Jira / Slack List）へ起票（egress・`openWorldHint: true`・[ADR-0036](../adr/0036-task-external-home.md)） | 実装済み（GitHub 先行。下記参照） |
+| `task.act` | 公開済み task への状態操作を外部ホームへ発行（complete / reopen / comment・egress・`openWorldHint: true`） | 実装済み（GitHub 先行。下記参照） |
 | `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
 | `inbox.add` | 受信箱項目を捕捉（state `open`） | 実装済み（#88。下記参照） |
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |

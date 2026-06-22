@@ -207,20 +207,23 @@ export const TasksConfig = z
     home: z
       .object({
         /** Which external tool hosts tasks. */
-        destination: z.enum(["github", "github_projects", "jira", "slack"]),
+        destination: z.enum(["github", "jira", "slack"]),
         /** GitHub target as `"owner/repo"` (when destination = github). */
         repo: z.string().min(1).optional(),
         /**
          * When destination = jira: Jira project key.
-         * When destination = github_projects: the Projects v2 node id (`PVT_...`).
+         * When destination = github: optional Projects v2 board node id (`PVT_...`)
+         * to also add the created Issue to (ADR-0036).
          */
         project: z.string().min(1).optional(),
         /** Slack list id (when destination = slack). */
         list: z.string().min(1).optional(),
         /**
-         * GitHub Projects v2 single-select Status field mapping (ADR-0036). These
-         * node ids are project-specific (like a Jira custom workflow), so they are
-         * config-driven; without them complete/reopen returns a structured error.
+         * GitHub Projects v2 single-select Status field mapping, used when a
+         * `github` home also has a `project` board (ADR-0036). These node ids are
+         * project-specific (like a Jira custom workflow), so they are config-driven;
+         * without them complete/reopen only changes the Issue state (board Status
+         * stays untouched).
          */
         statusFieldId: z.string().min(1).optional(),
         doneOptionId: z.string().min(1).optional(),

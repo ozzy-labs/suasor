@@ -15,7 +15,7 @@
   - `SyncRunEnded` — sync run の終了（`connector` / `runId` / `status`（ok / partial / error）/ `observed` / `updated` / `unchanged` / `durationMs` / `error?`、[ADR-0033](../adr/0033-sync-run-history.md)）。**成功・失敗いずれでも append**（connector が throw した run も `status=error` で残る）ため、`ConnectorSyncCompleted` だけでは取れない「直近 sync が失敗」を鮮度ビューに表せる
   - `TaskProposed` — task 候補の提案（HITL・未適用。`dueDate?` / `priority?`（low / normal / high）の scheduling fields を持つ、[ADR-0028](../adr/0028-task-scheduling-fields.md) / #147。欠落時は null＝旧 event の replay 互換）
   - `TaskApplied` — 提案 task の承認・適用（`state`: open / in_progress / completed / dropped。`dueDate?` / `priority?` を任意に同時 (re)set。null は既存値を維持＝reducer が COALESCE、[ADR-0028](../adr/0028-task-scheduling-fields.md)）
-  - `TaskPublished` — task を単一の外部ホーム（GitHub Issues / GitHub Projects v2 / Jira / Slack List）へ起票した記録（[ADR-0036](../adr/0036-task-external-home.md)・egress。`taskId` / `destination` / `externalId` / `publishedAt` のみで **body は持たない**。reducer が `tasks` の `published_*` 列＋`task → external_task` の `published_to` link を fold。`externalId` で冪等＝再起票 no-op）
+  - `TaskPublished` — task を単一の外部ホーム（GitHub Issues（任意で Projects v2 board）/ Jira / Slack List）へ起票した記録（[ADR-0036](../adr/0036-task-external-home.md)・egress。`taskId` / `destination` / `externalId` / `publishedAt` のみで **body は持たない**。reducer が `tasks` の `published_*` 列＋`task → external_task` の `published_to` link を fold。`externalId` で冪等＝再起票 no-op）
   - `TaskActionIssued` — 公開済み task への状態操作（complete / reopen / comment）を外部ホームへ発行した監査記録（[ADR-0036](../adr/0036-task-external-home.md)・**body-less**。状態正本は外部ツール側＝projection なし＝reducer no-op、`DraftExported` と同型）
   - `DecisionRecorded` — 決定の記録（`rationale` + provenance）
   - `ReplyDraftProposed` — 返信下書きの提案（HITL・送信はユーザー手動）
