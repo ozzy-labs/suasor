@@ -65,7 +65,9 @@ usage-guard の取り扱い:
 各 checkpoint で以下を実行する:
 
 1. `usage-guard` エンジン（`.claude/skills/usage-guard/SKILL.md`、user-scope では `~/.claude/skills/usage-guard/SKILL.md`）を Read し、その「軽量 wait-loop」を実行する（= 同階層の `usage-check.mjs` を Bash 実行して JSON を得る）。
-2. `ok: true`（両枠とも閾値未満）→ **通常進行**。次のフェーズ／wave／worker dispatch へそのまま進む。
+   - **wave / worker dispatch checkpoint（オーケストレーション）では headroom-aware に gate する（#141）**: wave dispatch は **N 個の中断不能 worker** を確定起動し、それらは走行中に枠を消費する。現在値だけで判定すると 1 wave 分の見込み消費を見込めず、wave 走行中に閾値を飛び越えて overshoot する（実観測: `five_hour` 86% → 1 wave で 98%、3-worker 並列）。これを防ぐため、dispatch checkpoint では `usage-check.mjs --headroom <pct>` を渡し、**見込み post-dispatch 値**（`util + reserve(N) >= threshold`）で gate する。`reserve(N)` は並列度 `N`（`--concurrency`、既定 `min(4, wave 内タスク数)`）に比例した予約。**目安は `reserve = N × per_worker_pct`**（`per_worker_pct` は heavy worker 1 本あたりの見込み消費。実観測の `86→98 / 3-worker ≈ 4pt/worker` を初期値に、env `USAGE_GUARD_DISPATCH_HEADROOM` で上書き）。例: `concurrency=3`・`per_worker≈4pt` → `--headroom 12` → `threshold(95) − 12 = 83%` を超えていれば dispatch 前に pause。`--concurrency` が大きいほど reserve を増やす。
+   - **単一モードの Phase1 / review-loop checkpoint は headroom を渡さない**（= 既定 0、現在値で gate。従来どおり）。1 unit の消費は中断可能境界で吸収できるため reserve は不要。
+2. `ok: true`（両枠とも閾値未満。dispatch checkpoint では `util + reserve` が閾値未満）→ **通常進行**。次のフェーズ／wave／worker dispatch へそのまま進む。
 3. `ok: false`（いずれかの枠が閾値超過）→ usage-guard の wait-loop に委譲する。`wait_seconds` にはポストリセットのバッファ（`resume_buffer_seconds`、既定 +300 秒）が折り込まれており、待機は `resets_at + buffer` まで延びる（リセット丁度の再突入による再ハネを回避）:
    - in-session・待機 ≤1h → `ScheduleWakeup(min(wait_seconds, 3600))` で heartbeat を仕込み、**待機する**（待機中は再入せず予算を消費しない）。`wait_seconds` が 3600 を超える場合は複数回に分けて再チェックする。
    - 非 /loop オーケストレーション（Agent tool / Workflow drive）・待機 >1h・再起動耐性が必要 → `CronCreate`（`recurring: false`, durable）を **`resets_at + resume_buffer_seconds`** にセットし、発火時に継続コマンドを再投入する（壁時計一発・再起動耐性。one-shot は発火後 auto-delete）。既定 ON によりこの経路（>1h・非 /loop）を踏みやすいため、該当時は `ScheduleWakeup` ではなく **`CronCreate`(one-shot, durable)** を優先する。詳細は usage-guard SKILL.md §軽量 wait-loop「再開トリガの選択」。
@@ -75,10 +77,20 @@ usage-guard の取り扱い:
 
 > 継続コマンドには**元の引数列**をそのまま渡す（既定 ON のため `--usage-guard` の付与は不要。resume 後も guard は既定で効き続ける）。
 
-#### 粒度と二重化
+#### 粒度と二重化（in-wave overshoot への二層防御・#141）
 
-- orchestration の停止は **wave 境界 / worker dispatch 境界の粒度**。一度起動した worker の**走行中（mid-unit）の超過**はこのフラグでは止められない。長い unit 内の ceiling は #123 の **PreToolUse hook**（全 tool 呼び出し前に効き、subagent 内にも届く）が担う（推奨併用）。一過性異常値で hook が誤 deny し session が hard-stop した場合は **`touch ~/.claude/usage-guard/DISABLE`** で即解除できる（#139、usage-guard SKILL.md §無効化）。
-- worker（subagent）に渡す prompt 自体は無改変でよい。worker は単一モードを実行するため、**親が（既定 ON で）worker dispatch 前に checkpoint を挟む**ことで wave 粒度の予算対応になる。
+orchestration の停止は **wave 境界 / worker dispatch 境界の粒度**。ここには構造的な失敗モードがある:
+
+- **失敗モード（in-wave overshoot）**: 境界 checkpoint が `ok:true` で dispatch しても、起動した N 本の worker は**走行中に枠を消費する**。境界 checkpoint は走行中には効かないため、wave 走行中に閾値を飛び越えて 100% に到達し得る。`ok:false` は次の境界で**事後検知**されるだけで、その wave の overshoot は防げない（実観測: dispatch 前 86%・threshold 95 → 3-worker 並列 → 走行中 98%）。**threshold 引き下げは並列度を見込めない stopgap で代替にならない**。
+
+これを **二層防御**で塞ぐ:
+
+1. **境界の resumable pause（headroom-aware・予防）**: wave / worker dispatch checkpoint で `usage-check.mjs --headroom <pct>`（`reserve(N)` を `--concurrency` から算出）を渡し、**見込み post-dispatch 値**で gate して dispatch 自体を見込みで止める（前述「checkpoint での手順」step 1）。headroom-trip 時の待機は枠端 + buffer（枠リセットで headroom が回復する）。
+2. **mid-unit ceiling（#123 PreToolUse hook・確実な天井）**: 一度起動した worker の走行中（mid-unit）超過は境界では止まらない。**全 tool 呼び出し前に効き subagent 内にも届く** #123 hook が唯一の確実な天井。`/drive` の wave 並列を回す環境では `matcher:"*"` の hook を**既定で配線することを推奨**する（#141）。以前は **pre-#139** の hook が一過性異常値で hard-stop するリスクから「推奨併用」止まりだったが、**#139（file kill-switch / 反映ラグ ALLOW / debounce / spike 棄却）で hard-stop リスクが解消された**ため、既定配線が安全になった。万一の誤 deny は **`touch ~/.claude/usage-guard/DISABLE`** で即解除できる（usage-guard SKILL.md §無効化）。配線手順は usage-guard SKILL.md §PreToolUse hook を有効化。
+
+> 境界 pause（headroom-aware）と mid-unit hook は**どちらか一方では不十分**。headroom は「dispatch を見込みで止める」予防、hook は「走行中の確実な天井」。両者を揃えて初めて overshoot を実用上塞げる。
+
+- worker（subagent）に渡す prompt 自体は無改変でよい。worker は単一モードを実行するため、**親が（既定 ON で）worker dispatch 前に headroom-aware checkpoint を挟む**ことで wave 粒度の予算対応になる。
 
 #### fail-open（劣化可視化）
 
@@ -153,7 +165,7 @@ Workflow 方式固有の注意:
 - 途中失敗からの再開は `Workflow({scriptPath, resumeFromRunId})`。完了済み worker はキャッシュから復元される
 - **Phase Final-1 / Final-2 / Final-3 は workflow 終了後に会話側で実行する**。worker の worktree は変更を含むためランタイムの自動削除対象にならず、cleanup 手順（後述の Phase Final-2 節）が引き続き必要。worktree path 規約（`.claude/worktrees/agent-<id>/`）も同一
 - `--merge` 未指定時の一括マージ確認（「完了後」節の AskUserQuestion）は workflow の return 後に行う
-- **wave checkpoint は会話側で挟む**（既定 ON。`--no-usage-guard` 指定時は省略）。workflow スクリプトは決定論実行で SKILL.md の Read も `ScheduleWakeup` も呼べないため、wave 単位で workflow を起動し、各 wave の起動**前**に会話側で「usage-guard 配線」節の checkpoint を実行する（`ok` なら次 wave の workflow を起動、超過なら待機 → `/drive <元の引数>` で再入し、`resumeFromRunId` で完了済み worker をキャッシュ復元して続行）
+- **wave checkpoint は会話側で挟む**（既定 ON。`--no-usage-guard` 指定時は省略）。workflow スクリプトは決定論実行で SKILL.md の Read も `ScheduleWakeup` も呼べないため、wave 単位で workflow を起動し、各 wave の起動**前**に会話側で「usage-guard 配線」節の checkpoint を **headroom-aware に**（`--headroom` を `--concurrency` から算出。#141）実行する（`ok` なら次 wave の workflow を起動、超過なら待機 → `/drive <元の引数>` で再入し、`resumeFromRunId` で完了済み worker をキャッシュ復元して続行）。workflow 走行中（dispatch 済み worker の mid-unit 超過）は #123 PreToolUse hook が天井を担う（§粒度と二重化）
 
 ### subagent dispatch（オーケストレーションモード・Agent tool 方式 fallback）
 
