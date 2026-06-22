@@ -90,6 +90,11 @@ describe("reducer: TaskPublished / TaskActionIssued (ADR-0036)", () => {
       publishedAt: "2026-06-22T00:00:00+00:00",
     });
     expect(publishedRow("ghost")).toBeNull();
+    // No orphan published_to link for a task that does not exist.
+    const links = store.connection.sqlite
+      .query("SELECT COUNT(*) AS n FROM links WHERE relation='published_to'")
+      .get() as { n: number };
+    expect(links.n).toBe(0);
   });
 
   test("TaskActionIssued is a projection no-op (audit only)", () => {

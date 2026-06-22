@@ -285,7 +285,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       // same externalId) refreshes the same row rather than duplicating. Only
       // updates an existing task (the task must have been proposed first); a
       // TaskPublished with no matching task is a no-op under replay.
-      sqlite
+      const published = sqlite
         .query(
           `UPDATE tasks SET
              published_destination = $destination,
@@ -302,13 +302,17 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           $ts: event.recordedAt,
         });
       // Record the provenance link task → external item (loop-avoidance dedup).
-      upsertLink(sqlite, {
-        fromKind: "task",
-        fromId: event.taskId,
-        toKind: "external_task",
-        toId: event.externalId,
-        relation: "published_to",
-      });
+      // Only when the task actually exists, so an unmatched TaskPublished (no
+      // prior TaskProposed) stays a clean no-op and never leaves an orphan link.
+      if (published.changes > 0) {
+        upsertLink(sqlite, {
+          fromKind: "task",
+          fromId: event.taskId,
+          toKind: "external_task",
+          toId: event.externalId,
+          relation: "published_to",
+        });
+      }
       return;
     }
     case "TaskActionIssued": {
