@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.16](https://github.com/ozzy-labs/suasor/compare/v0.1.15...v0.1.16) (2026-06-21)
+
+
+### Features
+
+* **cli:** interactive onboard connector selection + cron invocation note ([#301](https://github.com/ozzy-labs/suasor/issues/301)) ([683bd1f](https://github.com/ozzy-labs/suasor/commit/683bd1fb0997c10d75c175d5efadc28d4cb978c0))
+
+
+### Bug Fixes
+
+* **cli:** cli.md drift + minor UX polish ([#305](https://github.com/ozzy-labs/suasor/issues/305)) ([e6c1132](https://github.com/ozzy-labs/suasor/commit/e6c1132c65469474d82d498d4686667c99a7a3c8))
+* **config:** embedding.dim guard / docker model / readiness warnings ([#307](https://github.com/ozzy-labs/suasor/issues/307)) ([e8d6147](https://github.com/ozzy-labs/suasor/commit/e8d614788b99765033b7ad0e862e20811ebeed6d))
+* **connectors:** notion/jira onboard templates + no-op detectors + box template key ([#298](https://github.com/ozzy-labs/suasor/issues/298)) ([fffb5df](https://github.com/ozzy-labs/suasor/commit/fffb5dfc8c0d8306114e2f2a578b97849e415ef0))
+* **db:** align drizzle artifact with runtime schema + document extraction_meta ([#300](https://github.com/ozzy-labs/suasor/issues/300)) ([25c79f0](https://github.com/ozzy-labs/suasor/commit/25c79f0d896ba8bffcc1b0b549170b8bcb74180a))
+* **mcp:** align write tool description, add list truncation transparency, fix doc refs ([#303](https://github.com/ozzy-labs/suasor/issues/303)) ([f38290a](https://github.com/ozzy-labs/suasor/commit/f38290af1a2a91ea2e584fbafe49c34a19ef13b6))
+* **skills:** read/write boundary drift + frontmatter validator cross-check ([#302](https://github.com/ozzy-labs/suasor/issues/302)) ([1f1ab26](https://github.com/ozzy-labs/suasor/commit/1f1ab26b178986a41d347fc7bcf94a1c24446b33))
+
 ## [0.1.15](https://github.com/ozzy-labs/suasor/compare/v0.1.14...v0.1.15) (2026-06-21)
 
 
