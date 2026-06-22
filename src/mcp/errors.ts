@@ -53,6 +53,10 @@ export type McpErrorCode =
   | "EXPORT_DIR_NOT_CONFIGURED"
   | "CONFIG_INVALID"
   | "UNKNOWN_CONNECTOR"
+  // Task external-home management (ADR-0036).
+  | "ACTUATOR_NOT_CONFIGURED"
+  | "PUBLISH_DESTINATION_INVALID"
+  | "EGRESS_FAILED"
   | "INTERNAL";
 
 /** The serialized body carried inside an `isError` tool result. */

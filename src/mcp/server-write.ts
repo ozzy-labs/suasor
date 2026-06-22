@@ -36,6 +36,7 @@ import { personMerge } from "../propose/person-merge.ts";
 import { personSplit } from "../propose/person-split.ts";
 import { proposeReject } from "../propose/reject.ts";
 import { taskCreate } from "../propose/task-create.ts";
+import { taskAct, taskPublish } from "../propose/task-publish.ts";
 import { taskUpdate } from "../propose/task-update.ts";
 import { toolError, toToolError } from "./errors.ts";
 import { isoDateTime, jsonResult, type McpServerDeps } from "./server-shared.ts";
@@ -337,6 +338,73 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         ...(priority !== undefined ? { priority } : {}),
       });
       return jsonResult(result);
+    },
+  );
+
+  // --- task.publish: 起票 a task to its single external home (ADR-0036). ---
+  // Egress write (single-pane). Publishes a confirmed task to the configured
+  // [tasks].home (GitHub Issues first) and appends a body-less TaskPublished.
+  // HITL, openWorldHint (external I/O), idempotent on the deterministic taskId.
+  server.registerTool(
+    "task.publish",
+    {
+      title: "Publish task to external home",
+      description:
+        "Publish a confirmed task to its single external home ([tasks].home: " +
+        "GitHub Issues / Jira / Slack List) and record TaskPublished (ADR-0036). " +
+        "Egress write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "Idempotent: an already-published task is a no-op (returns existing).",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Id of the task to publish."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: true },
+    },
+    async ({ taskId }) => {
+      try {
+        const result = await taskPublish(write.store, write.config, { taskId });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
+    },
+  );
+
+  // --- task.act: lifecycle write-back to a published task's home (ADR-0036). ---
+  // complete / reopen / comment issued to the external tool (the state authority);
+  // appends a body-less TaskActionIssued. HITL, openWorldHint.
+  server.registerTool(
+    "task.act",
+    {
+      title: "Act on a published task",
+      description:
+        "Issue a lifecycle operation (complete / reopen / comment) to a published " +
+        "task's external home and record TaskActionIssued (ADR-0036). The external " +
+        "tool is the state authority; suasor reflects it back via read-back. " +
+        "Egress write tool: requires human approval — no auto-apply (ADR-0004).",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Id of the published task to act on."),
+        action: z
+          .enum(["complete", "reopen", "comment"])
+          .describe("Lifecycle operation to issue to the external home."),
+        body: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Comment body (required when action = comment)."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: true },
+    },
+    async ({ taskId, action, body }) => {
+      try {
+        const result = await taskAct(write.store, write.config, {
+          taskId,
+          action,
+          ...(body !== undefined ? { body } : {}),
+        });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 

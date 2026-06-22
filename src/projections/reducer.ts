@@ -279,6 +279,49 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
         });
       return;
     }
+    case "TaskPublished": {
+      // Fold the external-home identity link onto the task (ADR-0036). Idempotent
+      // on externalId: re-publishing the same task (same deterministic taskId →
+      // same externalId) refreshes the same row rather than duplicating. Only
+      // updates an existing task (the task must have been proposed first); a
+      // TaskPublished with no matching task is a no-op under replay.
+      const published = sqlite
+        .query(
+          `UPDATE tasks SET
+             published_destination = $destination,
+             published_external_id = $externalId,
+             published_at = $publishedAt,
+             updated_at = $ts
+           WHERE id = $id`,
+        )
+        .run({
+          $id: event.taskId,
+          $destination: event.destination,
+          $externalId: event.externalId,
+          $publishedAt: event.publishedAt,
+          $ts: event.recordedAt,
+        });
+      // Record the provenance link task → external item (loop-avoidance dedup).
+      // Only when the task actually exists, so an unmatched TaskPublished (no
+      // prior TaskProposed) stays a clean no-op and never leaves an orphan link.
+      if (published.changes > 0) {
+        upsertLink(sqlite, {
+          fromKind: "task",
+          fromId: event.taskId,
+          toKind: "external_task",
+          toId: event.externalId,
+          relation: "published_to",
+        });
+      }
+      return;
+    }
+    case "TaskActionIssued": {
+      // Audit-only (body-less, ADR-0036 §4). The authoritative lifecycle state
+      // lives in the external tool and is reflected back via read-back (which
+      // appends TaskApplied), so this event folds to nothing — same no-op as
+      // DraftExported / ConnectorSyncCompleted.
+      return;
+    }
     case "DecisionRecorded": {
       sqlite
         .query(

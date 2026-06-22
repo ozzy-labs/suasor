@@ -74,6 +74,11 @@ export function initSchema(sqlite: Database): void {
       -- NOT stored — it is derived at read time (dueDate < now AND open/in_progress).
       due_date   TEXT,
       priority   TEXT,
+      -- External home link (ADR-0036); NULL until the task is published (egress).
+      -- Identity link for read-back & loop-avoidance (native task vs its mirror).
+      published_destination TEXT,
+      published_external_id TEXT,
+      published_at          TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -184,6 +189,10 @@ export function initSchema(sqlite: Database): void {
   // non-destructive (the event log is the source of truth — ADR-0002).
   ensureColumn(sqlite, "tasks", "due_date", "TEXT");
   ensureColumn(sqlite, "tasks", "priority", "TEXT");
+  // External-home link (ADR-0036) on legacy tables.
+  ensureColumn(sqlite, "tasks", "published_destination", "TEXT");
+  ensureColumn(sqlite, "tasks", "published_external_id", "TEXT");
+  ensureColumn(sqlite, "tasks", "published_at", "TEXT");
 
   // task.list filters overdue tasks by due_date (ADR-0028); index it. Created
   // after ensureColumn so the column exists on legacy tables too.

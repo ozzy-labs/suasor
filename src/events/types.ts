@@ -192,6 +192,53 @@ export const TaskApplied = z.object({
   priority: TaskPriority.nullable().default(null),
 });
 
+/** External task-home destinations a task can be published to (ADR-0036). */
+export const TaskDestination = z.enum(["github", "jira", "slack"]);
+export type TaskDestination = z.infer<typeof TaskDestination>;
+
+/**
+ * A task was published (起票) to its single external home (ADR-0036, egress).
+ *
+ * Body-less audit event (mirrors {@link DraftExported}): it records *that* the
+ * task was created in an external tool and *where* (the cross-source `externalId`
+ * is the identity link that lets later syncs recognise "this external item is my
+ * task" — loop avoidance, ADR-0036 §8). It carries no task body. The reducer
+ * folds the link onto the `tasks` projection (published_*) and is idempotent on
+ * `externalId` (re-publish of the same task is a no-op, matching the
+ * deterministic `taskId` idempotency key).
+ */
+export const TaskPublished = z.object({
+  type: z.literal("TaskPublished"),
+  ...Envelope,
+  taskId: z.string().min(1),
+  /** Which external home the task was published to. */
+  destination: TaskDestination,
+  /** Cross-source-unique id of the created external item (identity link). */
+  externalId: z.string().min(1),
+  /** When the task was published (ISO 8601). */
+  publishedAt: IsoDateTime,
+});
+
+/**
+ * A state operation (complete / reopen / comment) was issued to a published
+ * task's external home (ADR-0036, single-pane write-back). Body-less audit
+ * event: the comment body (when `action === "comment"`) is sent to the tool but
+ * NOT folded here (content-minimization, ADR-0003). Projection no-op — the
+ * authoritative state lives in the tool and is reflected back via read-back
+ * (ADR-0036 §6), so this event is audit-only (same as {@link DraftExported}).
+ */
+export const TaskActionIssued = z.object({
+  type: z.literal("TaskActionIssued"),
+  ...Envelope,
+  taskId: z.string().min(1),
+  /** External item the action targeted. */
+  externalId: z.string().min(1),
+  /** The state operation issued to the external home. */
+  action: z.enum(["complete", "reopen", "comment"]),
+  /** When the action was issued (ISO 8601). */
+  issuedAt: IsoDateTime,
+});
+
 /** A decision was recorded (provenance-tracked, ADR-0002). */
 export const DecisionRecorded = z.object({
   type: z.literal("DecisionRecorded"),
@@ -438,6 +485,8 @@ export const DomainEvent = z.discriminatedUnion("type", [
   SyncRunEnded,
   TaskProposed,
   TaskApplied,
+  TaskPublished,
+  TaskActionIssued,
   DecisionRecorded,
   ReplyDraftProposed,
   DraftExported,
@@ -467,6 +516,8 @@ export const EVENT_TYPES = [
   "SyncRunEnded",
   "TaskProposed",
   "TaskApplied",
+  "TaskPublished",
+  "TaskActionIssued",
   "DecisionRecorded",
   "ReplyDraftProposed",
   "DraftExported",
@@ -499,6 +550,8 @@ export type NewEvent =
   | Omit<z.input<typeof SyncRunEnded>, "id" | "recordedAt">
   | Omit<z.input<typeof TaskProposed>, "id" | "recordedAt">
   | Omit<z.input<typeof TaskApplied>, "id" | "recordedAt">
+  | Omit<z.input<typeof TaskPublished>, "id" | "recordedAt">
+  | Omit<z.input<typeof TaskActionIssued>, "id" | "recordedAt">
   | Omit<z.input<typeof DecisionRecorded>, "id" | "recordedAt">
   | Omit<z.input<typeof ReplyDraftProposed>, "id" | "recordedAt">
   | Omit<z.input<typeof DraftExported>, "id" | "recordedAt">
