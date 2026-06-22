@@ -142,18 +142,23 @@ describe("[tasks] config (ADR-0036)", () => {
     expect(() => TasksConfig.parse({ home: { destination: "trello" } })).toThrow();
   });
 
-  test("parses a github_projects home with Status field mapping (ADR-0036)", () => {
+  test("parses a github home with an optional Projects v2 board (ADR-0036)", () => {
     const c = TasksConfig.parse({
       home: {
-        destination: "github_projects",
+        destination: "github",
+        repo: "acme/widgets",
         project: "PVT_kw1",
         statusFieldId: "PVTSSF_s",
         doneOptionId: "od",
         todoOptionId: "ot",
       },
     });
-    expect(c.home?.destination).toBe("github_projects");
+    expect(c.home?.destination).toBe("github");
     expect(c.home?.project).toBe("PVT_kw1");
     expect(c.home?.statusFieldId).toBe("PVTSSF_s");
+  });
+
+  test("rejects github_projects (folded into the github home, ADR-0036)", () => {
+    expect(() => TasksConfig.parse({ home: { destination: "github_projects" } })).toThrow();
   });
 });
