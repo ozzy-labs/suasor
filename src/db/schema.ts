@@ -32,6 +32,16 @@ export const tasks = sqliteTable("tasks", {
   dueDate: text("due_date"),
   /** Optional priority (low/normal/high); NULL when unprioritised (ADR-0028). */
   priority: text("priority"),
+  /**
+   * External home this task was published to (ADR-0036): "github"/"jira"/"slack".
+   * NULL until the task is published (egress). The triple below is the identity
+   * link used for read-back & loop-avoidance (dedup native task vs its mirror).
+   */
+  publishedDestination: text("published_destination"),
+  /** Cross-source-unique id of the external item; NULL until published. */
+  publishedExternalId: text("published_external_id"),
+  /** When the task was published (ISO 8601); NULL until published. */
+  publishedAt: text("published_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

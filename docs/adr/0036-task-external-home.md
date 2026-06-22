@@ -1,10 +1,10 @@
 # 0036. タスクの外部ホーム管理（egress write-back / single-pane）
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-22
 - Deciders: Suasor maintainers
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（event-sourced / replay-stable）, [ADR-0003](0003-local-first-and-content-minimization.md)（local-first / egress 最小化・送信は HITL）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP+HITL write）, [ADR-0007](0007-connector-contract.md)（connector 契約＝read 専用）, [ADR-0008](0008-assistant-skills.md)（assistant skills）, [ADR-0009](0009-multi-agent-neutrality.md)（write tool は全 host 共通 MCP surface）, [ADR-0021](0021-commitment-ledger.md)（commitment `dueDate`）, [ADR-0025](0025-local-draft-export.md)（local export＝egress を local file に限定。SaaS 直接 write は「別途慎重な ADR が要る」と明記）, [ADR-0028](0028-task-scheduling-fields.md)（task `dueDate` / `priority`）, [ADR-0031](0031-mcp-structured-errors.md)（MCP 構造化エラー）
-- Tracks: TBD（本 ADR 承認後に実装 Issue を作成し、Tracks に Issue 番号を記入する）
+- Tracks: #311（GitHub Issues actuator + 基盤先行。Jira / Slack actuator・読み戻し D4・task.update 統一・generate skip は後続）
 
 ## Context
 

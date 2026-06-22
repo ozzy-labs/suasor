@@ -232,6 +232,8 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `proposal.feedback` | pending 候補に「修正して再生成」用の reason を記録（state は `pending` のまま、次 generate のヒント） | 実装済み（#279。下記参照） |
 | `task.create` | task 直接追加（ホスト側で人確認を促す） | 実装済み（#12。下記参照） |
 | `task.update` | task の lifecycle 状態遷移（open / in_progress / completed / dropped） | 実装済み（下記参照） |
+| `task.publish` | task を単一の外部ホーム（GitHub Issues / Jira / Slack List）へ起票（egress・`openWorldHint: true`・[ADR-0036](../adr/0036-task-external-home.md)） | 実装済み（GitHub 先行。下記参照） |
+| `task.act` | 公開済み task への状態操作を外部ホームへ発行（complete / reopen / comment・egress・`openWorldHint: true`） | 実装済み（GitHub 先行。下記参照） |
 | `decision.record` | decision 直接記録（人自身の「これを決定として」経路） | 実装済み（#88。下記参照） |
 | `inbox.add` | 受信箱項目を捕捉（state `open`） | 実装済み（#88。下記参照） |
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
@@ -447,6 +449,15 @@ task の lifecycle 状態を遷移させる write tool（`task.create` が task 
 - **scheduling 更新**: 同一 state でも非 null の `dueDate` / `priority` を渡せば (re)set として `updated`（[ADR-0028](../adr/0028-task-scheduling-fields.md)）。reducer は null を COALESCE で既存値維持する
 - **禁止遷移なし**: 4 状態は相互に到達可能（`completed` の task を `in_progress` に戻す等も許可）。task lifecycle に invalid 遷移は設けない
 - 新規 task の作成は `task.create`（本 tool は遷移専用で title を持たない）
+
+### `task.publish` / `task.act`（確定・write / HITL・egress・[ADR-0036](../adr/0036-task-external-home.md)）
+
+確定 task を**単一の外部ホーム**（`[tasks].home`：GitHub Issues / Jira / Slack List。GitHub 先行）へ起票し、以後の状態操作を外部へ書き戻す egress write tool 群。状態正本はツール側＝suasor は読む + 操作命令を出す single pane。read 専用 connector 契約（[ADR-0007](../adr/0007-connector-contract.md)）は不変で、write は別 capability `Actuator`（`src/connectors/actuator.ts`）。両 tool とも HITL（`readOnlyHint: false`）・`openWorldHint: true`（外部 I/O）。失敗は構造化エラー（[ADR-0031](../adr/0031-mcp-structured-errors.md)）`ACTUATOR_NOT_CONFIGURED` / `PUBLISH_DESTINATION_INVALID` / `EGRESS_FAILED`。
+
+- **`task.publish`**（`src/propose/task-publish.ts`）— 引数 `{ taskId }`。actuator が起票（`taskId` を冪等キーに marker 検索→既存再利用）→ 成功時のみ `TaskPublished` を append（外部 write → event の順序）。戻り値 `{ taskId, destination, externalId, status: "published" \| "existing" }`。公開済み task は `existing` で二重起票しない。
+- **`task.act`**（同上）— 引数 `{ taskId, action: "complete" \| "reopen" \| "comment", body? }`。公開済み task の外部項目へ操作を発行 → `TaskActionIssued`（body-less）を append。未公開 task は `INVALID_STATE`。`comment` は `body` 必須。
+- **読み戻し（D4）**: 完了状態 + 期日 / 優先度はツール側で変わり、既存 sync 経由で `TaskApplied` に反映（read→ローカル event のみ＝ループしない）。
+- **ループ回避**: 起票項目に label `suasor` + body marker `<!-- suasor:task:<id> -->` を刻み、`published_to` link で native task と外部 mirror を 1 行に畳む（[ADR-0036](../adr/0036-task-external-home.md) §8）。
 
 ### `decision.record`（確定・write / HITL・[Issue #88](https://github.com/ozzy-labs/suasor/issues/88)）
 

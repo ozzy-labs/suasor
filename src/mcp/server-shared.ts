@@ -14,6 +14,7 @@ import {
   type EmbeddingConfig,
   type ExportConfig,
   type ExtractionConfig,
+  type TasksConfig,
 } from "../config/schema.ts";
 import type { Store } from "../db/index.ts";
 import type { Embedder } from "../retrieval/embedding/index.ts";
@@ -82,6 +83,8 @@ export interface McpServerDeps {
       extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
       /** `[export]` section; `draft.export` writes into `dir` (ADR-0025) + composition (#138). */
       export?: Pick<ExportConfig, "dir" | "composition">;
+      /** `[tasks]` section; task.publish / task.act egress to the external home (ADR-0036). */
+      tasks?: TasksConfig;
     };
   };
 }

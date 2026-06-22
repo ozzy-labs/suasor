@@ -90,6 +90,9 @@ CREATE TABLE `tasks` (
 	`state` text DEFAULT 'proposed' NOT NULL,
 	`due_date` text,
 	`priority` text,
+	`published_destination` text,
+	`published_external_id` text,
+	`published_at` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );

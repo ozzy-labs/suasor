@@ -52,7 +52,7 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
         "propose.generate, propose.apply, propose.reject, proposal.feedback, propose.batch, " +
-        "task.create, task.update, decision.record, inbox.add, inbox.triage, link.add, " +
+        "task.create, task.update, task.publish, task.act, decision.record, inbox.add, inbox.triage, link.add, " +
         "link.remove, person.merge, person.split, commitment.resolve, commitment.dismiss, " +
         "commitment.reopen, draft.export, source.forget) are HITL: gate them behind human " +
         "approval, never auto-apply — including the destructive source.forget (local purge, " +

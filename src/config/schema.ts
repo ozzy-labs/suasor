@@ -195,6 +195,40 @@ export const ExportConfig = z
 export type ExportConfig = z.infer<typeof ExportConfig>;
 
 /**
+ * `[tasks]` — task external-home management (ADR-0036). A confirmed task is
+ * published to a **single** external home; suasor holds no authoritative state.
+ * `home` is `null` until configured (then `task.publish` / `task.act` degrade
+ * per-call with a structured `ACTUATOR_NOT_CONFIGURED` error, never at startup).
+ * The default may be switched (乗り換え); there is no per-task override.
+ */
+export const TasksConfig = z
+  .object({
+    /** The single task home, or `null` when unconfigured. */
+    home: z
+      .object({
+        /** Which external tool hosts tasks. */
+        destination: z.enum(["github", "jira", "slack"]),
+        /** GitHub target as `"owner/repo"` (when destination = github). */
+        repo: z.string().min(1).optional(),
+        /** Jira project key (when destination = jira). */
+        project: z.string().min(1).optional(),
+        /** Slack list id (when destination = slack). */
+        list: z.string().min(1).optional(),
+      })
+      .passthrough()
+      .nullable()
+      .default(null),
+    /**
+     * Slack-only loop-avoidance: exclude the dedicated task list from ingest
+     * scope so published items are never re-consumed as new sources (ADR-0036 §8,
+     * mirrors ADR-0025's export-dir/connector-root containment). Default on.
+     */
+    slackListExcludeFromIngest: z.boolean().default(true),
+  })
+  .passthrough();
+export type TasksConfig = z.infer<typeof TasksConfig>;
+
+/**
  * Root config. `connectors` is an open record extended per-connector by
  * #7–#12; values are left lenient at the foundation layer.
  *
@@ -209,6 +243,7 @@ export const Config = z.object({
   llm: LlmConfig.default(() => LlmConfig.parse({})),
   extraction: ExtractionConfig.default(() => ExtractionConfig.parse({})),
   export: ExportConfig.default(() => ExportConfig.parse({})),
+  tasks: TasksConfig.default(() => TasksConfig.parse({})),
   connectors: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 export type Config = z.infer<typeof Config>;

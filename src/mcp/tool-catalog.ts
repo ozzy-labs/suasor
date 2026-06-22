@@ -147,6 +147,16 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     summary: "Transition a task's lifecycle state (TaskApplied).",
   },
   {
+    name: "task.publish",
+    readOnlyHint: false,
+    summary: "Publish a task to its external home (TaskPublished, egress).",
+  },
+  {
+    name: "task.act",
+    readOnlyHint: false,
+    summary: "Act on a published task: complete/reopen/comment (TaskActionIssued).",
+  },
+  {
     name: "decision.record",
     readOnlyHint: false,
     summary: "Record a decision directly (DecisionRecorded).",
