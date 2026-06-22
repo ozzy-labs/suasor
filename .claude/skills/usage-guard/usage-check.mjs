@@ -18,7 +18,14 @@
 //   { five_hour, seven_day, ok, wait_seconds, resets_at, resume_buffer_seconds,
 //     suspected_reflection_lag, source }
 //   - five_hour / seven_day: { utilization (0-100), resets_at (ISO|null) }
-//   - ok:           both windows' utilization < threshold (default 95)
+//   - ok:           both windows' (utilization + headroom) < threshold
+//                   (headroom default 0 → both windows' utilization < threshold,
+//                   default threshold 95). A wave/worker dispatch checkpoint
+//                   passes a non-zero headroom (CLI `--headroom <pct>` or env
+//                   USAGE_GUARD_DISPATCH_HEADROOM) so the gate trips on the
+//                   PROJECTED post-dispatch utilization, preventing in-wave
+//                   overshoot the boundary checkpoint could not otherwise catch
+//                   (#141).
 //   - wait_seconds: seconds until the LATEST resets_at among exceeded windows
 //                   PLUS the post-reset resume buffer (0 when ok). Derived from
 //                   `resets_at` minus now, plus resume_buffer_seconds. When a
@@ -38,6 +45,10 @@
 //                   raw window edge. Such results are NOT cached (so the next
 //                   check hits the live endpoint, not the stale lagged value).
 //   - source:       "endpoint" | "jsonl" | "fail-open" | "cache"
+//                   A non-zero headroom NEVER reports "cache": it bypasses the
+//                   shared (headroom-0) cache for both read and write so a
+//                   projected gate is never served — nor poisons — a headroom-0
+//                   reading (#141 follow-up).
 //
 // Fail-open: if the endpoint fails AND the JSONL fallback fails, emit
 // { ok: true, ... source: "fail-open" } and a warning on stderr so the guard
@@ -54,6 +65,16 @@ const USAGE_ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA = "oauth-2025-04-20";
 const CLAUDE_CODE_VERSION = "2.0.0";
 const DEFAULT_THRESHOLD = 95;
+// Dispatch headroom (#141). A wave/worker dispatch commits N uninterruptible
+// units that will burn budget WHILE running, so a boundary checkpoint that only
+// compares the CURRENT utilization to the threshold cannot prevent the in-wave
+// overshoot (observed: 86% → 98% in one 3-worker wave). `headroom` (percentage
+// points) is the projected post-dispatch consumption reserve: the trip test
+// becomes `utilization + headroom >= threshold`, so dispatch is gated on the
+// PROJECTED post-wave value rather than the current one. Default 0 = legacy
+// behaviour (gate on current utilization). Only the threshold COMPARISON gains
+// `+ headroom`; wait_seconds / resets_at / reflection-lag math are unchanged.
+const DEFAULT_DISPATCH_HEADROOM = 0;
 // Post-reset resume buffer (seconds). Server-side `utilization` can lag the
 // window reset and ScheduleWakeup fires late, so resuming a few minutes AFTER
 // resets_at avoids re-entering a still-throttled window and re-bouncing. 0
@@ -130,6 +151,28 @@ export function resolveResumeBuffer(env = process.env) {
     return DEFAULT_RESUME_BUFFER_SECONDS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_RESUME_BUFFER_SECONDS;
+  return n;
+}
+
+/**
+ * Resolve the dispatch headroom in percentage points (env override → default).
+ *
+ * `USAGE_GUARD_DISPATCH_HEADROOM` overrides the default (0). A wave/worker
+ * dispatch checkpoint passes a non-zero headroom so the trip test gates on the
+ * projected post-dispatch utilization (`utilization + headroom >= threshold`)
+ * instead of the current value (#141). Single-mode checkpoints leave it at 0.
+ * Negative/non-finite/blank → default 0 (never relax the gate below current
+ * utilization).
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function resolveDispatchHeadroom(env = process.env) {
+  const raw = env?.USAGE_GUARD_DISPATCH_HEADROOM;
+  if (raw === undefined || raw === null || String(raw).trim() === "")
+    return DEFAULT_DISPATCH_HEADROOM;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_DISPATCH_HEADROOM;
   return n;
 }
 
@@ -258,9 +301,19 @@ export function normalizeWindows(payload) {
  * full window + buffer) so the caller re-fetches the real value soon. `resets_at`
  * is preserved as the raw window edge in both cases.
  *
+ * Dispatch headroom (#141): the trip test is `utilization + headroom >= threshold`
+ * per window, so a wave/worker dispatch checkpoint can gate on the PROJECTED
+ * post-dispatch value (current util plus the reserve a wave will burn) rather
+ * than the current value. `headroom` defaults to 0 (legacy: gate on current
+ * utilization). It enters ONLY the threshold comparison — `wait_seconds`,
+ * `resets_at`, and the reflection-lag math are unchanged and do not scale with
+ * the headroom magnitude (a tripped window's wait is purely time-to-edge +
+ * buffer regardless of headroom).
+ *
  * @param {{ five_hour: {utilization:number,resets_at:string|null}, seven_day: {utilization:number,resets_at:string|null} }} windows
  * @param {object} [opts]
  * @param {number} [opts.threshold]
+ * @param {number} [opts.headroom] projected dispatch reserve in pct points (default 0)
  * @param {number} [opts.resumeBuffer] post-reset buffer in seconds (default 300)
  * @param {number} [opts.lagEpsilon] boundary-proximity window in seconds (default 900)
  * @param {number} [opts.lagRecheck] short recheck interval when lag suspected (default 180)
@@ -271,18 +324,24 @@ export function evaluate(
   windows,
   {
     threshold = DEFAULT_THRESHOLD,
+    headroom = DEFAULT_DISPATCH_HEADROOM,
     resumeBuffer = DEFAULT_RESUME_BUFFER_SECONDS,
     lagEpsilon = DEFAULT_LAG_EPSILON_SECONDS,
     lagRecheck = DEFAULT_LAG_RECHECK_SECONDS,
     now = Date.now,
   } = {},
 ) {
+  // Negative headroom would relax the gate below the current utilization; clamp
+  // it to 0 so a misconfigured reserve can never weaken the guard.
+  const reserve = Number.isFinite(headroom) && headroom > 0 ? headroom : 0;
   // Pair each window with its period (seconds) so we can compute elapsed since
-  // the window boundary for the reflection-lag check.
+  // the window boundary for the reflection-lag check. The trip test gates on the
+  // PROJECTED value (utilization + reserve) so a wave dispatch is held when its
+  // expected consumption would cross the threshold mid-wave (#141).
   const exceeded = [
     { w: windows.five_hour, periodS: FIVE_HOUR_PERIOD_S },
     { w: windows.seven_day, periodS: SEVEN_DAY_PERIOD_S },
-  ].filter(({ w }) => w.utilization >= threshold);
+  ].filter(({ w }) => w.utilization + reserve >= threshold);
   const ok = exceeded.length === 0;
   let resetsAt = null;
   let waitSeconds = 0;
@@ -524,18 +583,48 @@ export async function getUsage({
   projectsDir = PROJECTS_DIR,
   cachePath = CACHE_PATH,
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
+  // Dispatch headroom (#141): an explicit value (e.g. the CLI `--headroom`) wins
+  // over the env default so a wave checkpoint can request a per-dispatch reserve
+  // without exporting an env var. `undefined` → fall back to env.
+  headroom,
   warn = (msg) => process.stderr.write(`${msg}\n`),
 } = {}) {
   const threshold = resolveThreshold(env);
   const resumeBuffer = resolveResumeBuffer(env);
   const lagEpsilon = resolveLagEpsilon(env);
   const lagRecheck = resolveLagRecheck(env);
+  const dispatchHeadroom = headroom === undefined ? resolveDispatchHeadroom(env) : headroom;
 
-  // 1. Fresh cache → return as-is (no endpoint re-fetch within TTL).
-  const cached = await readCache({ readFileImpl, cachePath, ttlMs: cacheTtlMs, now });
-  if (cached) return { ...cached, source: "cache" };
+  // Headroom + shared cache (#141 follow-up): the cache at CACHE_PATH is shared
+  // with the #123 PreToolUse hook and every headroom-0 caller, and it stores a
+  // result whose `ok` was computed WITHOUT headroom. A dispatch checkpoint
+  // passing a non-zero headroom must therefore NOT:
+  //   (a) be served that cached headroom-0 result — it would report ok:true on a
+  //       projected over-threshold and silently defeat the gate (observed:
+  //       `--headroom 90` returned source:cache ok:true right after a headroom-0
+  //       check), nor
+  //   (b) write its headroom-tripped result back — it would poison the shared
+  //       headroom-0 path (the hook) with a false over-threshold reading.
+  // So a non-zero headroom bypasses BOTH the cache read and write; only the
+  // headroom-0 path shares the cache. (Negative headroom clamps to 0 in
+  // evaluate(), so treat <= 0 as the shared-cache path.)
+  const useSharedCache = dispatchHeadroom <= 0;
 
-  const evalOpts = { threshold, resumeBuffer, lagEpsilon, lagRecheck, now };
+  // 1. Fresh cache → return as-is (no endpoint re-fetch within TTL). Only the
+  //    headroom-0 path reads the shared cache (see above).
+  if (useSharedCache) {
+    const cached = await readCache({ readFileImpl, cachePath, ttlMs: cacheTtlMs, now });
+    if (cached) return { ...cached, source: "cache" };
+  }
+
+  const evalOpts = {
+    threshold,
+    headroom: dispatchHeadroom,
+    resumeBuffer,
+    lagEpsilon,
+    lagRecheck,
+    now,
+  };
 
   // Cache-bypass (#133): a suspected reflection lag is a transient, likely-stale
   // 100% reading. Persisting it would pin the false signal for the cache TTL and
@@ -543,6 +632,7 @@ export async function getUsage({
   // result flags a lag we skip the cache write — the next check hits the live
   // endpoint and can observe the post-lag value immediately.
   const maybeCache = async (result) => {
+    if (!useSharedCache) return result; // headroom>0: never read NOR write the shared cache
     if (result.suspected_reflection_lag) return result; // do NOT cache a lagged read
     // (#139 (e)) Over-threshold reads get a SHORTENED TTL so a transient spike /
     // residual lag just outside the epsilon is re-verified soon (the next check
@@ -583,13 +673,38 @@ export async function getUsage({
   }
 }
 
+/**
+ * Parse `--headroom <pct>` (or `--headroom=<pct>`) from CLI argv. Returns the
+ * parsed reserve (pct points) or `undefined` when the flag is absent/invalid so
+ * getUsage falls back to the env default (#141). Negative values clamp to 0.
+ *
+ * @param {string[]} argv
+ * @returns {number|undefined}
+ */
+export function parseHeadroomArg(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    let raw;
+    if (a === "--headroom") raw = argv[i + 1];
+    else if (a.startsWith("--headroom=")) raw = a.slice("--headroom=".length);
+    else continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    return n < 0 ? 0 : n;
+  }
+  return undefined;
+}
+
 // CLI entry: print the usage JSON to stdout. Exit 0 always (fail-open ethos);
 // the JSON's `ok` field is the signal, not the exit code.
 async function main() {
   // getUsage now defaults writeFileImpl/mkdirImpl to the real fs (symmetric with
   // readFileImpl), so the CLI no longer needs to inject them explicitly — every
   // caller that omits fs (including the PreToolUse hook) self-sustains the cache.
-  const result = await getUsage();
+  // `--headroom <pct>` (CLI) wins over USAGE_GUARD_DISPATCH_HEADROOM (env); when
+  // the flag is absent getUsage resolves the env default (#141).
+  const headroom = parseHeadroomArg(process.argv.slice(2));
+  const result = await getUsage({ headroom });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
