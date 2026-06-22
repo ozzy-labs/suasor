@@ -76,3 +76,4 @@ NNNN-kebab-case-title.md
 | 0033 | Sync run history & freshness (`SyncRunStarted` / `SyncRunEnded`, `suasor sync status`) |
 | 0034 | API connector extraction (Box / Drive / OneDrive; content fingerprint, lazy download, Google native export) |
 | 0035 | Project skills — vendor ecosystem dev skills; stop dogfood-committing assistant mirrors |
+| 0036 | Task external-home management (egress write-back / single-pane; loop avoidance) |
