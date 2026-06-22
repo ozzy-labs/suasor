@@ -193,7 +193,7 @@ export const TaskApplied = z.object({
 });
 
 /** External task-home destinations a task can be published to (ADR-0036). */
-export const TaskDestination = z.enum(["github", "jira", "slack"]);
+export const TaskDestination = z.enum(["github", "github_projects", "jira", "slack"]);
 export type TaskDestination = z.infer<typeof TaskDestination>;
 
 /**

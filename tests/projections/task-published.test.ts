@@ -141,4 +141,19 @@ describe("[tasks] config (ADR-0036)", () => {
   test("rejects an unknown destination", () => {
     expect(() => TasksConfig.parse({ home: { destination: "trello" } })).toThrow();
   });
+
+  test("parses a github_projects home with Status field mapping (ADR-0036)", () => {
+    const c = TasksConfig.parse({
+      home: {
+        destination: "github_projects",
+        project: "PVT_kw1",
+        statusFieldId: "PVTSSF_s",
+        doneOptionId: "od",
+        todoOptionId: "ot",
+      },
+    });
+    expect(c.home?.destination).toBe("github_projects");
+    expect(c.home?.project).toBe("PVT_kw1");
+    expect(c.home?.statusFieldId).toBe("PVTSSF_s");
+  });
 });
