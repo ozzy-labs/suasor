@@ -328,16 +328,27 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
           .optional()
           .describe("Optional priority to (re)set (low/normal/high, ADR-0028)."),
       },
-      annotations: { readOnlyHint: false, openWorldHint: false },
+      // openWorldHint: a state change on a *published* task egresses to its home
+      // (ADR-0036 §3); unpublished tasks stay local. HITL either way.
+      annotations: { readOnlyHint: false, openWorldHint: true },
     },
     async ({ taskId, state, dueDate, priority }) => {
-      const result = taskUpdate(write.store, {
-        taskId,
-        state,
-        ...(dueDate !== undefined ? { dueDate } : {}),
-        ...(priority !== undefined ? { priority } : {}),
-      });
-      return jsonResult(result);
+      try {
+        const result = await taskUpdate(
+          write.store,
+          {
+            taskId,
+            state,
+            ...(dueDate !== undefined ? { dueDate } : {}),
+            ...(priority !== undefined ? { priority } : {}),
+          },
+          new Date(),
+          { config: write.config },
+        );
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 

@@ -449,6 +449,7 @@ task の lifecycle 状態を遷移させる write tool（`task.create` が task 
 - **scheduling 更新**: 同一 state でも非 null の `dueDate` / `priority` を渡せば (re)set として `updated`（[ADR-0028](../adr/0028-task-scheduling-fields.md)）。reducer は null を COALESCE で既存値維持する
 - **禁止遷移なし**: 4 状態は相互に到達可能（`completed` の task を `in_progress` に戻す等も許可）。task lifecycle に invalid 遷移は設けない
 - 新規 task の作成は `task.create`（本 tool は遷移専用で title を持たない）
+- **公開済みタスクの state 変更は actuator へ統一（ADR-0036 §3）**: `published_external_id` を持つタスクの state 遷移は、ローカルを先に変えず **actuator に操作命令を発行**（completed→complete / open・in_progress→reopen、dropped はローカルのみ）。外部成功後に optimistic な `TaskApplied` をキャッシュし read-back が整合させる。このため `task.update` は `openWorldHint: true`、egress 失敗時は構造化エラー（`EGRESS_FAILED` 等）。未公開タスクは従来どおりローカルのみ・throw しない
 
 ### `task.publish` / `task.act`（確定・write / HITL・egress・[ADR-0036](../adr/0036-task-external-home.md)）
 
