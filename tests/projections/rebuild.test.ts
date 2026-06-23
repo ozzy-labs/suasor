@@ -127,6 +127,20 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
     expect(twice).toEqual(once);
   });
 
+  test("onProgress fires once per replayed event", () => {
+    for (const { event, at } of SCRIPT) {
+      store.record(event, new Date(at));
+    }
+    let ticks = 0;
+    const result = store.rebuild({
+      onProgress: () => {
+        ticks += 1;
+      },
+    });
+    expect(result.events).toBe(SCRIPT.length);
+    expect(ticks).toBe(SCRIPT.length);
+  });
+
   test("rebuild on an empty event log yields empty projections", () => {
     const result = store.rebuild();
     expect(result.events).toBe(0);

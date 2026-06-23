@@ -13,6 +13,7 @@
  * inside `execute` so the command registry stays cheap (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
+import { createProgress } from "../progress.ts";
 
 /** Message printed by every verb when no embedding backend is configured. */
 const DISABLED_MESSAGE =
@@ -131,6 +132,10 @@ export class EmbeddingsRebuildCommand extends Command {
     description: "Emit the rebuild result as JSON.",
   });
 
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
+  });
+
   override async execute(): Promise<number> {
     const ctx = await openEmbeddingContext(this.context);
     if (ctx === null) return 1;
@@ -140,9 +145,19 @@ export class EmbeddingsRebuildCommand extends Command {
         return 0;
       }
       const { embeddingRebuild } = await import("../../retrieval/embedding/index.ts");
+      // Indeterminate "N processed" on stderr while the sidecar embeds each batch
+      // (TTY-gated; no-op for --json / pipes / CI). Re-embedding is O(sources) and
+      // network-bound, the slowest maintenance verb — opshub ADR-0026 parity.
+      const progress = createProgress(
+        this.context.stderr,
+        "embeddings rebuild",
+        this.noProgress ? false : undefined,
+      );
       const result = await embeddingRebuild(ctx.store.connection.sqlite, ctx.embedder, {
         full: this.full,
+        onProgress: () => progress.tick(),
       });
+      progress.finish();
       if (this.json) {
         this.context.stdout.write(
           `${JSON.stringify({ candidates: result.candidates, embedded: result.embedded }, null, 2)}\n`,
@@ -180,6 +195,10 @@ export class EmbeddingsDrainCommand extends Command {
     description: "Emit the drain result as JSON.",
   });
 
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
+  });
+
   override async execute(): Promise<number> {
     const ctx = await openEmbeddingContext(this.context);
     if (ctx === null) return 1;
@@ -189,7 +208,17 @@ export class EmbeddingsDrainCommand extends Command {
         return 0;
       }
       const { embeddingDrain } = await import("../../retrieval/embedding/index.ts");
-      const result = await embeddingDrain(ctx.store.connection.sqlite, ctx.embedder);
+      // Indeterminate "N processed" on stderr while pending sources embed (TTY-
+      // gated; no-op for --json / pipes / CI). opshub ADR-0026 parity.
+      const progress = createProgress(
+        this.context.stderr,
+        "embeddings drain",
+        this.noProgress ? false : undefined,
+      );
+      const result = await embeddingDrain(ctx.store.connection.sqlite, ctx.embedder, {
+        onProgress: () => progress.tick(),
+      });
+      progress.finish();
       if (this.json) {
         this.context.stdout.write(
           `${JSON.stringify({ candidates: result.candidates, embedded: result.embedded }, null, 2)}\n`,

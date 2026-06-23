@@ -61,15 +61,25 @@ export interface RebuildResult {
   events: number;
 }
 
+/** Options for {@link rebuildProjections}. */
+export interface RebuildOptions {
+  /**
+   * Invoked once per replayed event so a long rebuild can surface progress.
+   * Replay runs in a single transaction; the callback only observes, it must not
+   * touch the DB. A no-op when omitted (the default).
+   */
+  onProgress?: () => void;
+}
+
 /**
  * Rebuild all projections from the event log. Atomic: on error the prior
  * projections are rolled back.
  */
-export function rebuildProjections(sqlite: Database): RebuildResult {
+export function rebuildProjections(sqlite: Database, options: RebuildOptions = {}): RebuildResult {
   const events = readAllEvents(sqlite);
   const tx = sqlite.transaction(() => {
     truncateProjections(sqlite);
-    applyEvents(sqlite, events);
+    applyEvents(sqlite, events, options.onProgress);
   });
   tx();
   return { events: events.length };

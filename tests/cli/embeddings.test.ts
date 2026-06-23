@@ -98,6 +98,16 @@ describe("suasor embeddings rebuild/drain/find-duplicates (disabled no-op)", () 
     expect(out).toContain("nothing to do");
   });
 
+  test("rebuild/drain accept --no-progress", async () => {
+    await seed("gh:1", "alpha");
+    const rebuild = await run(["embeddings", "rebuild", "--no-progress"]);
+    expect(rebuild.code).toBe(0);
+    expect(rebuild.out).toContain("nothing to do");
+    const drain = await run(["embeddings", "drain", "--no-progress"]);
+    expect(drain.code).toBe(0);
+    expect(drain.out).toContain("nothing to do");
+  });
+
   test("find-duplicates is a no-op with an explicit message", async () => {
     await seed("gh:1", "alpha");
     const { code, out } = await run(["embeddings", "find-duplicates"]);

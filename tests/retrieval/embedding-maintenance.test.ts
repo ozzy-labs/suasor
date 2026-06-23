@@ -222,6 +222,65 @@ describe("embeddingDrain", () => {
   });
 });
 
+describe("progress + batching (long-running maintenance verbs)", () => {
+  test("embeddingRebuild fires onProgress once per source processed", async () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "beta");
+    const embedder = fakeEmbedder({ alpha: [1, 0, 0], beta: [0, 1, 0] });
+    let ticks = 0;
+    const result = await embeddingRebuild(store.connection.sqlite, embedder, {
+      full: true,
+      onProgress: () => {
+        ticks += 1;
+      },
+    });
+    expect(result.candidates).toBe(2);
+    expect(ticks).toBe(2);
+  });
+
+  test("embeddingDrain fires onProgress once per pending source", async () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "beta");
+    const embedder = fakeEmbedder({ alpha: [1, 0, 0], beta: [0, 1, 0] });
+    let ticks = 0;
+    const result = await embeddingDrain(store.connection.sqlite, embedder, {
+      onProgress: () => {
+        ticks += 1;
+      },
+    });
+    expect(ticks).toBe(result.candidates);
+    expect(ticks).toBe(2);
+  });
+
+  test("processes a corpus larger than one batch and preserves partial work on failure", async () => {
+    // 200 sources > MAINTENANCE_EMBED_BATCH (128) forces ≥2 chunks. An embedder
+    // that fails on its second chunk leaves the first chunk's vectors written and
+    // returns a partial `embedded` count with the error (best-effort, ADR-0006).
+    const total = 200;
+    for (let i = 0; i < total; i += 1) seed(`gh:${i}`, `body-${i}`);
+    let calls = 0;
+    const failOnSecondChunk: Embedder = {
+      model: "fake-3d",
+      embed: (texts) => {
+        calls += 1;
+        if (calls >= 2) return Promise.reject(new EmbeddingError("down"));
+        return Promise.resolve(texts.map(() => [1, 0, 0]));
+      },
+    };
+    let ticks = 0;
+    const result = await embeddingRebuild(store.connection.sqlite, failOnSecondChunk, {
+      full: true,
+      onProgress: () => {
+        ticks += 1;
+      },
+    });
+    expect(result.candidates).toBe(total); // all sources were candidates
+    expect(result.embedded).toBe(128); // only the first chunk's vectors persisted
+    expect(ticks).toBe(128); // progress advanced only for the embedded chunk
+    expect(result.error).toBeInstanceOf(EmbeddingError);
+  });
+});
+
 describe("findDuplicates", () => {
   test("lists near-duplicate pairs above the threshold, best-first", async () => {
     seed("gh:1", "alpha");
