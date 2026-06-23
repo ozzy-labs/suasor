@@ -9,10 +9,9 @@
  * The external tool is the state authority (D1); this is how the local cache
  * converges to it.
  *
- * Scope: GitHub Issues first — `github_issue` source meta already carries `state`
- * (open/closed). Jira read-back needs the jira connector to ingest `status`
- * (follow-up), and `closed(not_planned) → dropped` needs `state_reason` in meta
- * (follow-up); both are skipped here (unknown → leave the task untouched).
+ * Scope: GitHub Issues + Jira (status category). Slack read-back needs the slack
+ * connector to ingest List items (follow-up); `closed(not_planned) → dropped`
+ * needs `state_reason` in github meta (follow-up); both unknown → leave untouched.
  */
 import type { Store } from "../db/index.ts";
 import type { TaskState } from "../propose/task-update.ts";
@@ -36,7 +35,19 @@ export function taskStateFromSource(
     if (meta.state === "closed") return "completed";
     if (meta.state === "open") return "open";
   }
-  // jira_issue / slack list items: not yet reflected (see module doc).
+  if (sourceType === "jira_issue") {
+    // Workflow-agnostic status category (ADR-0036 §6): custom status names map
+    // onto new/indeterminate/done. Unknown / empty → null (conservative).
+    switch (meta.statusCategory) {
+      case "done":
+        return "completed";
+      case "indeterminate":
+        return "in_progress";
+      case "new":
+        return "open";
+    }
+  }
+  // slack list items: not yet reflected (read side does not ingest lists).
   return null;
 }
 

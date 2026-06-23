@@ -121,6 +121,8 @@ export function issueToRecord(host: string, issue: JiraIssue): SourceRecord {
       host,
       project: issue.projectKey,
       key: issue.key,
+      // Status category (new/indeterminate/done) for task read-back (ADR-0036 §6).
+      statusCategory: issue.statusCategoryKey ?? "",
     },
     // `fields.updated` is the delta signal in place of a content hash.
     fingerprint: issue.updated,
