@@ -25,6 +25,10 @@ const REGISTRY: Partial<Record<TaskDestination, ActuatorLoader>> = {
     const { createJiraActuator } = await import("./jira-actuator.ts");
     return (config) => createJiraActuator(config);
   },
+  slack: async () => {
+    const { createSlackListsActuator } = await import("./slack-lists-actuator.ts");
+    return (config) => createSlackListsActuator(config);
+  },
 };
 
 /** Destinations with a registered actuator (cheap; loads no SDK). */
