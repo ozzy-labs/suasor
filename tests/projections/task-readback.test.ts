@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
-import { reconcileReadback, taskStateFromSource } from "../../src/projections/task-readback.ts";
+import {
+  mapJiraPriority,
+  normalizeJiraDue,
+  reconcileReadback,
+  taskStateFromSource,
+} from "../../src/projections/task-readback.ts";
 import { taskCreate } from "../../src/propose/task-create.ts";
 
 let store: Store;
@@ -118,6 +123,61 @@ describe("reconcileReadback (ADR-0036 §6 read-back)", () => {
     expect(stateOf(taskId)).toBe("dropped");
   });
 
+  test("reflects jira due date (normalized) + priority alongside state", () => {
+    const { taskId } = taskCreate(store, { title: "jira task" });
+    store.record({
+      type: "TaskPublished",
+      taskId,
+      destination: "jira",
+      externalId: "jira:acme.atlassian.net:ENG:ENG-9",
+      publishedAt: "2026-06-23T00:00:00+00:00",
+    });
+    store.record({
+      type: "SourceObserved",
+      externalId: "jira:acme.atlassian.net:ENG:ENG-9",
+      sourceType: "jira_issue",
+      body: "t",
+      observedAt: "2026-06-23T00:00:00+00:00",
+      fingerprint: "fp-due-1",
+      meta: { statusCategory: "indeterminate", dueDate: "2026-07-01", priority: "High" },
+    });
+    expect(reconcileReadback(store)).toBe(1);
+    const row = store.connection.sqlite
+      .query("SELECT state, due_date AS due, priority FROM tasks WHERE id = ?")
+      .get(taskId) as { state: string; due: string | null; priority: string | null };
+    expect(row).toEqual({
+      state: "in_progress",
+      due: "2026-07-01T00:00:00+00:00",
+      priority: "high",
+    });
+  });
+
+  test("diff guard: a due-date-only change re-reflects, then no-ops", () => {
+    const { taskId } = taskCreate(store, { title: "t" });
+    store.record({
+      type: "TaskPublished",
+      taskId,
+      destination: "jira",
+      externalId: "jira:h:ENG:ENG-1",
+      publishedAt: "2026-06-23T00:00:00+00:00",
+    });
+    const observe = (due: string, fp: string) =>
+      store.record({
+        type: "SourceObserved",
+        externalId: "jira:h:ENG:ENG-1",
+        sourceType: "jira_issue",
+        body: "t",
+        observedAt: "2026-06-23T00:00:00+00:00",
+        fingerprint: fp,
+        meta: { statusCategory: "new", dueDate: due, priority: "" },
+      });
+    observe("2026-07-01", "fp1");
+    expect(reconcileReadback(store)).toBe(1); // state open + due set
+    observe("2026-07-05", "fp2"); // due moved upstream
+    expect(reconcileReadback(store)).toBe(1);
+    expect(reconcileReadback(store)).toBe(0); // unchanged → no spam
+  });
+
   test("an unpublished task is never reflected", () => {
     taskCreate(store, { title: "local" });
     observeIssue("gh:acme/widgets:issue:7", "closed"); // a source, but no published task links it
@@ -152,5 +212,23 @@ describe("taskStateFromSource", () => {
     // A raw status name (not a category) or empty → conservative null.
     expect(taskStateFromSource("jira_issue", { status: "Done" })).toBeNull();
     expect(taskStateFromSource("jira_issue", {})).toBeNull();
+  });
+});
+
+describe("normalizeJiraDue / mapJiraPriority", () => {
+  test("normalizes a bare jira due date to ISO with offset; rejects bad input", () => {
+    expect(normalizeJiraDue("2026-07-01")).toBe("2026-07-01T00:00:00+00:00");
+    expect(normalizeJiraDue("")).toBeNull();
+    expect(normalizeJiraDue("2026/07/01")).toBeNull();
+    expect(normalizeJiraDue(null)).toBeNull();
+  });
+
+  test("maps jira priority names (case-insensitive) to suasor priority; custom → null", () => {
+    expect(mapJiraPriority("Highest")).toBe("high");
+    expect(mapJiraPriority("high")).toBe("high");
+    expect(mapJiraPriority("Medium")).toBe("normal");
+    expect(mapJiraPriority("Lowest")).toBe("low");
+    expect(mapJiraPriority("Blocker")).toBeNull();
+    expect(mapJiraPriority("")).toBeNull();
   });
 });

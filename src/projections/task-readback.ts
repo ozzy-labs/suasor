@@ -19,8 +19,38 @@ import type { TaskState } from "../propose/task-update.ts";
 interface PublishedSourceRow {
   taskId: string;
   taskState: string;
+  taskDue: string | null;
+  taskPriority: string | null;
   sourceType: string;
   meta: string;
+}
+
+/**
+ * Normalize a Jira bare due date (`YYYY-MM-DD`) to the ISO-8601-with-offset form
+ * `TaskApplied.dueDate` requires (UTC midnight), or `null` when absent/malformed.
+ * Comparing the normalized value (not the raw bare date) keeps the diff guard
+ * stable against the stored ISO column (ADR-0036 §6).
+ */
+export function normalizeJiraDue(raw: unknown): string | null {
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  return `${raw}T00:00:00+00:00`;
+}
+
+/** Map a Jira priority name (case-insensitive) to a suasor priority, or `null`. */
+export function mapJiraPriority(raw: unknown): "low" | "normal" | "high" | null {
+  if (typeof raw !== "string") return null;
+  switch (raw.toLowerCase()) {
+    case "highest":
+    case "high":
+      return "high";
+    case "medium":
+      return "normal";
+    case "low":
+    case "lowest":
+      return "low";
+    default:
+      return null; // custom schemes → leave the local value untouched (COALESCE)
+  }
 }
 
 /**
@@ -55,18 +85,25 @@ export function taskStateFromSource(
 }
 
 /**
- * Reflect external state onto published tasks. For every published task whose
- * home item was ingested as a source, derive the implied state and append
- * `TaskApplied` only when it differs from the current task state (a diff guard
- * — the reducer rewrites `updated_at` on any apply, so an unconditional append
- * would spam a redundant event every sync).
+ * Reflect external state (lifecycle + Jira due/priority) onto published tasks.
+ * For every published task whose home item was ingested as a source, derive the
+ * implied state/due/priority and append `TaskApplied` only when something differs
+ * (a diff guard — the reducer rewrites `updated_at` on any apply, so an
+ * unconditional append would spam a redundant event every sync).
  *
- * @returns the number of tasks whose state was reflected (TaskApplied appended).
+ * Due/priority are read back for `jira_issue` only (GitHub Issues have no due).
+ * Because the reducer COALESCEs a null update, this can SET/CHANGE due/priority
+ * but **cannot CLEAR** them (deleting a Jira due date is not reflected, ADR-0036
+ * §6 — a documented limitation). A change is only appended with a valid derived
+ * state, so the reducer's direct `state =` assignment never sees a stale state.
+ *
+ * @returns the number of tasks reflected (TaskApplied appended).
  */
 export function reconcileReadback(store: Store, now: Date = new Date()): number {
   const rows = store.connection.sqlite
     .query(
-      `SELECT t.id AS taskId, t.state AS taskState, s.source_type AS sourceType, s.meta AS meta
+      `SELECT t.id AS taskId, t.state AS taskState, t.due_date AS taskDue,
+              t.priority AS taskPriority, s.source_type AS sourceType, s.meta AS meta
        FROM tasks t
        JOIN sources s ON s.external_id = t.published_external_id
        WHERE t.published_external_id IS NOT NULL`,
@@ -82,8 +119,29 @@ export function reconcileReadback(store: Store, now: Date = new Date()): number 
       continue;
     }
     const derived = taskStateFromSource(row.sourceType, meta);
-    if (derived === null || derived === row.taskState) continue; // unknown or unchanged → skip
-    store.record({ type: "TaskApplied", taskId: row.taskId, state: derived }, now);
+    if (derived === null) continue; // unknown external state → leave the task untouched
+
+    // Jira also carries due/priority; github_issue does not (→ null = no change).
+    const isJira = row.sourceType === "jira_issue";
+    const due = isJira ? normalizeJiraDue(meta.dueDate) : null;
+    const priority = isJira ? mapJiraPriority(meta.priority) : null;
+
+    const stateChanged = derived !== row.taskState;
+    const dueChanged = due !== null && due !== row.taskDue;
+    const priorityChanged = priority !== null && priority !== row.taskPriority;
+    if (!stateChanged && !dueChanged && !priorityChanged) continue;
+
+    store.record(
+      {
+        type: "TaskApplied",
+        taskId: row.taskId,
+        state: derived,
+        // null ⇒ COALESCE keeps the stored value (no change / can't clear).
+        dueDate: dueChanged ? due : null,
+        priority: priorityChanged ? priority : null,
+      },
+      now,
+    );
     reflected++;
   }
   return reflected;

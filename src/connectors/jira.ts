@@ -123,6 +123,9 @@ export function issueToRecord(host: string, issue: JiraIssue): SourceRecord {
       key: issue.key,
       // Status category (new/indeterminate/done) for task read-back (ADR-0036 §6).
       statusCategory: issue.statusCategoryKey ?? "",
+      // Raw due date (YYYY-MM-DD) + priority name for due/priority read-back (ADR-0036 §6).
+      dueDate: issue.dueDate ?? "",
+      priority: issue.priority ?? "",
     },
     // `fields.updated` is the delta signal in place of a content hash.
     fingerprint: issue.updated,

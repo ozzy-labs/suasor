@@ -50,6 +50,10 @@ export interface JiraIssue {
    * workflow-agnostic (custom status *names* map onto these three categories).
    */
   readonly statusCategoryKey?: string;
+  /** Raw Jira due date `fields.duedate` (`YYYY-MM-DD`), or "" — for read-back (ADR-0036 §6). */
+  readonly dueDate?: string;
+  /** Raw Jira priority name `fields.priority.name` (e.g. "High"), or "" — for read-back. */
+  readonly priority?: string;
 }
 
 /** A normalized Jira comment the connector maps into a `SourceRecord`. */
@@ -283,7 +287,15 @@ function toIssue(raw: Record<string, unknown>): JiraIssue | null {
     description: flattenRichText(fields.description),
     updated: asString(fields.updated) || new Date(0).toISOString(),
     statusCategoryKey: statusCategoryOf(fields.status),
+    dueDate: asString(fields.duedate),
+    priority: priorityNameOf(fields.priority),
   };
+}
+
+/** Extract `priority.name` (e.g. "High"), or "" when absent/null (defensive). */
+function priorityNameOf(priority: unknown): string {
+  if (!priority || typeof priority !== "object") return "";
+  return asString((priority as Record<string, unknown>).name);
 }
 
 /** Extract `status.statusCategory.key` (`new`/`indeterminate`/`done`), or "" when absent. */
@@ -328,7 +340,7 @@ export function makeJiraClient(auth: JiraAuth, transport: JiraTransport): JiraCl
           startAt: String(startAt),
           maxResults: String(PAGE_SIZE),
           // Only the fields we read, to keep payloads small (project for identity).
-          fields: "summary,description,updated,project,status",
+          fields: "summary,description,updated,project,status,duedate,priority",
         });
         const page = await request(transport, auth, `${apiBase}/search?${params.toString()}`);
         const issues = Array.isArray(page.issues) ? (page.issues as Record<string, unknown>[]) : [];
