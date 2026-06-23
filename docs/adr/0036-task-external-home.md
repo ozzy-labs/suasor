@@ -60,7 +60,7 @@ Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projecti
    - **同一性リンク** — 起票時に外部 id を provenance 記録（決定4）。「この外部項目＝自分のタスク」を Suasor が知っている状態にする。
    - **マーカー（保険）** — 外部項目に識別子を刻む（GitHub/Jira は label `suasor` + body の taskId 等）。`projections rebuild` で local の id-map が失われても再認識できる。
    - **rebuild window の保護** — `projections rebuild` 後は marker から id-map を**読み戻し・再提案より前に**再構築する。再構築完了まで該当 source の起票・読み戻しを保留し、rebuild 直後の window での二重起票/取りこぼしを防ぐ。
-   - **読み側 dedup/skip** — connector は項目を source として mirror してよい（検索用）が、提案・抽出パイプラインは**公開済みタスクに紐づく source をスキップ**（自分のタスクを再提案しない）。統合ビューは id-map で native task と外部 mirror を**1行に畳む**。
+   - **読み側 dedup/skip** — connector は項目を source として mirror してよい（検索用）が、提案・抽出パイプラインは**公開済みタスクに紐づく source をスキップ**（自分のタスクを再提案しない）。**実装済み**: `persistProposals`（`src/propose/generate.ts`）が `publishedTaskExternalIds()`（`tasks.published_external_id` ∪ `links(published_to)`）と candidate の provenance source を突き合わせ、一致候補を ledger 追記前に除外（skip 件数を戻り値に露出）。統合ビューの「native task と外部 mirror を1行に畳む」dedup は別途（read query 層）。
    - **スコープ隔離（可能な所）** — Slack List は**専用 list/channel に書き出し、それを取り込みスコープから除外**できる（最もクリーン）。GitHub/Jira は上記リンク+マーカーで担保。
 
 9. **config** — `[tasks]` に**単一ホーム設定**（destination 種別 + 対象 repo/project/list、Slack 専用 list の取り込み除外フラグ）を持つ。既定の変更は可能。`[tasks].home` と connector 設定の整合を loader で検証する。
