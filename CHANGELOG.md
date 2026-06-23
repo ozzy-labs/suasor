@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.1.17](https://github.com/ozzy-labs/suasor/compare/v0.1.16...v0.1.17) (2026-06-23)
+
+
+### Features
+
+* **tasks:** add GitHub Projects v2 as a task external home — ADR-0036 ([#315](https://github.com/ozzy-labs/suasor/issues/315)) ([f274f21](https://github.com/ozzy-labs/suasor/commit/f274f216e4b876b7458683f78d4b7958274e1dff))
+* **tasks:** add jira actuator (task external home) — ADR-0036 ([#320](https://github.com/ozzy-labs/suasor/issues/320)) ([5dfc0a2](https://github.com/ozzy-labs/suasor/commit/5dfc0a27cbd3da20e15387dbd1f371ce77528aa5))
+* **tasks:** add slack lists actuator (task external home) — ADR-0036 ([#321](https://github.com/ozzy-labs/suasor/issues/321)) ([a4e2535](https://github.com/ozzy-labs/suasor/commit/a4e25355ef7ef79272d7d738cfa314875b111049))
+* **tasks:** approve & publish — one-motion apply + publish — ADR-0036 ([#335](https://github.com/ozzy-labs/suasor/issues/335)) ([3bc94e8](https://github.com/ozzy-labs/suasor/commit/3bc94e870fba85ad041c43cffbc30c4a956c0ae9))
+* **tasks:** dropped lifecycle — drop actuator action + not_planned read-back — ADR-0036 ([#331](https://github.com/ozzy-labs/suasor/issues/331)) ([5298b77](https://github.com/ozzy-labs/suasor/commit/5298b77b89b00a9322759319a9a1340e0c152b87))
+* **tasks:** jira state read-back — reflect ticket status onto published tasks — ADR-0036 ([#330](https://github.com/ozzy-labs/suasor/issues/330)) ([1aeff6d](https://github.com/ozzy-labs/suasor/commit/1aeff6de4ee41122da11ed98b66a5f8d26749e2e))
+* **tasks:** multi-workspace slack list read-back ingestion — ADR-0036 ([#341](https://github.com/ozzy-labs/suasor/issues/341)) ([e2f697b](https://github.com/ozzy-labs/suasor/commit/e2f697ba5f60763f2db659c42e0b7f99ccd48c50))
+* **tasks:** publish/act to external home (egress, GitHub-first) — ADR-0036 ([#312](https://github.com/ozzy-labs/suasor/issues/312)) ([8fa344b](https://github.com/ozzy-labs/suasor/commit/8fa344bbbf6d0df69676cb112b94f4943bfb278e))
+* **tasks:** read back jira due date & priority onto published tasks — ADR-0036 ([#336](https://github.com/ozzy-labs/suasor/issues/336)) ([f197045](https://github.com/ozzy-labs/suasor/commit/f1970452f44d79d89085220e36debd8704446a55))
+* **tasks:** route published-task task.update through the actuator (§3) — ADR-0036 ([#326](https://github.com/ozzy-labs/suasor/issues/326)) ([570c91a](https://github.com/ozzy-labs/suasor/commit/570c91aa2f5ac007533a57d3a35880e374318c29))
+* **tasks:** skip published-task sources in propose.generate (loop avoidance §8) — ADR-0036 ([#325](https://github.com/ozzy-labs/suasor/issues/325)) ([8568484](https://github.com/ozzy-labs/suasor/commit/8568484778f03581e6494f2281ff287f3ce6874f))
+* **tasks:** slack lists read-back — ingest list items & reflect state — ADR-0036 ([#337](https://github.com/ozzy-labs/suasor/issues/337)) ([4eff3e3](https://github.com/ozzy-labs/suasor/commit/4eff3e3fddf44579127cae456f67ebb7655ba7ea))
+* **tasks:** state read-back D4 — reflect external state onto published tasks — ADR-0036 ([#327](https://github.com/ozzy-labs/suasor/issues/327)) ([8695269](https://github.com/ozzy-labs/suasor/commit/8695269b8c4ba378ad4be3e730e58a4750c3c0da))
+
+
+### Bug Fixes
+
+* **tasks:** match slack list cells by key or column_id (items.list shape) — ADR-0036 ([#342](https://github.com/ozzy-labs/suasor/issues/342)) ([9dbf85f](https://github.com/ozzy-labs/suasor/commit/9dbf85f23c418f3ff457cce1353624de5cb3accc))
+* **tasks:** read-back must not un-drop a locally dropped task (sticky) — ADR-0036 ([#340](https://github.com/ozzy-labs/suasor/issues/340)) ([388d1b2](https://github.com/ozzy-labs/suasor/commit/388d1b2b024eb2ebd717ec4d1d1c0c1229cd2d5d))
+
 ## [0.1.16](https://github.com/ozzy-labs/suasor/compare/v0.1.15...v0.1.16) (2026-06-21)
 
 
