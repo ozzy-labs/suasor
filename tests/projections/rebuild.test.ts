@@ -198,6 +198,27 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
       .all('"initial"');
     expect(stale).toHaveLength(0);
   });
+
+  test("rebuild leaves exactly one FTS row per source (deferred bulk reindex)", () => {
+    // gh:1 is observed once then body-updated once in SCRIPT — under the old
+    // per-event sync it was reindexed twice; the deferred rebuild must still
+    // leave exactly one FTS row per live source (no dupes, no orphans).
+    for (const { event, at } of SCRIPT) {
+      store.record(event, new Date(at));
+    }
+    store.rebuild();
+    const sqlite = store.connection.sqlite;
+    const sources = sqlite.query("SELECT count(*) AS n FROM sources").get() as { n: number };
+    const fts = sqlite.query("SELECT count(*) AS n FROM sources_fts").get() as { n: number };
+    expect(fts.n).toBe(sources.n);
+    // and the FTS external_id set matches the sources external_id set exactly
+    const orphans = sqlite
+      .query(
+        "SELECT external_id FROM sources_fts WHERE external_id NOT IN (SELECT external_id FROM sources)",
+      )
+      .all();
+    expect(orphans).toHaveLength(0);
+  });
 });
 
 describe("replay equivalence (incremental == full rebuild)", () => {

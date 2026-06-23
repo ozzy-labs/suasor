@@ -19,6 +19,30 @@ function syncSourceFts(sqlite: Database, externalId: string, body: string): void
   sqlite.query("INSERT INTO sources_fts (external_id, body) VALUES (?, ?)").run(externalId, body);
 }
 
+/** Options controlling how an event is applied (used by replay/rebuild). */
+export interface ApplyOptions {
+  /**
+   * Skip the per-event `sources_fts` writes. A full rebuild rewrites the FTS row
+   * for a source on every SourceObserved/SourceBodyUpdated in its history, so a
+   * source updated K times is reindexed K times — all but the last wasted. With
+   * `deferFts`, replay touches only the `sources` table and the caller rebuilds
+   * the FTS index once from the final `sources` state (see {@link rebuildSourcesFts}).
+   * The live append path leaves this unset (FTS stays consistent per event).
+   */
+  deferFts?: boolean;
+}
+
+/**
+ * Rebuild the entire `sources_fts` index from the current `sources` table in one
+ * pass. Used after a `deferFts` replay: the FTS table is empty (truncated, never
+ * touched during replay) so a single bulk INSERT of every final source body
+ * reproduces exactly what per-event syncing would have left — but O(sources)
+ * instead of O(events).
+ */
+export function rebuildSourcesFts(sqlite: Database): void {
+  sqlite.exec("INSERT INTO sources_fts (external_id, body) SELECT external_id, body FROM sources");
+}
+
 /**
  * Relation label for human/agent-created manual links (ADR-0018 追補 / #90),
  * distinct from the reducer-derived provenance edges (`derived_from` /
@@ -94,7 +118,7 @@ function refreshIdentityCount(sqlite: Database, personId: string, ts: string): v
 }
 
 /** Apply a single event to the projections. Idempotent under replay. */
-export function applyEvent(sqlite: Database, event: DomainEvent): void {
+export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyOptions = {}): void {
   switch (event.type) {
     case "SourceObserved": {
       sqlite
@@ -116,7 +140,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           $obs: event.observedAt,
           $meta: JSON.stringify(event.meta),
         });
-      syncSourceFts(sqlite, event.externalId, event.body);
+      if (!options.deferFts) syncSourceFts(sqlite, event.externalId, event.body);
       return;
     }
     case "SourceBodyUpdated": {
@@ -136,7 +160,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
           $obs: event.observedAt,
           $meta: JSON.stringify(event.meta),
         });
-      if (changes.changes > 0) {
+      if (changes.changes > 0 && !options.deferFts) {
         syncSourceFts(sqlite, event.externalId, event.body);
       }
       return;
@@ -148,7 +172,9 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
       // removes it again (replay-stable). The non-event sidecar substrate
       // (vec0 / *_meta) is purged imperatively by the source.forget service.
       sqlite.query("DELETE FROM sources WHERE external_id = ?").run(event.externalId);
-      sqlite.query("DELETE FROM sources_fts WHERE external_id = ?").run(event.externalId);
+      if (!options.deferFts) {
+        sqlite.query("DELETE FROM sources_fts WHERE external_id = ?").run(event.externalId);
+      }
       return;
     }
     case "ConnectorSyncCompleted": {
@@ -630,9 +656,10 @@ export function applyEvents(
   sqlite: Database,
   events: Iterable<DomainEvent>,
   onProgress?: () => void,
+  options: ApplyOptions = {},
 ): void {
   for (const event of events) {
-    applyEvent(sqlite, event);
+    applyEvent(sqlite, event, options);
     onProgress?.();
   }
 }
