@@ -39,6 +39,8 @@ export const SlackListsActuatorConfig = z.object({
   slackDoneOptionId: z.string().min(1).optional(),
   slackTodoOptionId: z.string().min(1).optional(),
   slackCheckboxColumnId: z.string().min(1).optional(),
+  /** Status option mapped to "dropped" (won't-do); required for drop egress. */
+  slackDroppedOptionId: z.string().min(1).optional(),
   slackMarkerColumnId: z.string().min(1).optional(),
 });
 export type SlackListsActuatorConfig = z.infer<typeof SlackListsActuatorConfig>;
@@ -180,6 +182,24 @@ export function createSlackListsActuator(
       const { listId, rowId } = parseSlackItemExternalId(externalId);
       if (action.kind === "comment") {
         throw new Error("slack lists: comment is not supported (List records have no comment API)");
+      }
+      // Best-effort drop: a checkbox can't express "dropped" (only done/not-done),
+      // so drop needs a dedicated status option. Without it → no-op + warn (don't
+      // throw — the local cache still records the drop, ADR-0036 §3).
+      if (action.kind === "drop") {
+        if (cfg.slackStatusColumnId && cfg.slackDroppedOptionId) {
+          const slack = await client(ctx);
+          await slack.updateField({
+            listId,
+            rowId,
+            field: { column_id: cfg.slackStatusColumnId, select: [cfg.slackDroppedOptionId] },
+          });
+        } else {
+          ctx.onWarn?.(
+            "slack: drop is a no-op (needs slackStatusColumnId + slackDroppedOptionId in [tasks.home])",
+          );
+        }
+        return;
       }
       const slack = await client(ctx);
       const done = action.kind === "complete";

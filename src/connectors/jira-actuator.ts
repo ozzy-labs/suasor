@@ -46,6 +46,8 @@ export const JiraActuatorConfig = z.object({
   doneTransitionId: z.string().min(1).optional(),
   /** Workflow transition id mapped to reopen. */
   reopenTransitionId: z.string().min(1).optional(),
+  /** Workflow transition id mapped to drop / won't-do (best-effort; absent → no-op). */
+  dropTransitionId: z.string().min(1).optional(),
 });
 export type JiraActuatorConfig = z.infer<typeof JiraActuatorConfig>;
 
@@ -208,6 +210,12 @@ export function createJiraActuator(
 
     async act(externalId: string, action: ActuatorAction, ctx: ActuatorContext): Promise<void> {
       const { issueKey } = parseJiraExternalId(externalId);
+      // Best-effort drop: without a configured won't-do transition, no-op + warn
+      // (don't throw — the local cache still records the drop, ADR-0036 §3).
+      if (action.kind === "drop" && !cfg.dropTransitionId) {
+        ctx.onWarn?.("jira: drop is a no-op (no dropTransitionId configured in [tasks.home])");
+        return;
+      }
       const jira = await client(ctx);
       switch (action.kind) {
         case "complete":
@@ -224,6 +232,10 @@ export function createJiraActuator(
           await jira.transition({ issueKey, transitionId });
           return;
         }
+        case "drop":
+          // dropTransitionId is present here (early-returned above otherwise).
+          await jira.transition({ issueKey, transitionId: cfg.dropTransitionId as string });
+          return;
         case "comment":
           await jira.addComment({ issueKey, body: textToAdf(action.body) });
           return;

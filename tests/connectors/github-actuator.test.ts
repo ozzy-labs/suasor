@@ -115,6 +115,15 @@ describe("github-actuator act (Issue)", () => {
     expect(fake.statusSets).toHaveLength(0); // no board configured
   });
 
+  test("drop closes the issue as not_planned", async () => {
+    const fake = fakeClient();
+    const actuator = createGithubActuator({ repo: "acme/widgets" }, () => fake.client);
+    await actuator.act("gh:acme/widgets:issue:7", { kind: "drop" }, ctx);
+    expect(fake.stateCalls).toEqual([
+      { issueNumber: 7, state: "closed", stateReason: "not_planned" },
+    ]);
+  });
+
   test("comment posts to the (real) issue", async () => {
     const fake = fakeClient();
     const actuator = createGithubActuator({ repo: "acme/widgets" }, () => fake.client);

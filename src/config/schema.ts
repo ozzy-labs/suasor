@@ -229,6 +229,8 @@ export const TasksConfig = z
         slackDoneOptionId: z.string().min(1).optional(),
         slackTodoOptionId: z.string().min(1).optional(),
         slackCheckboxColumnId: z.string().min(1).optional(),
+        /** Slack status option mapped to "dropped" (won't-do; required for drop egress). */
+        slackDroppedOptionId: z.string().min(1).optional(),
         /** Optional text column to stamp the idempotency marker into (for re-publish dedup). */
         slackMarkerColumnId: z.string().min(1).optional(),
         /**
@@ -244,6 +246,7 @@ export const TasksConfig = z
         issueType: z.string().min(1).optional(),
         doneTransitionId: z.string().min(1).optional(),
         reopenTransitionId: z.string().min(1).optional(),
+        dropTransitionId: z.string().min(1).optional(),
         /**
          * GitHub Projects v2 single-select Status field mapping, used when a
          * `github` home also has a `project` board (ADR-0036). These node ids are

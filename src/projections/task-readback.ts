@@ -9,9 +9,9 @@
  * The external tool is the state authority (D1); this is how the local cache
  * converges to it.
  *
- * Scope: GitHub Issues + Jira (status category). Slack read-back needs the slack
- * connector to ingest List items (follow-up); `closed(not_planned) → dropped`
- * needs `state_reason` in github meta (follow-up); both unknown → leave untouched.
+ * Scope: GitHub Issues (incl. `closed(not_planned)` → dropped via meta
+ * `state_reason`) + Jira (status category). Slack read-back needs the slack
+ * connector to ingest List items (follow-up); unknown state → leave untouched.
  */
 import type { Store } from "../db/index.ts";
 import type { TaskState } from "../propose/task-update.ts";
@@ -32,7 +32,10 @@ export function taskStateFromSource(
   meta: Record<string, unknown>,
 ): TaskState | null {
   if (sourceType === "github_issue") {
-    if (meta.state === "closed") return "completed";
+    if (meta.state === "closed") {
+      // A "not planned" close is a won't-do → dropped; any other close → completed.
+      return meta.state_reason === "not_planned" ? "dropped" : "completed";
+    }
     if (meta.state === "open") return "open";
   }
   if (sourceType === "jira_issue") {

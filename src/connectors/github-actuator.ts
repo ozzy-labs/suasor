@@ -258,6 +258,17 @@ export function createGithubActuator(
           await gh.setIssueState({ owner: o, repo: r, issueNumber, state: "open" });
           await moveBoardStatus(gh, { owner: o, repo: r, issueNumber }, cfg.todoOptionId);
           return;
+        case "drop":
+          // Abandon = close as "not planned" (GitHub's won't-do semantic). Board
+          // Status is left untouched (Issue state alone reflects the drop).
+          await gh.setIssueState({
+            owner: o,
+            repo: r,
+            issueNumber,
+            state: "closed",
+            stateReason: "not_planned",
+          });
+          return;
         case "comment":
           await gh.createComment({ owner: o, repo: r, issueNumber, body: action.body });
           return;

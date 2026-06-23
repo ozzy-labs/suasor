@@ -109,6 +109,32 @@ describe("slack-lists-actuator act", () => {
     ).rejects.toThrow(/slackCheckboxColumnId|slackStatusColumnId/);
   });
 
+  test("drop sets the dropped status option when configured", async () => {
+    const fake = fakeClient();
+    const actuator = createSlackListsActuator(
+      { ...statusCfg, slackDroppedOptionId: "opt_dropped" },
+      () => fake.client,
+    );
+    await actuator.act("slack:list:L1:item:Rec5", { kind: "drop" }, ctx);
+    expect(fake.updates[0]?.field).toEqual({ column_id: "ColStatus", select: ["opt_dropped"] });
+  });
+
+  test("drop without a dropped option is a no-op + warn (does not throw)", async () => {
+    const fake = fakeClient();
+    const warnings: string[] = [];
+    const actuator = createSlackListsActuator(checkboxCfg, () => fake.client);
+    await actuator.act(
+      "slack:list:L1:item:Rec5",
+      { kind: "drop" },
+      {
+        secret: async () => "xoxb-token",
+        onWarn: (m) => warnings.push(m),
+      },
+    );
+    expect(fake.updates).toHaveLength(0);
+    expect(warnings[0]).toMatch(/drop/);
+  });
+
   test("comment is unsupported", async () => {
     const fake = fakeClient();
     const actuator = createSlackListsActuator(checkboxCfg, () => fake.client);

@@ -102,6 +102,22 @@ describe("reconcileReadback (ADR-0036 §6 read-back)", () => {
     expect(stateOf(taskId)).toBe("completed");
   });
 
+  test("a not_planned-closed github issue reflects to dropped (not completed)", () => {
+    const { taskId } = taskCreate(store, { title: "abandon" });
+    publish(taskId, "gh:acme/widgets:issue:7");
+    store.record({
+      type: "SourceObserved",
+      externalId: "gh:acme/widgets:issue:7",
+      sourceType: "github_issue",
+      body: "issue",
+      observedAt: "2026-06-23T00:00:00+00:00",
+      fingerprint: "fp-np",
+      meta: { state: "closed", state_reason: "not_planned" },
+    });
+    expect(reconcileReadback(store)).toBe(1);
+    expect(stateOf(taskId)).toBe("dropped");
+  });
+
   test("an unpublished task is never reflected", () => {
     taskCreate(store, { title: "local" });
     observeIssue("gh:acme/widgets:issue:7", "closed"); // a source, but no published task links it

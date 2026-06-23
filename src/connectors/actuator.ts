@@ -39,10 +39,17 @@ export interface PublishableTask {
   readonly priority?: string | null;
 }
 
-/** Lifecycle operations an actuator can issue against a published item. */
+/**
+ * Lifecycle operations an actuator can issue against a published item. `drop`
+ * (abandon / won't-do) is **best-effort**: an actuator whose tool cannot express
+ * a dropped state (e.g. a Slack checkbox) must **no-op + `ctx.onWarn`**, NOT throw
+ * — so a `task.update → dropped` still records locally (ADR-0036 §3). Genuine
+ * egress failures (bad token, network) still throw.
+ */
 export type ActuatorAction =
   | { readonly kind: "complete" }
   | { readonly kind: "reopen" }
+  | { readonly kind: "drop" }
   | { readonly kind: "comment"; readonly body: string };
 
 /** Context handed to actuator calls (mirrors {@link ./contract.ts SyncContext}). */
