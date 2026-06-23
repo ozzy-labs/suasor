@@ -340,4 +340,21 @@ describe("findDuplicates", () => {
     upsertSourceVector(store.connection.sqlite, "ghost-2", [1, 0, 0], { modelId: "fake-3d" });
     expect(findDuplicates(store.connection.sqlite, 0.5)).toHaveLength(0);
   });
+
+  test("onProgress fires once per scanned vector (O(n²) pairwise scan)", async () => {
+    seed("gh:1", "a");
+    seed("gh:2", "b");
+    seed("gh:3", "c");
+    const embedder = fakeEmbedder({ a: [1, 0, 0], b: [0, 1, 0], c: [0, 0, 1] });
+    await embedSources(store.connection.sqlite, embedder, [
+      { externalId: "gh:1", body: "a" },
+      { externalId: "gh:2", body: "b" },
+      { externalId: "gh:3", body: "c" },
+    ]);
+    let ticks = 0;
+    findDuplicates(store.connection.sqlite, 0.95, () => {
+      ticks += 1;
+    });
+    expect(ticks).toBe(3); // one tick per outer-loop vector
+  });
 });

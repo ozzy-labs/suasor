@@ -374,10 +374,15 @@ function cosine(a: Float32Array, b: Float32Array): number {
  * `a < b` lexicographically and sorted by descending similarity. The active
  * `embedder` is unused for the comparison (vectors are already stored) but its
  * presence gates the verb — a disabled backend means there is nothing to compare.
+ *
+ * The pairwise comparison is O(n²); on a large corpus it can run for many seconds
+ * with no output. `onProgress` (when given) fires once per outer-loop iteration
+ * (i.e. per vector scanned against the rest) so the CLI can surface progress.
  */
 export function findDuplicates(
   sqlite: Database,
   threshold: number = DEFAULT_DUPLICATE_THRESHOLD,
+  onProgress?: () => void,
 ): DuplicatePair[] {
   // Only compare vectors whose source still exists (JOIN drops orphan vectors,
   // mirroring recallSearch). Order by external_id for deterministic pairing.
@@ -406,6 +411,7 @@ export function findDuplicates(
         pairs.push({ a: left.id, b: right.id, similarity });
       }
     }
+    onProgress?.();
   }
   pairs.sort((p, q) => q.similarity - p.similarity);
   return pairs;
