@@ -4,6 +4,7 @@ import {
   mapJiraPriority,
   normalizeJiraDue,
   reconcileReadback,
+  slackStateFromCells,
   taskStateFromSource,
 } from "../../src/projections/task-readback.ts";
 import { taskCreate } from "../../src/propose/task-create.ts";
@@ -178,6 +179,32 @@ describe("reconcileReadback (ADR-0036 §6 read-back)", () => {
     expect(reconcileReadback(store)).toBe(0); // unchanged → no spam
   });
 
+  test("a checked slack list item reflects its published task to completed (config-driven)", () => {
+    const slackHome = { slackCheckboxColumnId: "ColDone" };
+    const { taskId } = taskCreate(store, { title: "slack task" });
+    store.record({
+      type: "TaskPublished",
+      taskId,
+      destination: "slack",
+      externalId: "slack:list:L1:item:Rec5",
+      publishedAt: "2026-06-23T00:00:00+00:00",
+    });
+    store.record({
+      type: "SourceObserved",
+      externalId: "slack:list:L1:item:Rec5",
+      sourceType: "slack_list_item",
+      body: "t",
+      observedAt: "2026-06-23T00:00:00+00:00",
+      fingerprint: "fp-slack-1",
+      meta: { listId: "L1", cells: [{ column_id: "ColDone", checkbox: true }] },
+    });
+    // Without slack home config, the raw cell can't be interpreted → no-op.
+    expect(reconcileReadback(store, new Date())).toBe(0);
+    // With the [tasks.home] column config, it reflects.
+    expect(reconcileReadback(store, new Date(), slackHome)).toBe(1);
+    expect(stateOf(taskId)).toBe("completed");
+  });
+
   test("an unpublished task is never reflected", () => {
     taskCreate(store, { title: "local" });
     observeIssue("gh:acme/widgets:issue:7", "closed"); // a source, but no published task links it
@@ -230,5 +257,31 @@ describe("normalizeJiraDue / mapJiraPriority", () => {
     expect(mapJiraPriority("Lowest")).toBe("low");
     expect(mapJiraPriority("Blocker")).toBeNull();
     expect(mapJiraPriority("")).toBeNull();
+  });
+});
+
+describe("slackStateFromCells", () => {
+  test("checkbox column wins: true→completed, false→open", () => {
+    const home = { slackCheckboxColumnId: "C" };
+    expect(slackStateFromCells([{ column_id: "C", checkbox: true }], home)).toBe("completed");
+    expect(slackStateFromCells([{ column_id: "C", checkbox: false }], home)).toBe("open");
+  });
+
+  test("status select maps via option ids (done/dropped/todo)", () => {
+    const home = {
+      slackStatusColumnId: "S",
+      slackDoneOptionId: "od",
+      slackTodoOptionId: "ot",
+      slackDroppedOptionId: "ox",
+    };
+    expect(slackStateFromCells([{ column_id: "S", select: ["od"] }], home)).toBe("completed");
+    expect(slackStateFromCells([{ column_id: "S", select: ["ox"] }], home)).toBe("dropped");
+    expect(slackStateFromCells([{ column_id: "S", select: ["ot"] }], home)).toBe("open");
+    expect(slackStateFromCells([{ column_id: "S", select: ["other"] }], home)).toBeNull();
+  });
+
+  test("unconfigured / no matching cell → null", () => {
+    expect(slackStateFromCells([{ column_id: "X", checkbox: true }], {})).toBeNull();
+    expect(slackStateFromCells([], { slackCheckboxColumnId: "C" })).toBeNull();
   });
 });

@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { EmbeddingConfig, ExtractionConfig } from "../config/schema.ts";
 import type { Store } from "../db/index.ts";
 import { createExtractor } from "../extraction/index.ts";
+import type { SlackHomeColumns } from "../projections/task-readback.ts";
 import { createEmbedderResolved } from "../retrieval/embedding/index.ts";
 import { type SecretStoreOptions, syncConnector } from "./index.ts";
 import { loadConnector } from "./registry.ts";
@@ -79,6 +80,8 @@ export interface ConnectorSyncDeps {
     embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
     /** `[extraction]` section; when backend is enabled, Office/PDF bodies are extracted (ADR-0024). */
     extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
+    /** `[tasks]` section; its `home` lets post-sync read-back interpret slack list items (ADR-0036). */
+    tasks?: { home?: SlackHomeColumns | null };
   };
   /** Secret backend override (tests inject; defaults to env + keychain). */
   secrets?: SecretStoreOptions;
@@ -109,6 +112,7 @@ export async function runConnectorSyncTool(
     embedder,
     extractor,
     ...(deps.config.extraction ? { extractionMaxBytes: deps.config.extraction.maxBytes } : {}),
+    ...(deps.config.tasks?.home ? { slackHome: deps.config.tasks.home } : {}),
   });
   return ConnectorSyncOutput.parse(outcome);
 }

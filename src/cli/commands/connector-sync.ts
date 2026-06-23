@@ -130,6 +130,8 @@ class ConnectorSyncCommand extends Command {
         embedder,
         extractor,
         extractionMaxBytes: config.extraction.maxBytes,
+        // [tasks.home] lets post-sync read-back interpret slack list items (ADR-0036 §6).
+        ...(config.tasks?.home ? { slackHome: config.tasks.home } : {}),
         onProgress: () => progress.tick(),
         onWarn: (message) => {
           progress.finish();
