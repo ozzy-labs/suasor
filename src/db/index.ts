@@ -9,7 +9,11 @@
  */
 import { appendEvent } from "../events/store.ts";
 import type { DomainEvent, NewEvent } from "../events/types.ts";
-import { type RebuildResult, rebuildProjections } from "../projections/rebuild.ts";
+import {
+  type RebuildOptions,
+  type RebuildResult,
+  rebuildProjections,
+} from "../projections/rebuild.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type OpenOptions, openDatabase, type SuasorDb } from "./connection.ts";
 
@@ -63,8 +67,8 @@ export class Store {
   }
 
   /** Rebuild all projections by replaying the event log (FR-MNT-1). */
-  rebuild(): RebuildResult {
-    return rebuildProjections(this.db.sqlite);
+  rebuild(options: RebuildOptions = {}): RebuildResult {
+    return rebuildProjections(this.db.sqlite, options);
   }
 
   close(): void {

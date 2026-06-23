@@ -4,7 +4,8 @@
  * Heavy dependencies (DB layer, config loader) are imported lazily inside
  * `execute` so the CLI cold start stays light (NFR-PRF-1, docs/design/cli.md).
  */
-import { Command } from "clipanion";
+import { Command, Option } from "clipanion";
+import { createProgress } from "../progress.ts";
 
 export class ProjectionsRebuildCommand extends Command {
   static override paths = [["projections", "rebuild"]];
@@ -17,6 +18,10 @@ export class ProjectionsRebuildCommand extends Command {
       reconstruct them (ADR-0002 / FR-MNT-1). The event store is never modified.
     `,
     examples: [["Rebuild projections", "suasor projections rebuild"]],
+  });
+
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
   });
 
   override async execute(): Promise<number> {
@@ -32,9 +37,20 @@ export class ProjectionsRebuildCommand extends Command {
       return 1;
     }
 
+    // Indeterminate "N processed" on stderr while the replay runs (TTY-gated; a
+    // no-op in CI / pipes so stdout stays clean). Replaying a large event log is
+    // O(events) and otherwise silent until the final summary — opshub ADR-0026
+    // parity, mirroring `<connector> sync`.
+    const progress = createProgress(
+      this.context.stderr,
+      "projections rebuild",
+      this.noProgress ? false : undefined,
+    );
+
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
-      const result = store.rebuild();
+      const result = store.rebuild({ onProgress: () => progress.tick() });
+      progress.finish();
       this.context.stdout.write(`Rebuilt projections from ${result.events} event(s).\n`);
       return 0;
     } finally {

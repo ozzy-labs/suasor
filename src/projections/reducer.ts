@@ -621,7 +621,18 @@ export function applyEvent(sqlite: Database, event: DomainEvent): void {
   }
 }
 
-/** Apply a sequence of events in order. */
-export function applyEvents(sqlite: Database, events: Iterable<DomainEvent>): void {
-  for (const event of events) applyEvent(sqlite, event);
+/**
+ * Apply a sequence of events in order. `onProgress` (when given) is invoked once
+ * per applied event so a long replay (`projections rebuild`) can surface progress
+ * without the reducer knowing about the CLI's indicator.
+ */
+export function applyEvents(
+  sqlite: Database,
+  events: Iterable<DomainEvent>,
+  onProgress?: () => void,
+): void {
+  for (const event of events) {
+    applyEvent(sqlite, event);
+    onProgress?.();
+  }
 }

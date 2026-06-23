@@ -73,4 +73,13 @@ describe("suasor projections rebuild", () => {
     expect(code).toBe(0);
     expect(out).toContain("Rebuilt projections from 1 event(s).");
   });
+
+  test("--no-progress is accepted and keeps stdout clean (no ANSI)", async () => {
+    const { code, out } = await run(["projections", "rebuild", "--no-progress"]);
+    expect(code).toBe(0);
+    expect(out).toContain("Rebuilt projections from 0 event(s).");
+    // The summary line is the only stdout content — no progress escapes leak in.
+    expect(out).not.toContain("\x1b");
+    expect(out).not.toContain("processed");
+  });
 });
