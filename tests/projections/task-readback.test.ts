@@ -313,4 +313,17 @@ describe("slackStateFromCells", () => {
     expect(slackStateFromCells([{ column_id: "X", checkbox: true }], {})).toBeNull();
     expect(slackStateFromCells([], { slackCheckboxColumnId: "C" })).toBeNull();
   });
+
+  test("matches a cell by `key` when the response omits column_id (items.list shape)", () => {
+    // slackLists.items.list returns cells keyed by `key`; `column_id` is optional.
+    expect(
+      slackStateFromCells([{ key: "C", checkbox: true }], { slackCheckboxColumnId: "C" }),
+    ).toBe("completed");
+    expect(
+      slackStateFromCells([{ key: "S", select: ["od"] }], {
+        slackStatusColumnId: "S",
+        slackDoneOptionId: "od",
+      }),
+    ).toBe("completed");
+  });
 });
