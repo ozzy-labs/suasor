@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.18](https://github.com/ozzy-labs/suasor/compare/v0.1.17...v0.1.18) (2026-06-23)
+
+
+### Features
+
+* **cli:** progress indicator for embeddings find-duplicates ([#346](https://github.com/ozzy-labs/suasor/issues/346)) ([4cff6b2](https://github.com/ozzy-labs/suasor/commit/4cff6b20c45fdca82bde99af883eda3d3896b938))
+* **cli:** progress indicators for projections/embeddings rebuild ([#344](https://github.com/ozzy-labs/suasor/issues/344)) ([19ce360](https://github.com/ozzy-labs/suasor/commit/19ce3606e1919df9795e8913a0ec455b1c068ec7))
+
+
+### Performance
+
+* **projections:** defer FTS reindex during rebuild (~25× faster) ([#347](https://github.com/ozzy-labs/suasor/issues/347)) ([5e2e818](https://github.com/ozzy-labs/suasor/commit/5e2e818189262d3b95de372d42a64246067c3f18))
+
 ## [0.1.17](https://github.com/ozzy-labs/suasor/compare/v0.1.16...v0.1.17) (2026-06-23)
 
 
