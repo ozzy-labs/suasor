@@ -171,6 +171,13 @@ export function reconcileReadback(
         : taskStateFromSource(row.sourceType, meta);
     if (derived === null) continue; // unknown external state → leave the task untouched
 
+    // `dropped` is a suasor-side decision the tool may not be able to express
+    // (a drop that no-op'd egress, ADR-0036 §3). Read-back must NOT un-drop such
+    // a task — keep it sticky (state + due/priority). A genuine external drop
+    // (github not_planned, a slack dropped option) yields derived === "dropped"
+    // and falls through to the diff guard (a no-op).
+    if (row.taskState === "dropped" && derived !== "dropped") continue;
+
     // Jira also carries due/priority; github_issue does not (→ null = no change).
     const isJira = row.sourceType === "jira_issue";
     const due = isJira ? normalizeJiraDue(meta.dueDate) : null;

@@ -205,6 +205,35 @@ describe("reconcileReadback (ADR-0036 §6 read-back)", () => {
     expect(stateOf(taskId)).toBe("completed");
   });
 
+  test("a locally dropped task is sticky: read-back never un-drops it", () => {
+    const { taskId } = taskCreate(store, { title: "abandon" });
+    publish(taskId, "gh:acme/widgets:issue:7");
+    store.record({ type: "TaskApplied", taskId, state: "dropped" }); // local drop (egress no-op'd)
+    // The tool still shows the issue open / closed-completed (it can't say "dropped").
+    observeIssue("gh:acme/widgets:issue:7", "open");
+    expect(reconcileReadback(store)).toBe(0);
+    expect(stateOf(taskId)).toBe("dropped"); // not reverted
+    observeIssue("gh:acme/widgets:issue:7", "closed");
+    expect(reconcileReadback(store)).toBe(0);
+    expect(stateOf(taskId)).toBe("dropped");
+  });
+
+  test("a genuine external not_planned drop still reflects onto a non-dropped task", () => {
+    const { taskId } = taskCreate(store, { title: "t" });
+    publish(taskId, "gh:acme/widgets:issue:7");
+    store.record({
+      type: "SourceObserved",
+      externalId: "gh:acme/widgets:issue:7",
+      sourceType: "github_issue",
+      body: "i",
+      observedAt: "2026-06-23T00:00:00+00:00",
+      fingerprint: "fp-np2",
+      meta: { state: "closed", state_reason: "not_planned" },
+    });
+    expect(reconcileReadback(store)).toBe(1);
+    expect(stateOf(taskId)).toBe("dropped");
+  });
+
   test("an unpublished task is never reflected", () => {
     taskCreate(store, { title: "local" });
     observeIssue("gh:acme/widgets:issue:7", "closed"); // a source, but no published task links it
