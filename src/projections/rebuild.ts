@@ -19,7 +19,7 @@
 import type { Database } from "bun:sqlite";
 import { DEFAULT_VEC_TABLE } from "../db/connection.ts";
 import { readAllEvents } from "../events/store.ts";
-import { applyEvents } from "./reducer.ts";
+import { applyEvents, rebuildSourcesFts } from "./reducer.ts";
 
 /** Projection tables cleared before replay (the event store is untouched). */
 const PROJECTION_TABLES = [
@@ -79,7 +79,13 @@ export function rebuildProjections(sqlite: Database, options: RebuildOptions = {
   const events = readAllEvents(sqlite);
   const tx = sqlite.transaction(() => {
     truncateProjections(sqlite);
-    applyEvents(sqlite, events, options.onProgress);
+    // Defer FTS during replay: a source updated K times would otherwise be
+    // reindexed K times (all but the last wasted). Replay touches only `sources`,
+    // then we rebuild the FTS index once from the final state — O(sources) not
+    // O(events). truncateProjections already emptied sources_fts, so the bulk
+    // insert below reproduces exactly what per-event syncing would have left.
+    applyEvents(sqlite, events, options.onProgress, { deferFts: true });
+    rebuildSourcesFts(sqlite);
   });
   tx();
   return { events: events.length };
