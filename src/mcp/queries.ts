@@ -1350,3 +1350,21 @@ export function buildActivityTimeline(
     items: items.slice(0, limit),
   };
 }
+
+/**
+ * The set of external item ids that are already a published task's home item
+ * (ADR-0036 §8 loop avoidance). Drawn from both `tasks.published_external_id`
+ * and the `published_to` links (the reducer records both with the same id; the
+ * OR makes the lookup robust across a `projections rebuild`). Used by
+ * `persistProposals` to skip re-proposing a task suasor itself published.
+ */
+export function publishedTaskExternalIds(sqlite: Database): Set<string> {
+  const rows = sqlite
+    .query(
+      `SELECT published_external_id AS id FROM tasks WHERE published_external_id IS NOT NULL
+       UNION
+       SELECT to_id AS id FROM links WHERE relation = 'published_to'`,
+    )
+    .all() as Array<{ id: string }>;
+  return new Set(rows.map((r) => r.id));
+}

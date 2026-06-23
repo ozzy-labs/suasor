@@ -19,6 +19,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { publishedTaskExternalIds } from "../mcp/queries.ts";
 import { type Candidate, CandidateInput, MODE_ALLOWED_KINDS, ProposeMode } from "./candidates.ts";
 import { candidateId, entityId } from "./id.ts";
 
@@ -34,6 +35,12 @@ export type ProposeGenerateInput = z.input<typeof ProposeGenerateInput>;
 export interface ProposeGenerateOutput {
   mode: ProposeMode;
   candidates: Candidate[];
+  /**
+   * Count of candidates dropped because they reference a source that is already
+   * a published task's external item (loop avoidance, ADR-0036 §8). Only set by
+   * `persistProposals` (the pure `proposeGenerate` never skips). Omitted ⇒ 0.
+   */
+  skipped?: number;
 }
 
 /**
@@ -108,7 +115,16 @@ export function persistProposals(
 ): ProposeGenerateOutput {
   const result = proposeGenerate(input);
   const sqlite = store.connection.sqlite;
-  for (const candidate of result.candidates) {
+  // Loop avoidance (ADR-0036 §8): drop candidates whose provenance source is
+  // already a published task's external item — suasor must not re-propose a task
+  // it itself published (the mirror of its own issue/ticket/list item). Identity
+  // join on the published external ids (published_external_id / published_to).
+  const published = publishedTaskExternalIds(sqlite);
+  const kept = result.candidates.filter(
+    (c) => !candidateSources(c).some((src) => published.has(src)),
+  );
+  const skipped = result.candidates.length - kept.length;
+  for (const candidate of kept) {
     // Idempotent at the event layer: the candidate id is content-derived, so a
     // ledger row already existing means this exact candidate was generated
     // before — don't append a redundant ProposalGenerated (and never resurrect a
@@ -130,5 +146,5 @@ export function persistProposals(
       now,
     );
   }
-  return result;
+  return { mode: result.mode, candidates: kept, skipped };
 }
