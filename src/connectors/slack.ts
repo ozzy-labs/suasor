@@ -358,6 +358,9 @@ export interface SlackClientLike {
 export interface SlackListItem {
   id?: string;
   fields?: Array<{
+    /** Stable column key (always present in `items.list` responses). */
+    key?: string;
+    /** Encoded column id (optional in responses; the id used by create/update). */
     column_id?: string;
     checkbox?: boolean;
     select?: string[];

@@ -90,11 +90,19 @@ const defaultClientFactory: SlackListsClientFactory = (token) => {
     async findItemByMarker({ listId, columnId, marker }) {
       const w = await web();
       const res = (await w.apiCall("slackLists.items.list", { list_id: listId, limit: 100 })) as {
-        items?: Array<{ id?: string; fields?: Array<{ column_id?: string; text?: string }> }>;
+        items?: Array<{
+          id?: string;
+          fields?: Array<{ key?: string; column_id?: string; text?: string }>;
+        }>;
       };
+      // `items.list` keys cells by `key` (always present); `column_id` is optional
+      // in responses. Match the configured column id against either.
       const hit = res.items?.find((it) =>
         it.fields?.some(
-          (f) => f.column_id === columnId && typeof f.text === "string" && f.text.includes(marker),
+          (f) =>
+            (f.column_id === columnId || f.key === columnId) &&
+            typeof f.text === "string" &&
+            f.text.includes(marker),
         ),
       );
       return hit?.id ?? null;

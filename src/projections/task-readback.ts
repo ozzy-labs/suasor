@@ -48,9 +48,16 @@ export interface SlackHomeColumns {
 
 /** A raw Slack List cell (as stored in `slack_list_item` meta.cells). */
 interface SlackCell {
+  /** Stable column key (always present in `items.list`); `column_id` is optional. */
+  key?: string;
   column_id?: string;
   checkbox?: boolean;
   select?: string[];
+}
+
+/** Match a cell against a configured column id, by `column_id` or `key` (read responses use `key`). */
+function cellFor(cells: SlackCell[], columnId: string): SlackCell | undefined {
+  return cells.find((c) => c.column_id === columnId || c.key === columnId);
 }
 
 /**
@@ -62,11 +69,11 @@ interface SlackCell {
  */
 export function slackStateFromCells(cells: SlackCell[], home: SlackHomeColumns): TaskState | null {
   if (home.slackCheckboxColumnId) {
-    const cell = cells.find((c) => c.column_id === home.slackCheckboxColumnId);
+    const cell = cellFor(cells, home.slackCheckboxColumnId);
     if (cell && typeof cell.checkbox === "boolean") return cell.checkbox ? "completed" : "open";
   }
   if (home.slackStatusColumnId) {
-    const cell = cells.find((c) => c.column_id === home.slackStatusColumnId);
+    const cell = cellFor(cells, home.slackStatusColumnId);
     const opt = cell?.select?.[0];
     if (opt) {
       if (opt === home.slackDoneOptionId) return "completed";
