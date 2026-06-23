@@ -122,6 +122,13 @@ describe("suasor embeddings rebuild/drain/find-duplicates (disabled no-op)", () 
     expect(code).toBe(0);
     expect(out).toContain("nothing to do");
   });
+
+  test("find-duplicates accepts --no-progress", async () => {
+    await seed("gh:1", "alpha");
+    const { code, out } = await run(["embeddings", "find-duplicates", "--no-progress"]);
+    expect(code).toBe(0);
+    expect(out).toContain("nothing to do");
+  });
 });
 
 describe("suasor embeddings list-failed (Issue #202)", () => {

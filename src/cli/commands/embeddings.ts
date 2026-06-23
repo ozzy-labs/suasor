@@ -263,6 +263,10 @@ export class EmbeddingsFindDuplicatesCommand extends Command {
     description: "Emit duplicate pairs as JSON.",
   });
 
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
+  });
+
   override async execute(): Promise<number> {
     const ctx = await openEmbeddingContext(this.context);
     if (ctx === null) return 1;
@@ -283,7 +287,16 @@ export class EmbeddingsFindDuplicatesCommand extends Command {
         }
         threshold = parsed;
       }
-      const pairs = findDuplicates(ctx.store.connection.sqlite, threshold);
+      // Indeterminate "N processed" on stderr while the O(n²) pairwise scan runs
+      // (TTY-gated; no-op for --json / pipes / CI). A large vec0 corpus can scan
+      // for many seconds otherwise silently — opshub ADR-0026 parity.
+      const progress = createProgress(
+        this.context.stderr,
+        "embeddings find-duplicates",
+        this.noProgress ? false : undefined,
+      );
+      const pairs = findDuplicates(ctx.store.connection.sqlite, threshold, () => progress.tick());
+      progress.finish();
       if (this.json) {
         this.context.stdout.write(`${JSON.stringify(pairs, null, 2)}\n`);
         return 0;
