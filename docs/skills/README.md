@@ -30,7 +30,7 @@
 | [`commitment-chase`](commitment-chase/SKILL.md) | 「催促して」「相手の約束で期限切れ」 | commitment.list(owed_to_me) + graph.related / source.get（text-only・persist なし） |
 | [`weekly-review`](weekly-review/SKILL.md) | 「週次レビュー」「棚卸し」 | task.list(overdue) / commitment.list / inbox.list / brief |
 
-## HITL write 系（人の承認で適用・10）
+## HITL write 系（人の承認で適用・13）
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -43,7 +43,10 @@
 | [`proposal-review`](proposal-review/SKILL.md) | 「保留中の提案を確認」「pending を捌いて」 | propose.list(pending) → propose.apply / propose.reject / propose.batch |
 | [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
 | [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
+| [`task-publish`](task-publish/SKILL.md) | 「GitHub に起票して」「Jira を完了に」「issue にコメント」 | task.list → task.publish / task.act |
 | [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply / draft.export |
+| [`source-forget`](source-forget/SKILL.md) | 「あの誤取り込みを消して」「この source を忘れて」 | search / source.list → source.forget |
+| [`sync-now`](sync-now/SKILL.md) | 「最新を取り込んで」「Slack 同期して」「sync して」 | connector.sync |
 
 エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）で、suasor 開発に使う project skill として host dir に commit 済み（[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md)・更新は [dev-skills-refresh.md](dev-skills-refresh.md)）。
 

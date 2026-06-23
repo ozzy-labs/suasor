@@ -1,6 +1,6 @@
 # アシスタント skill 利用ガイド
 
-Suasor は 29 個のアシスタント skill を同梱する（[ADR-0008](../adr/0008-assistant-skills.md)）。自然文で頼むと該当 skill が発火し、Suasor MCP の read / write tool を組み合わせて「次にやること」「今日のまとめ」「この資料から task 抽出」などを返す。本ガイドは **install → 起動 → 確認 → トラブルシュート** を 1 本にまとめる。
+Suasor は 32 個のアシスタント skill を同梱する（[ADR-0008](../adr/0008-assistant-skills.md)）。自然文で頼むと該当 skill が発火し、Suasor MCP の read / write tool を組み合わせて「次にやること」「今日のまとめ」「この資料から task 抽出」などを返す。本ガイドは **install → 起動 → 確認 → トラブルシュート** を 1 本にまとめる。
 
 > skill の責務一覧（catalog）は [docs/skills/README.md](../skills/README.md)。frontmatter の機械可読フィールド仕様は [ADR-0032](../adr/0032-skill-frontmatter-schema.md)。CLI verb の一覧は [docs/design/cli.md](../design/cli.md)。
 
@@ -96,5 +96,5 @@ mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と
 - [ADR-0008](../adr/0008-assistant-skills.md) — アシスタント skill の SSOT / install / drift
 - [ADR-0032](../adr/0032-skill-frontmatter-schema.md) — frontmatter 機械可読フィールド + `skills search` / `info`
 - [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) — read 自律 / write HITL 境界
-- [docs/skills/README.md](../skills/README.md) — skill catalog（全 29 件の責務と発火例）
+- [docs/skills/README.md](../skills/README.md) — skill catalog（全 32 件の責務と発火例）
 - [docs/design/cli.md](../design/cli.md) — CLI verb 一覧

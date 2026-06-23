@@ -98,7 +98,7 @@ bun test                   # テスト
 <!-- このブロックは sync-skills.sh が opt-in 後に自動管理する。opt-in していない場合は空のままで問題ない。 -->
 <!-- end: @ozzylabs/skills -->
 
-アシスタント 29 skill（Suasor 同梱・`suasor skills install`）の SSOT は `docs/skills/<name>/SKILL.md`（[ADR-0008]）。展開先の mirror（`.claude/skills/` / `.agents/skills/`）は **commit しない**（`.gitignore` 済みのローカル install 物・[ADR-0035]）。エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 由来で、suasor 開発に使う **project skill として host dir に commit 済み**（更新手順: [docs/skills/dev-skills-refresh.md](docs/skills/dev-skills-refresh.md)）。
+アシスタント 32 skill（Suasor 同梱・`suasor skills install`）の SSOT は `docs/skills/<name>/SKILL.md`（[ADR-0008]）。展開先の mirror（`.claude/skills/` / `.agents/skills/`）は **commit しない**（`.gitignore` 済みのローカル install 物・[ADR-0035]）。エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 由来で、suasor 開発に使う **project skill として host dir に commit 済み**（更新手順: [docs/skills/dev-skills-refresh.md](docs/skills/dev-skills-refresh.md)）。
 
 ## Adapter Files
 

@@ -10,7 +10,8 @@ triggers:
   - これは見送り
   - task を再開
   - あのタスク done
-pairs: []
+pairs:
+  - task-publish
 mcp_tools_read:
   - task.list
 mcp_tools_write:
