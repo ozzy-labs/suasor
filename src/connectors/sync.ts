@@ -24,7 +24,7 @@ import type { Database } from "bun:sqlite";
 import type { Store } from "../db/index.ts";
 import type { Extractor } from "../extraction/index.ts";
 import { personIdFor } from "../projections/person.ts";
-import { reconcileReadback } from "../projections/task-readback.ts";
+import { reconcileReadback, type SlackHomeColumns } from "../projections/task-readback.ts";
 import type { Embedder } from "../retrieval/embedding/index.ts";
 import { embedSources } from "../retrieval/embedding/index.ts";
 import { authorFromMeta } from "./author.ts";
@@ -104,6 +104,12 @@ export interface SyncOptions {
   extractionMaxBytes?: number;
   /** Called when extraction fails (best-effort; ingest still succeeds name-only). */
   onExtractError?: (error: Error) => void;
+  /**
+   * `[tasks.home]` slack column/option mapping, so post-sync read-back can
+   * interpret ingested `slack_list_item` raw cells (ADR-0036 §6). Omitted ⇒ Slack
+   * read-back is skipped (GitHub/Jira read-back is config-free and still runs).
+   */
+  slackHome?: SlackHomeColumns | null;
 }
 
 /** Default cap when a caller supplies an extractor but no explicit max. */
@@ -442,7 +448,8 @@ async function runSyncPass(
   // State read-back (ADR-0036 §6): reflect external state onto published tasks
   // whose home item was just (re)ingested. Read → local event only (no egress),
   // run after the full pass so all sources are folded. Diff-guarded inside.
-  reconcileReadback(store, now());
+  // `slackHome` lets it interpret `slack_list_item` raw cells (option C).
+  reconcileReadback(store, now(), options.slackHome);
 
   return {
     connector: connector.name,

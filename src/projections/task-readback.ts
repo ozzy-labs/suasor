@@ -10,8 +10,9 @@
  * converges to it.
  *
  * Scope: GitHub Issues (incl. `closed(not_planned)` → dropped via meta
- * `state_reason`) + Jira (status category). Slack read-back needs the slack
- * connector to ingest List items (follow-up); unknown state → leave untouched.
+ * `state_reason`) + Jira (status category + due/priority) + Slack Lists
+ * (`slack_list_item` raw cells interpreted with the `[tasks.home]` column config,
+ * option C). Unknown external state → leave the task untouched.
  */
 import type { Store } from "../db/index.ts";
 import type { TaskState } from "../propose/task-update.ts";
@@ -34,6 +35,46 @@ interface PublishedSourceRow {
 export function normalizeJiraDue(raw: unknown): string | null {
   if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
   return `${raw}T00:00:00+00:00`;
+}
+
+/** The `[tasks.home]` slack column/option mapping read-back needs to interpret cells. */
+export interface SlackHomeColumns {
+  slackCheckboxColumnId?: string;
+  slackStatusColumnId?: string;
+  slackDoneOptionId?: string;
+  slackTodoOptionId?: string;
+  slackDroppedOptionId?: string;
+}
+
+/** A raw Slack List cell (as stored in `slack_list_item` meta.cells). */
+interface SlackCell {
+  column_id?: string;
+  checkbox?: boolean;
+  select?: string[];
+}
+
+/**
+ * Interpret a Slack List item's raw cells into a task state, using the
+ * `[tasks.home]` column config (ADR-0036 §6, option C: cells are ingested raw,
+ * interpreted here — the connector stays config-free). Checkbox column wins when
+ * configured (done/not-done); else a status single-select maps via the option
+ * ids. Returns `null` when it cannot be derived (unconfigured / no match).
+ */
+export function slackStateFromCells(cells: SlackCell[], home: SlackHomeColumns): TaskState | null {
+  if (home.slackCheckboxColumnId) {
+    const cell = cells.find((c) => c.column_id === home.slackCheckboxColumnId);
+    if (cell && typeof cell.checkbox === "boolean") return cell.checkbox ? "completed" : "open";
+  }
+  if (home.slackStatusColumnId) {
+    const cell = cells.find((c) => c.column_id === home.slackStatusColumnId);
+    const opt = cell?.select?.[0];
+    if (opt) {
+      if (opt === home.slackDoneOptionId) return "completed";
+      if (opt === home.slackDroppedOptionId) return "dropped";
+      if (opt === home.slackTodoOptionId) return "open";
+    }
+  }
+  return null;
 }
 
 /** Map a Jira priority name (case-insensitive) to a suasor priority, or `null`. */
@@ -99,7 +140,11 @@ export function taskStateFromSource(
  *
  * @returns the number of tasks reflected (TaskApplied appended).
  */
-export function reconcileReadback(store: Store, now: Date = new Date()): number {
+export function reconcileReadback(
+  store: Store,
+  now: Date = new Date(),
+  slackHome?: SlackHomeColumns | null,
+): number {
   const rows = store.connection.sqlite
     .query(
       `SELECT t.id AS taskId, t.state AS taskState, t.due_date AS taskDue,
@@ -118,7 +163,12 @@ export function reconcileReadback(store: Store, now: Date = new Date()): number 
     } catch {
       continue;
     }
-    const derived = taskStateFromSource(row.sourceType, meta);
+    const derived =
+      row.sourceType === "slack_list_item"
+        ? slackHome
+          ? slackStateFromCells((meta.cells as SlackCell[]) ?? [], slackHome)
+          : null // no [tasks.home] slack config available → can't interpret cells
+        : taskStateFromSource(row.sourceType, meta);
     if (derived === null) continue; // unknown external state → leave the task untouched
 
     // Jira also carries due/priority; github_issue does not (→ null = no change).

@@ -79,6 +79,14 @@ export const SlackConnectorConfig = z.object({
   channel_since: z.record(z.string(), z.string().min(1)).optional(),
   /** Operator's own user id for the flat/default workspace (ADR-0012). */
   self_user_id: z.string().min(1).optional(),
+  /**
+   * Slack List ids to mirror as `slack_list_item` sources for task read-back
+   * (ADR-0036 §6). The items are ingested with **raw cells** (no interpretation);
+   * `reconcileReadback` maps them to a task state using `[tasks.home]` column ids.
+   * Uses the flat/default token (`lists:read`). Multi-workspace lists are a
+   * follow-up.
+   */
+  lists: z.array(z.string().min(1)).optional(),
   workspaces: z.record(z.string(), SlackWorkspaceConfig).optional(),
 });
 export type SlackConnectorConfig = z.infer<typeof SlackConnectorConfig>;
@@ -330,6 +338,49 @@ export interface SlackClientLike {
       response_metadata?: { next_cursor?: string };
     }>;
   };
+  /**
+   * List items for a Slack List (ADR-0036 §6 read-back). Optional so existing
+   * message-only fakes need not implement it; List ingest is skipped when absent.
+   */
+  slackListsItems?: (args: { list_id: string; cursor?: string; limit?: number }) => Promise<{
+    items?: SlackListItem[];
+    response_metadata?: { next_cursor?: string };
+  }>;
+}
+
+/** A Slack List item (record) and its raw cells, as `slackLists.items.list` returns. */
+export interface SlackListItem {
+  id?: string;
+  fields?: Array<{
+    column_id?: string;
+    checkbox?: boolean;
+    select?: string[];
+    text?: string;
+  }>;
+}
+
+/**
+ * Build a `slack_list_item` SourceRecord from a raw List item (ADR-0036 §6). The
+ * cells are stored verbatim in `meta.cells`; `reconcileReadback` interprets them
+ * with the `[tasks.home]` column config. The fingerprint hashes the cells so a
+ * checkbox/status change re-ingests (the title body alone wouldn't change).
+ * externalId mirrors the actuator's published id exactly (the read-back join key).
+ */
+export function listItemToRecord(
+  listId: string,
+  item: SlackListItem,
+  observedAt: string,
+): SourceRecord {
+  const fields = item.fields ?? [];
+  const title = fields.find((f) => typeof f.text === "string" && f.text)?.text ?? item.id ?? "";
+  return {
+    externalId: `slack:list:${listId}:item:${item.id}`,
+    sourceType: "slack_list_item",
+    body: title,
+    observedAt,
+    meta: { listId, cells: fields },
+    fingerprint: JSON.stringify(fields),
+  };
 }
 
 /** How the connector obtains a Slack client (overridable in tests). */
@@ -338,7 +389,15 @@ export type SlackClientFactory = (token: string) => Promise<SlackClientLike> | S
 /** Default factory: lazy-imports `@slack/web-api` so registration stays import-clean. */
 const defaultSlackClientFactory: SlackClientFactory = async (token) => {
   const { WebClient } = await import("@slack/web-api");
-  return new WebClient(token) as unknown as SlackClientLike;
+  const web = new WebClient(token);
+  const like = web as unknown as SlackClientLike;
+  // `slackLists.items.list` isn't a typed method on the SDK; go through apiCall.
+  like.slackListsItems = (args) =>
+    web.apiCall("slackLists.items.list", args) as Promise<{
+      items?: SlackListItem[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  return like;
 };
 
 export interface SlackConnectorOptions {
@@ -431,7 +490,8 @@ class SlackConnector implements Connector {
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
     const workspaces = resolveWorkspaces(this.config).filter((w) => w.channels.length > 0);
-    if (workspaces.length === 0) return;
+    const hasLists = (this.config.lists?.length ?? 0) > 0;
+    if (workspaces.length === 0 && !hasLists) return;
 
     const { byAlias: previous, legacyFloor } = parseCursor(ctx.cursor);
     // Start empty and seed only configured aliases/channels below, so cursors
@@ -558,7 +618,12 @@ class SlackConnector implements Connector {
       }
     }
 
-    if (resolvedCount === 0) {
+    // Mirror configured Slack Lists as `slack_list_item` sources (ADR-0036 §6
+    // read-back). Raw cells only — `reconcileReadback` interprets them with the
+    // [tasks.home] column config. Best-effort: a list failure warns, not aborts.
+    if (hasLists) yield* this.syncLists(ctx);
+
+    if (workspaces.length > 0 && resolvedCount === 0) {
       throw new Error(
         "slack connector: no token configured for any workspace " +
           "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
@@ -568,6 +633,43 @@ class SlackConnector implements Connector {
     // reporting a silent success. A partial failure (some succeeded) is isolated.
     if (failedCount > 0 && failedCount === resolvedCount) {
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    }
+  }
+
+  /**
+   * Ingest the configured Slack Lists' items as `slack_list_item` sources (raw
+   * cells, ADR-0036 §6). Uses the flat/default token. Paginated; per-list errors
+   * warn (best-effort) rather than aborting the sync.
+   */
+  private async *syncLists(ctx: SyncContext): AsyncIterable<SourceRecord> {
+    const token = await ctx.secret("token");
+    if (!token) {
+      ctx.onWarn?.("slack lists skipped: no flat token (needs `lists:read`)");
+      return;
+    }
+    const client = await this.clientFactory(token);
+    if (!client.slackListsItems) return; // a fake without list support
+    const observedAt = new Date().toISOString();
+    for (const listId of this.config.lists ?? []) {
+      try {
+        let cursor: string | undefined;
+        do {
+          const res = await client.slackListsItems({
+            list_id: listId,
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const item of res.items ?? []) {
+            if (!item.id) continue;
+            yield listItemToRecord(listId, item, observedAt);
+          }
+          cursor = res.response_metadata?.next_cursor || undefined;
+        } while (cursor);
+      } catch (error) {
+        ctx.onWarn?.(
+          `slack list '${listId}' failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 
