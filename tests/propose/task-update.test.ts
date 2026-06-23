@@ -194,7 +194,7 @@ describe("task.update (direct HITL task lifecycle transition)", () => {
       expect(fake.acts[0]?.kind).toBe("reopen");
     });
 
-    test("dropped is local-only (no actuator action)", async () => {
+    test("dropped on a published task issues actuator drop, then caches dropped", async () => {
       const { taskId } = taskCreate(store, { title: "drop" });
       publish(taskId, "gh:acme/widgets:issue:7");
       const fake = fakeActuator();
@@ -203,8 +203,8 @@ describe("task.update (direct HITL task lifecycle transition)", () => {
         loadActuatorImpl: fake.loader,
       });
       expect(out.status).toBe("updated");
-      expect(fake.acts).toHaveLength(0);
-      expect(stateOf(taskId)).toBe("dropped");
+      expect(fake.acts).toEqual([{ externalId: "gh:acme/widgets:issue:7", kind: "drop" }]);
+      expect(stateOf(taskId)).toBe("dropped"); // optimistic local cache
     });
 
     test("an unpublished task stays local-only (no actuator call)", async () => {

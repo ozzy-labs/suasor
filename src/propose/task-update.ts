@@ -74,11 +74,11 @@ function loadRow(store: Store, taskId: string): TaskStateRow | null {
 
 /**
  * Map a target lifecycle state to the actuator action that effects it externally
- * (ADR-0036 §3). `dropped` has no actuator action — it stays a local-only cache
- * update (a `drop` actuator action is a follow-up). `in_progress` collapses to
- * `reopen` (the external tools have no distinct in-progress write).
+ * (ADR-0036 §3). `dropped` → `drop` (abandon; best-effort — actuators whose tool
+ * can't express it no-op + warn, so the local cache still records). `in_progress`
+ * collapses to `reopen` (the external tools have no distinct in-progress write).
  */
-function actionForState(state: TaskState): "complete" | "reopen" | null {
+function actionForState(state: TaskState): "complete" | "reopen" | "drop" | null {
   switch (state) {
     case "completed":
       return "complete";
@@ -86,7 +86,9 @@ function actionForState(state: TaskState): "complete" | "reopen" | null {
     case "in_progress":
       return "reopen";
     case "dropped":
-      return null;
+      // Best-effort egress: the actuator no-ops (+ onWarn) where the tool can't
+      // express "dropped" (e.g. Slack), so the local TaskApplied still records.
+      return "drop";
   }
 }
 

@@ -113,6 +113,29 @@ describe("jira-actuator act", () => {
     ).rejects.toThrow(/doneTransitionId/);
   });
 
+  test("drop applies the configured won't-do transition", async () => {
+    const fake = fakeClient();
+    const actuator = createJiraActuator({ ...cfg, dropTransitionId: "51" }, () => fake.client);
+    await actuator.act("jira:acme.atlassian.net:ENG:ENG-5", { kind: "drop" }, ctx);
+    expect(fake.transitions).toEqual([{ issueKey: "ENG-5", transitionId: "51" }]);
+  });
+
+  test("drop without dropTransitionId is a no-op + warn (does not throw)", async () => {
+    const fake = fakeClient();
+    const warnings: string[] = [];
+    const actuator = createJiraActuator(cfg, () => fake.client);
+    await actuator.act(
+      "jira:acme.atlassian.net:ENG:ENG-5",
+      { kind: "drop" },
+      {
+        secret: async () => "api-token",
+        onWarn: (m) => warnings.push(m),
+      },
+    );
+    expect(fake.transitions).toHaveLength(0);
+    expect(warnings[0]).toMatch(/drop/);
+  });
+
   test("comment adds an ADF comment", async () => {
     const fake = fakeClient();
     const actuator = createJiraActuator(cfg, () => fake.client);

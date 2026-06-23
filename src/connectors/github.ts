@@ -66,6 +66,8 @@ interface GithubIssueItem {
   title: string;
   body: string | null;
   state: string;
+  /** `completed` / `not_planned` / `reopened` / null — distinguishes a won't-do close (ADR-0036 §6). */
+  state_reason?: string | null;
   html_url: string;
   updated_at: string;
   pull_request?: unknown;
@@ -130,6 +132,8 @@ function toRecord(repo: string, item: GithubIssueItem): SourceRecord {
       repo,
       number: item.number,
       state: item.state,
+      // state_reason distinguishes a "not planned" (won't-do) close → dropped (ADR-0036 §6).
+      state_reason: item.state_reason ?? null,
       url: item.html_url,
       author: item.user?.login ?? null,
     },

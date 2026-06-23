@@ -234,7 +234,7 @@ export const TaskActionIssued = z.object({
   /** External item the action targeted. */
   externalId: z.string().min(1),
   /** The state operation issued to the external home. */
-  action: z.enum(["complete", "reopen", "comment"]),
+  action: z.enum(["complete", "reopen", "drop", "comment"]),
   /** When the action was issued (ISO 8601). */
   issuedAt: IsoDateTime,
 });

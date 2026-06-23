@@ -158,13 +158,13 @@ export async function taskPublish(
 
 export interface TaskActInput {
   taskId: string;
-  action: "complete" | "reopen" | "comment";
+  action: "complete" | "reopen" | "drop" | "comment";
   body?: string;
 }
 export interface TaskActOutput {
   taskId: string;
   externalId: string;
-  action: "complete" | "reopen" | "comment";
+  action: "complete" | "reopen" | "drop" | "comment";
 }
 
 /**
