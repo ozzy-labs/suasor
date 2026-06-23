@@ -251,8 +251,14 @@ export async function readAccessToken({
 
 /**
  * Normalize one raw usage window (`{ utilization, resets_at }`-ish) into a
- * stable `{ utilization, resets_at }` shape. Tolerates missing fields and
- * `utilization` expressed as a 0–1 fraction (scaled to 0–100).
+ * stable `{ utilization, resets_at }` shape. Tolerates missing fields.
+ *
+ * `utilization` is taken verbatim as a 0–100 percentage — the OAuth usage
+ * endpoint reports percentages (e.g. `11.0`, `2.0`, and fractional values like
+ * `94.9`), never a 0–1 fraction. An earlier "scale 0–1 fractions to percent"
+ * heuristic (`util <= 1 → util * 100`) inflated a genuine 1% reading to 100%
+ * (and would turn 0.5% into 50%), hard-stopping the guard whenever a window sat
+ * at exactly 1%. There is no fraction form to detect here, so we never scale.
  *
  * @param {any} raw
  * @returns {{ utilization: number, resets_at: string|null }}
@@ -261,7 +267,6 @@ export function normalizeWindow(raw) {
   if (!raw || typeof raw !== "object") return { utilization: 0, resets_at: null };
   let util = Number(raw.utilization);
   if (!Number.isFinite(util)) util = 0;
-  if (util > 0 && util <= 1) util *= 100; // fraction → percent
   const resetsAt = raw.resets_at ?? raw.resetsAt ?? null;
   return { utilization: util, resets_at: typeof resetsAt === "string" ? resetsAt : null };
 }
