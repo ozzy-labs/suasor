@@ -49,10 +49,11 @@ Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projecti
 
 5. **失敗は構造化エラーで返す（[ADR-0031](0031-mcp-structured-errors.md)）** — actuator が導入する新たな失敗モード（外部 write 失敗・scope 不足・rate limit・ホーム未設定）は 0031 の構造化エラーで返す。新 code（例 `ACTUATOR_NOT_CONFIGURED` / `EGRESS_FAILED` / `PUBLISH_DESTINATION_INVALID`）を `src/mcp/errors.ts` に追加し、`docs/design/mcp-surface.md` を更新する。`[tasks]` ホーム未設定は `draft.export` の `[export].dir` 未設定と同様、**起動時致命にせず per-call で degrade**（該当 tool 呼び出し時にのみエラー）。
 
-6. **状態読み戻し — 完了状態 + 期日・優先度（D4）** — 公開済みタスク（外部 id リンク有り）に限り、既存の connector sync で取り込んだ source の状態から **完了/未完了 + `dueDate` / `priority`** を読み、native task に `TaskApplied` を append して優先ビューを正確に保つ。**読み取り → ローカル event のみ。ツールには書かない**（操作命令＝決定4 とは別経路）ので**ループしない**。同一状態は no-op（[ADR-0028](0028-task-scheduling-fields.md) / reducer 既存挙動）。状態マッピング例:
-   - GitHub: open→open/in_progress、closed→completed、closed(not planned)→dropped
-   - Jira: To Do→open、In Progress→in_progress、Done→completed、Won't Do→dropped（**カスタムワークフローは site 依存。category ベースでマップし未知 status は保守的に現状維持**）
-   - Slack List: チェック→completed
+6. **状態読み戻し — 完了状態 + 期日・優先度（D4）** — 公開済みタスク（外部 id リンク有り）に限り、既存の connector sync で取り込んだ source の状態から **完了/未完了 + `dueDate` / `priority`** を読み、native task に `TaskApplied` を append して優先ビューを正確に保つ。**読み取り → ローカル event のみ。ツールには書かない**（操作命令＝決定4 とは別経路）ので**ループしない**。同一状態は no-op（[ADR-0028](0028-task-scheduling-fields.md) / reducer 既存挙動）。**GitHub 先行で実装済み**（`src/projections/task-readback.ts` の `reconcileReadback`、`sync.ts` の `ConnectorSyncCompleted` 後で呼ぶ・差分ガード付き）。状態マッピング:
+   - GitHub: open→open、closed→completed（**実装済み**。`closed(not_planned)→dropped` は source meta に `state_reason` が無く follow-up）
+   - Jira: To Do→open、In Progress→in_progress、Done→completed、Won't Do→dropped（**follow-up**＝jira connector が status を取り込んでいないため。category ベースでマップし未知 status は保守的に現状維持）
+   - Slack List: チェック→completed（**follow-up**＝read 側が List item を ingest しないため）
+   - **due/priority の読み戻しは初期スコープ外**（lifecycle 先行・best-effort、follow-up）
 
 7. **全タスクを外部化、Suasor 自身はホームにしない（D3）** — 確定タスクは必ず外部ホームに住む。Suasor の自前面は **triage inbox（コミット前の提案承認）だけ**に保ち、タスク管理用の独自 UI（案A）は作らない（サイロ化・忘却リスクの回避）。**private なタスクはホームの選び方**（自分専用 Slack List / private repo / Google Tasks 等）で対応する。
 

@@ -24,6 +24,7 @@ import type { Database } from "bun:sqlite";
 import type { Store } from "../db/index.ts";
 import type { Extractor } from "../extraction/index.ts";
 import { personIdFor } from "../projections/person.ts";
+import { reconcileReadback } from "../projections/task-readback.ts";
 import type { Embedder } from "../retrieval/embedding/index.ts";
 import { embedSources } from "../retrieval/embedding/index.ts";
 import { authorFromMeta } from "./author.ts";
@@ -437,6 +438,11 @@ async function runSyncPass(
     },
     now(),
   );
+
+  // State read-back (ADR-0036 §6): reflect external state onto published tasks
+  // whose home item was just (re)ingested. Read → local event only (no egress),
+  // run after the full pass so all sources are folded. Diff-guarded inside.
+  reconcileReadback(store, now());
 
   return {
     connector: connector.name,
