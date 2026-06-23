@@ -161,4 +161,20 @@ describe("[tasks] config (ADR-0036)", () => {
   test("rejects github_projects (folded into the github home, ADR-0036)", () => {
     expect(() => TasksConfig.parse({ home: { destination: "github_projects" } })).toThrow();
   });
+
+  test("parses a jira home (host + project + transition ids, ADR-0036)", () => {
+    const c = TasksConfig.parse({
+      home: {
+        destination: "jira",
+        host: "acme.atlassian.net",
+        project: "ENG",
+        email: "me@acme.com",
+        doneTransitionId: "31",
+        reopenTransitionId: "11",
+      },
+    });
+    expect(c.home?.destination).toBe("jira");
+    expect(c.home?.host).toBe("acme.atlassian.net");
+    expect(c.home?.doneTransitionId).toBe("31");
+  });
 });

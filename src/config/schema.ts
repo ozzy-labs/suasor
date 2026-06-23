@@ -219,6 +219,19 @@ export const TasksConfig = z
         /** Slack list id (when destination = slack). */
         list: z.string().min(1).optional(),
         /**
+         * Jira fields (when destination = jira, ADR-0036). `host` must match the
+         * read connector's `[connectors.jira].host` so the published issue's
+         * identity (`jira:<host>:<project>:<key>`) dedups against ingest. `email`
+         * is non-secret (Cloud basic auth = email + token); `auth` = basic|bearer.
+         * `doneTransitionId` / `reopenTransitionId` are workflow-specific.
+         */
+        host: z.string().min(1).optional(),
+        email: z.string().min(1).optional(),
+        auth: z.enum(["basic", "bearer"]).optional(),
+        issueType: z.string().min(1).optional(),
+        doneTransitionId: z.string().min(1).optional(),
+        reopenTransitionId: z.string().min(1).optional(),
+        /**
          * GitHub Projects v2 single-select Status field mapping, used when a
          * `github` home also has a `project` board (ADR-0036). These node ids are
          * project-specific (like a Jira custom workflow), so they are config-driven;
