@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/ozzy-labs/suasor/compare/v0.1.18...v0.1.19) (2026-06-23)
+
+
+### Features
+
+* **skills:** add task-publish, source-forget, sync-now assistant skills ([#348](https://github.com/ozzy-labs/suasor/issues/348)) ([7a6dd94](https://github.com/ozzy-labs/suasor/commit/7a6dd94cea034dd7e9c024ae5d4b015db8a7e555))
+
 ## [0.1.18](https://github.com/ozzy-labs/suasor/compare/v0.1.17...v0.1.18) (2026-06-23)
 
 
