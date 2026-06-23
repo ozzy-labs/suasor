@@ -12,7 +12,7 @@
 
 スキルは 2 系統に分かれる:
 
-- **アシスタント skill（Suasor 同梱・29 件）** — `personal-brief` / `next-actions` / `find-document` / `research` 等。SSOT は [`docs/skills/`](docs/skills/)（[ADR-0008](docs/adr/0008-assistant-skills.md)）、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開。**展開された mirror は commit しない（`.gitignore` 済みのローカル install 物。[ADR-0035](docs/adr/0035-project-skills-vendor-dev-skills.md)）**。read 系は自律 OK、write 系は HITL（auto-apply なし）
+- **アシスタント skill（Suasor 同梱・32 件）** — `personal-brief` / `next-actions` / `find-document` / `research` 等。SSOT は [`docs/skills/`](docs/skills/)（[ADR-0008](docs/adr/0008-assistant-skills.md)）、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開。**展開された mirror は commit しない（`.gitignore` 済みのローカル install 物。[ADR-0035](docs/adr/0035-project-skills-vendor-dev-skills.md)）**。read 系は自律 OK、write 系は HITL（auto-apply なし）
 - **エコシステム共通 dev skill** — `@ozzylabs/skills` 由来。suasor 開発に使う **project skill として `.claude/skills/` `.agents/skills/` に commit 済み**（名前空間 disjoint、[ADR-0035](docs/adr/0035-project-skills-vendor-dev-skills.md)。更新は [docs/skills/dev-skills-refresh.md](docs/skills/dev-skills-refresh.md)）:
   - `/implement` — Issue または指示をもとに、ブランチ作成・実装
   - `/lint` — 全リンターを自動修正付きで実行

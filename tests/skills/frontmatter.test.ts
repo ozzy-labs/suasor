@@ -124,8 +124,8 @@ describe("skillMatchesQuery", () => {
 describe("bundled skill catalog invariants (ADR-0032)", () => {
   const infos = loadSkillInfos(listBundledSkills());
 
-  test("there are 29 bundled skills", () => {
-    expect(infos.length).toBe(29);
+  test("there are 32 bundled skills", () => {
+    expect(infos.length).toBe(32);
   });
 
   test("every skill carries readOnly (boolean) + category (enum)", () => {
@@ -154,11 +154,11 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
     }
   });
 
-  test("exactly 19 read-only and 10 write skills (docs/skills/README.md split)", () => {
+  test("exactly 19 read-only and 13 write skills (docs/skills/README.md split)", () => {
     const read = infos.filter((i) => i.frontmatter.readOnly === true).length;
     const write = infos.filter((i) => i.frontmatter.readOnly === false).length;
     expect(read).toBe(19);
-    expect(write).toBe(10);
+    expect(write).toBe(13);
   });
 
   // Cross-check the read/write boundary (frontmatter) against the MCP tool
