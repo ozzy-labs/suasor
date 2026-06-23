@@ -21,6 +21,10 @@ const REGISTRY: Partial<Record<TaskDestination, ActuatorLoader>> = {
     const { createGithubActuator } = await import("./github-actuator.ts");
     return (config) => createGithubActuator(config);
   },
+  jira: async () => {
+    const { createJiraActuator } = await import("./jira-actuator.ts");
+    return (config) => createJiraActuator(config);
+  },
 };
 
 /** Destinations with a registered actuator (cheap; loads no SDK). */
