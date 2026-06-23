@@ -177,4 +177,18 @@ describe("[tasks] config (ADR-0036)", () => {
     expect(c.home?.host).toBe("acme.atlassian.net");
     expect(c.home?.doneTransitionId).toBe("31");
   });
+
+  test("parses a slack home (list + column/option ids, ADR-0036)", () => {
+    const c = TasksConfig.parse({
+      home: {
+        destination: "slack",
+        list: "L1",
+        slackTitleColumnId: "ColTitle",
+        slackCheckboxColumnId: "ColDone",
+      },
+    });
+    expect(c.home?.destination).toBe("slack");
+    expect(c.home?.list).toBe("L1");
+    expect(c.home?.slackTitleColumnId).toBe("ColTitle");
+  });
 });
