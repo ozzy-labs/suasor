@@ -90,4 +90,44 @@ describe("slack List ingestion (ADR-0036 §6 read-back)", () => {
     const records = await collect(connector.sync(ctx()));
     expect(records).toHaveLength(0);
   });
+
+  test("ingests lists from a named workspace using its own token", async () => {
+    const seen: string[] = [];
+    const ctxMulti: SyncContext = {
+      cursor: null,
+      secret: async (name) => (name === "acme:token" ? "tok-acme" : null),
+      onWarn: () => {},
+    };
+    const connector = createSlackConnector(
+      { workspaces: { acme: { team: "T", channels: [], lists: ["LA"] } } },
+      {
+        clientFactory: (token) => {
+          seen.push(token);
+          return fakeClient([
+            { items: [{ id: "R1", fields: [{ column_id: "C", checkbox: true }] }] },
+          ]);
+        },
+      },
+    );
+    const records = await collect(connector.sync(ctxMulti));
+    // The List ingest used the named workspace's own token (only token resolvable).
+    expect(seen.every((t) => t === "tok-acme")).toBe(true);
+    expect(records.map((r) => r.externalId)).toEqual(["slack:list:LA:item:R1"]);
+  });
+
+  test("a named workspace with no token has its lists skipped (warn, not abort)", async () => {
+    const warnings: string[] = [];
+    const ctxNoTok: SyncContext = {
+      cursor: null,
+      secret: async () => null,
+      onWarn: (m) => warnings.push(m),
+    };
+    const connector = createSlackConnector(
+      { workspaces: { acme: { team: "T", channels: [], lists: ["LA"] } } },
+      { clientFactory: () => fakeClient([{ items: [{ id: "R1" }] }]) },
+    );
+    const records = await collect(connector.sync(ctxNoTok));
+    expect(records).toHaveLength(0);
+    expect(warnings.some((w) => /lists skipped: no token/.test(w))).toBe(true);
+  });
 });

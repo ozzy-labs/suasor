@@ -56,6 +56,8 @@ export const SlackWorkspaceConfig = z.object({
    * back to DM-only.
    */
   self_user_id: z.string().min(1).optional(),
+  /** Slack List ids to mirror for task read-back in this workspace (ADR-0036 §6). */
+  lists: z.array(z.string().min(1)).optional(),
 });
 export type SlackWorkspaceConfig = z.infer<typeof SlackWorkspaceConfig>;
 
@@ -128,6 +130,8 @@ interface ResolvedWorkspace {
   alias: string;
   team: string;
   channels: string[];
+  /** Slack List ids to mirror for read-back in this workspace (ADR-0036 §6). */
+  lists: string[];
   secretName: string;
   since?: string;
   channelSince?: Record<string, string>;
@@ -141,6 +145,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       alias,
       team: w.team,
       channels: w.channels,
+      lists: w.lists ?? [],
       secretName: workspaceSecretName(alias),
       ...(w.since ? { since: w.since } : {}),
       ...(w.channel_since ? { channelSince: w.channel_since } : {}),
@@ -151,6 +156,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       alias: DEFAULT_WORKSPACE_ALIAS,
       team: config.team,
       channels: config.channels,
+      lists: config.lists ?? [],
       secretName: workspaceSecretName(),
       ...(config.since ? { since: config.since } : {}),
       ...(config.channel_since ? { channelSince: config.channel_since } : {}),
@@ -489,9 +495,11 @@ class SlackConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    const workspaces = resolveWorkspaces(this.config).filter((w) => w.channels.length > 0);
-    const hasLists = (this.config.lists?.length ?? 0) > 0;
-    if (workspaces.length === 0 && !hasLists) return;
+    // Keep any workspace that has channels (messages) OR lists (read-back, §6).
+    const workspaces = resolveWorkspaces(this.config).filter(
+      (w) => w.channels.length > 0 || w.lists.length > 0,
+    );
+    if (workspaces.length === 0) return;
 
     const { byAlias: previous, legacyFloor } = parseCursor(ctx.cursor);
     // Start empty and seed only configured aliases/channels below, so cursors
@@ -619,11 +627,12 @@ class SlackConnector implements Connector {
     }
 
     // Mirror configured Slack Lists as `slack_list_item` sources (ADR-0036 §6
-    // read-back). Raw cells only — `reconcileReadback` interprets them with the
-    // [tasks.home] column config. Best-effort: a list failure warns, not aborts.
-    if (hasLists) yield* this.syncLists(ctx);
+    // read-back), per workspace (each its own token). Raw cells only —
+    // `reconcileReadback` interprets them with the [tasks.home] column config.
+    // Best-effort: a per-list / token failure warns, not aborts.
+    yield* this.syncLists(ctx, workspaces);
 
-    if (workspaces.length > 0 && resolvedCount === 0) {
+    if (resolvedCount === 0 && workspaces.some((w) => w.channels.length > 0)) {
       throw new Error(
         "slack connector: no token configured for any workspace " +
           "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
@@ -641,34 +650,42 @@ class SlackConnector implements Connector {
    * cells, ADR-0036 §6). Uses the flat/default token. Paginated; per-list errors
    * warn (best-effort) rather than aborting the sync.
    */
-  private async *syncLists(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    const token = await ctx.secret("token");
-    if (!token) {
-      ctx.onWarn?.("slack lists skipped: no flat token (needs `lists:read`)");
-      return;
-    }
-    const client = await this.clientFactory(token);
-    if (!client.slackListsItems) return; // a fake without list support
+  private async *syncLists(
+    ctx: SyncContext,
+    workspaces: ResolvedWorkspace[],
+  ): AsyncIterable<SourceRecord> {
     const observedAt = new Date().toISOString();
-    for (const listId of this.config.lists ?? []) {
-      try {
-        let cursor: string | undefined;
-        do {
-          const res = await client.slackListsItems({
-            list_id: listId,
-            limit: 100,
-            ...(cursor ? { cursor } : {}),
-          });
-          for (const item of res.items ?? []) {
-            if (!item.id) continue;
-            yield listItemToRecord(listId, item, observedAt);
-          }
-          cursor = res.response_metadata?.next_cursor || undefined;
-        } while (cursor);
-      } catch (error) {
-        ctx.onWarn?.(
-          `slack list '${listId}' failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+    for (const ws of workspaces) {
+      if (ws.lists.length === 0) continue;
+      const token = await ctx.secret(ws.secretName);
+      if (!token) {
+        ctx.onWarn?.(`workspace '${ws.alias}' lists skipped: no token (needs \`lists:read\`)`);
+        continue;
+      }
+      const client = await this.clientFactory(token);
+      if (!client.slackListsItems) continue; // a fake without list support
+      for (const listId of ws.lists) {
+        try {
+          let cursor: string | undefined;
+          do {
+            const res = await client.slackListsItems({
+              list_id: listId,
+              limit: 100,
+              ...(cursor ? { cursor } : {}),
+            });
+            for (const item of res.items ?? []) {
+              if (!item.id) continue;
+              yield listItemToRecord(listId, item, observedAt);
+            }
+            cursor = res.response_metadata?.next_cursor || undefined;
+          } while (cursor);
+        } catch (error) {
+          ctx.onWarn?.(
+            `slack list '${listId}' (${ws.alias}) failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       }
     }
   }
