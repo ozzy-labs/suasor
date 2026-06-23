@@ -53,7 +53,7 @@ Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projecti
    - GitHub: open→open、closed(reason≠not_planned)→completed、closed(not_planned)→dropped（**実装済み**。connector meta に `state_reason` を取り込み）
    - Jira: status category で new→open、indeterminate→in_progress、done→completed（**実装済み**。jira connector が `fields.status.statusCategory.key` を meta に取り込み、未知 category は保守的に現状維持。`[tasks.home].host` と `[connectors.jira].host` が同一であることが join 前提）
    - Slack List: チェック→completed（**follow-up**＝read 側が List item を ingest しないため）
-   - **due/priority の読み戻しは初期スコープ外**（lifecycle 先行・best-effort、follow-up）
+   - **due/priority の読み戻しは Jira で実装済み**（jira connector が duedate/priority を meta に取り込み、read-back で正規化〔YYYY-MM-DD→ISO UTC〕+ priority マッピング〔Highest/High→high 等〕して TaskApplied に反映）。reducer の COALESCE のため**設定/変更は反映するがクリアは非反映**（Jira 側で due 削除しても残る＝既知制約）。GitHub は due 概念が無く対象外
 
 7. **全タスクを外部化、Suasor 自身はホームにしない（D3）** — 確定タスクは必ず外部ホームに住む。Suasor の自前面は **triage inbox（コミット前の提案承認）だけ**に保ち、タスク管理用の独自 UI（案A）は作らない（サイロ化・忘却リスクの回避）。**private なタスクはホームの選び方**（自分専用 Slack List / private repo / Google Tasks 等）で対応する。
 
