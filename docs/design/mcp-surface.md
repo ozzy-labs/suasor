@@ -226,7 +226,7 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 |---|---|---|
 | `connector.sync` | 取り込み実行 | 実装済み（#10。下記参照） |
 | `propose.generate` | 返信/タスク/決定/仕分け/commitment の候補生成（mode 引数: `reply_draft` / `source_extract` / `meeting_followup` / `inbox_triage` / `commitment_scan`）。候補を `proposals` ledger に `pending` 記録 | 実装済み（#12 / #89 / #91。下記参照） |
-| `propose.apply` | 承認された候補のみ適用（idempotent）。適用で ledger を `applied` に遷移 | 実装済み（#12 / #89。下記参照） |
+| `propose.apply` | 承認された候補のみ適用（idempotent）。適用で ledger を `applied` に遷移。任意 `publish:true` で適用した task 候補を `[tasks.home]` へ起票（ADR-0036・best-effort per task・`openWorldHint:true`・失敗は `published[]` に集約し throw しない） | 実装済み（#12 / #89 / ADR-0036。下記参照） |
 | `propose.reject` | pending 候補を理由付きで却下（ledger を `rejected` に遷移、idempotent） | 実装済み（#89。下記参照） |
 | `propose.batch` | apply / reject を 1 RPC・単一トランザクションで一括処理（atomic、apply/reject ロジック再利用） | 実装済み（#197。下記参照） |
 | `proposal.feedback` | pending 候補に「修正して再生成」用の reason を記録（state は `pending` のまま、次 generate のヒント） | 実装済み（#279。下記参照） |

@@ -21,16 +21,26 @@
  * while staying replay-deterministic.
  */
 import { z } from "zod";
+import type { loadActuator } from "../connectors/actuator-registry.ts";
 import type { Store } from "../db/index.ts";
 import { appendEvent } from "../events/store.ts";
 import type { NewEvent } from "../events/types.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type Candidate, Candidate as CandidateSchema } from "./candidates.ts";
 import { entityId } from "./id.ts";
+import { type TaskHomeConfig, taskPublish } from "./task-publish.ts";
 
 /** Input to `propose.apply`: the approved, id-stamped candidates to persist. */
 export const ProposeApplyInput = z.object({
   candidates: z.array(CandidateSchema).min(1),
+  /**
+   * When true, each applied/skipped **task** candidate is also published to the
+   * single external home (`[tasks.home]`) in one motion (ADR-0036). Default false
+   * (apply only). Non-task candidates ignore it; HITL is unchanged (the apply
+   * approval gates the egress too). Publish is best-effort per task — a failure
+   * is reported in `published[]`, never thrown (apply results are preserved).
+   */
+  publish: z.boolean().default(false),
 });
 /** Accepted at the call site (candidate defaults applied by `parse`). */
 export type ProposeApplyInput = z.input<typeof ProposeApplyInput>;
@@ -44,10 +54,26 @@ export interface AppliedCandidate {
   status: "applied" | "skipped";
 }
 
+/** Per-task publish result when `publish: true` (best-effort; never throws). */
+export interface PublishedTask {
+  taskId: string;
+  externalId?: string;
+  status: "published" | "existing" | "failed";
+  error?: string;
+}
+
 export interface ProposeApplyOutput {
   results: AppliedCandidate[];
   applied: number;
   skipped: number;
+  /** Present when `publish: true`: one entry per task candidate that was published. */
+  published?: PublishedTask[];
+}
+
+/** Optional deps for the publish phase (config + injectable actuator loader for tests). */
+export interface ProposeApplyDeps {
+  config?: TaskHomeConfig;
+  loadActuatorImpl?: typeof loadActuator;
 }
 
 /** True when an entity with this id already exists in the relevant projection. */
@@ -194,4 +220,52 @@ export function proposeApply(
 
   const applied = results.filter((r) => r.status === "applied").length;
   return { results, applied, skipped: results.length - applied };
+}
+
+/**
+ * Apply, then (when `input.publish`) publish the applied/skipped task candidates
+ * to the single external home in one motion (ADR-0036, "approve & publish"). A
+ * thin async wrapper over the sync {@link proposeApply}: apply is persisted first,
+ * then publish runs best-effort per task — failures are reported in `published[]`,
+ * never thrown, so a partial publish failure can't lose the apply results.
+ */
+export async function applyAndPublish(
+  store: Store,
+  input: ProposeApplyInput,
+  now: Date = new Date(),
+  deps: ProposeApplyDeps = {},
+): Promise<ProposeApplyOutput> {
+  const out = proposeApply(store, input, now);
+  if (!ProposeApplyInput.parse(input).publish) return out;
+  const taskIds = out.results.filter((r) => r.kind === "task").map((r) => r.entityId);
+  return { ...out, published: await publishTasks(store, taskIds, now, deps) };
+}
+
+/** Publish each task to the home, aggregating per-task results (never throws). */
+async function publishTasks(
+  store: Store,
+  taskIds: string[],
+  now: Date,
+  deps: ProposeApplyDeps,
+): Promise<PublishedTask[]> {
+  if (taskIds.length === 0) return [];
+  // A single home check up-front: if unset, report each task as failed rather
+  // than throwing ACTUATOR_NOT_CONFIGURED per task (apply still succeeded).
+  if (!deps.config?.tasks?.home) {
+    return taskIds.map((taskId) => ({
+      taskId,
+      status: "failed" as const,
+      error: "no task home configured ([tasks].home)",
+    }));
+  }
+  const published: PublishedTask[] = [];
+  for (const taskId of taskIds) {
+    try {
+      const r = await taskPublish(store, deps.config, { taskId }, now, deps.loadActuatorImpl);
+      published.push({ taskId, externalId: r.externalId, status: r.status });
+    } catch (err) {
+      published.push({ taskId, status: "failed", error: (err as Error).message });
+    }
+  }
+  return published;
 }

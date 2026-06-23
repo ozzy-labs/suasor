@@ -15,7 +15,7 @@ import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import { createComposer } from "../export/compose.ts";
 import { DraftExportError, draftExport } from "../export/draft-export.ts";
 import { sourceForget } from "../forget/source-forget.ts";
-import { proposeApply } from "../propose/apply.ts";
+import { applyAndPublish } from "../propose/apply.ts";
 import { proposeBatch } from "../propose/batch.ts";
 import {
   CandidateInput as CandidateInputSchema,
@@ -135,18 +135,34 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Persist approved candidates (from propose.generate) as domain events. " +
         "Write tool: requires human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: candidates whose entity already exists are skipped.",
+        "Idempotent: candidates whose entity already exists are skipped. " +
+        "Optionally `publish: true` also pushes applied task candidates to the " +
+        "single external home in one motion (ADR-0036; best-effort per task).",
       inputSchema: {
         candidates: z
           .array(CandidateSchema)
           .min(1)
           .describe("Approved, id-stamped candidates to apply."),
+        publish: z
+          .boolean()
+          .optional()
+          .describe("Also publish applied task candidates to [tasks].home (ADR-0036)."),
       },
-      annotations: { readOnlyHint: false, openWorldHint: false },
+      // openWorldHint: `publish: true` egresses to the external home; apply alone is local.
+      annotations: { readOnlyHint: false, openWorldHint: true },
     },
-    async ({ candidates }) => {
-      const result = proposeApply(write.store, { candidates });
-      return jsonResult(result);
+    async ({ candidates, publish }) => {
+      try {
+        const result = await applyAndPublish(
+          write.store,
+          { candidates, ...(publish !== undefined ? { publish } : {}) },
+          new Date(),
+          { config: write.config },
+        );
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
