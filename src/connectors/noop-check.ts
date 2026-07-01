@@ -119,11 +119,11 @@ const DETECTORS: Record<string, (slice: ConnectorConfig) => string | null> = {
       const anyChannels = aliases.some((alias) => (workspaces[alias]?.channels?.length ?? 0) > 0);
       return anyChannels
         ? null
-        : "workspaces のどの channel も未設定 — 取り込み対象なし（各 workspace の channels を設定）";
+        : "workspaces のどの channel も未設定 — 取り込み対象なし（各 workspace の channels を設定 — id は `suasor slack conversations` で取得）";
     }
     // Flat/default workspace: a target exists when `channels` is non-empty.
     if (cfg.channels.length === 0) {
-      return "channels 未設定 — 取り込み対象なし（config の channels を設定）";
+      return "channels 未設定 — 取り込み対象なし（config の channels を設定 — id は `suasor slack conversations` で取得）";
     }
     return null;
   },

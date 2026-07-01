@@ -731,10 +731,30 @@ class SlackConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
+    const allWorkspaces = resolveWorkspaces(this.config);
+
+    // Token resolution precedes the scope-emptiness no-op (#385): resolve every
+    // workspace's token (env override / keychain via ctx.secret) up front and
+    // fail loudly when NONE resolves, regardless of whether any channels are
+    // configured. Before this hoist, an enabled-but-unconfigured slice (no
+    // channels, no token — the fresh-onboard state, #384) returned silently
+    // below and the missing credential hid behind the channels-empty advisory
+    // (`0 observed`, exit 0, `sync status: ok`). If at least one workspace has a
+    // token, behaviour is unchanged: a tokenless alias is still skipped with a
+    // warning (per-workspace isolation, ADR-0014) inside the loop below.
+    const tokens = new Map<string, string | null>();
+    for (const ws of allWorkspaces) {
+      tokens.set(ws.alias, (await ctx.secret(ws.secretName)) ?? null);
+    }
+    if ([...tokens.values()].every((token) => token === null)) {
+      throw new Error(
+        "slack connector: no token configured for any workspace " +
+          "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
+      );
+    }
+
     // Keep any workspace that has channels (messages) OR lists (read-back, §6).
-    const workspaces = resolveWorkspaces(this.config).filter(
-      (w) => w.channels.length > 0 || w.lists.length > 0,
-    );
+    const workspaces = allWorkspaces.filter((w) => w.channels.length > 0 || w.lists.length > 0);
     if (workspaces.length === 0) return;
 
     // Shared-channel de-dup (ADR-0038 Layer 1): an Enterprise Grid channel listed
@@ -780,7 +800,7 @@ class SlackConnector implements Connector {
     }
 
     for (const ws of workspaces) {
-      const token = await ctx.secret(ws.secretName);
+      const token = tokens.get(ws.alias); // resolved once in the hoist above
       if (!token) {
         // Per-workspace isolation (ADR-0014): skip this workspace, keep the rest
         // syncing, and preserve its prior cursor so the skip isn't a reset.
@@ -960,6 +980,10 @@ class SlackConnector implements Connector {
     // Best-effort: a per-list / token failure warns, not aborts.
     yield* this.syncLists(ctx, workspaces);
 
+    // The fully-tokenless case already threw before the loop (#385); this
+    // catches the mixed case where the only token(s) belong to workspaces with
+    // no channels/lists (filtered out above) while every channel-bearing
+    // workspace was skipped — nothing was ingested, so surface the same error.
     if (resolvedCount === 0 && workspaces.some((w) => w.channels.length > 0)) {
       throw new Error(
         "slack connector: no token configured for any workspace " +

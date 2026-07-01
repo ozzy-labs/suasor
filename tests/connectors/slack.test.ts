@@ -276,6 +276,60 @@ describe("Slack connector — guards", () => {
     expect(await collect(connector.sync(ctx()))).toEqual([]);
     expect(built).toBe(false);
   });
+
+  test("throws when no token is configured even with no channels (#385)", async () => {
+    // Token resolution precedes the channels-empty no-op: the fresh-onboard
+    // state (enabled, no channels, no token) must fail loudly instead of
+    // reporting a silent 0-observed success that masks the missing credential.
+    let built = false;
+    const connector = createSlackConnector(
+      { channels: [] },
+      {
+        clientFactory: () => {
+          built = true;
+          return fakeSlack([]).client;
+        },
+      },
+    );
+    await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
+      /no token configured for any workspace/,
+    );
+    expect(built).toBe(false);
+  });
+
+  test("multi-workspace with no channels and no tokens throws too (#385)", async () => {
+    const connector = createSlackConnector(
+      { workspaces: { acme: { team: "TA", channels: [] } } },
+      { clientFactory: () => fakeSlack([]).client },
+    );
+    await expect(
+      collect(connector.sync(ctx({ secret: async () => null, onWarn: () => {} }))),
+    ).rejects.toThrow(/no token configured for any workspace/);
+  });
+
+  test("one workspace with a token keeps the channel-less config a quiet no-op (#385 regression)", async () => {
+    // acme resolves a token (but has no channels), beta has neither: at least
+    // one token exists, so the run stays the pre-#385 quiet no-op (0 records,
+    // no throw) — the noop advisory covers the empty scope.
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: [] },
+          beta: { team: "TB", channels: [] },
+        },
+      },
+      { clientFactory: () => fakeSlack([]).client },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "acme:token" ? "tok-a" : null),
+          onWarn: () => {},
+        }),
+      ),
+    );
+    expect(records).toEqual([]);
+  });
 });
 
 describe("Slack connector — non-id channel warn (#158)", () => {
