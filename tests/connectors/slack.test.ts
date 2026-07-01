@@ -605,6 +605,151 @@ describe("Slack connector — per-workspace summary + partial-failure flag (ADR-
   });
 });
 
+describe("Slack connector — shared-channel de-dup (ADR-0038 Layer 1)", () => {
+  /** A client that returns one message (keyed by `ts`) per channel from `byChannel`. */
+  function byChannelClient(byChannel: Record<string, Msg[]>): {
+    client: SlackClientLike;
+    historyChannels: string[];
+  } {
+    const historyChannels: string[] = [];
+    const client: SlackClientLike = {
+      conversations: {
+        async history(args) {
+          historyChannels.push(args.channel);
+          return { messages: byChannel[args.channel] ?? [] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+    };
+    return { client, historyChannels };
+  }
+
+  test("a shared channel is ingested only under its owner alias (no duplicate source)", async () => {
+    const warns: string[] = [];
+    // C1 is listed by both aliases (a shared Grid channel); C2 only by beta.
+    const { client, historyChannels } = byChannelClient({
+      C1: [{ ts: "10.000000", text: "shared" }],
+      C2: [{ ts: "20.000000", text: "beta-only" }],
+    });
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          beta: { team: "TB", channels: ["C1", "C2"] },
+          acme: { team: "TA", channels: ["C1"] },
+        },
+      },
+      { clientFactory: () => client },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) =>
+            name === "acme:token" ? "tok-a" : name === "beta:token" ? "tok-b" : null,
+          onWarn: (m: string) => warns.push(m),
+        }),
+      ),
+    );
+    // C1 ingested once, under owner "acme" (lexicographically smallest); the
+    // non-owner "beta" never yields C1. C2 (non-shared) ingested under beta.
+    expect(records.map((r) => r.externalId).sort()).toEqual([
+      "slack:TA:C1:10.000000",
+      "slack:TB:C2:20.000000",
+    ]);
+    // The non-owner alias never even fetched the shared channel's history.
+    expect(historyChannels.filter((c) => c === "C1")).toEqual(["C1"]);
+    // One aggregated warn naming the shared channel and its owner.
+    const sharedWarn = warns.find((w) => w.includes("shared across"));
+    expect(sharedWarn).toContain("C1 shared across [acme, beta] → ingesting under 'acme'");
+  });
+
+  test("cursor: only the owner alias holds the shared channel's cursor", async () => {
+    const { client } = byChannelClient({
+      C1: [{ ts: "10.000000" }],
+      C2: [{ ts: "20.000000" }],
+    });
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          beta: { team: "TB", channels: ["C1", "C2"] },
+          acme: { team: "TA", channels: ["C1"] },
+        },
+      },
+      { clientFactory: () => client },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) =>
+            name === "acme:token" ? "tok-a" : name === "beta:token" ? "tok-b" : null,
+          onWarn: () => {},
+        }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    // Owner "acme" holds C1's cursor; "beta" holds only its non-shared C2.
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
+      acme: { C1: "10.000000" },
+      beta: { C2: "20.000000" },
+    });
+  });
+
+  test("a non-owner alias listing only shared channels prunes to no cursor entry", async () => {
+    const { client } = byChannelClient({ C1: [{ ts: "10.000000" }] });
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          beta: { team: "TB", channels: ["C1"] }, // shared, non-owner → nothing
+          acme: { team: "TA", channels: ["C1"] }, // owner
+        },
+      },
+      { clientFactory: () => client },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async () => "tok",
+          onWarn: () => {},
+        }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    // "beta" owns nothing → pruned from the cursor entirely (empty alias dropped).
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ acme: { C1: "10.000000" } });
+  });
+
+  test("no warn and unchanged ingest when channels are not shared", async () => {
+    const warns: string[] = [];
+    const { client } = byChannelClient({
+      C1: [{ ts: "10.000000" }],
+      C2: [{ ts: "20.000000" }],
+    });
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C2"] },
+        },
+      },
+      { clientFactory: () => client },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async () => "tok",
+          onWarn: (m: string) => warns.push(m),
+        }),
+      ),
+    );
+    expect(records.map((r) => r.externalId).sort()).toEqual([
+      "slack:TA:C1:10.000000",
+      "slack:TB:C2:20.000000",
+    ]);
+    expect(warns.some((w) => w.includes("shared across"))).toBe(false);
+  });
+});
+
 describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)", () => {
   /**
    * A client whose `conversations.history` throws a `SlackAPIError`-shaped error
