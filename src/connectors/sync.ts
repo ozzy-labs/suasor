@@ -334,6 +334,11 @@ async function runSyncPass(
             personId: personIdFor(author.connector, author.handle),
             connector: author.connector,
             handle: author.handle,
+            // Enrich the person projection with the sync-time-resolved display
+            // name when the connector provided one (ADR-0037 §2/§4). Omitted when
+            // resolution degraded — the reducer's last-write-wins keeps the prior
+            // name and never overwrites it with an empty string (ADR-0037 §6).
+            ...(author.displayName ? { displayName: author.displayName } : {}),
           },
           now(),
         );

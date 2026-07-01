@@ -41,6 +41,15 @@ function identity(connector: string, handle: string) {
     .get(`${connector}:${handle}`);
 }
 
+/** The resolved display name stored on a (connector, handle) identity. */
+function identityName(connector: string, handle: string): string | undefined {
+  return store.connection.sqlite
+    .query<{ display_name: string }, [string]>(
+      "SELECT display_name FROM person_identities WHERE identity_key = ?",
+    )
+    .get(`${connector}:${handle}`)?.display_name;
+}
+
 describe("authorFromMeta (ADR-0022)", () => {
   test("maps github → meta.author, slack → meta.user", () => {
     expect(authorFromMeta("github", { author: "octocat" })).toEqual({
@@ -58,6 +67,28 @@ describe("authorFromMeta (ADR-0022)", () => {
     expect(authorFromMeta("github", { author: null })).toBeNull();
     expect(authorFromMeta("github", { author: "  " })).toBeNull();
     expect(authorFromMeta("web", { author: "x" })).toBeNull();
+  });
+
+  test("slack reads meta.userName into displayName (ADR-0037 §3)", () => {
+    expect(authorFromMeta("slack", { user: "U123", userName: "Ada" })).toEqual({
+      connector: "slack",
+      handle: "U123",
+      displayName: "Ada",
+    });
+  });
+
+  test("blank / missing / non-string userName leaves displayName unset (degrade)", () => {
+    expect(authorFromMeta("slack", { user: "U123" })?.displayName).toBeUndefined();
+    expect(authorFromMeta("slack", { user: "U123", userName: "" })?.displayName).toBeUndefined();
+    expect(authorFromMeta("slack", { user: "U123", userName: "  " })?.displayName).toBeUndefined();
+    expect(authorFromMeta("slack", { user: "U123", userName: 42 })?.displayName).toBeUndefined();
+  });
+
+  test("github ignores a userName key (no display-name concept)", () => {
+    expect(authorFromMeta("github", { author: "octocat", userName: "nope" })).toEqual({
+      connector: "github",
+      handle: "octocat",
+    });
   });
 });
 
@@ -103,6 +134,48 @@ describe("syncConnector records person identities (ADR-0022)", () => {
       .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM person_identities")
       .get();
     expect(count?.n).toBe(0);
+  });
+
+  test("a slack record's meta.userName lands on the person identity (ADR-0037 §4)", async () => {
+    await syncConnector(
+      store,
+      fakeConnector(
+        [
+          {
+            externalId: "slack:T1:C1:1700000000.000100",
+            sourceType: "slack_message",
+            body: "hi",
+            observedAt: "2026-06-14T00:00:00.000Z",
+            meta: { user: "U1", userName: "Ada Lovelace" },
+          },
+        ],
+        "slack",
+      ),
+    );
+    expect(identity("slack", "U1")?.person_id).toBe(personIdFor("slack", "U1"));
+    expect(identityName("slack", "U1")).toBe("Ada Lovelace");
+  });
+
+  test("a slack record without userName leaves the id-derived name (degrade, §6)", async () => {
+    await syncConnector(
+      store,
+      fakeConnector(
+        [
+          {
+            externalId: "slack:T1:C1:1700000000.000200",
+            sourceType: "slack_message",
+            body: "hi",
+            observedAt: "2026-06-14T00:00:00.000Z",
+            meta: { user: "U2" },
+          },
+        ],
+        "slack",
+      ),
+    );
+    // No displayName emitted → reducer stores the empty-string default, never a
+    // wrong name (the projection falls back to the id at display time).
+    expect(identity("slack", "U2")?.person_id).toBe(personIdFor("slack", "U2"));
+    expect(identityName("slack", "U2")).toBe("");
   });
 
   test("re-syncing the same author is idempotent (one identity row)", async () => {

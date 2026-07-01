@@ -29,6 +29,11 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import {
+  defaultUsersTransport,
+  resolveUserName,
+  type SlackUsersTransport,
+} from "./slack/resolve.ts";
 
 /** One workspace's ingest target (a single Slack team). */
 export const SlackWorkspaceConfig = z.object({
@@ -299,8 +304,19 @@ interface SlackMessageItem {
   reply_count?: number;
 }
 
-/** Build the `SourceRecord` for one message of a channel. */
-function toRecord(team: string, channel: string, item: SlackMessageItem): SourceRecord {
+/**
+ * Build the `SourceRecord` for one message of a channel. `userName` is the
+ * sync-time-resolved author display name (ADR-0037 §2): stored under
+ * `meta.userName` when present so `authorFromMeta` can enrich the person
+ * projection. A `null` / empty resolution leaves `meta.userName` unset — the
+ * degrade path (ADR-0037 §6) where the person keeps its id-derived name.
+ */
+function toRecord(
+  team: string,
+  channel: string,
+  item: SlackMessageItem,
+  userName?: string | null,
+): SourceRecord {
   return {
     externalId: `slack:${team}:${channel}:${item.ts}`,
     sourceType: "slack_message",
@@ -312,6 +328,7 @@ function toRecord(team: string, channel: string, item: SlackMessageItem): Source
       channel,
       ts: item.ts,
       user: item.user ?? null,
+      ...(userName ? { userName } : {}),
       ...(item.thread_ts ? { threadTs: item.thread_ts } : {}),
     },
   };
@@ -414,6 +431,12 @@ export interface SlackConnectorOptions {
   clientFactory?: SlackClientFactory;
   /** Clock (ms) for resolving the relative `since` floor; injectable for tests. */
   now?: () => number;
+  /**
+   * `users.info` transport for author display-name resolution (ADR-0037 §2).
+   * Tests inject a fake; the default goes through the shared rate-limit-aware
+   * `slackFetch` (ADR-0019), so registration stays import-clean.
+   */
+  usersTransport?: SlackUsersTransport;
 }
 
 /**
@@ -495,6 +518,7 @@ class SlackConnector implements Connector {
     private readonly config: SlackConnectorConfig,
     private readonly clientFactory: SlackClientFactory,
     private readonly now: () => number = () => Date.now(),
+    private readonly usersTransport: SlackUsersTransport = defaultUsersTransport,
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
@@ -549,6 +573,10 @@ class SlackConnector implements Connector {
       try {
         const client = await this.clientFactory(token);
         const aliasCursors: Record<string, string> = {};
+        // Per-workspace author-name cache (ADR-0037 §5): the same `Uxxxx`
+        // resolves `users.info` at most once per workspace this run. Keyed by
+        // this workspace's token so ids never cross-resolve between workspaces.
+        const nameCache = new Map<string, string | null>();
         // Channels this run could not reach (not_in_channel / channel_not_found /
         // is_archived): collected per channel and surfaced as one aggregated warn
         // so READY-but-unjoined channels are no longer silently empty (ADR-0011).
@@ -579,7 +607,14 @@ class SlackConnector implements Connector {
               if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
                 aliasCursors[channel] = item.ts;
               }
-              yield toRecord(ws.team, channel, item);
+              // Resolve the author id → display name at sync time so the person
+              // projection carries a human name (ADR-0037 §2). Best-effort: a
+              // failed resolution (missing `users:read`, API error) returns null
+              // → `meta.userName` unset, ingest continues (ADR-0037 §6 degrade).
+              const userName = item.user
+                ? await resolveUserName(token, item.user, this.usersTransport, nameCache)
+                : null;
+              yield toRecord(ws.team, channel, item, userName);
             }
           } catch (error) {
             // A channel-scoped unreachable error (not_in_channel etc.) must not
@@ -794,5 +829,6 @@ export function createSlackConnector(
     parsed,
     options.clientFactory ?? defaultSlackClientFactory,
     options.now,
+    options.usersTransport ?? defaultUsersTransport,
   );
 }

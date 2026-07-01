@@ -15,6 +15,11 @@
  */
 
 import { slackFetch } from "./_fetch.ts";
+import { defaultUsersTransport, resolveUserName, type SlackUsersTransport } from "./resolve.ts";
+
+// Re-exported so existing importers (and tests) keep resolving the type from
+// here; the SSOT now lives in `resolve.ts` (ADR-0037 §2).
+export type { SlackUsersTransport } from "./resolve.ts";
 
 /** The four conversation types this helper understands (keys match `scopes.ts`). */
 export type ConversationType = "public" | "private" | "im" | "mpim";
@@ -102,12 +107,6 @@ export type SlackConversationsTransport = (
   params: Record<string, string>,
 ) => Promise<Record<string, unknown>>;
 
-/** One `users.info` fetch (DM name resolution), decoupled from `fetch` for tests. */
-export type SlackUsersTransport = (
-  token: string,
-  userId: string,
-) => Promise<Record<string, unknown>>;
-
 /** Default transport: a rate-limit-aware GET to `users.conversations` (ADR-0019). */
 const defaultTransport: SlackConversationsTransport = async (token, params) => {
   const query = new URLSearchParams(params).toString();
@@ -116,59 +115,6 @@ const defaultTransport: SlackConversationsTransport = async (token, params) => {
   });
   return body;
 };
-
-/** Default `users.info` transport: a rate-limit-aware GET resolving id → profile. */
-const defaultUsersTransport: SlackUsersTransport = async (token, userId) => {
-  const { body } = await slackFetch(
-    `https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`,
-    { token },
-  );
-  return body;
-};
-
-/**
- * Resolve a Slack user id to a human display name (ADR-0011; opshub parity).
- * Best-effort: profile display name → profile/user real name → handle. Returns
- * `null` on any failure (missing `users:read`, rate limit) so the caller keeps
- * the `dm:<id>` fallback rather than erroring. Cached per call.
- */
-async function resolveUserName(
-  token: string,
-  userId: string,
-  transport: SlackUsersTransport,
-  cache: Map<string, string | null>,
-): Promise<string | null> {
-  const cached = cache.get(userId);
-  if (cached !== undefined) return cached;
-  let name: string | null = null;
-  try {
-    const body = await transport(token, userId);
-    if (body.ok === true) {
-      const user = body.user as
-        | {
-            name?: string;
-            real_name?: string;
-            profile?: { display_name?: string; real_name?: string };
-          }
-        | undefined;
-      name =
-        firstNonEmpty(user?.profile?.display_name) ??
-        firstNonEmpty(user?.profile?.real_name) ??
-        firstNonEmpty(user?.real_name) ??
-        firstNonEmpty(user?.name) ??
-        null;
-    }
-  } catch {
-    name = null; // resolution is best-effort; keep the id fallback
-  }
-  cache.set(userId, name);
-  return name;
-}
-
-/** Return the value when it is a non-empty string, else `undefined`. */
-function firstNonEmpty(value: string | undefined): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 /** Per-page ceiling (the SDK default and Slack's recommended sweet spot). */
 const PAGE_LIMIT = 200;
