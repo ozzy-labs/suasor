@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.20](https://github.com/ozzy-labs/suasor/compare/v0.1.19...v0.1.20) (2026-07-01)
+
+
+### Features
+
+* **slack:** add `slack resolve-names` name backfill verb (PR5 of [#354](https://github.com/ozzy-labs/suasor/issues/354)) ([#360](https://github.com/ozzy-labs/suasor/issues/360)) ([8fb0792](https://github.com/ozzy-labs/suasor/commit/8fb07920f9283c775001a9f33a9950937e275b20))
+* **slack:** add slack_channels projection + sync-time channel name resolution ([#357](https://github.com/ozzy-labs/suasor/issues/357)) ([cfe77b2](https://github.com/ozzy-labs/suasor/commit/cfe77b2299523dc468e1375794aff50a49520f02))
+* **slack:** auto-enumerate Enterprise Grid workspaces in `slack conversations` (PR2 of [#350](https://github.com/ozzy-labs/suasor/issues/350)) ([#353](https://github.com/ozzy-labs/suasor/issues/353)) ([ecf91db](https://github.com/ozzy-labs/suasor/commit/ecf91db021119456b93ca9eb2854a048fa2b8b61))
+* **slack:** join channel names into `slack status` / `slack cursor` output (PR4 of [#354](https://github.com/ozzy-labs/suasor/issues/354)) ([#359](https://github.com/ozzy-labs/suasor/issues/359)) ([b09a892](https://github.com/ozzy-labs/suasor/commit/b09a8924d7ecc01ff153640d3c35005d4b96dd9c))
+* **slack:** join channel/user names into slack.demand.list (PR3 of [#354](https://github.com/ozzy-labs/suasor/issues/354)) ([#358](https://github.com/ozzy-labs/suasor/issues/358)) ([a264e42](https://github.com/ozzy-labs/suasor/commit/a264e42420a7e79d888364163f148829b4f1f199))
+* **slack:** resolve user display names into person projection at sync ([#356](https://github.com/ozzy-labs/suasor/issues/356)) ([e5fdfc0](https://github.com/ozzy-labs/suasor/commit/e5fdfc0b164f23c0347b77988ddb8a1a4ece3588))
+* **slack:** scope `slack conversations` by team_id for Enterprise Grid (PR1 of [#350](https://github.com/ozzy-labs/suasor/issues/350)) ([#351](https://github.com/ozzy-labs/suasor/issues/351)) ([7f97c05](https://github.com/ozzy-labs/suasor/commit/7f97c05b98017b364da5992d41c75c144eb8250f))
+* **slack:** surface teamName in slack.demand.list (add local team-name projection) — ADR-0037 ([#362](https://github.com/ozzy-labs/suasor/issues/362)) ([ac2d7b7](https://github.com/ozzy-labs/suasor/commit/ac2d7b76b0d599cdba079ea2d1ebeb776ba82bde))
+
 ## [0.1.19](https://github.com/ozzy-labs/suasor/compare/v0.1.18...v0.1.19) (2026-06-23)
 
 
