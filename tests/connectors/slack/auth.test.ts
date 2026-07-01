@@ -37,6 +37,31 @@ describe("auth — testToken", () => {
     expect(result.principal).toBe("user");
   });
 
+  test("is_enterprise_install true resolves isEnterpriseInstall=true (org-level token, #350)", async () => {
+    const { transport } = fakeAuth(
+      {
+        ok: true,
+        team: "Acme",
+        team_id: "T1",
+        user: "ozzy",
+        user_id: "U2",
+        is_enterprise_install: true,
+      },
+      "channels:read",
+    );
+    const result = await testToken("xoxp-secret", transport);
+    expect(result.isEnterpriseInstall).toBe(true);
+  });
+
+  test("absent is_enterprise_install resolves isEnterpriseInstall=false (workspace-level token, #350)", async () => {
+    const { transport } = fakeAuth(
+      { ok: true, team: "Acme", team_id: "T1", user: "ozzy", user_id: "U2" },
+      "channels:read",
+    );
+    const result = await testToken("xoxp-secret", transport);
+    expect(result.isEnterpriseInstall).toBe(false);
+  });
+
   test("a missing scopes header yields an empty scopes string", async () => {
     const { transport } = fakeAuth({ ok: true, team: "Acme", team_id: "T1" }, null);
     const result = await testToken("xoxb-secret", transport);

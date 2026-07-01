@@ -54,6 +54,12 @@ export interface SlackConversation {
    * time. Surfaced as a join mark so reachability is visible before configuring.
    */
   readonly isMember: boolean;
+  /**
+   * The Enterprise Grid workspace (team) id this conversation was listed under,
+   * when the sweep was scoped by {@link ListConversationsOptions.teamId} (Issue
+   * #350). `undefined` for an unscoped sweep (the token's default team).
+   */
+  readonly teamId?: string;
 }
 
 /** Result of a discovery sweep: rows plus any per-type listing-scope gaps. */
@@ -66,6 +72,14 @@ export interface ConversationsResult {
 export interface ListConversationsOptions {
   /** Types to enumerate (default: all four). */
   readonly types?: readonly ConversationType[];
+  /**
+   * Enterprise Grid workspace (team) id to scope the listing to (Issue #350).
+   * Passed as `users.conversations`'s `team_id`, which Slack honours **only for
+   * org-level tokens**; a workspace-level token ignores it. When set, every
+   * returned {@link SlackConversation} is tagged with this `teamId`. Omitted →
+   * the token's default team (current behaviour).
+   */
+  readonly teamId?: string;
   /** Include archived channels (default: excluded). */
   readonly includeArchived?: boolean;
   /** Cap on total rows returned (default: no limit). */
@@ -225,6 +239,10 @@ export async function listConversations(
         limit: String(PAGE_LIMIT),
         exclude_archived: options.includeArchived ? "false" : "true",
       };
+      // Scope to a specific Enterprise Grid workspace when requested (Issue
+      // #350). Slack honours `team_id` only for org-level tokens; a
+      // workspace-level token ignores it (the CLI warns before this call).
+      if (options.teamId) params.team_id = options.teamId;
       if (cursor) params.cursor = cursor;
 
       const body = await transport(token, params);
@@ -245,6 +263,9 @@ export async function listConversations(
       for (const raw of (body.channels as RawChannel[]) ?? []) {
         let conv = toConversation(type, raw);
         if (!conv) continue;
+        // Tag each row with the scoped workspace so multi-workspace callers can
+        // group by team (Issue #350); undefined when the sweep is unscoped.
+        if (options.teamId) conv = { ...conv, teamId: options.teamId };
         // DM rows have no name — resolve the counterpart's display name so the
         // listing shows a person, not a `dm:U123` id (opshub parity).
         if (type === "im" && typeof raw.user === "string") {

@@ -163,10 +163,16 @@ export class SlackConversationsCommand extends Command {
       type by type, so a missing listing scope self-reports per type rather than
       failing the sweep (ADR-0011). Prints a [connectors.slack] block you can
       paste into config.toml, then run 'suasor slack sync'.
+
+      On Enterprise Grid, pass --team-id <T…> to scope the listing to a specific
+      workspace; Slack honours it only for an org-level (org-wide app) token, so
+      a workspace-level token ignores it and warns (Issue #350). To cover several
+      workspaces, use a per-workspace token each via --workspace <alias> (ADR-0014).
     `,
     examples: [
       ["List everything visible", "suasor slack conversations"],
       ["Public channels only, as JSON", "suasor slack conversations --types public --json"],
+      ["Scope to one Grid workspace", "suasor slack conversations --team-id T0123ABC"],
     ],
   });
 
@@ -177,6 +183,10 @@ export class SlackConversationsCommand extends Command {
     description: "Include archived channels (default: excluded).",
   });
   limit = Option.String("--limit", { description: "Maximum number of conversations to list." });
+  teamId = Option.String("--team-id", {
+    description:
+      "Enterprise Grid workspace (team) id to scope the listing to (org-level token only, #350).",
+  });
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
   workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
   sort = Option.String("--sort", {
@@ -257,10 +267,16 @@ export class SlackConversationsCommand extends Command {
     try {
       // One auth.test resolves the team id for the config block + the principal
       // (engagement sort is User Token only — ADR-0013).
-      const { teamId, principal } = await testToken(token);
+      const { teamId, principal, isEnterpriseInstall } = await testToken(token);
+      // --team-id only scopes the sweep on an org-level (org-wide app) token;
+      // Slack silently ignores it for a workspace-level token, so passing it
+      // there would tag rows with a workspace Slack never honoured (Issue #350).
+      // Only scope when the token can honour it; warn (below) otherwise.
+      const scopeTeamId = this.teamId && isEnterpriseInstall ? this.teamId : undefined;
       const result = await listConversations(token, {
         ...(types ? { types } : {}),
         ...(limit !== undefined ? { limit } : {}),
+        ...(scopeTeamId ? { teamId: scopeTeamId } : {}),
         includeArchived: this.includeArchived,
         onProgress: () => progress.tick(),
       });
@@ -289,6 +305,20 @@ export class SlackConversationsCommand extends Command {
         }
       }
       progress.finish();
+
+      // --team-id is honoured by Slack only for org-level (org-wide app) tokens;
+      // a workspace-level token silently ignores it and lists its own workspace
+      // instead. Warn before the --json branch so both output modes surface the
+      // mismatch (Issue #350): to reach other Enterprise Grid workspaces, add a
+      // per-workspace token via `slack auth set --workspace <alias>` (ADR-0014).
+      if (this.teamId && !isEnterpriseInstall) {
+        this.context.stderr.write(
+          `warning: --team-id is ignored for a workspace-level token (Slack honours it only for ` +
+            `org-level/org-wide-app tokens); listed this token's own workspace instead. To reach ` +
+            `other Enterprise Grid workspaces, add a per-workspace token with ` +
+            "`suasor slack auth set --workspace <alias>` (ADR-0014).\n",
+        );
+      }
 
       if (this.json) {
         const withEngagement = lastSelfPost

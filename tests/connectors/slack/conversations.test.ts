@@ -52,6 +52,30 @@ describe("conversations — listConversations", () => {
     expect(result.missingScopes).toEqual({});
   });
 
+  test("teamId option is sent as users.conversations team_id and tags each row (#350)", async () => {
+    const { transport, calls } = fakeConvos({
+      public_channel: [{ id: "C1", name: "general" }],
+    });
+    const result = await listConversations("xoxp", {
+      types: ["public"],
+      teamId: "T222",
+      transport,
+    });
+    // Every page fetch carries the scoped team_id.
+    expect(calls.every((p) => p.team_id === "T222")).toBe(true);
+    // Every returned conversation is tagged with the scoped workspace.
+    expect(result.conversations.every((c) => c.teamId === "T222")).toBe(true);
+  });
+
+  test("no teamId option → no team_id param and untagged rows (backward compatible, #350)", async () => {
+    const { transport, calls } = fakeConvos({
+      public_channel: [{ id: "C1", name: "general" }],
+    });
+    const result = await listConversations("xoxp", { types: ["public"], transport });
+    expect(calls.every((p) => p.team_id === undefined)).toBe(true);
+    expect(result.conversations.every((c) => c.teamId === undefined)).toBe(true);
+  });
+
   test("resolves DM names (display_name → real_name → handle); falls back to dm:<id>", async () => {
     const { transport, usersTransport } = fakeConvos(
       {

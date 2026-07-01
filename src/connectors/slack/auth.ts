@@ -26,6 +26,14 @@ export interface SlackTokenTest {
   readonly userId: string;
   /** Comma-separated granted scopes from `x-oauth-scopes` (empty when absent). */
   readonly scopes: string;
+  /**
+   * `true` when `auth.test` reports `is_enterprise_install` — an org-wide app
+   * install, i.e. an **org-level token**. Only org-level tokens honour the
+   * `users.conversations` `team_id` param and can enumerate other workspaces of
+   * an Enterprise Grid; a workspace-level token silently ignores `team_id` and
+   * is bound to its single workspace (Issue #350). Absent/false → workspace-level.
+   */
+  readonly isEnterpriseInstall: boolean;
 }
 
 /** One `auth.test` round-trip, decoupled from `fetch` so tests inject a fake. */
@@ -69,5 +77,6 @@ export async function testToken(
     user: asString(body.user),
     userId: asString(body.user_id),
     scopes: scopesHeader ?? "",
+    isEnterpriseInstall: body.is_enterprise_install === true,
   };
 }
