@@ -248,6 +248,12 @@ describe("conversations — renderConfigBlock", () => {
     expect(block).toContain("channels = []");
   });
 
+  test("names the token env override for discoverability (Issue #371 theme 4)", () => {
+    const block = renderConfigBlock("T1", { conversations: [], missingScopes: {} }).join("\n");
+    expect(block).toContain("SUASOR_CONNECTOR_SLACK_TOKEN");
+    expect(block).toContain("suasor slack auth set");
+  });
+
   test("notes that channels are ids (not names) so a pasted name is not a footgun (#158)", async () => {
     const { transport } = fakeConvos({
       public_channel: [{ id: "C1", name: "general" }],
@@ -309,6 +315,19 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
       { teamId: "T01", alias: "acme", conversations: [] },
     ]);
     expect(block.join("\n")).toContain("channels = []");
+  });
+
+  test("each workspace sub-section names its per-workspace token env override (theme 4)", () => {
+    const block = renderWorkspacesConfigBlock([
+      { teamId: "T01", alias: "acme", conversations: [] },
+      { teamId: "T02", alias: "beta-eu", conversations: [] },
+    ]).join("\n");
+    // Each alias carries its own `slack auth set --workspace <alias>` command and
+    // env override (a `-` in the alias normalises to `_` in the env name).
+    expect(block).toContain("suasor slack auth set --workspace acme");
+    expect(block).toContain("SUASOR_CONNECTOR_SLACK_ACME_TOKEN");
+    expect(block).toContain("suasor slack auth set --workspace beta-eu");
+    expect(block).toContain("SUASOR_CONNECTOR_SLACK_BETA_EU_TOKEN");
   });
 
   test("a shared channel is a real entry only under its owner, a comment elsewhere (ADR-0038)", () => {

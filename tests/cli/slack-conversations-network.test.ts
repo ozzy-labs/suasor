@@ -10,6 +10,9 @@
  * `SUASOR_CONNECTOR_SLACK_TOKEN` env override so the keychain is never touched.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
 
 /** A Slack endpoint stub: status + a JSON body + optional response headers. */
@@ -24,17 +27,28 @@ type Router = (url: string, params: URLSearchParams) => Stub;
 
 let realFetch: typeof fetch;
 let savedToken: string | undefined;
+let savedDir: string | undefined;
+let dir: string;
 
 beforeEach(() => {
   realFetch = globalThis.fetch;
   savedToken = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
   process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxp-test-token";
+  // Isolate the config dir so `--workspace` resolution (Issue #371 theme 1) reads
+  // an empty (flat) config — not the developer's real multi-workspace config,
+  // which would flip these single-token sweeps into an ambiguity error.
+  savedDir = process.env.SUASOR_CONFIG_DIR;
+  dir = mkdtempSync(join(tmpdir(), "suasor-cli-convo-net-"));
+  process.env.SUASOR_CONFIG_DIR = dir;
 });
 
 afterEach(() => {
   globalThis.fetch = realFetch;
   if (savedToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
   else process.env.SUASOR_CONNECTOR_SLACK_TOKEN = savedToken;
+  if (savedDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
+  else process.env.SUASOR_CONFIG_DIR = savedDir;
+  rmSync(dir, { recursive: true, force: true });
 });
 
 /** Install a fake global `fetch` that dispatches Slack API calls to `route`. */
@@ -636,6 +650,33 @@ describe("suasor slack auth test — network seam", () => {
     expect(out).toContain("channels:read");
     // The readiness assessment is rendered (a 'features:' block).
     expect(out).toContain("features:");
+    // The resolved user_id is surfaced with a self_user_id copy hint (Issue #371
+    // theme 2) — the value the operator pastes so demand detects their @mentions.
+    expect(out).toContain("user_id: U001");
+    expect(out).toContain('self_user_id = "U001"');
+    expect(out).toContain("[connectors.slack]");
+  });
+
+  test("names the workspace section when --workspace is given (theme 2)", async () => {
+    installFetch((url) => {
+      if (url.includes("auth.test")) {
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    // The acme workspace resolves the `acme:token` secret — supply it via its own
+    // env override so the lookup succeeds.
+    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxp-acme-token";
+    try {
+      // --workspace is explicit, so it wins regardless of config shape; the
+      // self_user_id hint points at that workspace's sub-section.
+      const { code, out } = await run(["slack", "auth", "test", "--workspace", "acme"]);
+      expect(code).toBe(0);
+      expect(out).toContain('self_user_id = "U001"');
+      expect(out).toContain("[connectors.slack.workspaces.acme]");
+    } finally {
+      delete process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN;
+    }
   });
 
   test("--json emits the resolved identity + scopes + features (token never echoed)", async () => {

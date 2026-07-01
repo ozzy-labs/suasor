@@ -22,7 +22,44 @@ const SLACK = "slack";
 
 /** Shared `--workspace <alias>` description (ADR-0014). */
 const WORKSPACE_DESC =
-  "Workspace alias for a multi-workspace setup (omit for the default workspace).";
+  "Workspace alias for a multi-workspace setup (omit to auto-select when unambiguous).";
+
+/**
+ * Alias of the flat / single-workspace (`[connectors.slack]`) config shape. Local
+ * mirror of `DEFAULT_WORKSPACE_ALIAS` in `../../connectors/slack.ts` so the pure
+ * {@link chooseWorkspaceAlias} helper stays import-clean (NFR-PRF-1, no runtime
+ * require of the connector module just to read a constant).
+ */
+const DEFAULT_WORKSPACE_ALIAS = "default";
+
+/**
+ * Decide which workspace alias an operational verb should act on, from the
+ * `--workspace` flag and the configured alias set (Issue #371 theme 1, ADR-0014).
+ * Pure so the resolution is unit-testable without config / keychain:
+ *
+ * - an explicit `--workspace` always wins (`ok`, that alias);
+ * - a flat / single-workspace config (0 or 1 configured alias) auto-selects the
+ *   sole alias — `undefined` for the flat shape (the `token` secret) or the one
+ *   named alias (so a named-only setup is no longer a silent no-op / wrong-secret
+ *   lookup);
+ * - a multi-workspace config that declares a `default` alias falls back to it;
+ * - a multi-workspace config with 2+ aliases and no `default` is ambiguous
+ *   (`!ok`) — the caller lists the available aliases and asks for `--workspace`
+ *   instead of silently touching the wrong (or a non-existent) workspace.
+ */
+export function chooseWorkspaceAlias(
+  explicit: string | undefined,
+  configuredAliases: readonly string[],
+):
+  | { readonly ok: true; readonly alias: string | undefined }
+  | { readonly ok: false; readonly aliases: readonly string[] } {
+  if (explicit !== undefined) return { ok: true, alias: explicit };
+  if (configuredAliases.length <= 1) return { ok: true, alias: configuredAliases[0] };
+  if (configuredAliases.includes(DEFAULT_WORKSPACE_ALIAS)) {
+    return { ok: true, alias: DEFAULT_WORKSPACE_ALIAS };
+  }
+  return { ok: false, aliases: configuredAliases };
+}
 
 /**
  * Render one `slack conversations` table row (pure, so it is unit-testable
@@ -73,16 +110,27 @@ export class SlackAuthSetCommand extends Command {
       return 1;
     }
 
+    // Resolve which workspace to store under (Issue #371 theme 1): an explicit
+    // --workspace wins; otherwise a single-workspace config auto-selects, and a
+    // multi-workspace config with no `default` errors rather than silently
+    // storing under the wrong (flat `token`) secret.
+    const resolved = await resolveWorkspaceAlias(this.workspace);
+    if (!resolved.ok) {
+      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
+      return 1;
+    }
+    const alias = resolved.alias;
+
     const [{ storeSecret }, { workspaceSecretName }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
     ]);
-    await storeSecret(SLACK, workspaceSecretName(this.workspace), token);
-    const where = this.workspace ? ` for workspace '${this.workspace}'` : "";
+    await storeSecret(SLACK, workspaceSecretName(alias), token);
+    const where = alias ? ` for workspace '${alias}'` : "";
     this.context.stdout.write(
       `Stored Slack token${where} in the OS keychain (service 'suasor').\n`,
     );
-    const verify = this.workspace ? ` --workspace ${this.workspace}` : "";
+    const verify = alias ? ` --workspace ${alias}` : "";
     this.context.stdout.write(`next: verify it with \`suasor slack auth test${verify}\`.\n`);
     return 0;
   }
@@ -111,16 +159,20 @@ export class SlackAuthTestCommand extends Command {
   workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
 
   override async execute(): Promise<number> {
+    const resolved = await resolveWorkspaceAlias(this.workspace);
+    if (!resolved.ok) {
+      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
+      return 1;
+    }
+    const alias = resolved.alias;
+
     const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
     ]);
-    const token = await resolveSecret(SLACK, workspaceSecretName(this.workspace));
+    const token = await resolveSecret(SLACK, workspaceSecretName(alias));
     if (!token) {
-      const hint = this.workspace ? ` --workspace ${this.workspace}` : "";
-      this.context.stderr.write(
-        `error: no Slack token configured (run \`suasor slack auth set${hint}\` or set the env override)\n`,
-      );
+      this.context.stderr.write(await noTokenError(alias));
       return 1;
     }
 
@@ -147,6 +199,15 @@ export class SlackAuthTestCommand extends Command {
 
     this.context.stdout.write(
       `ok: ${result.principal} token for ${result.user} @ ${result.team} (${result.teamId})\n`,
+    );
+    // Surface the resolved user id (Issue #371 theme 2): it is the value the
+    // operator copies into `self_user_id` so `slack.demand.list` can detect their
+    // own @mentions. Without it, demand silently degrades to DM-only (ADR-0012).
+    const section = alias ? `[connectors.slack.workspaces.${alias}]` : "[connectors.slack]";
+    this.context.stdout.write(`user_id: ${result.userId}\n`);
+    this.context.stdout.write(
+      `note: add \`self_user_id = "${result.userId}"\` under ${section} so slack.demand.list ` +
+        "detects your @mentions — without it, demand degrades to DM-only (ADR-0012).\n",
     );
     this.context.stdout.write(`scopes: ${result.scopes || "(none reported)"}\n`);
     this.context.stdout.write("features:\n");
@@ -250,16 +311,20 @@ export class SlackConversationsCommand extends Command {
       return 1;
     }
 
+    const resolved = await resolveWorkspaceAlias(this.workspace);
+    if (!resolved.ok) {
+      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
+      return 1;
+    }
+    const alias = resolved.alias;
+
     const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
     ]);
-    const token = await resolveSecret(SLACK, workspaceSecretName(this.workspace));
+    const token = await resolveSecret(SLACK, workspaceSecretName(alias));
     if (!token) {
-      const hint = this.workspace ? ` --workspace ${this.workspace}` : "";
-      this.context.stderr.write(
-        `error: no Slack token configured (run \`suasor slack auth set${hint}\` or set the env override)\n`,
-      );
+      this.context.stderr.write(await noTokenError(alias));
       return 1;
     }
 
@@ -507,6 +572,17 @@ export class SlackConversationsCommand extends Command {
       for (const line of configLines) {
         this.context.stdout.write(`${line}\n`);
       }
+      // A multi-workspace sweep pastes a `[connectors.slack.workspaces.<alias>]`
+      // block, and each workspace needs its own token — flag the format + the
+      // per-workspace token导线 so the operator does not paste a multi block and
+      // then hit `workspace 'X' skipped: no token` at sync time (Issue #371).
+      if (multi) {
+        this.context.stderr.write(
+          "note: this is a multi-workspace ([connectors.slack.workspaces.<alias>]) block — " +
+            "each workspace needs its own token: `suasor slack auth set --workspace <alias>` " +
+            "(or the SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN env override).\n",
+        );
+      }
       this.context.stderr.write(
         "next: paste the block above into config.toml, then run `suasor slack sync`.\n",
       );
@@ -570,9 +646,14 @@ export class SlackStatusCommand extends Command {
     // when" at a glance; the --json path above keeps the raw ts (#84). `now` is
     // injectable so the relative phrasing is deterministic under test.
     const { formatSlackTs } = await import("../slack-time.ts");
+    // Join each alias to its team id / resolved workspace name so a multi-
+    // workspace operator can tell which Grid workspace a cursor block belongs to
+    // (Issue #371 theme 3). Local projection join — no live fetch; unknown → alias
+    // only.
+    const identities = await readSlackWorkspaceIdentities();
     this.context.stdout.write("slack cursors:\n");
     for (const alias of aliases) {
-      this.context.stdout.write(`  [${alias}]\n`);
+      this.context.stdout.write(`  [${alias}]${workspaceIdentityLabel(identities.get(alias))}\n`);
       for (const [channel, ts] of Object.entries(map[alias] ?? {})) {
         const rec = channelNames.get(channel);
         const label = rec ? `  ${slackChannelLabel(rec.name, rec.kind)}` : "";
@@ -639,26 +720,43 @@ export class SlackCursorResetCommand extends Command {
       import("../../db/index.ts"),
     ]);
 
-    const alias = this.workspace ?? "default";
     const next: Record<string, Record<string, string>> = structuredClone(current);
     const targets: string[] = [];
     if (this.all && !this.workspace) {
+      // --all with no --workspace clears every workspace's cursors — unambiguous,
+      // so it skips alias resolution (does not error on a multi-workspace config).
       for (const a of Object.keys(next)) targets.push(`[${a}] (all)`);
       for (const a of Object.keys(next)) delete next[a];
-    } else if (this.all) {
-      if (next[alias]) targets.push(`[${alias}] (all)`);
-      delete next[alias];
     } else {
-      const aliasMap = next[alias] ?? {};
-      for (const ch of channels) {
-        if (aliasMap[ch] !== undefined) {
-          const rec = channelNames.get(ch);
-          const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
-          targets.push(`[${alias}] ${ch}${label}`);
-          delete aliasMap[ch];
-        }
+      // Resolve the target workspace (Issue #371 theme 1): a single-workspace
+      // config auto-selects its sole alias instead of resetting a `default` that
+      // may not exist (the old `this.workspace ?? "default"` silent no-op); a
+      // multi-workspace config with no `default` errors with the alias list.
+      const resolved = await resolveWorkspaceAlias(this.workspace);
+      if (!resolved.ok) {
+        this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
+        return 1;
       }
-      next[alias] = aliasMap;
+      const alias = resolved.alias ?? DEFAULT_WORKSPACE_ALIAS;
+      // Name the team the reset targets (Issue #371 theme 3), on stderr so the
+      // stdout preview / summary stays a clean machine-readable target list.
+      const idLabel = workspaceIdentityLabel((await readSlackWorkspaceIdentities()).get(alias));
+      if (idLabel) this.context.stderr.write(`workspace: [${alias}]${idLabel}\n`);
+      if (this.all) {
+        if (next[alias]) targets.push(`[${alias}] (all)`);
+        delete next[alias];
+      } else {
+        const aliasMap = next[alias] ?? {};
+        for (const ch of channels) {
+          if (aliasMap[ch] !== undefined) {
+            const rec = channelNames.get(ch);
+            const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
+            targets.push(`[${alias}] ${ch}${label}`);
+            delete aliasMap[ch];
+          }
+        }
+        next[alias] = aliasMap;
+      }
     }
 
     if (targets.length === 0) {
@@ -744,7 +842,18 @@ export class SlackCursorBackfillCommand extends Command {
     // (`[alias] C0123 #general: … → …`) beside the id (ADR-0037 §1). No live fetch.
     const channelNames = await readSlackChannelNames();
 
-    const alias = this.workspace ?? "default";
+    // Resolve the target workspace (Issue #371 theme 1): single-workspace configs
+    // auto-select; a multi-workspace config with no `default` errors with the
+    // alias list rather than backfilling a `default` that may not exist.
+    const resolved = await resolveWorkspaceAlias(this.workspace);
+    if (!resolved.ok) {
+      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
+      return 1;
+    }
+    const alias = resolved.alias ?? DEFAULT_WORKSPACE_ALIAS;
+    // Name the team the backfill targets (Issue #371 theme 3), on stderr.
+    const idLabel = workspaceIdentityLabel((await readSlackWorkspaceIdentities()).get(alias));
+    if (idLabel) this.context.stderr.write(`workspace: [${alias}]${idLabel}\n`);
     const next: Record<string, Record<string, string>> = structuredClone(current);
     const aliasMap = next[alias] ?? {};
     const before = aliasMap[this.channel];
@@ -968,6 +1077,132 @@ async function readSlackCursor(
   } finally {
     store.close();
   }
+}
+
+/**
+ * Resolve which workspace alias to act on from the `--workspace` flag and the
+ * configured workspaces (Issue #371 theme 1). Loads the config to read the
+ * `[connectors.slack.workspaces.*]` alias set, then delegates the decision to the
+ * pure {@link chooseWorkspaceAlias}. Reads the raw `workspaces` keys (not a Zod
+ * parse) so a validation error elsewhere in the slice never turns a plain alias
+ * lookup into a hard failure. Shared by `slack auth set/test`, `conversations`,
+ * and `cursor reset/backfill` so all resolve the same workspace.
+ */
+async function resolveWorkspaceAlias(
+  explicit: string | undefined,
+): Promise<
+  | { readonly ok: true; readonly alias: string | undefined }
+  | { readonly ok: false; readonly aliases: readonly string[] }
+> {
+  if (explicit !== undefined) return { ok: true, alias: explicit };
+  const { loadConfig } = await import("../../config/index.ts");
+  const config = await loadConfig();
+  const slack = config.connectors[SLACK] as { workspaces?: Record<string, unknown> } | undefined;
+  return chooseWorkspaceAlias(undefined, Object.keys(slack?.workspaces ?? {}));
+}
+
+/**
+ * The stderr message for an ambiguous `--workspace` omission (Issue #371 theme
+ * 1): a multi-workspace config with no `default` alias. Lists the configured
+ * aliases so the operator can pick one instead of silently touching the wrong
+ * workspace.
+ */
+function workspaceAmbiguityError(aliases: readonly string[]): string {
+  return (
+    `error: multiple Slack workspaces configured (${aliases.join(", ")}); ` +
+    "pass --workspace <alias> to choose one.\n"
+  );
+}
+
+/**
+ * The per-connector env override name for a workspace's token (Issue #371 theme
+ * 4): `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN` for a named alias (non-alphanumeric
+ * chars, e.g. `-`, normalised to `_`), or `SUASOR_CONNECTOR_SLACK_TOKEN` for the
+ * flat/default workspace. Surfaced in token-missing errors so the headless / WSL
+ * override is discoverable from the CLI.
+ */
+async function slackTokenEnvName(alias: string | undefined): Promise<string> {
+  const [{ secretEnvName }, { workspaceSecretName }] = await Promise.all([
+    import("../../connectors/secrets.ts"),
+    import("../../connectors/slack.ts"),
+  ]);
+  return secretEnvName(SLACK, workspaceSecretName(alias));
+}
+
+/**
+ * The stderr message for a missing Slack token (Issue #371 theme 1/4): names the
+ * workspace it looked under, the `slack auth set` recovery command, and the env
+ * override that would satisfy it headless.
+ */
+async function noTokenError(alias: string | undefined): Promise<string> {
+  const env = await slackTokenEnvName(alias);
+  const where = alias ? ` for workspace '${alias}'` : "";
+  const wsHint = alias ? ` --workspace ${alias}` : "";
+  return (
+    `error: no Slack token configured${where} ` +
+    `(run \`suasor slack auth set${wsHint}\` or set env $${env})\n`
+  );
+}
+
+/** A workspace's team identity for output enrichment (Issue #371 theme 3). */
+interface SlackWorkspaceIdentity {
+  readonly teamId: string;
+  readonly teamName?: string;
+}
+
+/**
+ * Build an alias → team identity map for enriching operational output (Issue
+ * #371 theme 3): each configured workspace's `team` id joined to its resolved
+ * name from the local `slack_teams` projection (ADR-0037 §10, Issue #361). Pure
+ * local join — no live fetch. Returns an empty map on a config / parse error
+ * (output falls back to alias-only). Shared by `slack status` and `slack cursor`.
+ */
+async function readSlackWorkspaceIdentities(): Promise<Map<string, SlackWorkspaceIdentity>> {
+  const [{ loadConfig }, { Store }, { SlackConnectorConfig, resolveWorkspaces }] =
+    await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../connectors/slack.ts"),
+    ]);
+  const config = await loadConfig();
+  let workspaces: ReturnType<typeof resolveWorkspaces>;
+  try {
+    workspaces = resolveWorkspaces(SlackConnectorConfig.parse(config.connectors[SLACK] ?? {}));
+  } catch {
+    return new Map();
+  }
+  const names = new Map<string, string>();
+  const dbPath = config.storage.dbPath;
+  if (dbPath !== null) {
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    try {
+      const rows = store.connection.sqlite
+        .query("SELECT team_id AS id, name FROM slack_teams WHERE name <> ''")
+        .all() as { id: string; name: string }[];
+      for (const r of rows) names.set(r.id, r.name);
+    } finally {
+      store.close();
+    }
+  }
+  const out = new Map<string, SlackWorkspaceIdentity>();
+  for (const ws of workspaces) {
+    const teamName = names.get(ws.team);
+    out.set(ws.alias, { teamId: ws.team, ...(teamName ? { teamName } : {}) });
+  }
+  return out;
+}
+
+/**
+ * Format a workspace's team identity for an output label (Issue #371 theme 3):
+ * `  team T0123 (Acme)` when the name is resolved, `  team T0123` when only the
+ * id is known, or `""` for the unconfigured flat placeholder (`team = "default"`)
+ * so a plain single-workspace `[default]` header stays unchanged (no regression).
+ */
+function workspaceIdentityLabel(id: SlackWorkspaceIdentity | undefined): string {
+  if (!id) return "";
+  if (id.teamName) return `  team ${id.teamId} (${id.teamName})`;
+  if (id.teamId && id.teamId !== DEFAULT_WORKSPACE_ALIAS) return `  team ${id.teamId}`;
+  return "";
 }
 
 /** A resolved Slack channel name + kind, as stored in the `slack_channels` projection. */
