@@ -252,26 +252,50 @@ export function isSinceParseable(since: string): boolean {
 export function validateSlackSince(config: SlackConnectorConfig): void {
   const issues: string[] = [];
 
-  const checkSince = (value: string | undefined, label: string): void => {
+  // Recovery hint (Issue #380): once the floor is corrected, older history can be
+  // re-fetched with the `slack cursor backfill` verb. The alias is a real value;
+  // `channel_since` embeds its concrete channel while a workspace-level `since`
+  // (which spans every channel) uses a `<channel-id>` placeholder.
+  const backfillHint = (alias: string, channel: string): string =>
+    `Tip: after correcting it, backfill older history with 'suasor slack cursor backfill --workspace ${alias} --channel ${channel} --since <floor> --yes'`;
+
+  const checkSince = (
+    value: string | undefined,
+    label: string,
+    alias: string,
+    channel: string,
+  ): void => {
     if (value !== undefined && !isSinceParseable(value)) {
       issues.push(
-        `${label}: invalid since '${value}' (expected relative '30d'/'4w'/'12h' or ISO date '2026-01-01')`,
+        `${label}: invalid since '${value}' (expected relative '30d'/'4w'/'12h' or ISO date '2026-01-01'). ${backfillHint(alias, channel)}`,
       );
     }
   };
-  const checkChannelSince = (map: Record<string, string> | undefined, label: string): void => {
+  const checkChannelSince = (
+    map: Record<string, string> | undefined,
+    label: string,
+    alias: string,
+  ): void => {
     for (const [channel, value] of Object.entries(map ?? {})) {
-      checkSince(value, `${label}.${channel}`);
+      checkSince(value, `${label}.${channel}`, alias, channel);
     }
   };
 
   // Flat / default workspace.
-  checkSince(config.since, "connectors.slack.since");
-  checkChannelSince(config.channel_since, "connectors.slack.channel_since");
+  checkSince(config.since, "connectors.slack.since", DEFAULT_WORKSPACE_ALIAS, "<channel-id>");
+  checkChannelSince(
+    config.channel_since,
+    "connectors.slack.channel_since",
+    DEFAULT_WORKSPACE_ALIAS,
+  );
   // Named workspaces.
   for (const [alias, ws] of Object.entries(config.workspaces ?? {})) {
-    checkSince(ws.since, `connectors.slack.workspaces.${alias}.since`);
-    checkChannelSince(ws.channel_since, `connectors.slack.workspaces.${alias}.channel_since`);
+    checkSince(ws.since, `connectors.slack.workspaces.${alias}.since`, alias, "<channel-id>");
+    checkChannelSince(
+      ws.channel_since,
+      `connectors.slack.workspaces.${alias}.channel_since`,
+      alias,
+    );
   }
 
   if (issues.length > 0) {
