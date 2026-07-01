@@ -30,6 +30,12 @@ import type {
   SyncResult,
 } from "./contract.ts";
 import { type ResolvedChannel, resolveChannel } from "./slack/channel.ts";
+import {
+  type ConversationType,
+  diffConversations,
+  listConversations,
+  type SlackConversationsTransport,
+} from "./slack/conversations.ts";
 import { channelOwnership, formatSharedChannelWarn } from "./slack/dedup.ts";
 import {
   defaultUsersTransport,
@@ -66,6 +72,14 @@ export const SlackWorkspaceConfig = z.object({
   self_user_id: z.string().min(1).optional(),
   /** Slack List ids to mirror for task read-back in this workspace (ADR-0036 §6). */
   lists: z.array(z.string().min(1)).optional(),
+  /**
+   * Opt out of the sync-time discovery-drift sweep for this workspace (ADR-0039
+   * Layer 2). When unset, the connector-level `discover_new` (default `true`)
+   * applies; `false` here overrides it off for this one workspace, `true`
+   * overrides it on. The sweep never ingests — it only warns that newly-joined
+   * conversations are not yet in `channels` (cursor unchanged, no auto-follow).
+   */
+  discover_new: z.boolean().optional(),
 });
 export type SlackWorkspaceConfig = z.infer<typeof SlackWorkspaceConfig>;
 
@@ -97,6 +111,15 @@ export const SlackConnectorConfig = z.object({
    * follow-up.
    */
   lists: z.array(z.string().min(1)).optional(),
+  /**
+   * Whether `slack sync` sweeps for newly-joined conversations not yet in
+   * `channels` and warns about the drift (ADR-0039 Layer 2). Default `true`.
+   * Set `false` to opt the whole connector out; a named workspace can override
+   * it per-alias with `[connectors.slack.workspaces.<alias>] discover_new`. The
+   * sweep is cadence-gated (once per 24h) and never ingests — it only surfaces a
+   * one-line warn pointing at `slack conversations --new` (cursor unchanged).
+   */
+  discover_new: z.boolean().optional(),
   workspaces: z.record(z.string(), SlackWorkspaceConfig).optional(),
 });
 export type SlackConnectorConfig = z.infer<typeof SlackConnectorConfig>;
@@ -145,6 +168,12 @@ export interface ResolvedWorkspace {
   channelSince?: Record<string, string>;
   /** Operator's own user id, excluded from group-DM name joins (ADR-0037 §4). */
   selfUserId?: string;
+  /**
+   * Whether the sync-time discovery-drift sweep runs for this workspace (ADR-0039
+   * Layer 2). Resolved from `discover_new`: a per-workspace value wins, else the
+   * connector-level value, else the default `true`.
+   */
+  discoverNew: boolean;
 }
 
 /** Expand the config into the concrete list of workspaces to sync. */
@@ -157,6 +186,8 @@ export function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspa
       channels: w.channels,
       lists: w.lists ?? [],
       secretName: workspaceSecretName(alias),
+      // Per-workspace opt-out wins over the connector default; both default true.
+      discoverNew: w.discover_new ?? config.discover_new ?? true,
       ...(w.since ? { since: w.since } : {}),
       ...(w.channel_since ? { channelSince: w.channel_since } : {}),
       ...(w.self_user_id ? { selfUserId: w.self_user_id } : {}),
@@ -169,6 +200,7 @@ export function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspa
       channels: config.channels,
       lists: config.lists ?? [],
       secretName: workspaceSecretName(),
+      discoverNew: config.discover_new ?? true,
       ...(config.since ? { since: config.since } : {}),
       ...(config.channel_since ? { channelSince: config.channel_since } : {}),
       ...(config.self_user_id ? { selfUserId: config.self_user_id } : {}),
@@ -506,6 +538,12 @@ export interface SlackConnectorOptions {
    * `slackFetch` (ADR-0019), so registration stays import-clean.
    */
   usersTransport?: SlackUsersTransport;
+  /**
+   * `users.conversations` transport for the discovery-drift sweep (ADR-0039
+   * Layer 2). Tests inject a fake so the sweep is network-free; the default goes
+   * through the shared rate-limit-aware `slackFetch` (ADR-0019).
+   */
+  conversationsTransport?: SlackConversationsTransport;
 }
 
 /**
@@ -548,12 +586,26 @@ function parseCursor(raw: string | null): {
 }
 
 /**
+ * Reserved cursor "alias" key that carries the per-workspace discovery-drift
+ * marker (ADR-0039 Layer 2), stashed inside the connector's own opaque cursor so
+ * it needs no extra projection / event wiring — the same lightweight persistence
+ * the channel cursors use. Its inner map is `{ "<workspace-alias>":
+ * "<lastSweptEpochMs>:<newCount>" }`, NOT channel→ts. The `__…__` prefix cannot
+ * collide with a real workspace alias, and {@link cursorToAliasMap} strips it so
+ * `slack status` / `cursor reset` / `cursor backfill` never see or clobber it.
+ */
+const DISCOVERY_CURSOR_KEY = "__discovery__";
+
+/**
  * The stored cursor as an alias → channel → ts map (ADR-0016 `slack status` /
  * `slack cursor reset` read this). A bare-ts legacy cursor has no per-channel
- * structure and yields `{}`.
+ * structure and yields `{}`. The reserved discovery marker
+ * ({@link DISCOVERY_CURSOR_KEY}) is stripped so the recovery verbs that
+ * re-serialize this map never surface or drop it as if it were a workspace.
  */
 export function cursorToAliasMap(raw: string | null): Record<string, Record<string, string>> {
-  return parseCursor(raw).byAlias;
+  const { [DISCOVERY_CURSOR_KEY]: _discovery, ...aliases } = parseCursor(raw).byAlias;
+  return aliases;
 }
 
 /** Serialize an alias → channel → ts map back to a cursor string (empty → `null`). */
@@ -564,6 +616,57 @@ export function serializeCursor(map: Record<string, Record<string, string>>): st
   }
   return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
 }
+
+/** One workspace's persisted discovery-drift marker (ADR-0039 Layer 2). */
+export interface DiscoveryMarker {
+  /** Workspace alias the marker belongs to. */
+  readonly alias: string;
+  /** Epoch ms of the last discovery sweep (drives the 24h cadence). */
+  readonly lastSweptMs: number;
+  /** New (member, not-yet-configured) conversations that sweep found. */
+  readonly newCount: number;
+}
+
+/** Parse one `"<epochMs>:<count>"` marker value, or `null` when malformed. */
+function parseDiscoveryMarkerValue(
+  value: string,
+): { lastSweptMs: number; newCount: number } | null {
+  const idx = value.indexOf(":");
+  if (idx < 0) return null;
+  const lastSweptMs = Number(value.slice(0, idx));
+  const newCount = Number(value.slice(idx + 1));
+  if (!Number.isFinite(lastSweptMs) || !Number.isFinite(newCount)) return null;
+  return { lastSweptMs, newCount };
+}
+
+/**
+ * Read the per-workspace discovery-drift markers the sync sweep persisted into
+ * the connector cursor (ADR-0039 Layer 2). Offline: parses the stored cursor,
+ * with no network. Used by `suasor doctor` to surface "N new Slack conversation(s)
+ * not in config" without sweeping the network itself. Returns `[]` when no sweep
+ * has run (or the cursor predates this feature).
+ */
+export function readDiscoveryMarkers(raw: string | null): DiscoveryMarker[] {
+  const meta = parseCursor(raw).byAlias[DISCOVERY_CURSOR_KEY];
+  if (!meta) return [];
+  const out: DiscoveryMarker[] = [];
+  for (const [alias, value] of Object.entries(meta)) {
+    const parsed = parseDiscoveryMarkerValue(value);
+    if (parsed) out.push({ alias, ...parsed });
+  }
+  return out;
+}
+
+/**
+ * Conversation types the sync-time discovery sweep enumerates (ADR-0039 §3):
+ * public + private only. DMs / group-DMs are excluded by default — they are
+ * noisy and better surfaced on the explicit `slack conversations --new --types`
+ * path, not a routine sync warn.
+ */
+const DISCOVERY_SWEEP_TYPES: readonly ConversationType[] = ["public", "private"];
+
+/** Cadence for the discovery sweep (ADR-0039 §3): at most once per 24h per workspace. */
+const DISCOVERY_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /** Per-workspace outcome of a sync pass, used to build the summary (ADR-0014). */
 type WorkspaceStatus = "ok" | "failed" | "skipped";
@@ -599,6 +702,8 @@ class SlackConnector implements Connector {
     private readonly clientFactory: SlackClientFactory,
     private readonly now: () => number = () => Date.now(),
     private readonly usersTransport: SlackUsersTransport = defaultUsersTransport,
+    /** Sweep transport for the discovery drift check (ADR-0039); default `slackFetch`. */
+    private readonly conversationsTransport?: SlackConversationsTransport,
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
@@ -620,6 +725,12 @@ class SlackConnector implements Connector {
     if (ownership.shared.length > 0) ctx.onWarn?.(formatSharedChannelWarn(ownership.shared));
 
     const { byAlias: previous, legacyFloor } = parseCursor(ctx.cursor);
+    // Lift the reserved discovery-drift markers out of `previous` so it stays a
+    // pure alias→channel→ts map for the ingest logic below (ADR-0039 Layer 2).
+    // The markers are carried forward per workspace and re-stashed after the loop.
+    const prevDiscovery = previous[DISCOVERY_CURSOR_KEY] ?? {};
+    delete previous[DISCOVERY_CURSOR_KEY];
+    const discoveryMarkers: Record<string, string> = {};
     // Start empty and seed only configured aliases/channels below, so cursors
     // for workspaces/channels removed from config don't accumulate forever.
     this.cursors = {};
@@ -655,11 +766,21 @@ class SlackConnector implements Connector {
             : `\`suasor slack auth set --workspace ${ws.alias}\``;
         ctx.onWarn?.(`workspace '${ws.alias}' skipped: no token (run ${hint})`);
         if (previous[ws.alias]) this.cursors[ws.alias] = { ...previous[ws.alias] };
+        // No token → cannot sweep; carry the prior marker forward unchanged so a
+        // transient skip does not reset the discovery cadence (ADR-0039).
+        const skipMarker = prevDiscovery[ws.alias];
+        if (skipMarker) discoveryMarkers[ws.alias] = skipMarker;
         this.workspaceStatus.push({ alias: ws.alias, team: ws.team, status: "skipped" });
         continue;
       }
       resolvedCount += 1;
       const prevChannels = previous[ws.alias] ?? {};
+      // Discovery-drift sweep (ADR-0039 Layer 2): cadence-gated, opt-out-aware,
+      // best-effort. Warns about newly-joined conversations not in `channels`;
+      // never ingests and never advances a channel cursor. Runs before the
+      // ingest fetch so a mid-sync channel failure still records the marker.
+      const marker = await this.sweepDiscovery(ctx, ws, token, prevDiscovery[ws.alias]);
+      if (marker !== undefined) discoveryMarkers[ws.alias] = marker;
       // Hoisted so the summary carries the workspace name even when a later
       // fetch fails (the catch below runs outside the try scope). Reset each
       // workspace; stays undefined if resolution degrades or never runs.
@@ -802,6 +923,13 @@ class SlackConnector implements Connector {
       }
     }
 
+    // Re-stash the discovery markers under the reserved key so the 24h cadence +
+    // doctor drift count persist across runs (ADR-0039 Layer 2). Non-channel data
+    // (alias → "<epochMs>:<count>"), stripped from the cursor by cursorToAliasMap.
+    if (Object.keys(discoveryMarkers).length > 0) {
+      this.cursors[DISCOVERY_CURSOR_KEY] = discoveryMarkers;
+    }
+
     // Mirror configured Slack Lists as `slack_list_item` sources (ADR-0036 §6
     // read-back), per workspace (each its own token). Raw cells only —
     // `reconcileReadback` interprets them with the [tasks.home] column config.
@@ -818,6 +946,76 @@ class SlackConnector implements Connector {
     // reporting a silent success. A partial failure (some succeeded) is isolated.
     if (failedCount > 0 && failedCount === resolvedCount) {
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    }
+  }
+
+  /**
+   * Discovery-drift sweep for one workspace (ADR-0039 Layer 2). Enumerates the
+   * public + private conversations the token can see (`users.conversations`, via
+   * the shared rate-limit-aware `slackFetch`) and diffs them against the
+   * configured `channels`: any **member** conversation not in config is drift. It
+   * emits one aggregated warn pointing at `slack conversations --new` and returns
+   * the persisted marker `"<epochMs>:<newCount>"`. Crucially it **never ingests**
+   * and never advances a channel cursor — the explicit-enumeration privacy model
+   * is preserved; the sweep only makes the operator aware (ADR-0039 §Decision c).
+   *
+   * Guards, cheapest first:
+   * - **opt-out**: `discover_new = false` (connector or per-workspace) → no sweep;
+   *   the prior marker is carried forward untouched.
+   * - **cadence**: at most once per {@link DISCOVERY_SWEEP_INTERVAL_MS} (24h) per
+   *   workspace, keyed off the prior marker's timestamp.
+   * - **best-effort**: any sweep error is warned and swallowed (the marker is
+   *   preserved) so a discovery hiccup never fails the ingest that follows.
+   *
+   * @returns the marker to persist for this workspace, or `undefined` when there
+   *   is nothing to persist (opted out with no prior marker).
+   */
+  private async sweepDiscovery(
+    ctx: SyncContext,
+    ws: ResolvedWorkspace,
+    token: string,
+    prevMarker: string | undefined,
+  ): Promise<string | undefined> {
+    // Opt-out: keep the prior marker (if any) so re-enabling later still respects
+    // the last cadence window; do not sweep.
+    if (!ws.discoverNew) return prevMarker;
+
+    // A channel-less workspace (e.g. lists-only) has no message-channel config to
+    // drift against — every visible channel would read as "new" and nag on every
+    // window. First-time discovery for such a workspace is the explicit
+    // `slack conversations --new` path, not a routine sync warn (ADR-0039).
+    if (ws.channels.length === 0) return prevMarker;
+
+    const nowMs = this.now();
+    const prev = prevMarker ? parseDiscoveryMarkerValue(prevMarker) : null;
+    // Cadence: swept recently enough → carry the marker forward without a fetch.
+    if (prev && nowMs - prev.lastSweptMs < DISCOVERY_SWEEP_INTERVAL_MS) return prevMarker;
+
+    const scope = ws.alias === DEFAULT_WORKSPACE_ALIAS ? "" : `workspace '${ws.alias}': `;
+    try {
+      const { conversations } = await listConversations(token, {
+        types: DISCOVERY_SWEEP_TYPES,
+        ...(this.conversationsTransport ? { transport: this.conversationsTransport } : {}),
+      });
+      const { added } = diffConversations({
+        visible: conversations,
+        configured: ws.channels,
+        sweptTypes: DISCOVERY_SWEEP_TYPES,
+      });
+      if (added.length > 0) {
+        ctx.onWarn?.(
+          `${scope}${added.length} new conversation(s) visible but not in config — ` +
+            "run `suasor slack conversations --new` to review " +
+            "(none ingested; cursor unchanged, ADR-0039)",
+        );
+      }
+      return `${nowMs}:${added.length}`;
+    } catch (error) {
+      // Best-effort: a discovery sweep must never fail the sync. Keep the prior
+      // marker so the cadence window is respected rather than re-swept every run.
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.onWarn?.(`${scope}discovery sweep skipped: ${message}`);
+      return prevMarker;
     }
   }
 
@@ -981,5 +1179,6 @@ export function createSlackConnector(
     options.clientFactory ?? defaultSlackClientFactory,
     options.now,
     options.usersTransport ?? defaultUsersTransport,
+    options.conversationsTransport,
   );
 }

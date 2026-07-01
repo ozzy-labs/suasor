@@ -90,6 +90,17 @@ async function seed(externalId: string, body: string): Promise<void> {
   store.close();
 }
 
+/**
+ * Persist a Slack resume cursor (a `ConnectorSyncCompleted` event) so the doctor
+ * discovery-drift check (ADR-0039 Layer 2) can read the drift marker offline.
+ */
+async function seedSlackCursor(cursor: string): Promise<void> {
+  const { Store } = await import("../../src/db/index.ts");
+  const store = Store.open({ path: join(dir, "suasor.db") });
+  store.record({ type: "ConnectorSyncCompleted", connector: "slack", cursor, count: 0 });
+  store.close();
+}
+
 /** Insert an `extraction_meta` row directly to simulate version drift. */
 async function seedExtractionMeta(externalId: string, version: string): Promise<void> {
   const { Store } = await import("../../src/db/index.ts");
@@ -508,6 +519,46 @@ describe("suasor doctor", () => {
     expect(demand[0]?.detail).toContain("DM-only");
     expect(demand[0]?.detail).toContain("slack auth test --workspace bp");
     expect(demand.some((c) => c.detail.includes("'acme'"))).toBe(false);
+  });
+
+  test("slack discovery drift: a persisted marker with new conversations warns (ADR-0039)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    // Marker: workspace 'default' had a sweep that found 3 new conversations.
+    await seedSlackCursor(
+      JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:3" } }),
+    );
+    const { code, out } = await run(["doctor", "--json"]);
+    // Drift is a warning, not an error → exit 0.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const drift = report.checks.filter((c) => c.name === "slack.discovery");
+    expect(drift).toHaveLength(1);
+    expect(drift[0]?.status).toBe("warn");
+    expect(drift[0]?.detail).toContain("3 new Slack conversation(s)");
+    expect(drift[0]?.detail).toContain("slack conversations --new");
+  });
+
+  test("slack discovery drift: a zero-count marker stays quiet (ADR-0039)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await seedSlackCursor(
+      JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:0" } }),
+    );
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack.discovery")).toBe(false);
+  });
+
+  test("slack discovery drift: opting out (discover_new = false) suppresses a stale marker (ADR-0039)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\ndiscover_new = false\n');
+    await seedSlackCursor(
+      JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:5" } }),
+    );
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack.discovery")).toBe(false);
   });
 
   test("flat single-workspace slack config emits no per-workspace token/identity checks (#371)", async () => {
