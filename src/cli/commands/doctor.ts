@@ -54,6 +54,9 @@ export class DoctorCommand extends Command {
     details: `
       Aggregates config / database / embedding-backend / connector-credential
       checks into one report so you can see what is wired and what is missing.
+      Also warns when the same Slack channel id is listed under multiple
+      workspace aliases: sync de-duplicates it (owner-wins, ADR-0038) but the
+      redundant declaration is surfaced here so you can spot it without a sync.
       Read-only (never creates a database; secret values are never printed,
       NFR-PRV-4). Exits 1 when any check is an error, so cron / CI can gate on it.
       Use --json for machine-readable output.
@@ -303,6 +306,34 @@ export class DoctorCommand extends Command {
           detail:
             `credential stored but not enabled: ${storedNotEnabled.join(", ")} ` +
             "(add a [connectors.<name>] section, or set enabled = true to start syncing)",
+        });
+      }
+    }
+
+    // 5b. slack shared channels — the same global Slack channel id listed under
+    //    multiple workspace aliases (ADR-0038 Layer 3, early detection). Sync
+    //    de-dups these owner-wins so nothing is double-ingested (Layer 1), but
+    //    surfacing the redundant declaration here lets the user notice it without
+    //    running a sync — and names the very owner that will ingest it, since the
+    //    owner rule (lexicographically smallest alias) is shared with sync via
+    //    `channelOwnership`. Warn, not error: the config still works (dedup
+    //    absorbs it); it is just redundant. Runs whenever a [connectors.slack]
+    //    slice exists (enabled or not — a duplicate is worth flagging while the
+    //    connector is still being set up). Quiet when nothing is shared, so the
+    //    common single-workspace / non-overlapping case adds no line.
+    if (config !== null && config.connectors.slack !== undefined) {
+      const [{ SlackConnectorConfig, resolveWorkspaces }, { channelOwnership }] = await Promise.all(
+        [import("../../connectors/slack.ts"), import("../../connectors/slack/dedup.ts")],
+      );
+      const slack = SlackConnectorConfig.parse(config.connectors.slack);
+      const { shared } = channelOwnership(resolveWorkspaces(slack));
+      for (const s of shared) {
+        checks.push({
+          name: "slack",
+          status: "warn",
+          detail:
+            `channel ${s.channel} configured under [${s.aliases.join(", ")}]; ` +
+            `only owner '${s.owner}' will ingest it (shared-channel de-dup, ADR-0038)`,
         });
       }
     }
