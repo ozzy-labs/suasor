@@ -362,4 +362,66 @@ describe("suasor doctor", () => {
     expect(report.checks.some((c) => c.name === "embedding.backend")).toBe(false);
     expect(report.checks.some((c) => c.name === "llm.backend")).toBe(false);
   });
+
+  // ADR-0038 Layer 3: doctor detects a Slack channel id listed under more than
+  // one workspace alias and warns which owner will ingest it (early detection,
+  // without running a sync). The owner rule (lexicographically smallest alias)
+  // is shared with sync via `channelOwnership`.
+  test("shared Slack channel across aliases is a warning naming the owner (ADR-0038)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.slack.workspaces.employees]",
+        'team = "T_EMP"',
+        'channels = ["C123", "C_EMP_ONLY"]',
+        "",
+        "[connectors.slack.workspaces.bp]",
+        'team = "T_BP"',
+        'channels = ["C123", "C_BP_ONLY"]',
+      ].join("\n"),
+    );
+    const { code, out } = await run(["doctor", "--json"]);
+    // Shared-channel config is a warning, not an error → still exits 0.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const shared = report.checks.filter((c) => c.name === "slack" && c.status === "warn");
+    // Exactly one shared channel (C123); the alias-exclusive channels are quiet.
+    expect(shared).toHaveLength(1);
+    expect(shared[0]?.detail).toContain("C123");
+    // Both aliases sharing it are named...
+    expect(shared[0]?.detail).toContain("bp");
+    expect(shared[0]?.detail).toContain("employees");
+    // ...and the owner is the lexicographically smallest alias ('bp').
+    expect(shared[0]?.detail).toContain("only owner 'bp'");
+    expect(shared[0]?.detail).toContain("ADR-0038");
+    // Non-shared channels never surface as a shared-channel warning.
+    expect(shared.some((c) => c.detail.includes("C_EMP_ONLY"))).toBe(false);
+    expect(shared.some((c) => c.detail.includes("C_BP_ONLY"))).toBe(false);
+  });
+
+  test("no shared Slack channel: no slack warning (ADR-0038)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.slack.workspaces.employees]",
+        'team = "T_EMP"',
+        'channels = ["C_EMP_ONLY"]',
+        "",
+        "[connectors.slack.workspaces.bp]",
+        'team = "T_BP"',
+        'channels = ["C_BP_ONLY"]',
+      ].join("\n"),
+    );
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack")).toBe(false);
+  });
+
+  test("flat single-workspace slack config emits no shared-channel warning (ADR-0038)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1", "C2"]\n');
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack")).toBe(false);
+  });
 });
