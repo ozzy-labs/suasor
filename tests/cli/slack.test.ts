@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatConversationRow } from "../../src/cli/commands/slack.ts";
+import { formatConversationRow, slackChannelLabel } from "../../src/cli/commands/slack.ts";
 import { buildCli } from "../../src/cli/index.ts";
 
 /** Run the CLI capturing stdout/stderr (Slack token env cleared for isolation). */
@@ -126,5 +126,20 @@ describe("slack conversations — joined mark (ADR-0011, #165)", () => {
     );
     expect(row).toContain("(archived)");
     expect(row).toContain("last_self_post=2026-01-01");
+  });
+});
+
+describe("slackChannelLabel — kind-aware display (ADR-0037)", () => {
+  test("public/private channels get a `#` prefix", () => {
+    expect(slackChannelLabel("general", "public")).toBe("#general");
+    expect(slackChannelLabel("secret", "private")).toBe("#secret");
+  });
+
+  test("a single DM gets an `@` prefix (the counterpart)", () => {
+    expect(slackChannelLabel("Ada Lovelace", "dm")).toBe("@Ada Lovelace");
+  });
+
+  test("a group DM keeps the participant-name join as-is", () => {
+    expect(slackChannelLabel("Ada, Grace", "group")).toBe("Ada, Grace");
   });
 });

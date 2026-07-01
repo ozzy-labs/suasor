@@ -489,8 +489,20 @@ export class SlackStatusCommand extends Command {
     const map = await readSlackCursor(this);
     if (map === null) return 1;
 
+    // Join the local `slack_channels` projection so id-only cursors carry a
+    // human name (ADR-0037 §1). Local lookup only — no live fetch. Empty until a
+    // sync has resolved names, in which case every channel stays id-only (§6).
+    const channelNames = await readSlackChannelNames();
+
     if (this.json) {
-      this.context.stdout.write(`${JSON.stringify(map, null, 2)}\n`);
+      // Additive back-compat: the top-level object stays the alias → channel →
+      // ts cursor map (existing consumers read `parsed[alias][channel]`
+      // unchanged). Resolved names are surfaced under a sibling `names` map
+      // (channel id → resolved name), only when at least one resolved — so the
+      // no-projection case emits the exact prior shape (ADR-0037 §1/§6).
+      const names = Object.fromEntries([...channelNames].map(([id, { name }]) => [id, name]));
+      const payload = Object.keys(names).length > 0 ? { ...map, names } : map;
+      this.context.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
       return 0;
     }
     const aliases = Object.keys(map);
@@ -506,7 +518,9 @@ export class SlackStatusCommand extends Command {
     for (const alias of aliases) {
       this.context.stdout.write(`  [${alias}]\n`);
       for (const [channel, ts] of Object.entries(map[alias] ?? {})) {
-        this.context.stdout.write(`    ${channel}  ${formatSlackTs(ts, this.now)}\n`);
+        const rec = channelNames.get(channel);
+        const label = rec ? `  ${slackChannelLabel(rec.name, rec.kind)}` : "";
+        this.context.stdout.write(`    ${channel}${label}  ${formatSlackTs(ts, this.now)}\n`);
       }
     }
     return 0;
@@ -559,6 +573,10 @@ export class SlackCursorResetCommand extends Command {
     const current = await readSlackCursor(this);
     if (current === null) return 1;
 
+    // Local channel-name join so a previewed / reset channel shows its name
+    // (`[alias] C0123 #general`) beside the id (ADR-0037 §1). No live fetch.
+    const channelNames = await readSlackChannelNames();
+
     const [{ serializeCursor }, { loadConfig }, { Store }] = await Promise.all([
       import("../../connectors/slack.ts"),
       import("../../config/index.ts"),
@@ -578,7 +596,9 @@ export class SlackCursorResetCommand extends Command {
       const aliasMap = next[alias] ?? {};
       for (const ch of channels) {
         if (aliasMap[ch] !== undefined) {
-          targets.push(`[${alias}] ${ch}`);
+          const rec = channelNames.get(ch);
+          const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
+          targets.push(`[${alias}] ${ch}${label}`);
           delete aliasMap[ch];
         }
       }
@@ -664,6 +684,10 @@ export class SlackCursorBackfillCommand extends Command {
     const current = await readSlackCursor(this);
     if (current === null) return 1;
 
+    // Local channel-name join so the backfill summary names the target channel
+    // (`[alias] C0123 #general: … → …`) beside the id (ADR-0037 §1). No live fetch.
+    const channelNames = await readSlackChannelNames();
+
     const alias = this.workspace ?? "default";
     const next: Record<string, Record<string, string>> = structuredClone(current);
     const aliasMap = next[alias] ?? {};
@@ -679,7 +703,9 @@ export class SlackCursorBackfillCommand extends Command {
     aliasMap[this.channel] = floorTs;
     next[alias] = aliasMap;
 
-    const summary = `[${alias}] ${this.channel}: ${before ?? "(none)"} → ${floorTs}`;
+    const rec = channelNames.get(this.channel);
+    const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
+    const summary = `[${alias}] ${this.channel}${label}: ${before ?? "(none)"} → ${floorTs}`;
     if (!this.yes) {
       this.context.stdout.write(`would backfill: ${summary}\n`);
       this.context.stdout.write("(preview — re-run with --yes to apply)\n");
@@ -736,6 +762,53 @@ async function readSlackCursor(
   const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
   try {
     return cursorToAliasMap(lastCursor(store.connection.sqlite, SLACK));
+  } finally {
+    store.close();
+  }
+}
+
+/** A resolved Slack channel name + kind, as stored in the `slack_channels` projection. */
+interface SlackChannelName {
+  name: string;
+  kind: string;
+}
+
+/**
+ * Format a resolved channel name into a display label by its kind (ADR-0037):
+ * `#name` for a public/private channel, `@name` for a single DM (the
+ * counterpart), and the name as-is for a group DM (already a participant-name
+ * join, §4). Exported so the row layout is unit-testable without a store.
+ */
+export function slackChannelLabel(name: string, kind: string): string {
+  if (kind === "dm") return `@${name}`;
+  if (kind === "group") return name;
+  return `#${name}`;
+}
+
+/**
+ * Load the Slack channel-name projection (ADR-0037 §3) as a channel-id → name
+ * map, for enriching id-only operational output (`slack status` / `cursor`).
+ * This is a pure local join over `slack_channels` — no live fetch
+ * (no-fetch-at-query, ADR-0012/§1). Only rows with a resolved (non-empty) name
+ * are included; an unresolved / absent channel is simply missing from the map,
+ * so callers fall back to the raw id (§6). Returns an empty map on a config
+ * error (display still renders ids). Shared by `slack status`, `slack cursor
+ * reset`, and `slack cursor backfill`.
+ */
+async function readSlackChannelNames(): Promise<Map<string, SlackChannelName>> {
+  const [{ loadConfig }, { Store }] = await Promise.all([
+    import("../../config/index.ts"),
+    import("../../db/index.ts"),
+  ]);
+  const config = await loadConfig();
+  const dbPath = config.storage.dbPath;
+  if (dbPath === null) return new Map();
+  const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+  try {
+    const rows = store.connection.sqlite
+      .query("SELECT channel_id AS id, name, kind FROM slack_channels WHERE name <> ''")
+      .all() as { id: string; name: string; kind: string }[];
+    return new Map(rows.map((r) => [r.id, { name: r.name, kind: r.kind }]));
   } finally {
     store.close();
   }
