@@ -99,6 +99,7 @@ describe("suasor slack resolve-names (ADR-0037 §11)", () => {
     expect(code).toBe(0);
     expect(out).toContain("channels: 0 resolved, 0 already named");
     expect(out).toContain("users:    0 resolved, 0 already named");
+    expect(out).toContain("teams:    0 resolved, 0 already named");
   });
 
   test("--json emits the structured summary", async () => {
@@ -108,6 +109,7 @@ describe("suasor slack resolve-names (ADR-0037 §11)", () => {
     const parsed = JSON.parse(out);
     expect(parsed.channels).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
     expect(parsed.users).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
+    expect(parsed.teams).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
     expect(parsed.tokenlessWorkspaces).toEqual([]);
     expect(parsed.orphanTeamIds).toBe(0);
   });

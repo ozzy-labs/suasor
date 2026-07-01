@@ -34,6 +34,7 @@ import {
 } from "../slack.ts";
 import { type ResolvedChannel, resolveChannel } from "./channel.ts";
 import { resolveUserName, type SlackUsersTransport } from "./resolve.ts";
+import { resolveTeamName } from "./team.ts";
 
 /** Injected side-effecting dependencies, so the whole path is network-free in tests. */
 export interface BackfillDeps {
@@ -71,6 +72,8 @@ export interface NameCounts {
 export interface BackfillSummary {
   channels: NameCounts;
   users: NameCounts;
+  /** Team ids re-resolved to workspace names (ADR-0037 §10, Issue #361). */
+  teams: NameCounts;
   /** In-scope workspace aliases that had no token (skipped entirely, ADR-0014). */
   tokenlessWorkspaces: string[];
   /** Distinct ids whose `meta.team` matches no configured workspace (can't resolve). */
@@ -114,6 +117,15 @@ function userHasName(store: Store, handle: string): boolean {
         "SELECT 1 FROM person_identities WHERE identity_key = ? AND display_name <> '' LIMIT 1",
       )
       .get(identityKey("slack", handle)) !== null
+  );
+}
+
+/** Whether a Slack team already carries a resolved (non-empty) name in the projection. */
+function teamHasName(store: Store, teamId: string): boolean {
+  return (
+    store.connection.sqlite
+      .query("SELECT 1 FROM slack_teams WHERE team_id = ? AND name <> '' LIMIT 1")
+      .get(teamId) !== null
   );
 }
 
@@ -164,6 +176,7 @@ export async function backfillSlackNames(
   const summary: BackfillSummary = {
     channels: { resolved: 0, skipped: 0, degraded: 0 },
     users: { resolved: 0, skipped: 0, degraded: 0 },
+    teams: { resolved: 0, skipped: 0, degraded: 0 },
     tokenlessWorkspaces: [],
     orphanTeamIds: 0,
   };
@@ -201,6 +214,28 @@ export async function backfillSlackNames(
     // cross-resolve between workspaces.
     const userCache = new Map<string, string | null>();
     const channelCache = new Map<string, ResolvedChannel>();
+    const teamCache = new Map<string, string | null>();
+
+    // Team name (ADR-0037 §10, Issue #361): re-resolve this workspace's team id →
+    // workspace name, unless it already carries a resolved name (idempotent, §7;
+    // --force re-resolves). Always emit so a degrade still records the id (id
+    // fallback at display, §6). last-write-wins keeps a prior name from a degrade.
+    if (!options.force && teamHasName(store, team)) {
+      summary.teams.skipped += 1;
+    } else {
+      options.onProgress?.();
+      const teamName = await resolveTeamName(client, team, teamCache);
+      store.record(
+        {
+          type: "SlackTeamObserved",
+          teamId: team,
+          ...(teamName ? { displayName: teamName } : {}),
+        },
+        now(),
+      );
+      if (teamName) summary.teams.resolved += 1;
+      else summary.teams.degraded += 1;
+    }
 
     for (const channelId of channelIds ?? []) {
       if (!options.force && channelHasName(store, channelId)) {

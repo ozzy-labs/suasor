@@ -76,6 +76,25 @@ function userName(handle: string): string {
   return row?.n ?? "";
 }
 
+/** Read a resolved team name from the slack_teams projection ("" when absent). */
+function teamName(teamId: string): string {
+  const row = store.connection.sqlite
+    .query("SELECT name FROM slack_teams WHERE team_id = ?")
+    .get(teamId) as { name: string } | null;
+  return row?.name ?? "";
+}
+
+/** A Slack client that resolves team names from auth.test (single workspace). */
+function fakeTeamClient(name: string): SlackClientLike {
+  return {
+    conversations: {
+      history: async () => ({ messages: [] }),
+      replies: async () => ({ messages: [] }),
+    },
+    authTest: async () => ({ ok: true, team: name }),
+  };
+}
+
 /** A single-workspace config (team `T1`, default alias). */
 function defaultConfig(overrides: Partial<SlackConnectorConfig> = {}): SlackConnectorConfig {
   return SlackConfigSchema.parse({ team: "T1", channels: [], ...overrides });
@@ -296,7 +315,93 @@ describe("backfillSlackNames (ADR-0037 §11)", () => {
     });
     expect(summary.channels).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
     expect(summary.users).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
+    expect(summary.teams).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
     expect(summary.tokenlessWorkspaces).toEqual([]);
     expect(summary.orphanTeamIds).toBe(0);
+  });
+});
+
+describe("backfillSlackNames — team names (ADR-0037 §10, Issue #361)", () => {
+  test("resolves a workspace's team name into the projection", async () => {
+    seedSource("slack:T1:C1:1", { team: "T1", channel: "C1" });
+    const summary = await backfillSlackNames(store, defaultConfig(), {
+      clientFactory: async () => fakeTeamClient("Acme"),
+      usersTransport: fakeUsers({}),
+      secret: async () => "tok",
+    });
+    expect(teamName("T1")).toBe("Acme");
+    expect(summary.teams).toEqual({ resolved: 1, skipped: 0, degraded: 0 });
+  });
+
+  test("skips a team that already carries a resolved name (idempotent, §7)", async () => {
+    seedSource("slack:T1:C1:1", { team: "T1", channel: "C1" });
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Acme" });
+    let authCalls = 0;
+    const summary = await backfillSlackNames(store, defaultConfig(), {
+      clientFactory: async () => ({
+        conversations: {
+          history: async () => ({ messages: [] }),
+          replies: async () => ({ messages: [] }),
+        },
+        authTest: async () => {
+          authCalls += 1;
+          return { ok: true, team: "Renamed" };
+        },
+      }),
+      usersTransport: fakeUsers({}),
+      secret: async () => "tok",
+    });
+    expect(authCalls).toBe(0); // never reached the network for a named team
+    expect(teamName("T1")).toBe("Acme"); // unchanged
+    expect(summary.teams).toEqual({ resolved: 0, skipped: 1, degraded: 0 });
+  });
+
+  test("--force re-resolves an already-named team (last-write-wins)", async () => {
+    seedSource("slack:T1:C1:1", { team: "T1", channel: "C1" });
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Old" });
+    const summary = await backfillSlackNames(
+      store,
+      defaultConfig(),
+      {
+        clientFactory: async () => fakeTeamClient("New"),
+        usersTransport: fakeUsers({}),
+        secret: async () => "tok",
+      },
+      { force: true },
+    );
+    expect(teamName("T1")).toBe("New");
+    expect(summary.teams).toEqual({ resolved: 1, skipped: 0, degraded: 0 });
+  });
+
+  test("degrades (no resolver) recording the id with an empty name (§6)", async () => {
+    seedSource("slack:T1:C1:1", { team: "T1", channel: "C1" });
+    const summary = await backfillSlackNames(store, defaultConfig(), {
+      // A client without authTest/authTeamsList → team name degrades to empty.
+      clientFactory: async () => fakeClient({ info: { C1: { name: "general" } } }),
+      usersTransport: fakeUsers({}),
+      secret: async () => "tok",
+    });
+    expect(teamName("T1")).toBe(""); // id-only fallback
+    expect(summary.teams).toEqual({ resolved: 0, skipped: 0, degraded: 1 });
+  });
+
+  test("resolves each workspace's team with its own token (no cross-resolution, ADR-0014)", async () => {
+    seedSource("slack:T1:C1:1", { team: "T1", channel: "C1" });
+    seedSource("slack:T2:C9:1", { team: "T2", channel: "C9" });
+    const config = SlackConfigSchema.parse({
+      workspaces: {
+        default: { team: "T1", channels: ["C1"] },
+        acme: { team: "T2", channels: ["C9"] },
+      },
+    });
+    const summary = await backfillSlackNames(store, config, {
+      clientFactory: async (token) =>
+        token === "tok-default" ? fakeTeamClient("Default WS") : fakeTeamClient("Acme WS"),
+      usersTransport: fakeUsers({}),
+      secret: async (name) => (name === "default:token" ? "tok-default" : "tok-acme"),
+    });
+    expect(teamName("T1")).toBe("Default WS");
+    expect(teamName("T2")).toBe("Acme WS");
+    expect(summary.teams.resolved).toBe(2);
   });
 });

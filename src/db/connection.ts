@@ -179,6 +179,14 @@ export function initSchema(sqlite: Database): void {
       kind        TEXT NOT NULL,
       observed_at TEXT NOT NULL
     );
+    -- Slack team / workspace name projection (ADR-0037 §3/§10, Issue #361): one
+    -- row per observed T… id, name-resolved at sync so display joins ids → names
+    -- locally (no-fetch-at-query, ADR-0012). Folded from SlackTeamObserved (LWW).
+    CREATE TABLE IF NOT EXISTS slack_teams (
+      team_id     TEXT PRIMARY KEY,
+      name        TEXT NOT NULL DEFAULT '',
+      observed_at TEXT NOT NULL
+    );
     -- Document-extraction provenance sidecar (ADR-0024). Derived substrate (not
     -- events, ADR-0002): records which extractor version produced a source's
     -- extracted body, so a later extractor upgrade (version bump) or a newly

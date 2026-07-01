@@ -29,6 +29,7 @@ const PROJECTION_TABLES = [
   "persons",
   "person_identities",
   "slack_channels",
+  "slack_teams",
 ] as const;
 
 /** Per-projection-table row count. */

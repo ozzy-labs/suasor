@@ -1002,3 +1002,58 @@ describe("Slack connector — channel name resolution (ADR-0037 §3)", () => {
     expect((records[0]?.meta as { channelName?: string }).channelName).toBeUndefined();
   });
 });
+
+describe("Slack connector — team name resolution (ADR-0037 §10, Issue #361)", () => {
+  test("stashes resolved teamName into meta from auth.test (single workspace)", async () => {
+    const client: SlackClientLike = {
+      conversations: {
+        async history() {
+          return { messages: [{ ts: "1700000000.000100", text: "hi", user: "U1" }] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTest: async () => ({ ok: true, team: "Acme", team_id: "T1" }),
+    };
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.meta).toMatchObject({ team: "T1", teamName: "Acme" });
+  });
+
+  test("resolves teamName from auth.teams.list enumeration (Enterprise Grid)", async () => {
+    const client: SlackClientLike = {
+      conversations: {
+        async history() {
+          return { messages: [{ ts: "1700000000.000100", text: "hi" }] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTeamsList: async () => ({ ok: true, teams: [{ id: "T1", name: "Acme Grid" }] }),
+    };
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.meta).toMatchObject({ team: "T1", teamName: "Acme Grid" });
+  });
+
+  test("degrades to no meta.teamName when the client cannot resolve (no network)", async () => {
+    // The existing message-only fake has neither authTest nor authTeamsList:
+    // resolution must not reach the network — no teamName stashed.
+    const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.meta).toMatchObject({ team: "T1" });
+    expect((records[0]?.meta as { teamName?: string }).teamName).toBeUndefined();
+  });
+});

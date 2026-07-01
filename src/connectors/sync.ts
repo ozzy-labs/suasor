@@ -31,6 +31,7 @@ import { authorFromMeta } from "./author.ts";
 import { channelFromMeta } from "./channel.ts";
 import type { Connector, SourceRecord, SyncContext } from "./contract.ts";
 import { makeSecretResolver, type SecretStoreOptions } from "./secrets.ts";
+import { teamFromMeta } from "./team.ts";
 
 /** Per-run counters returned to the caller (CLI prints them; MCP returns them). */
 export interface SyncOutcome {
@@ -321,6 +322,9 @@ async function runSyncPass(
   // record per message, so dedup by channel id to emit SlackChannelObserved at
   // most once per channel per run (the reducer is last-write-wins regardless).
   const seenChannels = new Set<string>();
+  // Teams already recorded this run (ADR-0037 §10, Issue #361): same dedup as
+  // channels — emit SlackTeamObserved at most once per team id per run.
+  const seenTeams = new Set<string>();
 
   for await (const record of connector.sync(ctx)) {
     const fingerprint = record.fingerprint ?? (await sha256Hex(record.body));
@@ -366,6 +370,25 @@ async function runSyncPass(
             teamId: channel.teamId,
             kind: channel.kind,
             ...(channel.displayName ? { displayName: channel.displayName } : {}),
+          },
+          now(),
+        );
+      }
+
+      // Resolve the team this record belongs to → slack_teams projection
+      // (ADR-0037 §10, Issue #361). The connector stashes the sync-time-resolved
+      // team name into meta; here we fold it into a SlackTeamObserved once per
+      // team per run. Best-effort: a record with no team concept (or a degrade
+      // missing the name) yields null / an absent name → the reducer keeps the
+      // prior resolved name (last-write-wins with a non-empty guard, §6/§7).
+      const team = teamFromMeta(connector.name, record.meta);
+      if (team !== null && !seenTeams.has(team.teamId)) {
+        seenTeams.add(team.teamId);
+        store.record(
+          {
+            type: "SlackTeamObserved",
+            teamId: team.teamId,
+            ...(team.displayName ? { displayName: team.displayName } : {}),
           },
           now(),
         );
