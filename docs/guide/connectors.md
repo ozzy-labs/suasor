@@ -243,6 +243,7 @@ suasor slack sync                      # （= <connector> sync）取り込み
   - `suasor slack cursor reset --channel C1,C2 | --all [--workspace A] [--yes]` — cursor を消し、次回 sync で `since` floor から取り直す（`--yes` 無しは preview のみ）
   - `suasor slack cursor backfill --channel C1 --since 180d [--workspace A] [--yes]` — 指定 channel の cursor を `--since` floor（現在位置より過去）へ下げ、次回 sync で未取得 window を取り直す（floor より古い backfill 用、#57）
   - `since` は per-channel 上書きも可（`[connectors.slack.channel_since]`、#57）
+  - `suasor slack resolve-names [--workspace A] [--force] [--json]` — 既に取り込み済みの `slack_message` source を走査し、名前が未解決のままの channel / user id を `conversations.info` / `users.info` で遡及解決して projection を enrich する（前方 sync は新規取り込み分しか名前を付けないため、[ADR-0037](../adr/0037-slack-name-enrichment.md) §11）。冪等（既に名前がある id は skip、`--force` で再解決）。scope 不足 / API エラーの id は skip して継続し、解決 / skip / degrade 件数を要約出力する。これにより `slack status` / `cursor` / `slack.demand.list` が id ではなく人間可読名で会話を提示できる
 
 ## Microsoft Graph（`ms-graph`）
 

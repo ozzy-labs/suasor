@@ -740,6 +740,149 @@ export class SlackCursorBackfillCommand extends Command {
 }
 
 /**
+ * `slack resolve-names` — backfill human names for already-ingested Slack
+ * sources (ADR-0037 §11/§12). Forward sync only enriches messages it newly
+ * ingests, so ids ingested before name resolution existed stay `C…`/`U…`-only.
+ * This verb walks the local `slack_message` sources, and re-resolves the channel
+ * / user ids whose name is still missing via the same resolvers the sync path
+ * uses — appending `SlackChannelObserved` / `PersonIdentityObserved` so the
+ * projections enrich last-write-wins. Read-of-Slack only (ADR-0003); no egress.
+ */
+export class SlackResolveNamesCommand extends Command {
+  static override paths = [[SLACK, "resolve-names"]];
+
+  static override usage = Command.Usage({
+    category: "Slack",
+    description: "Backfill human names for already-ingested Slack channels / users (ADR-0037).",
+    details: `
+      Forward 'slack sync' only names messages it newly ingests; sources ingested
+      before name resolution existed stay id-only (C…/U…). This verb scans the
+      local slack_message sources, collects the distinct channel + user ids per
+      workspace, and re-resolves the ones whose name is still missing via
+      users.info / conversations.info — the same path sync uses — enriching the
+      slack_channels + person projections (ADR-0037 §11). Idempotent: already-named
+      ids are skipped (pass --force to re-resolve). A scope-less / erroring id is
+      degraded (counted, id fallback kept) so it never aborts the pass (§6).
+    `,
+    examples: [
+      ["Backfill every workspace", "suasor slack resolve-names"],
+      ["Backfill one workspace", "suasor slack resolve-names --workspace acme"],
+      ["Re-resolve even named ids", "suasor slack resolve-names --force"],
+    ],
+  });
+
+  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  force = Option.Boolean("--force", false, {
+    description: "Re-resolve ids that already carry a resolved name (default: skip them).",
+  });
+  json = Option.Boolean("--json", false, { description: "Emit the summary as JSON." });
+  noProgress = Option.Boolean("--no-progress", false, {
+    description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
+  });
+
+  override async execute(): Promise<number> {
+    const [{ loadConfig }, { Store }] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+    ]);
+    const config = await loadConfig();
+    const dbPath = config.storage.dbPath;
+    if (dbPath === null) {
+      this.context.stderr.write("error: storage.dbPath is not configured\n");
+      return 1;
+    }
+
+    const [
+      { backfillSlackNames },
+      { SlackConnectorConfig, defaultSlackClientFactory },
+      { defaultUsersTransport },
+      { makeSecretResolver },
+      { createProgress },
+    ] = await Promise.all([
+      import("../../connectors/slack/backfill.ts"),
+      import("../../connectors/slack.ts"),
+      import("../../connectors/slack/resolve.ts"),
+      import("../../connectors/secrets.ts"),
+      import("../progress.ts"),
+    ]);
+
+    let slackConfig: ReturnType<typeof SlackConnectorConfig.parse>;
+    try {
+      slackConfig = SlackConnectorConfig.parse(config.connectors[SLACK] ?? {});
+    } catch (cause) {
+      this.context.stderr.write(
+        `error: invalid Slack connector config: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+      return 1;
+    }
+
+    // TTY-gated progress on stderr while resolution round-trips run, so a
+    // multi-second sweep is not silent; suppressed by --no-progress / --json.
+    const progress = createProgress(
+      this.context.stderr,
+      "slack resolve-names",
+      this.noProgress ? false : undefined,
+    );
+
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    let summary: Awaited<ReturnType<typeof backfillSlackNames>>;
+    try {
+      summary = await backfillSlackNames(
+        store,
+        slackConfig,
+        {
+          clientFactory: defaultSlackClientFactory,
+          usersTransport: defaultUsersTransport,
+          secret: makeSecretResolver(SLACK),
+        },
+        {
+          ...(this.workspace ? { workspace: this.workspace } : {}),
+          force: this.force,
+          onProgress: () => progress.tick(),
+        },
+      );
+    } catch (cause) {
+      progress.finish();
+      this.context.stderr.write(
+        `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+      return 1;
+    } finally {
+      store.close();
+    }
+    progress.finish();
+
+    if (this.json) {
+      this.context.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      return 0;
+    }
+
+    const { channels, users } = summary;
+    this.context.stdout.write(
+      `channels: ${channels.resolved} resolved, ${channels.skipped} already named, ` +
+        `${channels.degraded} unresolved (scope/API)\n`,
+    );
+    this.context.stdout.write(
+      `users:    ${users.resolved} resolved, ${users.skipped} already named, ` +
+        `${users.degraded} unresolved (scope/API)\n`,
+    );
+    if (summary.tokenlessWorkspaces.length > 0) {
+      this.context.stderr.write(
+        `warning: skipped workspace(s) with no token: ${summary.tokenlessWorkspaces.join(", ")} ` +
+          "(run `suasor slack auth set [--workspace <alias>]`)\n",
+      );
+    }
+    if (summary.orphanTeamIds > 0) {
+      this.context.stderr.write(
+        `note: ${summary.orphanTeamIds} id(s) belong to a team no configured workspace claims — ` +
+          "left id-only (add the workspace to config to resolve them)\n",
+      );
+    }
+    return 0;
+  }
+}
+
+/**
  * Load the saved Slack cursor as an alias → channel → ts map, or `null` on a
  * config error (after writing the error to stderr). Shared by `slack status`,
  * `slack cursor reset`, and `slack cursor backfill`.
