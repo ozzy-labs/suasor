@@ -15,6 +15,8 @@ let dir: string;
 const SECRET_ENVS = [
   "SUASOR_CONNECTOR_GITHUB_TOKEN",
   "SUASOR_CONNECTOR_SLACK_TOKEN",
+  "SUASOR_CONNECTOR_SLACK_ACME_TOKEN",
+  "SUASOR_CONNECTOR_SLACK_BP_TOKEN",
   "SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET",
   "SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN",
   "SUASOR_CONNECTOR_BOX_TOKEN",
@@ -423,5 +425,100 @@ describe("suasor doctor", () => {
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.some((c) => c.name === "slack")).toBe(false);
+  });
+
+  // Issue #371 theme 2: the connector-credential check only probes the static
+  // primary secret (connector:slack:token), so a multi-workspace config whose
+  // per-alias token is missing would otherwise read as "ok" and then silently
+  // skip that workspace at sync time. doctor probes each named workspace token.
+  test("multi-workspace slack: a missing per-workspace token is a warning (#371)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.slack.workspaces.acme]",
+        'team = "T_ACME"',
+        'channels = ["C1"]',
+        "",
+        "[connectors.slack.workspaces.bp]",
+        'team = "T_BP"',
+        'channels = ["C2"]',
+      ].join("\n"),
+    );
+    // Only acme has a token; bp is missing → bp warns, acme does not.
+    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxb-acme";
+    const { code, out } = await run(["doctor", "--json"]);
+    // Missing per-workspace token is a warning, not an error → still exits 0.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const tokenWarns = report.checks.filter((c) => c.name === "slack.token");
+    expect(tokenWarns).toHaveLength(1);
+    expect(tokenWarns[0]?.status).toBe("warn");
+    expect(tokenWarns[0]?.detail).toContain("bp");
+    expect(tokenWarns[0]?.detail).toContain("skipped: no token");
+    // The recovery command names the specific alias.
+    expect(tokenWarns[0]?.detail).toContain("slack auth set --workspace bp");
+    // The alias whose token is present is not flagged, and the value is never printed.
+    expect(tokenWarns.some((c) => c.detail.includes("'acme'"))).toBe(false);
+    expect(out).not.toContain("xoxb-acme");
+  });
+
+  test("multi-workspace slack: all per-workspace tokens set emits no token warning (#371)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.slack.workspaces.acme]",
+        'team = "T_ACME"',
+        'channels = ["C1"]',
+        "",
+        "[connectors.slack.workspaces.bp]",
+        'team = "T_BP"',
+        'channels = ["C2"]',
+      ].join("\n"),
+    );
+    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxb-acme";
+    process.env.SUASOR_CONNECTOR_SLACK_BP_TOKEN = "xoxb-bp";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack.token")).toBe(false);
+  });
+
+  test("multi-workspace slack: a missing self_user_id is an info hint (#371)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.slack.workspaces.acme]",
+        'team = "T_ACME"',
+        'channels = ["C1"]',
+        'self_user_id = "U_ACME"',
+        "",
+        "[connectors.slack.workspaces.bp]",
+        'team = "T_BP"',
+        'channels = ["C2"]',
+      ].join("\n"),
+    );
+    const { code, out } = await run(["doctor", "--json"]);
+    // self_user_id degrade is info, not error/warn → exits 0.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const demand = report.checks.filter((c) => c.name === "slack.demand");
+    // Only bp lacks self_user_id.
+    expect(demand).toHaveLength(1);
+    expect(demand[0]?.status).toBe("info");
+    expect(demand[0]?.detail).toContain("bp");
+    expect(demand[0]?.detail).toContain("DM-only");
+    expect(demand[0]?.detail).toContain("slack auth test --workspace bp");
+    expect(demand.some((c) => c.detail.includes("'acme'"))).toBe(false);
+  });
+
+  test("flat single-workspace slack config emits no per-workspace token/identity checks (#371)", async () => {
+    await run(["init"]);
+    // Flat config with no token and no self_user_id: the connector-credential
+    // check covers the default token, so the multi-workspace probes stay silent
+    // (no regression to the flat/single-workspace path).
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack.token")).toBe(false);
+    expect(report.checks.some((c) => c.name === "slack.demand")).toBe(false);
   });
 });
