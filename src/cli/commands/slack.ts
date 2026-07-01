@@ -621,7 +621,9 @@ export class SlackConversationsCommand extends Command {
    * `slack conversations --new` — surface only the config drift (ADR-0039 Layer
    * 1). Sweeps the token's visible conversations (default public+private), diffs
    * against the workspace's configured `channels`, and prints the member
-   * conversations not yet configured (paste-ready via {@link renderConfigBlock})
+   * conversations not yet configured (paste-ready: a flat `[connectors.slack]`
+   * block, or a `[connectors.slack.workspaces.<alias>]` sub-section when config is
+   * multi-workspace, so the fragment matches the section sync actually ingests)
    * plus a warn for configured channels the token can no longer reach. `--new
    * --json` emits `{ new, removed }`; the full-listing `--json` shape is untouched.
    * Single-workspace scoped: no Enterprise Grid auto-enumeration / engagement sort.
@@ -632,12 +634,15 @@ export class SlackConversationsCommand extends Command {
     requestedTypes: ConversationType[] | undefined,
     limit: number | undefined,
   ): Promise<number> {
-    const [{ testToken }, { listConversations, renderConfigBlock, diffConversations }, config] =
-      await Promise.all([
-        import("../../connectors/slack/auth.ts"),
-        import("../../connectors/slack/conversations.ts"),
-        loadResolvedSlackConfig(),
-      ]);
+    const [
+      { testToken },
+      { listConversations, renderConfigBlock, renderWorkspacesConfigBlock, diffConversations },
+      config,
+    ] = await Promise.all([
+      import("../../connectors/slack/auth.ts"),
+      import("../../connectors/slack/conversations.ts"),
+      loadResolvedSlackConfig(),
+    ]);
 
     if (config.error) {
       this.context.stderr.write(`error: ${config.error}\n`);
@@ -691,13 +696,21 @@ export class SlackConversationsCommand extends Command {
           this.context.stdout.write(`${formatConversationRow(c)}\n`);
         }
         this.context.stdout.write("\n");
-        // Paste-ready fragment for the *new* channels only (renderConfigBlock
-        // reuse, ADR-0039 §2). Shared-channel owner placement is a multi-workspace
-        // concern; --new is single-workspace scoped, so the flat block applies.
-        for (const line of renderConfigBlock(teamId, {
-          conversations: diff.added,
-          missingScopes: result.missingScopes,
-        })) {
+        // Paste-ready fragment for the *new* channels only (ADR-0039 §2). The
+        // TOML section must match the config shape sync ingests: a named
+        // `[connectors.slack.workspaces.<alias>]` config discards the flat
+        // `channels` (resolveWorkspaces), so a flat block pasted there is silently
+        // ignored — render the workspace sub-section for the resolved alias
+        // instead. --new is single-workspace scoped, so there is no cross-workspace
+        // shared-channel de-dup to apply.
+        const configLines =
+          config.multi && alias !== undefined
+            ? renderWorkspacesConfigBlock([{ teamId, alias, conversations: diff.added }])
+            : renderConfigBlock(teamId, {
+                conversations: diff.added,
+                missingScopes: result.missingScopes,
+              });
+        for (const line of configLines) {
           this.context.stdout.write(`${line}\n`);
         }
         this.context.stderr.write(
@@ -1246,6 +1259,14 @@ interface SlackWorkspaceChannels {
  */
 async function loadResolvedSlackConfig(): Promise<{
   workspaces: SlackWorkspaceChannels[];
+  /**
+   * `true` when config uses the named `[connectors.slack.workspaces.<alias>]`
+   * shape. `resolveWorkspaces` then ingests **only** those sub-sections and
+   * discards the flat `channels`, so `--new` must render a
+   * `[connectors.slack.workspaces.<alias>]` fragment (not a flat block sync would
+   * silently ignore).
+   */
+  multi: boolean;
   error?: string;
 }> {
   const [{ loadConfig }, { SlackConnectorConfig, resolveWorkspaces }] = await Promise.all([
@@ -1254,11 +1275,14 @@ async function loadResolvedSlackConfig(): Promise<{
   ]);
   const config = await loadConfig();
   try {
-    const resolved = resolveWorkspaces(SlackConnectorConfig.parse(config.connectors[SLACK] ?? {}));
-    return { workspaces: resolved.map((w) => ({ alias: w.alias, channels: w.channels })) };
+    const parsed = SlackConnectorConfig.parse(config.connectors[SLACK] ?? {});
+    const resolved = resolveWorkspaces(parsed);
+    const multi = parsed.workspaces !== undefined && Object.keys(parsed.workspaces).length > 0;
+    return { workspaces: resolved.map((w) => ({ alias: w.alias, channels: w.channels })), multi };
   } catch (cause) {
     return {
       workspaces: [],
+      multi: false,
       error: `invalid Slack connector config: ${cause instanceof Error ? cause.message : String(cause)}`,
     };
   }
