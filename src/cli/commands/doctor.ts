@@ -57,6 +57,11 @@ export class DoctorCommand extends Command {
       Also warns when the same Slack channel id is listed under multiple
       workspace aliases: sync de-duplicates it (owner-wins, ADR-0038) but the
       redundant declaration is surfaced here so you can spot it without a sync.
+      For a multi-workspace Slack config
+      ([connectors.slack.workspaces.<alias>]), each named workspace's token
+      (connector:slack:<alias>:token) is probed — a missing per-workspace token
+      is a warning (sync skips that workspace, ADR-0014) and a missing
+      self_user_id is info (slack.demand.list degrades to DM-only, ADR-0012).
       Read-only (never creates a database; secret values are never printed,
       NFR-PRV-4). Exits 1 when any check is an error, so cron / CI can gate on it.
       Use --json for machine-readable output.
@@ -326,7 +331,8 @@ export class DoctorCommand extends Command {
         [import("../../connectors/slack.ts"), import("../../connectors/slack/dedup.ts")],
       );
       const slack = SlackConnectorConfig.parse(config.connectors.slack);
-      const { shared } = channelOwnership(resolveWorkspaces(slack));
+      const workspaces = resolveWorkspaces(slack);
+      const { shared } = channelOwnership(workspaces);
       for (const s of shared) {
         checks.push({
           name: "slack",
@@ -335,6 +341,48 @@ export class DoctorCommand extends Command {
             `channel ${s.channel} configured under [${s.aliases.join(", ")}]; ` +
             `only owner '${s.owner}' will ingest it (shared-channel de-dup, ADR-0038)`,
         });
+      }
+
+      // 5c. per-workspace slack credential / identity — the connector-credential
+      //    check above only probes the static primary secret (`connector:slack:token`,
+      //    the flat/default workspace), so a multi-workspace config
+      //    (`[connectors.slack.workspaces.<alias>]`) whose per-alias token
+      //    (`connector:slack:<alias>:token`) is missing reads as "ok" there and
+      //    then silently drops that workspace at sync time
+      //    (`workspace '<alias>' skipped: no token`, Issue #371). Surface each
+      //    named workspace's token presence (warn — sync skips it) and its
+      //    `self_user_id` presence (info — `slack.demand.list` degrades to DM-only
+      //    without it, ADR-0012). Only named workspaces are probed: the flat/default
+      //    workspace's `token` is already covered by the connector-credential check,
+      //    so the flat/single-workspace path is unchanged. Warn/info only — never
+      //    error (exit code unchanged, matching the shared-channel check above).
+      //    Presence only, never the value (NFR-PRV-4).
+      const isMultiWorkspace =
+        slack.workspaces !== undefined && Object.keys(slack.workspaces).length > 0;
+      if (isMultiWorkspace) {
+        for (const ws of workspaces) {
+          if ((await resolveSecret("slack", ws.secretName)) === null) {
+            checks.push({
+              name: "slack.token",
+              status: "warn",
+              detail:
+                `workspace '${ws.alias}' has no token (connector:slack:${ws.secretName}); ` +
+                `sync skips it (\`workspace '${ws.alias}' skipped: no token\`). ` +
+                `Run \`suasor slack auth set --workspace ${ws.alias}\`.`,
+            });
+          }
+          if (ws.selfUserId === undefined) {
+            checks.push({
+              name: "slack.demand",
+              status: "info",
+              detail:
+                `workspace '${ws.alias}' has no self_user_id; \`slack.demand.list\` degrades to ` +
+                `DM-only (no \`<@you>\` mentions, ADR-0012). Run ` +
+                `\`suasor slack auth test --workspace ${ws.alias} --json\` and copy the ` +
+                `\`userId\` into [connectors.slack.workspaces.${ws.alias}].self_user_id.`,
+            });
+          }
+        }
       }
     }
 
