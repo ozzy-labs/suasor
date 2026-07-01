@@ -581,7 +581,18 @@ class SlackConnector implements Connector {
    * build the end-of-run summary line and decide the partial-failure flag
    * (ADR-0014 / #166). Reset at the start of each `sync`.
    */
-  private workspaceStatus: { alias: string; status: WorkspaceStatus }[] = [];
+  private workspaceStatus: {
+    alias: string;
+    /** Team id (Txxxx) this workspace targets, for summary identity (#371). */
+    team: string;
+    /**
+     * Workspace name resolved this run (ADR-0037/#361), when available. Absent
+     * for skipped workspaces (no token → no resolution) and for failures that
+     * abort before resolution; the summary then falls back to the team id.
+     */
+    teamName?: string;
+    status: WorkspaceStatus;
+  }[] = [];
 
   constructor(
     private readonly config: SlackConnectorConfig,
@@ -644,11 +655,15 @@ class SlackConnector implements Connector {
             : `\`suasor slack auth set --workspace ${ws.alias}\``;
         ctx.onWarn?.(`workspace '${ws.alias}' skipped: no token (run ${hint})`);
         if (previous[ws.alias]) this.cursors[ws.alias] = { ...previous[ws.alias] };
-        this.workspaceStatus.push({ alias: ws.alias, status: "skipped" });
+        this.workspaceStatus.push({ alias: ws.alias, team: ws.team, status: "skipped" });
         continue;
       }
       resolvedCount += 1;
       const prevChannels = previous[ws.alias] ?? {};
+      // Hoisted so the summary carries the workspace name even when a later
+      // fetch fails (the catch below runs outside the try scope). Reset each
+      // workspace; stays undefined if resolution degrades or never runs.
+      let teamName: string | undefined;
 
       try {
         const client = await this.clientFactory(token);
@@ -667,7 +682,7 @@ class SlackConnector implements Connector {
         // undefined → the display layer falls back to the team id. Stashed into
         // `meta.teamName` so `teamFromMeta` folds a SlackTeamObserved per team.
         const teamCache = new Map<string, string | null>();
-        const teamName = (await resolveTeamName(client, ws.team, teamCache)) ?? undefined;
+        teamName = (await resolveTeamName(client, ws.team, teamCache)) ?? undefined;
         // Channels this run could not reach (not_in_channel / channel_not_found /
         // is_archived): collected per channel and surfaced as one aggregated warn
         // so READY-but-unjoined channels are no longer silently empty (ADR-0011).
@@ -746,7 +761,12 @@ class SlackConnector implements Connector {
           }
         }
         this.cursors[ws.alias] = aliasCursors;
-        this.workspaceStatus.push({ alias: ws.alias, status: "ok" });
+        this.workspaceStatus.push({
+          alias: ws.alias,
+          team: ws.team,
+          ...(teamName ? { teamName } : {}),
+          status: "ok",
+        });
 
         // One aggregated warn naming every unreachable channel (which, and why),
         // so the operator sees the membership gap instead of a silent empty sync.
@@ -773,7 +793,12 @@ class SlackConnector implements Connector {
           if (prevChannels[channel]) preserved[channel] = prevChannels[channel];
         }
         if (Object.keys(preserved).length > 0) this.cursors[ws.alias] = preserved;
-        this.workspaceStatus.push({ alias: ws.alias, status: "failed" });
+        this.workspaceStatus.push({
+          alias: ws.alias,
+          team: ws.team,
+          ...(teamName ? { teamName } : {}),
+          status: "failed",
+        });
       }
     }
 
@@ -848,13 +873,26 @@ class SlackConnector implements Connector {
     if (this.workspaceStatus.length === 0) return { cursor };
 
     // One summary line naming each workspace's outcome (ADR-0014 / #166), e.g.
-    // `slack: acme=ok, beta=failed (cursor preserved), gamma=skipped (no token)`.
-    // A failed workspace's prior cursor is preserved (the failure is not a
-    // reset) — annotate it so an operator reads the recovery state inline.
-    const parts = this.workspaceStatus.map(({ alias, status }) => {
-      if (status === "failed") return `${alias}=failed (cursor preserved)`;
-      if (status === "skipped") return `${alias}=skipped (no token)`;
-      return `${alias}=ok`;
+    // `workspaces: acme (TA "Acme")=ok, beta (TB)=failed (cursor preserved),
+    // gamma (TG)=skipped (no token)`. A failed workspace's prior cursor is
+    // preserved (the failure is not a reset) — annotate it so an operator reads
+    // the recovery state inline.
+    //
+    // Named workspaces annotate their team id and, when resolved this run
+    // (ADR-0037/#361), the workspace name so many workspaces are told apart
+    // (#371). Degrade is silent: name → team id → alias only. The flat/default
+    // single workspace keeps its bare `default` label (no ambiguity to resolve,
+    // and `team` is a synthetic placeholder there) — no summary regression.
+    const identify = (ws: { alias: string; team: string; teamName?: string }): string => {
+      if (ws.alias === DEFAULT_WORKSPACE_ALIAS || !ws.team) return ws.alias;
+      const ident = ws.teamName ? `${ws.team} "${ws.teamName}"` : ws.team;
+      return `${ws.alias} (${ident})`;
+    };
+    const parts = this.workspaceStatus.map((ws) => {
+      const label = identify(ws);
+      if (ws.status === "failed") return `${label}=failed (cursor preserved)`;
+      if (ws.status === "skipped") return `${label}=skipped (no token)`;
+      return `${label}=ok`;
     });
     const summaryLines = [`workspaces: ${parts.join(", ")}`];
 

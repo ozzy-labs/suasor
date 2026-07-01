@@ -534,8 +534,10 @@ describe("Slack connector — per-workspace summary + partial-failure flag (ADR-
     );
     const result = await connector.finalize?.();
     expect(result?.partialFailure).toBe(true);
+    // team id is annotated for each named workspace (#371); teamName is absent
+    // here (the fake has no auth.test → resolution degrades to id-only).
     expect(result?.summaryLines).toEqual([
-      "workspaces: acme=ok, beta=failed (cursor preserved), gamma=skipped (no token)",
+      "workspaces: acme (TA)=ok, beta (TB)=failed (cursor preserved), gamma (TG)=skipped (no token)",
     ]);
   });
 
@@ -552,7 +554,42 @@ describe("Slack connector — per-workspace summary + partial-failure flag (ADR-
     await collect(connector.sync(ctx({ secret: async () => "tok", onWarn: () => {} })));
     const result = await connector.finalize?.();
     expect(result?.partialFailure).toBe(false);
-    expect(result?.summaryLines).toEqual(["workspaces: acme=ok, beta=ok"]);
+    expect(result?.summaryLines).toEqual(["workspaces: acme (TA)=ok, beta (TB)=ok"]);
+  });
+
+  test("summary annotates the resolved workspace name when available (#371)", async () => {
+    // A workspace whose name resolves this run is shown as `alias (id "Name")`;
+    // one that can't resolve degrades to `alias (id)` — same summary line.
+    const named = (teamName: string): SlackClientLike => ({
+      conversations: {
+        async history() {
+          return { messages: [{ ts: "50.000000" }] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTest: async () => ({ ok: true, team: teamName, team_id: "ignored" }),
+    });
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] }, // name resolves
+          beta: { team: "TB", channels: ["C2"] }, // no auth.test → id only
+        },
+      },
+      { clientFactory: (t) => (t === "tok-a" ? named("Acme") : okClient()) },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (n) => (n === "acme:token" ? "tok-a" : "tok-b"),
+          onWarn: () => {},
+        }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    expect(result?.summaryLines).toEqual(['workspaces: acme (TA "Acme")=ok, beta (TB)=ok']);
   });
 
   test("failed workspace's prior cursor is preserved (failure is not a reset)", async () => {
