@@ -10,7 +10,7 @@
  * `SUASOR_CONNECTOR_SLACK_TOKEN` env override so the keychain is never touched.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -707,5 +707,112 @@ describe("suasor slack auth test — network seam", () => {
     expect(err).toContain("invalid_auth");
     expect(out).not.toContain("xoxp-test-token");
     expect(err).not.toContain("xoxp-test-token");
+  });
+});
+
+describe("suasor slack conversations --new — drift diff (ADR-0039)", () => {
+  /** Write a flat [connectors.slack] config with the given channel ids. */
+  function writeChannels(channels: string[]): void {
+    const arr = channels.map((c) => `"${c}"`).join(", ");
+    writeFileSync(join(dir, "config.toml"), `[connectors.slack]\nchannels = [${arr}]\n`);
+  }
+
+  test("shows only member conversations not in config + a paste-ready block", async () => {
+    writeChannels(["C001", "CGONE"]);
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          return {
+            body: {
+              ok: true,
+              channels: [
+                { id: "C001", name: "general", is_member: true }, // already configured
+                { id: "C002", name: "random", is_member: true }, // new
+                { id: "C003", name: "lurk", is_member: false }, // unjoined → not suggested
+              ],
+            },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out, err } = await run(["slack", "conversations", "--new"]);
+    expect(code).toBe(0);
+    // Only the new member channel is surfaced; the configured + unjoined ones are not.
+    expect(out).toContain("C002");
+    expect(out).not.toContain("C001");
+    expect(out).not.toContain("C003");
+    // Paste-ready block for the new channel(s).
+    expect(out).toContain("[connectors.slack]");
+    expect(out).toContain('team = "T123"');
+    // The configured-but-unreachable channel is surfaced as a warn (not removed).
+    expect(err).toContain("no longer reachable");
+    expect(err).toContain("CGONE");
+  });
+
+  test("--new --json emits { new, removed }; the full-listing --json shape is untouched", async () => {
+    writeChannels(["C001", "CGONE"]);
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          return {
+            body: {
+              ok: true,
+              channels: [
+                { id: "C001", name: "general", is_member: true },
+                { id: "C002", name: "random", is_member: true },
+              ],
+            },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--new", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as {
+      new: { id: string }[];
+      removed: string[];
+      conversations?: unknown;
+    };
+    expect(report.new.map((c) => c.id)).toEqual(["C002"]);
+    expect(report.removed).toEqual(["CGONE"]);
+    // The new shape does not carry the full-listing `conversations` key (back-compat).
+    expect(report.conversations).toBeUndefined();
+  });
+
+  test("defaults its sweep to public+private; a configured DM is not falsely 'removed'", async () => {
+    // Configure a DM id; the default sweep never fetches `im`, so the DM must not
+    // be reported as removed just because it was not swept (ADR-0039).
+    writeChannels(["D_DM"]);
+    const seenTypes: string[] = [];
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+      if (url.includes("users.conversations")) {
+        const t = params.get("types");
+        if (t) seenTypes.push(t);
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, err } = await run(["slack", "conversations", "--new"]);
+    expect(code).toBe(0);
+    // Only public + private are swept by default (DMs/group-DMs are noise).
+    expect(seenTypes).toContain("public_channel");
+    expect(seenTypes).toContain("private_channel");
+    expect(seenTypes).not.toContain("im");
+    expect(seenTypes).not.toContain("mpim");
+    // The unswept configured DM is not surfaced as unreachable.
+    expect(err).not.toContain("no longer reachable");
   });
 });

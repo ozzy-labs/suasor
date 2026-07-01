@@ -15,6 +15,7 @@ import { Command, Option } from "clipanion";
 // and keep the lazy-import discipline (NFR-PRF-1) intact.
 import type {
   ConversationsResult,
+  ConversationType,
   SlackConversation,
 } from "../../connectors/slack/conversations.ts";
 
@@ -245,14 +246,28 @@ export class SlackConversationsCommand extends Command {
       In the config block it is a real channels entry only under its owner and a
       "# <id> shared, owned by <alias>" comment elsewhere, so pasting the whole
       block ingests it exactly once (ADR-0038).
+
+      Pass --new to show only the config *drift* (ADR-0039): the conversations you
+      are a member of but have not listed in config (paste-ready), plus a warning
+      for configured channels the token can no longer reach (left/archived/
+      renamed). This avoids hunting a long full listing for what changed. --new
+      defaults its sweep to public+private (DMs/group-DMs are noise); pass --types
+      to widen it. --new --json emits { new: [...], removed: [...] } — the plain
+      (full-listing) --json shape is unchanged. --new resolves a single workspace
+      (--workspace); Enterprise Grid auto-enumeration is skipped.
     `,
     examples: [
       ["List everything visible", "suasor slack conversations"],
       ["Public channels only, as JSON", "suasor slack conversations --types public --json"],
       ["Scope to one Grid workspace", "suasor slack conversations --team-id T0123ABC"],
+      ["Show only newly-joined conversations", "suasor slack conversations --new"],
     ],
   });
 
+  new = Option.Boolean("--new", false, {
+    description:
+      "Show only config drift: member conversations not yet in config (paste-ready) + unreachable configured channels (ADR-0039).",
+  });
   types = Option.String("--types", {
     description: "Comma-separated types: public,private,im,mpim (default: all four).",
   });
@@ -327,6 +342,12 @@ export class SlackConversationsCommand extends Command {
       this.context.stderr.write(await noTokenError(alias));
       return 1;
     }
+
+    // --new shows only the config drift (ADR-0039) and is scoped to a single
+    // workspace, so it takes a dedicated, simpler path (no Grid auto-enumeration,
+    // no engagement sort). Everything above (arg validation, workspace + token
+    // resolution) is shared.
+    if (this.new) return this.executeNew(alias, token, types, limit);
 
     const [
       { testToken },
@@ -586,6 +607,115 @@ export class SlackConversationsCommand extends Command {
       this.context.stderr.write(
         "next: paste the block above into config.toml, then run `suasor slack sync`.\n",
       );
+      return 0;
+    } catch (cause) {
+      progress.finish();
+      this.context.stderr.write(
+        `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+      return 1;
+    }
+  }
+
+  /**
+   * `slack conversations --new` — surface only the config drift (ADR-0039 Layer
+   * 1). Sweeps the token's visible conversations (default public+private), diffs
+   * against the workspace's configured `channels`, and prints the member
+   * conversations not yet configured (paste-ready via {@link renderConfigBlock})
+   * plus a warn for configured channels the token can no longer reach. `--new
+   * --json` emits `{ new, removed }`; the full-listing `--json` shape is untouched.
+   * Single-workspace scoped: no Enterprise Grid auto-enumeration / engagement sort.
+   */
+  private async executeNew(
+    alias: string | undefined,
+    token: string,
+    requestedTypes: ConversationType[] | undefined,
+    limit: number | undefined,
+  ): Promise<number> {
+    const [{ testToken }, { listConversations, renderConfigBlock, diffConversations }, config] =
+      await Promise.all([
+        import("../../connectors/slack/auth.ts"),
+        import("../../connectors/slack/conversations.ts"),
+        loadResolvedSlackConfig(),
+      ]);
+
+    if (config.error) {
+      this.context.stderr.write(`error: ${config.error}\n`);
+      return 1;
+    }
+    const configured = configuredChannelsForAlias(config.workspaces, alias);
+
+    // Diff defaults to public + private: DMs / group-DMs are noisy and rarely
+    // configured, so include them only when explicitly requested (ADR-0039 §3).
+    const types: ConversationType[] = requestedTypes ?? ["public", "private"];
+
+    const { createProgress } = await import("../progress.ts");
+    const progress = createProgress(
+      this.context.stderr,
+      "slack conversations --new",
+      this.noProgress ? false : undefined,
+    );
+    try {
+      const { teamId } = await testToken(token);
+      const result = await listConversations(token, {
+        types,
+        includeArchived: this.includeArchived,
+        ...(limit !== undefined ? { limit } : {}),
+        onProgress: () => progress.tick(),
+      });
+      progress.finish();
+
+      const diff = diffConversations({
+        visible: result.conversations,
+        configured,
+        sweptTypes: types,
+      });
+
+      if (this.json) {
+        // New (additive) flag → new shape, so the existing full-listing --json is
+        // byte-for-byte unchanged (Issue #370 / ADR-0039): { new, removed }.
+        this.context.stdout.write(
+          `${JSON.stringify({ new: diff.added, removed: diff.removed }, null, 2)}\n`,
+        );
+        return 0;
+      }
+
+      if (diff.added.length === 0) {
+        this.context.stdout.write("no new conversations — config is up to date.\n");
+      } else {
+        this.context.stdout.write(
+          `${diff.added.length} new conversation(s) you are a member of but have not configured:\n`,
+        );
+        this.context.stdout.write("  Joined  ID / Name\n");
+        for (const c of diff.added) {
+          this.context.stdout.write(`${formatConversationRow(c)}\n`);
+        }
+        this.context.stdout.write("\n");
+        // Paste-ready fragment for the *new* channels only (renderConfigBlock
+        // reuse, ADR-0039 §2). Shared-channel owner placement is a multi-workspace
+        // concern; --new is single-workspace scoped, so the flat block applies.
+        for (const line of renderConfigBlock(teamId, {
+          conversations: diff.added,
+          missingScopes: result.missingScopes,
+        })) {
+          this.context.stdout.write(`${line}\n`);
+        }
+        this.context.stderr.write(
+          "next: add the new channel ids above to config.toml, then run `suasor slack sync`.\n",
+        );
+      }
+
+      // Configured-but-unreachable channels: surface (left/archived/renamed) but
+      // never auto-remove — the ingest decision stays with the operator (ADR-0039).
+      if (diff.removed.length > 0) {
+        this.context.stderr.write(
+          `warning: ${diff.removed.length} configured channel(s) no longer reachable ` +
+            `(left/archived/renamed): ${diff.removed.join(", ")}\n`,
+        );
+      }
+      for (const [type, scope] of Object.entries(result.missingScopes)) {
+        this.context.stderr.write(`warning: ${type} not listed — missing scope ${scope}\n`);
+      }
       return 0;
     } catch (cause) {
       progress.finish();
@@ -1099,6 +1229,56 @@ async function resolveWorkspaceAlias(
   const config = await loadConfig();
   const slack = config.connectors[SLACK] as { workspaces?: Record<string, unknown> } | undefined;
   return chooseWorkspaceAlias(undefined, Object.keys(slack?.workspaces ?? {}));
+}
+
+/** A workspace's configured channel ids for the `--new` drift diff (ADR-0039). */
+interface SlackWorkspaceChannels {
+  readonly alias: string;
+  readonly channels: readonly string[];
+}
+
+/**
+ * Load + resolve the Slack connector config into per-workspace channel lists for
+ * the `slack conversations --new` drift diff (ADR-0039). Reuses `resolveWorkspaces`
+ * so `--new` sees the exact same channel set sync would ingest, for either config
+ * shape (flat `[connectors.slack]` or `[connectors.slack.workspaces.<alias>]`). A
+ * parse error is returned (not thrown) so the caller reports it as a clean error.
+ */
+async function loadResolvedSlackConfig(): Promise<{
+  workspaces: SlackWorkspaceChannels[];
+  error?: string;
+}> {
+  const [{ loadConfig }, { SlackConnectorConfig, resolveWorkspaces }] = await Promise.all([
+    import("../../config/index.ts"),
+    import("../../connectors/slack.ts"),
+  ]);
+  const config = await loadConfig();
+  try {
+    const resolved = resolveWorkspaces(SlackConnectorConfig.parse(config.connectors[SLACK] ?? {}));
+    return { workspaces: resolved.map((w) => ({ alias: w.alias, channels: w.channels })) };
+  } catch (cause) {
+    return {
+      workspaces: [],
+      error: `invalid Slack connector config: ${cause instanceof Error ? cause.message : String(cause)}`,
+    };
+  }
+}
+
+/**
+ * Pick the configured channel ids for the resolved workspace alias (ADR-0039).
+ * `resolveWorkspaceAlias` yields `undefined` for a flat config, which
+ * `resolveWorkspaces` models as the `default` alias; an explicit alias matches by
+ * name. An unknown alias falls back to no configured channels (so every member
+ * conversation reads as new) — the safe drift signal, not a silent empty diff.
+ */
+function configuredChannelsForAlias(
+  workspaces: readonly SlackWorkspaceChannels[],
+  alias: string | undefined,
+): string[] {
+  const target = alias ?? DEFAULT_WORKSPACE_ALIAS;
+  const ws =
+    workspaces.find((w) => w.alias === target) ?? (alias === undefined ? workspaces[0] : undefined);
+  return [...(ws?.channels ?? [])];
 }
 
 /**

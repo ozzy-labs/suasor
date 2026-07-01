@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   type ConversationType,
+  diffConversations,
   listConversations,
   renderConfigBlock,
   renderWorkspacesConfigBlock,
+  type SlackConversation,
   type SlackConversationsTransport,
   type SlackUsersTransport,
 } from "../../../src/connectors/slack/conversations.ts";
@@ -421,5 +423,66 @@ describe("conversations — onProgress (#84)", () => {
       },
     });
     expect(result.conversations.map((c) => c.id)).toEqual(["C1"]);
+  });
+});
+
+describe("conversations — diffConversations (ADR-0039 drift)", () => {
+  /** Build a minimal visible-conversation row for the diff. */
+  function conv(
+    id: string,
+    isMember: boolean,
+    type: ConversationType = "public",
+  ): SlackConversation {
+    return { id, type, name: id, displayName: `#${id}`, isArchived: false, isMember };
+  }
+
+  test("added = member conversations not in config; non-member is excluded", () => {
+    const diff = diffConversations({
+      visible: [conv("C1", true), conv("C2", true), conv("C3", false)],
+      configured: ["C1"],
+    });
+    // C2 is a member and unconfigured → new. C3 is unjoined (ingests nothing) → not
+    // suggested. C1 is already configured → not new.
+    expect(diff.added.map((c) => c.id)).toEqual(["C2"]);
+    expect(diff.removed).toEqual([]);
+  });
+
+  test("removed = configured ids no longer visible (config order preserved)", () => {
+    const diff = diffConversations({
+      visible: [conv("C1", true)],
+      configured: ["C1", "C2", "C3"],
+    });
+    // C2 + C3 are configured but not in the visible set → left/archived/renamed.
+    expect(diff.removed).toEqual(["C2", "C3"]);
+    expect(diff.added).toEqual([]);
+  });
+
+  test("sweptTypes suppresses false 'removed' for a configured id of an unswept type", () => {
+    // Only public/private were swept; a configured DM (D…) is absent from `visible`
+    // simply because im was not fetched — it must NOT be reported as removed.
+    const diff = diffConversations({
+      visible: [conv("C1", true)],
+      configured: ["C1", "D9", "G7"],
+      sweptTypes: ["public", "private"],
+    });
+    // D9 (im) is suppressed; G7 (private, swept) is genuinely unreachable → removed.
+    expect(diff.removed).toEqual(["G7"]);
+  });
+
+  test("no sweptTypes → every unreachable configured id is reported", () => {
+    const diff = diffConversations({
+      visible: [conv("C1", true)],
+      configured: ["C1", "D9"],
+    });
+    expect(diff.removed).toEqual(["D9"]);
+  });
+
+  test("empty config → all member conversations are new", () => {
+    const diff = diffConversations({
+      visible: [conv("C1", true), conv("C2", true)],
+      configured: [],
+    });
+    expect(diff.added.map((c) => c.id)).toEqual(["C1", "C2"]);
+    expect(diff.removed).toEqual([]);
   });
 });

@@ -258,6 +258,97 @@ export async function listConversations(
 }
 
 /**
+ * Best-effort conversation-type guess from a Slack id prefix (ADR-0039). Used to
+ * decide whether a configured channel id *could* have appeared in a sweep scoped
+ * to certain types, so a configured DM id is not falsely flagged as "removed"
+ * when only public/private were swept. `C…` is a public channel; `G…` is a
+ * private channel or a group-DM (Slack shares the prefix); `D…` is a DM. An
+ * unknown prefix maps to every type (never suppress a real drift signal).
+ */
+const ID_PREFIX_TYPES: Record<string, readonly ConversationType[]> = {
+  C: ["public"],
+  G: ["private", "mpim"],
+  D: ["im"],
+};
+
+function possibleTypesForId(id: string): readonly ConversationType[] {
+  return ID_PREFIX_TYPES[id.charAt(0)] ?? TYPE_ORDER;
+}
+
+/** Input to {@link diffConversations}: what the token sees vs what config lists. */
+export interface ConversationDiffInput {
+  /**
+   * Conversations the token can currently see (the output of
+   * {@link listConversations}). Carries `isMember`, so an unjoined channel can be
+   * excluded from the add candidates (it would ingest nothing until joined).
+   */
+  readonly visible: readonly SlackConversation[];
+  /**
+   * Channel ids currently listed in config for this workspace (from
+   * `resolveWorkspaces(config)` in `../slack.ts`).
+   */
+  readonly configured: readonly string[];
+  /**
+   * The conversation types the {@link ConversationDiffInput.visible} sweep
+   * actually covered. When set, a configured id is only reported as `removed` if
+   * its id-prefix could belong to one of these types — so a configured DM id is
+   * not flagged as removed when the sweep was scoped to public/private (ADR-0039).
+   * Omit (or pass all four) to compare against every configured id.
+   */
+  readonly sweptTypes?: readonly ConversationType[];
+}
+
+/**
+ * The config drift between the conversations a token can see and the channels
+ * config lists for a workspace (ADR-0039 Layer 1). Reused by PR2 (sync sweep /
+ * doctor drift check) via the same pure signature — keep it network-free.
+ */
+export interface ConversationDiff {
+  /**
+   * Member conversations not in config — paste-ready add candidates. A
+   * conversation the token is not a member of (`isMember === false`) is excluded:
+   * it returns `not_in_channel` and ingests nothing until joined, so suggesting it
+   * as "new to add" would be noise (ADR-0011 / ADR-0039).
+   */
+  readonly added: SlackConversation[];
+  /**
+   * Configured channel ids the token can no longer reach (absent from `visible`):
+   * left / archived / renamed. Surfaced as a warn; never auto-removed — the
+   * ingest decision stays with the operator (ADR-0039). Preserves config order.
+   */
+  readonly removed: string[];
+}
+
+/**
+ * Compute the config drift between the conversations a token can see and the
+ * channels config lists (ADR-0039 Layer 1). Pure: no network, no config / keychain
+ * reads — the caller supplies both sets, so the same helper backs `slack
+ * conversations --new`, the sync-time sweep, and the doctor drift check (PR2).
+ *
+ * - `added` = member (`isMember`) conversations whose id is not configured. The
+ *   `isMember` gate keeps unjoined channels (which ingest nothing) out of the
+ *   suggestions.
+ * - `removed` = configured ids absent from `visible`. When `sweptTypes` is given,
+ *   an id is only considered if its prefix could belong to a swept type, so a
+ *   configured DM is not flagged removed on a public/private-only sweep.
+ */
+export function diffConversations(input: ConversationDiffInput): ConversationDiff {
+  const configured = new Set(input.configured);
+  const visibleIds = new Set(input.visible.map((c) => c.id));
+  const swept = input.sweptTypes ? new Set(input.sweptTypes) : null;
+
+  const added = input.visible.filter((c) => c.isMember && !configured.has(c.id));
+  const removed = input.configured.filter((id) => {
+    if (visibleIds.has(id)) return false;
+    // Only claim a config id "removed" when the sweep could have surfaced it —
+    // otherwise a DM id looks removed on a public/private-only sweep (ADR-0039).
+    if (swept && !possibleTypesForId(id).some((t) => swept.has(t))) return false;
+    return true;
+  });
+  return { added, removed };
+}
+
+/**
  * Render a `[connectors.slack]` config block the operator can paste straight
  * into `config.toml`. The `channels` array carries every discovered id (any
  * conversation type) with a trailing `# <displayName>` comment.

@@ -240,6 +240,7 @@ channels = ["C0BETA1"]
 suasor slack auth set                  # token を keychain に保存（stdin / --token）
 suasor slack auth test                 # 検証 + granted scopes + feature readiness
 suasor slack conversations             # 可視会話を列挙し [connectors.slack] ブロックを出力
+suasor slack conversations --new       # config 未設定の新規参加会話だけを差分表示（後述）
 # → 出力ブロックを config.toml に貼り、enabled にして
 suasor slack sync                      # （= <connector> sync）取り込み
 ```
@@ -249,6 +250,17 @@ suasor slack sync                      # （= <connector> sync）取り込み
   `conversations` の表示は先頭に `Joined  ID / Name` ラベル行を付け、**1 列目が参加印・2 列目（id）こそ `channels` に貼る値**だと明示する（[#158](https://github.com/ozzy-labs/suasor/issues/158) / [#165](https://github.com/ozzy-labs/suasor/issues/165)）。**参加印** `✓` は token の principal がその会話の member（＝ sync で到達可能）であることを示し、印が無い channel は未参加＝ sync 時に `not_in_channel` で空になる（ADR-0011；Slack の `is_member` 由来、DM / group-DM は常に member。未参加 channel が 1 つでもあれば stderr に補足 note を出す。`--json` は各会話に `isMember` を含む）。**type 内で a-z ソート**され、**DM は相手の表示名を `users.info` で解決**して `dm:<name>` で出す（`users:read` 必要、未解決時は `dm:<userId>` にフォールバック）。出力する `[connectors.slack]` ブロックの `channels` も id（`#` コメントは表示名ラベルのみ）。DM の逐次 `users.info` 解決と `--sort=last_self_post` の `search.messages` ページングは長くなりがちなので **stderr に進捗（処理件数）を表示**する（`sync` と同じ `createProgress`・TTY 限定・`--no-progress` で無効化、#84）。
 
   > **channels は id（名前不可）。** `channels` には会話 **id**（`C…` public / `G…` private・group-DM / `D…` DM）を指定する。`#general` のような channel **名**を貼ると `conversations.history` が id を引けず**無音でゼロ件取り込み**になるため、`sync` 時に `C/D/G` で始まらない値は warning を出す（ハード強制はしない＝将来 id プレフィックスが増えてもロックしない、[ADR-0007](../adr/0007-connector-contract.md) / [#158](https://github.com/ozzy-labs/suasor/issues/158)）。id は `suasor slack conversations` で取得する。
+
+#### 新規会話の見つけ方（`--new`・[ADR-0039](../adr/0039-conversation-discovery-drift.md)）
+
+  `channels` は**明示列挙**（＝データ最小化・取り込み範囲の明示制御、[ADR-0003](../adr/0003-local-first-and-content-minimization.md) / [ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）なので、初期設定後にチャンネルへ新規参加しても**自動では取り込まれない**。取りこぼすと「参加しているのに suasor に入ってこない」＝ demand / 検索 / brief の網羅性が落ちる。`suasor slack conversations --new` はこの **drift（token で見える会話と config の `channels` の差分）だけ**を表示する（全一覧を目視で漁らなくてよい）:
+
+- **新規**（`isMember` だが config 未設定）を、そのまま貼れる `[connectors.slack]` fragment（`renderConfigBlock` 再利用）で出力する。未参加（`✓` なし）会話は取り込んでも空なので候補から除外する。
+- **消失**（config にあるが token で到達不能 = 退出 / アーカイブ / 改名）は stderr に warn で surface する（**自動削除はしない**＝取り込み判断は運用者に残す）。
+- 差分の既定 sweep は **public + private のみ**（DM / group-DM はノイズが多い）。`--types public,private,im,mpim` で広げられる。config 済みの DM id は未 sweep でも「消失」に誤判定しない。
+- `--json` は**新 flag なので新形状** `{ new: [...], removed: [...] }` を返す。既存の全列挙 `slack conversations --json`（`{ teamId, conversations, … }`）は**不変**。
+- `--workspace <alias>` で単一 workspace にスコープする（Enterprise Grid の自動列挙は `--new` では行わない）。
+- **silent auto-follow は既定にしない**（[ADR-0039](../adr/0039-conversation-discovery-drift.md)）。sync 中の新規検出通知 / `doctor` drift チェック / 追記導線 (`--apply`) は後続 PR で追加予定。
 
 - **demand signal**（[ADR-0012](../adr/0012-slack-demand-digest.md)）: 取り込み済み `slack_message` から @mention（`self_user_id` 設定時）/ DM を MCP `slack.demand.list` で「読むべきが未処理」signal として取得（query 導出・追加 fetch なし）。`next-actions` / `personal-brief` skill が priority 上位に組み込む。
 - **engagement axis**（[ADR-0013](../adr/0013-slack-engagement-axis.md)）: `suasor slack conversations --sort=last_self_post` で「自分が最後に投稿した時刻」順に会話を並べる。`search.messages`（`from:me`）を使うため **User Token（`xoxp-`）専用**で、Bot Token では `N/A` に degrade（通常順で列挙）。値は Slack 全文 index の遅延により概算。表の `last_self_post` 列は人間可読時刻（`YYYY-MM-DD HH:MM (<相対時刻>)`）で出す（`--json` は raw ts 維持、#84）。
