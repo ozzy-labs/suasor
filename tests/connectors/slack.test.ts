@@ -961,3 +961,44 @@ describe("resolveSelfUserIds (ADR-0012)", () => {
     expect(resolveSelfUserIds({})).toEqual([]);
   });
 });
+
+describe("Slack connector — channel name resolution (ADR-0037 §3)", () => {
+  test("stashes resolved channelName + channelKind into meta from conversations.info", async () => {
+    const client: SlackClientLike = {
+      conversations: {
+        async history() {
+          return { messages: [{ ts: "1700000000.000100", text: "hi", user: "U1" }] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+        async info({ channel }) {
+          return channel === "C1" ? { ok: true, channel: { name: "general" } } : { ok: false };
+        },
+      },
+    };
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.meta).toMatchObject({
+      channel: "C1",
+      channelKind: "public",
+      channelName: "general",
+    });
+  });
+
+  test("degrades to channelKind from id prefix (no channelName) when info is unavailable", async () => {
+    // A client without conversations.info (the existing message-only fake shape):
+    // resolution must not reach the network — kind from the id prefix, no name.
+    const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["D9"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.meta).toMatchObject({ channel: "D9", channelKind: "dm" });
+    expect((records[0]?.meta as { channelName?: string }).channelName).toBeUndefined();
+  });
+});

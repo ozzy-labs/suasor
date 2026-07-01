@@ -28,6 +28,7 @@ import { reconcileReadback, type SlackHomeColumns } from "../projections/task-re
 import type { Embedder } from "../retrieval/embedding/index.ts";
 import { embedSources } from "../retrieval/embedding/index.ts";
 import { authorFromMeta } from "./author.ts";
+import { channelFromMeta } from "./channel.ts";
 import type { Connector, SourceRecord, SyncContext } from "./contract.ts";
 import { makeSecretResolver, type SecretStoreOptions } from "./secrets.ts";
 
@@ -316,6 +317,10 @@ async function runSyncPass(
   // Bodies whose vector needs (re)populating — new or changed sources only.
   // Unchanged sources keep their existing vector (fingerprint equality).
   const toEmbed: { externalId: string; body: string }[] = [];
+  // Channels already recorded this run (ADR-0037 §3): a connector yields one
+  // record per message, so dedup by channel id to emit SlackChannelObserved at
+  // most once per channel per run (the reducer is last-write-wins regardless).
+  const seenChannels = new Set<string>();
 
   for await (const record of connector.sync(ctx)) {
     const fingerprint = record.fingerprint ?? (await sha256Hex(record.body));
@@ -339,6 +344,28 @@ async function runSyncPass(
             // resolution degraded — the reducer's last-write-wins keeps the prior
             // name and never overwrites it with an empty string (ADR-0037 §6).
             ...(author.displayName ? { displayName: author.displayName } : {}),
+          },
+          now(),
+        );
+      }
+
+      // Resolve the channel this record belongs to → slack_channels projection
+      // (ADR-0037 §3). The connector stashes the sync-time-resolved name / kind
+      // into meta; here we fold it into a SlackChannelObserved once per channel
+      // per run. Best-effort: a record with no channel concept (or a degrade
+      // missing the id / kind / team) yields null and records nothing. On a
+      // degrade the name is absent → the reducer keeps the prior resolved name
+      // (last-write-wins with a non-empty guard, §6/§7).
+      const channel = channelFromMeta(connector.name, record.meta);
+      if (channel !== null && !seenChannels.has(channel.channelId)) {
+        seenChannels.add(channel.channelId);
+        store.record(
+          {
+            type: "SlackChannelObserved",
+            channelId: channel.channelId,
+            teamId: channel.teamId,
+            kind: channel.kind,
+            ...(channel.displayName ? { displayName: channel.displayName } : {}),
           },
           now(),
         );

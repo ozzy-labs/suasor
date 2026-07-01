@@ -169,6 +169,16 @@ export function initSchema(sqlite: Database): void {
     );
     -- person.list groups identities by person; index the FK for the grouping.
     CREATE INDEX IF NOT EXISTS idx_person_identities_person ON person_identities(person_id);
+    -- Slack channel name projection (ADR-0037 §3): one row per observed
+    -- conversation id, name-resolved at sync so display joins ids → names locally
+    -- (no-fetch-at-query, ADR-0012). Folded from SlackChannelObserved (LWW).
+    CREATE TABLE IF NOT EXISTS slack_channels (
+      channel_id  TEXT PRIMARY KEY,
+      team_id     TEXT NOT NULL DEFAULT '',
+      name        TEXT NOT NULL DEFAULT '',
+      kind        TEXT NOT NULL,
+      observed_at TEXT NOT NULL
+    );
     -- Document-extraction provenance sidecar (ADR-0024). Derived substrate (not
     -- events, ADR-0002): records which extractor version produced a source's
     -- extracted body, so a later extractor upgrade (version bump) or a newly

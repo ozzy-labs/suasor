@@ -29,6 +29,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import { type ResolvedChannel, resolveChannel } from "./slack/channel.ts";
 import {
   defaultUsersTransport,
   resolveUserName,
@@ -140,6 +141,8 @@ interface ResolvedWorkspace {
   secretName: string;
   since?: string;
   channelSince?: Record<string, string>;
+  /** Operator's own user id, excluded from group-DM name joins (ADR-0037 §4). */
+  selfUserId?: string;
 }
 
 /** Expand the config into the concrete list of workspaces to sync. */
@@ -154,6 +157,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       secretName: workspaceSecretName(alias),
       ...(w.since ? { since: w.since } : {}),
       ...(w.channel_since ? { channelSince: w.channel_since } : {}),
+      ...(w.self_user_id ? { selfUserId: w.self_user_id } : {}),
     }));
   }
   return [
@@ -165,6 +169,7 @@ function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
       secretName: workspaceSecretName(),
       ...(config.since ? { since: config.since } : {}),
       ...(config.channel_since ? { channelSince: config.channel_since } : {}),
+      ...(config.self_user_id ? { selfUserId: config.self_user_id } : {}),
     },
   ];
 }
@@ -310,12 +315,18 @@ interface SlackMessageItem {
  * `meta.userName` when present so `authorFromMeta` can enrich the person
  * projection. A `null` / empty resolution leaves `meta.userName` unset — the
  * degrade path (ADR-0037 §6) where the person keeps its id-derived name.
+ *
+ * `channelInfo` is the sync-time-resolved channel name / kind (ADR-0037 §3):
+ * `meta.channelKind` is always set (from the id prefix even on degrade) and
+ * `meta.channelName` only when a non-empty name was resolved, so `channelFromMeta`
+ * can fold a `SlackChannelObserved` (an empty name degrades to an id fallback).
  */
 function toRecord(
   team: string,
   channel: string,
   item: SlackMessageItem,
   userName?: string | null,
+  channelInfo?: ResolvedChannel,
 ): SourceRecord {
   return {
     externalId: `slack:${team}:${channel}:${item.ts}`,
@@ -329,6 +340,12 @@ function toRecord(
       ts: item.ts,
       user: item.user ?? null,
       ...(userName ? { userName } : {}),
+      ...(channelInfo
+        ? {
+            channelKind: channelInfo.kind,
+            ...(channelInfo.name ? { channelName: channelInfo.name } : {}),
+          }
+        : {}),
       ...(item.thread_ts ? { threadTs: item.thread_ts } : {}),
     },
   };
@@ -360,6 +377,23 @@ export interface SlackClientLike {
       messages?: SlackMessageItem[];
       response_metadata?: { next_cursor?: string };
     }>;
+    /**
+     * Channel metadata for name resolution (ADR-0037 §3). Optional so existing
+     * message-only fakes need not implement it — channel-name resolution then
+     * degrades to id-only (no live fetch) rather than reaching the network.
+     */
+    info?: (args: { channel: string }) => Promise<{
+      ok?: boolean;
+      channel?: {
+        name?: string;
+        is_private?: boolean;
+        is_im?: boolean;
+        is_mpim?: boolean;
+        user?: string;
+      };
+    }>;
+    /** Member ids of a (group) conversation, for group-DM name join (ADR-0037 §4). */
+    members?: (args: { channel: string }) => Promise<{ ok?: boolean; members?: string[] }>;
   };
   /**
    * List items for a Slack List (ADR-0036 §6 read-back). Optional so existing
@@ -577,6 +611,10 @@ class SlackConnector implements Connector {
         // resolves `users.info` at most once per workspace this run. Keyed by
         // this workspace's token so ids never cross-resolve between workspaces.
         const nameCache = new Map<string, string | null>();
+        // Per-workspace channel-name cache (ADR-0037 §3/§5): each channel id is
+        // resolved via `conversations.info` (+ members for group DMs) at most once
+        // this run. Shares `nameCache` for DM / group-DM participant names.
+        const channelCache = new Map<string, ResolvedChannel>();
         // Channels this run could not reach (not_in_channel / channel_not_found /
         // is_archived): collected per channel and surfaced as one aggregated warn
         // so READY-but-unjoined channels are no longer silently empty (ADR-0011).
@@ -614,7 +652,20 @@ class SlackConnector implements Connector {
               const userName = item.user
                 ? await resolveUserName(token, item.user, this.usersTransport, nameCache)
                 : null;
-              yield toRecord(ws.team, channel, item, userName);
+              // Resolve the channel name + kind at sync time so the
+              // slack_channels projection carries a human name (ADR-0037 §3).
+              // Cached per run; best-effort degrade to id-only (§6) never blocks
+              // ingest. Reuses `nameCache` for DM / group-DM participant names.
+              const channelInfo = await resolveChannel(
+                client,
+                token,
+                channel,
+                ws.selfUserId,
+                this.usersTransport,
+                nameCache,
+                channelCache,
+              );
+              yield toRecord(ws.team, channel, item, userName, channelInfo);
             }
           } catch (error) {
             // A channel-scoped unreachable error (not_in_channel etc.) must not

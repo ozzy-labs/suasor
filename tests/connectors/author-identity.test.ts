@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { authorFromMeta } from "../../src/connectors/author.ts";
+import { channelFromMeta } from "../../src/connectors/channel.ts";
 import type {
   Connector,
   SourceRecord,
@@ -196,5 +197,137 @@ describe("syncConnector records person identities (ADR-0022)", () => {
       .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM person_identities")
       .get();
     expect(count?.n).toBe(1);
+  });
+});
+
+/** The single slack_channels row for a channel id, or undefined. */
+function slackChannel(channelId: string) {
+  return store.connection.sqlite
+    .query<{ channel_id: string; team_id: string; name: string; kind: string }, [string]>(
+      "SELECT channel_id, team_id, name, kind FROM slack_channels WHERE channel_id = ?",
+    )
+    .get(channelId);
+}
+
+describe("channelFromMeta (ADR-0037 §3)", () => {
+  test("maps slack meta.channel/team/channelKind/channelName", () => {
+    expect(
+      channelFromMeta("slack", {
+        channel: "C1",
+        team: "T1",
+        channelKind: "public",
+        channelName: "general",
+      }),
+    ).toEqual({ channelId: "C1", teamId: "T1", kind: "public", displayName: "general" });
+  });
+
+  test("a missing / blank channelName leaves displayName unset (degrade)", () => {
+    expect(
+      channelFromMeta("slack", { channel: "C1", team: "T1", channelKind: "public" })?.displayName,
+    ).toBeUndefined();
+    expect(
+      channelFromMeta("slack", {
+        channel: "C1",
+        team: "T1",
+        channelKind: "public",
+        channelName: "  ",
+      })?.displayName,
+    ).toBeUndefined();
+  });
+
+  test("returns null for unknown connectors / missing id / invalid kind / missing team", () => {
+    expect(
+      channelFromMeta("github", { channel: "C1", team: "T1", channelKind: "public" }),
+    ).toBeNull();
+    expect(channelFromMeta("slack", { team: "T1", channelKind: "public" })).toBeNull();
+    expect(
+      channelFromMeta("slack", { channel: "C1", team: "T1", channelKind: "bogus" }),
+    ).toBeNull();
+    expect(channelFromMeta("slack", { channel: "C1", channelKind: "public" })).toBeNull();
+  });
+});
+
+describe("syncConnector records slack channels (ADR-0037 §3)", () => {
+  test("a slack record's channel meta becomes a slack_channels row", async () => {
+    await syncConnector(
+      store,
+      fakeConnector(
+        [
+          {
+            externalId: "slack:T1:C1:1700000000.000100",
+            sourceType: "slack_message",
+            body: "hi",
+            observedAt: "2026-07-01T00:00:00.000Z",
+            meta: {
+              user: "U1",
+              channel: "C1",
+              team: "T1",
+              channelKind: "public",
+              channelName: "general",
+            },
+          },
+        ],
+        "slack",
+      ),
+    );
+    expect(slackChannel("C1")).toEqual({
+      channel_id: "C1",
+      team_id: "T1",
+      name: "general",
+      kind: "public",
+    });
+  });
+
+  test("emits one SlackChannelObserved per channel per run (deduped)", async () => {
+    await syncConnector(
+      store,
+      fakeConnector(
+        [
+          {
+            externalId: "slack:T1:C1:1.000100",
+            sourceType: "slack_message",
+            body: "a",
+            observedAt: "2026-07-01T00:00:00.000Z",
+            meta: { channel: "C1", team: "T1", channelKind: "public", channelName: "general" },
+          },
+          {
+            externalId: "slack:T1:C1:2.000100",
+            sourceType: "slack_message",
+            body: "b",
+            observedAt: "2026-07-01T00:00:01.000Z",
+            meta: { channel: "C1", team: "T1", channelKind: "public", channelName: "general" },
+          },
+        ],
+        "slack",
+      ),
+    );
+    const n = store.connection.sqlite
+      .query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM events WHERE type = 'SlackChannelObserved'",
+      )
+      .get();
+    expect(n?.n).toBe(1); // two messages, one channel event
+  });
+
+  test("a record with no channel meta records no channel (best-effort)", async () => {
+    await syncConnector(
+      store,
+      fakeConnector(
+        [
+          {
+            externalId: "gh:org/repo:issue:1",
+            sourceType: "github_issue",
+            body: "hi",
+            observedAt: "2026-07-01T00:00:00.000Z",
+            meta: { author: "octocat" },
+          },
+        ],
+        "github",
+      ),
+    );
+    const n = store.connection.sqlite
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM slack_channels")
+      .get();
+    expect(n?.n).toBe(0);
   });
 });

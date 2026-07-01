@@ -33,6 +33,7 @@ const PROJECTION_TABLES = [
   "links",
   "persons",
   "person_identities",
+  "slack_channels",
   "sources_fts",
 ];
 
