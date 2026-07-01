@@ -405,6 +405,9 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       description:
         "List unread-worthy Slack signals — @mentions of you and DMs — newest first, " +
         "derived (read-only, FTS-first) from ingested slack_message sources (ADR-0012). " +
+        "Each row carries `channelName` / `userName` joined locally from the " +
+        "slack_channels / person_identities projections (ADR-0037), or `null` when " +
+        "unresolved (fall back to the raw ids in `meta`); names are never live-fetched. " +
         "Use as a priority signal in next-actions / personal-brief. Returns " +
         "`truncated: true` when more rows match than `limit` returned (ADR-0007).",
       inputSchema: {

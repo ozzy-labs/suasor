@@ -352,8 +352,14 @@ describe("listCommitments (ADR-0021)", () => {
 });
 
 describe("listSlackDemand (ADR-0012)", () => {
-  /** Seed a slack_message source with a channel + body. */
-  function slack(externalId: string, channel: string, body: string, observedAt: string) {
+  /** Seed a slack_message source with a channel + body (+ optional sender). */
+  function slack(
+    externalId: string,
+    channel: string,
+    body: string,
+    observedAt: string,
+    user?: string,
+  ) {
     store.record({
       type: "SourceObserved",
       externalId,
@@ -361,7 +367,27 @@ describe("listSlackDemand (ADR-0012)", () => {
       body,
       observedAt,
       fingerprint: externalId,
-      meta: { team: "T1", channel, ts: externalId },
+      meta: { team: "T1", channel, ts: externalId, ...(user ? { user } : {}) },
+    });
+  }
+
+  /** Seed the local `slack_channels` projection (ADR-0037 §3). */
+  function channel(
+    channelId: string,
+    displayName: string,
+    kind: "public" | "private" | "group" | "dm" = "public",
+  ) {
+    store.record({ type: "SlackChannelObserved", channelId, teamId: "T1", displayName, kind });
+  }
+
+  /** Seed the local `person_identities` projection (ADR-0022). */
+  function identity(handle: string, displayName: string) {
+    store.record({
+      type: "PersonIdentityObserved",
+      personId: `person_slack_${handle}`,
+      connector: "slack",
+      handle,
+      displayName,
     });
   }
 
@@ -421,6 +447,78 @@ describe("listSlackDemand (ADR-0012)", () => {
     const windowed = listSlackDemand(sqlite(), { observed: { after: "2026-06-11T00:00:00.000Z" } });
     expect(windowed.map((r) => r.externalId)).toEqual(["d3", "d2"]);
     expect(listSlackDemand(sqlite(), { limit: 1 }).map((r) => r.externalId)).toEqual(["d3"]);
+  });
+
+  test("enriches channelName / userName from local projections (ADR-0037 §10)", () => {
+    channel("C1", "general");
+    identity("U_ALICE", "Alice");
+    slack("m1", "C1", "hey <@U_ME> please look", "2026-06-10T00:00:00.000Z", "U_ALICE");
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.channelName).toBe("general");
+    expect(row?.userName).toBe("Alice");
+    // Existing fields stay intact (backward compatible, additive enrichment).
+    expect(row?.externalId).toBe("m1");
+    expect(row?.kind).toBe("mention");
+    expect(row?.meta.channel).toBe("C1");
+    expect(row?.meta.user).toBe("U_ALICE");
+  });
+
+  test("resolves a DM's counterpart name from slack_channels", () => {
+    // PR2 folds the DM counterpart's name onto the D… channel row.
+    channel("D9", "Bob", "dm");
+    slack("d1", "D9", "direct hello", "2026-06-11T00:00:00.000Z");
+    const [row] = listSlackDemand(sqlite());
+    expect(row?.kind).toBe("dm");
+    expect(row?.channelName).toBe("Bob");
+  });
+
+  test("unresolved channel / user ids fall back to null (id-only, §6)", () => {
+    slack("m1", "C_UNKNOWN", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_NOBODY");
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.channelName).toBeNull();
+    expect(row?.userName).toBeNull();
+    // Raw ids remain available in meta for the display-layer fallback.
+    expect(row?.meta.channel).toBe("C_UNKNOWN");
+    expect(row?.meta.user).toBe("U_NOBODY");
+  });
+
+  test("an empty resolved name degrades to null (not an empty string)", () => {
+    channel("C1", ""); // observed but unresolved name (degrade path)
+    slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_ALICE");
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.channelName).toBeNull();
+    // No person identity seeded → userName also degrades to null.
+    expect(row?.userName).toBeNull();
+  });
+
+  test("a source without meta.user yields a null userName", () => {
+    channel("C1", "general");
+    slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z"); // no user in meta
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.channelName).toBe("general");
+    expect(row?.userName).toBeNull();
+  });
+
+  test("joins purely from projections — no network at query time (no-fetch-at-query)", () => {
+    channel("C1", "general");
+    identity("U_ALICE", "Alice");
+    slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_ALICE");
+    // listSlackDemand takes only a sqlite handle (no transport/client is injected),
+    // so a join cannot reach Slack. Guard it by making any fetch throw.
+    const originalFetch = globalThis.fetch;
+    let fetched = false;
+    globalThis.fetch = (() => {
+      fetched = true;
+      throw new Error("no network at query time");
+    }) as unknown as typeof fetch;
+    try {
+      const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+      expect(row?.channelName).toBe("general");
+      expect(row?.userName).toBe("Alice");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(fetched).toBe(false);
   });
 });
 
