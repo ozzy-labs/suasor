@@ -327,9 +327,13 @@ export class DoctorCommand extends Command {
     //    connector is still being set up). Quiet when nothing is shared, so the
     //    common single-workspace / non-overlapping case adds no line.
     if (config !== null && config.connectors.slack !== undefined) {
-      const [{ SlackConnectorConfig, resolveWorkspaces }, { channelOwnership }] = await Promise.all(
-        [import("../../connectors/slack.ts"), import("../../connectors/slack/dedup.ts")],
-      );
+      const [
+        { SlackConnectorConfig, resolveWorkspaces, readDiscoveryMarkers },
+        { channelOwnership },
+      ] = await Promise.all([
+        import("../../connectors/slack.ts"),
+        import("../../connectors/slack/dedup.ts"),
+      ]);
       const slack = SlackConnectorConfig.parse(config.connectors.slack);
       const workspaces = resolveWorkspaces(slack);
       const { shared } = channelOwnership(workspaces);
@@ -382,6 +386,38 @@ export class DoctorCommand extends Command {
                 `\`userId\` into [connectors.slack.workspaces.${ws.alias}].self_user_id.`,
             });
           }
+        }
+      }
+
+      // 5d. slack discovery drift (ADR-0039 Layer 2, offline) — surface how many
+      //    newly-joined conversations the last `slack sync` sweep found that are
+      //    still not in `channels`. Doctor is a diagnostic and does NOT sweep the
+      //    network itself (ADR-0039 §Decision): it reads the drift marker the
+      //    sync-time sweep persisted in the connector cursor. Warn (actionable),
+      //    exit code unchanged. Only workspaces with discovery enabled and a
+      //    positive count emit a line, so a settled / opted-out store stays quiet.
+      //    Requires a migrated store (the cursor lives in the event log).
+      if (dbReady && dbPath !== null) {
+        const { lastCursor } = await import("../../connectors/sync.ts");
+        const driftStore = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+        try {
+          const markers = readDiscoveryMarkers(lastCursor(driftStore.connection.sqlite, "slack"));
+          const enabledByAlias = new Map(workspaces.map((w) => [w.alias, w.discoverNew]));
+          for (const m of markers) {
+            // Skip a marker whose workspace has since opted out of discovery (a
+            // stale count should not nag) or found nothing new.
+            if (m.newCount <= 0 || enabledByAlias.get(m.alias) === false) continue;
+            const label = m.alias === "default" ? "" : `workspace '${m.alias}': `;
+            checks.push({
+              name: "slack.discovery",
+              status: "warn",
+              detail:
+                `${label}${m.newCount} new Slack conversation(s) visible but not in config — ` +
+                "run `suasor slack conversations --new` to review (none ingested, ADR-0039)",
+            });
+          }
+        } finally {
+          driftStore.close();
         }
       }
     }

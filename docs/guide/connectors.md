@@ -195,6 +195,7 @@ team = "T0123ABCD"            # id prefix（rename しても安定）
 channels = ["C0123ABCD"]      # 取り込み対象 channel **id**（名前不可・空なら何もしない）。id は `suasor slack conversations` で取得
 since = "30d"                 # cold-start 下限（任意、ADR-0016）。相対 30d / 4w / 12h または ISO 日付 2026-01-01。不正値はロード時に ConfigError で fail-fast（#157）
 self_user_id = "U0SELF"       # 自分の Slack user id（任意、ADR-0012）。slack.demand.list の @mention 検出用
+discover_new = true           # sync 中に「未設定の新規参加会話」を検出して warn（任意・既定 true、ADR-0039）。false で無効化。取り込みはしない
 [connectors.slack.channel_since]
 C0123ABCD = "90d"             # per-channel の since 上書き（任意、#57）。未指定 channel は since にフォールバック。許容フォーマットは since と同じ（不正値はロード時 ConfigError、#157）
 ```
@@ -260,7 +261,16 @@ suasor slack sync                      # （= <connector> sync）取り込み
 - 差分の既定 sweep は **public + private のみ**（DM / group-DM はノイズが多い）。`--types public,private,im,mpim` で広げられる。config 済みの DM id は未 sweep でも「消失」に誤判定しない。
 - `--json` は**新 flag なので新形状** `{ new: [...], removed: [...] }` を返す。既存の全列挙 `slack conversations --json`（`{ teamId, conversations, … }`）は**不変**。
 - `--workspace <alias>` で単一 workspace にスコープする（Enterprise Grid の自動列挙は `--new` では行わない）。
-- **silent auto-follow は既定にしない**（[ADR-0039](../adr/0039-conversation-discovery-drift.md)）。sync 中の新規検出通知 / `doctor` drift チェック / 追記導線 (`--apply`) は後続 PR で追加予定。
+- **silent auto-follow は既定にしない**（[ADR-0039](../adr/0039-conversation-discovery-drift.md)）。追記導線 (`--apply`) は後続 PR（Layer 3）で判断。
+
+##### sync 中の自動検出 + `doctor` drift チェック（[ADR-0039](../adr/0039-conversation-discovery-drift.md) Layer 2）
+
+  「都度 `--new` を手で実行」を不要にするため、`slack sync` は各 workspace の token 解決後に軽く `users.conversations`（public + private のみ）を sweep し、config 外の **member 会話**があれば **1 行集約 warn**（`N new conversation(s) visible but not in config — run \`suasor slack conversations --new\` …`）を出す。**取り込みはせず cursor も不変**（明示列挙のプライバシー設計を維持）。
+
+- **opt-out**: `[connectors.slack] discover_new = false`（既定 `true`）。マルチ workspace は `[connectors.slack.workspaces.<alias>] discover_new` で per-workspace 上書き可（per-workspace 値 > connector 値 > 既定 `true`）。
+- **cadence（間引き）**: 毎 sync では叩かず **前回 sweep から 24h 経過した workspace のみ** sweep する。最終 sweep 時刻 + 新規件数は connector cursor 内の予約キーに軽量保持し（channel cursor とは別、`slack status` / `cursor reset` には出ない）、追加の projection / event は作らない。
+- **best-effort**: sweep が失敗しても sync 本体・cursor 前進は止めず warn のみ。rate-limit は共有 `slackFetch`（[ADR-0019](../adr/0019-slack-fetch-rate-limit-retry.md)）に乗る。
+- **`suasor doctor`** はネットワークを叩かず、この sweep が保存した drift marker を読み取って「N 件の新規 Slack 会話が未追加」を **WARN** で surface する（exit code は変えない・診断はオフライン、[ADR-0039](../adr/0039-conversation-discovery-drift.md)）。`discover_new = false` の workspace は stale marker を表示しない。
 
 - **demand signal**（[ADR-0012](../adr/0012-slack-demand-digest.md)）: 取り込み済み `slack_message` から @mention（`self_user_id` 設定時）/ DM を MCP `slack.demand.list` で「読むべきが未処理」signal として取得（query 導出・追加 fetch なし）。`next-actions` / `personal-brief` skill が priority 上位に組み込む。
 - **engagement axis**（[ADR-0013](../adr/0013-slack-engagement-axis.md)）: `suasor slack conversations --sort=last_self_post` で「自分が最後に投稿した時刻」順に会話を並べる。`search.messages`（`from:me`）を使うため **User Token（`xoxp-`）専用**で、Bot Token では `N/A` に degrade（通常順で列挙）。値は Slack 全文 index の遅延により概算。表の `last_self_post` 列は人間可読時刻（`YYYY-MM-DD HH:MM (<相対時刻>)`）で出す（`--json` は raw ts 維持、#84）。
