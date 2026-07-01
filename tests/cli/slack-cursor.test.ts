@@ -73,6 +73,42 @@ async function seedCursor(cursor: string): Promise<void> {
   }
 }
 
+/**
+ * Seed a `slack_channels` projection row by appending a SlackChannelObserved
+ * event (ADR-0037 §3), so the CLI can join channel id → name at display time.
+ */
+async function seedChannel(
+  channelId: string,
+  displayName: string,
+  kind: "public" | "private" | "group" | "dm",
+): Promise<void> {
+  const prev = process.env.SUASOR_CONFIG_DIR;
+  process.env.SUASOR_CONFIG_DIR = dir;
+  try {
+    const { loadConfig } = await import("../../src/config/index.ts");
+    const { Store } = await import("../../src/db/index.ts");
+    const config = await loadConfig();
+    const store = Store.open({
+      path: config.storage.dbPath as string,
+      embeddingDim: config.embedding.dim,
+    });
+    try {
+      store.record({
+        type: "SlackChannelObserved",
+        channelId,
+        teamId: "T1",
+        displayName,
+        kind,
+      });
+    } finally {
+      store.close();
+    }
+  } finally {
+    if (prev === undefined) delete process.env.SUASOR_CONFIG_DIR;
+    else process.env.SUASOR_CONFIG_DIR = prev;
+  }
+}
+
 describe("suasor slack status / cursor reset (ADR-0016)", () => {
   test("status reports no cursor on a fresh store", async () => {
     await run(["init"]);
@@ -101,6 +137,74 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     const { code, out } = await run(["slack", "status", "--json"]);
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({ default: { C1: "111.000000" } });
+  });
+
+  test("status names channels from the slack_channels projection (ADR-0037 §1)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "111.000000", D2: "222.000000" } }));
+    await seedChannel("C1", "general", "public");
+    await seedChannel("D2", "Ada Lovelace", "dm");
+    const { code, out } = await run(["slack", "status"]);
+    expect(code).toBe(0);
+    // Public channel → `#name`; single DM → `@name`; both keep the id prefix.
+    expect(out).toContain("C1  #general  1970-01-01");
+    expect(out).toContain("D2  @Ada Lovelace  1970-01-01");
+  });
+
+  test("status leaves an unresolved channel id-only (no regression, ADR-0037 §6)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "111.000000", C9: "999.000000" } }));
+    await seedChannel("C1", "general", "public");
+    // C9 has no projection row → falls back to the raw id (two spaces, no name).
+    const { out } = await run(["slack", "status"]);
+    expect(out).toContain("C1  #general  1970-01-01");
+    expect(out).toContain("C9  1970-01-01");
+    expect(out).not.toContain("C9  #");
+  });
+
+  test("status --json adds a `names` sibling but keeps the cursor map (ADR-0037 §1)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    await seedChannel("C1", "general", "public");
+    const { code, out } = await run(["slack", "status", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out);
+    // Existing key path is untouched (back-compat); names is a raw-name sidecar.
+    expect(parsed.default).toEqual({ C1: "111.000000" });
+    expect(parsed.names).toEqual({ C1: "general" });
+  });
+
+  test("status --json omits `names` when nothing is resolved (exact prior shape)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    const { out } = await run(["slack", "status", "--json"]);
+    expect(JSON.parse(out)).toEqual({ default: { C1: "111.000000" } });
+  });
+
+  test("cursor reset preview names the targeted channel (ADR-0037 §1)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    await seedChannel("C1", "general", "public");
+    const preview = await run(["slack", "cursor", "reset", "--channel", "C1"]);
+    expect(preview.code).toBe(0);
+    expect(preview.out).toContain("[default] C1 #general");
+  });
+
+  test("cursor backfill preview names the targeted channel (ADR-0037 §1)", async () => {
+    await run(["init"]);
+    await seedCursor(JSON.stringify({ default: { C1: "999999999.000000" } }));
+    await seedChannel("C1", "general", "public");
+    const preview = await run([
+      "slack",
+      "cursor",
+      "backfill",
+      "--channel",
+      "C1",
+      "--since",
+      "2026-01-01",
+    ]);
+    expect(preview.code).toBe(0);
+    expect(preview.out).toContain("[default] C1 #general:");
   });
 
   test("cursor reset without --yes previews and does not mutate", async () => {
