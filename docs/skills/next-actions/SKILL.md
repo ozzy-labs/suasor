@@ -32,7 +32,7 @@ mcp_tools_write: []
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. `task.list`（`state=open` / `state=in_progress`）で未完 task を取る。期間指定があれば `updatedAfter` / `updatedBefore`（ISO 8601、`tasks.updated_at` ベース）でフィルタする。各 task は `dueDate` / `priority`（low / normal / high）と read 時派生の `overdue` を持つ（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）。`overdue=true` で期限超過 task のみ、`dueBefore` で期日が近い task に絞れる
-2. `slack.demand.list` で Slack の @mention / DM の未処理 signal を取り、「読むべきが未処理」を priority 上位の入力に含める（[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ
+2. `slack.demand.list` で Slack の @mention / DM の未処理 signal を取り、「読むべきが未処理」を priority 上位の入力に含める（[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ。各 demand は `channelName` / `userName`（ローカル join した人間可読名。未解決は `null`＝生 id fallback、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）を持つので、提示は「`#<channelName>` の `<userName>` から」のように **id ではなく名前**で行い、`null` のときだけ `meta.channel` / `meta.user` の id に落とす。名前が id-only のままなら `slack resolve-names` で既取り込み分を遡及解決できる（§11）
 3. `commitment.list`（`state=open`）で未解決の commitment（約束/コミットメント）を取り、「能動的にやるべき約束」を priority 上位の入力に含める（[ADR-0021](../../adr/0021-commitment-ledger.md)）。`direction=owed_by_me` で自分が負う約束に絞れる
 4. `recall.search` で各 task に関連する context を補強する（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 5. ホスト LLM が以下の優先度関数で並べて next-actions を組み立てて返す（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）:

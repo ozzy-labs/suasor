@@ -39,7 +39,7 @@ mcp_tools_write: []
    - `task.list`（`updatedAfter=since`）— 動いた task
    - `decision.list`（`recordedAfter=since`）— 記録された決定
    - `inbox.list`（`state=open`）— 未処理シグナル
-   - `slack.demand.list`（`observedAfter=since`）— Slack の @mention / DM の未処理 signal（「読むべきが未処理」、[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ
+   - `slack.demand.list`（`observedAfter=since`）— Slack の @mention / DM の未処理 signal（「読むべきが未処理」、[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ。各 demand の `channelName` / `userName`（ローカル join した人間可読名、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）で要約に **id ではなく名前**（「`#<channelName>` の `<userName>` から」）を出し、`null`（未解決）のときだけ `meta` の生 id に fallback する（id-only が続くなら `slack resolve-names` で遡及解決、§11）
    - `commitment.list`（`state=open`）— 未解決の commitment（約束/コミットメント。「能動的にやるべき約束」、[ADR-0021](../../adr/0021-commitment-ledger.md)）
    - `recall.search` — トピックの関連 context（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 4. 集めた結果をホスト LLM が「主要な動き」として要約して返す

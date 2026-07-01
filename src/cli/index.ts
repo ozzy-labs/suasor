@@ -54,6 +54,7 @@ import {
   SlackConversationsCommand,
   SlackCursorBackfillCommand,
   SlackCursorResetCommand,
+  SlackResolveNamesCommand,
   SlackStatusCommand,
 } from "./commands/slack.ts";
 import { SourceForgetCommand, SourceListCommand } from "./commands/source.ts";
@@ -109,6 +110,7 @@ export function buildCli(): Cli {
   cli.register(SlackStatusCommand);
   cli.register(SlackCursorResetCommand);
   cli.register(SlackCursorBackfillCommand);
+  cli.register(SlackResolveNamesCommand);
   cli.register(SkillsInstallCommand);
   cli.register(SkillsListCommand);
   cli.register(SkillsSearchCommand);

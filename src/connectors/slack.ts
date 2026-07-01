@@ -132,7 +132,7 @@ export function workspaceSecretName(alias?: string): string {
 }
 
 /** A workspace resolved for a sync pass: where to read + which secret to use. */
-interface ResolvedWorkspace {
+export interface ResolvedWorkspace {
   alias: string;
   team: string;
   channels: string[];
@@ -146,7 +146,7 @@ interface ResolvedWorkspace {
 }
 
 /** Expand the config into the concrete list of workspaces to sync. */
-function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
+export function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
   const ws = config.workspaces;
   if (ws && Object.keys(ws).length > 0) {
     return Object.entries(ws).map(([alias, w]) => ({
@@ -447,7 +447,7 @@ export function listItemToRecord(
 export type SlackClientFactory = (token: string) => Promise<SlackClientLike> | SlackClientLike;
 
 /** Default factory: lazy-imports `@slack/web-api` so registration stays import-clean. */
-const defaultSlackClientFactory: SlackClientFactory = async (token) => {
+export const defaultSlackClientFactory: SlackClientFactory = async (token) => {
   const { WebClient } = await import("@slack/web-api");
   const web = new WebClient(token);
   const like = web as unknown as SlackClientLike;
