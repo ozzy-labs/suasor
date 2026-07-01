@@ -81,6 +81,12 @@ export interface SyncOptions {
   onProgress?: (record: SourceRecord) => void;
   /** Non-fatal warning sink, forwarded to the connector as `ctx.onWarn`. */
   onWarn?: (message: string) => void;
+  /**
+   * Per-run discovery-drift override (ADR-0039 Layer 2), forwarded to the
+   * connector as `ctx.discover`. Only Slack honors it (`slack sync --discover` /
+   * `--no-discover`); other connectors ignore it. Omitted ⇒ configured default.
+   */
+  discover?: "force" | "skip";
   /** Clock injection for deterministic event timestamps in tests. */
   now?: () => Date;
   /**
@@ -309,6 +315,7 @@ async function runSyncPass(
     cursor,
     secret: makeSecretResolver(connector.name, options.secrets),
     ...(options.onWarn ? { onWarn: options.onWarn } : {}),
+    ...(options.discover ? { discover: options.discover } : {}),
   };
 
   let observed = 0;

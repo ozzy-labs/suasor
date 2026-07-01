@@ -269,6 +269,10 @@ suasor slack sync                      # （= <connector> sync）取り込み
 
 - **opt-out**: `[connectors.slack] discover_new = false`（既定 `true`）。マルチ workspace は `[connectors.slack.workspaces.<alias>] discover_new` で per-workspace 上書き可（per-workspace 値 > connector 値 > 既定 `true`）。
 - **cadence（間引き）**: 毎 sync では叩かず **前回 sweep から 24h 経過した workspace のみ** sweep する。最終 sweep 時刻 + 新規件数は connector cursor 内の予約キーに軽量保持し（channel cursor とは別、`slack status` / `cursor reset` には出ない）、追加の projection / event は作らない。
+- **単発トグル（[ADR-0039](../adr/0039-conversation-discovery-drift.md) §3）**: config を書き換えずその回だけ挙動を変える CLI flag（`connector-sync` 共通・Slack のみ honor）:
+  - `suasor slack sync --discover` — 24h cadence（および `discover_new = false` opt-out）を無視して**即時 sweep**。新規チャンネル参加直後に drift をすぐ確認したいとき用。
+  - `suasor slack sync --no-discover` — config が `discover_new = true` でも**その回の sweep を抑止**（cadence marker・cursor は不変）。
+  - 両方を同時指定すると error（相反）。未指定は従来どおり config（`discover_new` + cadence）に従う。Slack 以外の connector では両 flag とも no-op（discovery 概念が無い）。
 - **best-effort**: sweep が失敗しても sync 本体・cursor 前進は止めず warn のみ。rate-limit は共有 `slackFetch`（[ADR-0019](../adr/0019-slack-fetch-rate-limit-retry.md)）に乗る。
 - **`suasor doctor`** はネットワークを叩かず、この sweep が保存した drift marker を読み取って「N 件の新規 Slack 会話が未追加」を **WARN** で surface する（exit code は変えない・診断はオフライン、[ADR-0039](../adr/0039-conversation-discovery-drift.md)）。`discover_new = false` の workspace は stale marker を表示しない。
 

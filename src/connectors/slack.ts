@@ -984,10 +984,13 @@ class SlackConnector implements Connector {
    * is preserved; the sweep only makes the operator aware (ADR-0039 §Decision c).
    *
    * Guards, cheapest first:
+   * - **per-run override** (`ctx.discover`, from `slack sync --discover` /
+   *   `--no-discover`): `"skip"` suppresses the sweep this run; `"force"` runs it
+   *   now, overriding both the opt-out and the cadence gate below.
    * - **opt-out**: `discover_new = false` (connector or per-workspace) → no sweep;
-   *   the prior marker is carried forward untouched.
+   *   the prior marker is carried forward untouched (unless forced).
    * - **cadence**: at most once per {@link DISCOVERY_SWEEP_INTERVAL_MS} (24h) per
-   *   workspace, keyed off the prior marker's timestamp.
+   *   workspace, keyed off the prior marker's timestamp (unless forced).
    * - **best-effort**: any sweep error is warned and swallowed (the marker is
    *   preserved) so a discovery hiccup never fails the ingest that follows.
    *
@@ -1000,9 +1003,19 @@ class SlackConnector implements Connector {
     token: string,
     prevMarker: string | undefined,
   ): Promise<string | undefined> {
+    // Per-run override from `slack sync --discover` / `--no-discover` (ADR-0039
+    // Layer 2). It only steers this run — config (`discover_new`) and the
+    // persisted cadence marker are untouched.
+    const override = ctx.discover;
+
+    // `--no-discover`: skip the sweep for this run even when config enables it.
+    // Keep the prior marker so the last cadence window is preserved.
+    if (override === "skip") return prevMarker;
+
     // Opt-out: keep the prior marker (if any) so re-enabling later still respects
-    // the last cadence window; do not sweep.
-    if (!ws.discoverNew) return prevMarker;
+    // the last cadence window; do not sweep. `--discover` (force) overrides the
+    // opt-out for this single run.
+    if (!ws.discoverNew && override !== "force") return prevMarker;
 
     // A channel-less workspace (e.g. lists-only) has no message-channel config to
     // drift against — every visible channel would read as "new" and nag on every
@@ -1013,7 +1026,9 @@ class SlackConnector implements Connector {
     const nowMs = this.now();
     const prev = prevMarker ? parseDiscoveryMarkerValue(prevMarker) : null;
     // Cadence: swept recently enough → carry the marker forward without a fetch.
-    if (prev && nowMs - prev.lastSweptMs < DISCOVERY_SWEEP_INTERVAL_MS) return prevMarker;
+    // `--discover` (force) bypasses the cadence gate to sweep immediately.
+    if (override !== "force" && prev && nowMs - prev.lastSweptMs < DISCOVERY_SWEEP_INTERVAL_MS)
+      return prevMarker;
 
     const scope = ws.alias === DEFAULT_WORKSPACE_ALIAS ? "" : `workspace '${ws.alias}': `;
     try {

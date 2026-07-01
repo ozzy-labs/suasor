@@ -128,6 +128,35 @@ describe("syncConnector — cursor resume", () => {
   });
 });
 
+describe("syncConnector — discovery override wiring (ADR-0039 Layer 2)", () => {
+  test("forwards options.discover to ctx.discover", async () => {
+    let seen: string | undefined = "unset";
+    await syncConnector(
+      store,
+      fakeConnector([], {
+        onCtx: (ctx) => {
+          seen = ctx.discover;
+        },
+      }),
+      { discover: "force" },
+    );
+    expect(seen).toBe("force");
+  });
+
+  test("omits ctx.discover when the option is absent (configured default)", async () => {
+    let seen: string | undefined = "unset";
+    await syncConnector(
+      store,
+      fakeConnector([], {
+        onCtx: (ctx) => {
+          seen = ctx.discover;
+        },
+      }),
+    );
+    expect(seen).toBeUndefined();
+  });
+});
+
 describe("syncConnector — secret resolution wiring", () => {
   test("ctx.secret resolves the injected env override for the connector", async () => {
     let token: string | null = "unset";

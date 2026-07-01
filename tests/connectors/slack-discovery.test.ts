@@ -241,6 +241,72 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     expect(warns.some((w) => w.includes("discovery sweep skipped"))).toBe(true);
   });
 
+  test("override skip: --no-discover suppresses the sweep even when config enables it", async () => {
+    const { transport, calls } = fakeSweep({
+      public_channel: [{ id: "C2", name: "random", is_member: true }],
+    });
+    const warns: string[] = [];
+    // discover_new defaults to true, so config would normally sweep here.
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 0 },
+    );
+    await drain(connector.sync(ctx({ discover: "skip", onWarn: (m) => warns.push(m) })));
+    expect(calls.length).toBe(0);
+    expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(false);
+  });
+
+  test("override force: --discover sweeps within the 24h cadence window", async () => {
+    const { transport, calls } = fakeSweep({
+      public_channel: [{ id: "C2", name: "random", is_member: true }],
+    });
+    const warns: string[] = [];
+    // Prior sweep at t=0; now = 1h later → normally cadence-gated, but force wins.
+    const prior = JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "0:0" } });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 1 * HOUR },
+    );
+    await drain(
+      connector.sync(ctx({ cursor: prior, discover: "force", onWarn: (m) => warns.push(m) })),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(true);
+    // The marker is refreshed with the forced-sweep time.
+    const saved = (await connector.finalize?.())?.cursor ?? null;
+    expect(readDiscoveryMarkers(saved)).toEqual([
+      { alias: "default", lastSweptMs: 1 * HOUR, newCount: 1 },
+    ]);
+  });
+
+  test("override force: --discover sweeps even when discover_new = false", async () => {
+    const { transport, calls } = fakeSweep({
+      public_channel: [{ id: "C2", name: "random", is_member: true }],
+    });
+    const warns: string[] = [];
+    const connector = createSlackConnector(
+      { channels: ["C1"], discover_new: false },
+      { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 0 },
+    );
+    await drain(connector.sync(ctx({ discover: "force", onWarn: (m) => warns.push(m) })));
+    expect(calls.length).toBeGreaterThan(0);
+    expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(true);
+  });
+
+  test("override undefined: absent flag keeps the configured default (cadence-gated)", async () => {
+    const { transport, calls } = fakeSweep({
+      public_channel: [{ id: "C2", name: "random", is_member: true }],
+    });
+    // Prior sweep at t=0; now = 1h → within cadence, so the default path skips it.
+    const prior = JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "0:0" } });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 1 * HOUR },
+    );
+    await drain(connector.sync(ctx({ cursor: prior, onWarn: () => {} })));
+    expect(calls.length).toBe(0);
+  });
+
   test("named workspace: the drift warn is scoped by alias", async () => {
     const { transport } = fakeSweep({
       public_channel: [{ id: "C2", name: "random", is_member: true }],
