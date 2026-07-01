@@ -457,6 +457,127 @@ describe("suasor slack conversations — network seam", () => {
     expect(byId.C_B).toBe("T02");
   });
 
+  test("a channel shared across workspaces is de-duplicated + marked in the listing (ADR-0038)", async () => {
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };
+      if (url.includes("auth.teams.list")) {
+        return {
+          body: {
+            ok: true,
+            teams: [
+              { id: "T01", name: "Acme" },
+              { id: "T02", name: "Beta" },
+            ],
+          },
+        };
+      }
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          const team = params.get("team_id");
+          // C_SHARED (same global id) is listed under BOTH workspaces; each also
+          // has one workspace-private channel.
+          return {
+            body: {
+              ok: true,
+              channels: [
+                { id: "C_SHARED", name: "cross", is_member: true },
+                { id: team === "T01" ? "C_A" : "C_B", name: "solo", is_member: true },
+              ],
+            },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--types", "public"]);
+    expect(code).toBe(0);
+    // The shared channel's listing row appears exactly once (de-duplicated), not
+    // once per workspace — identified by the "(shared across …)" row marker.
+    const sharedRows = out
+      .split("\n")
+      .filter((l) => l.includes("C_SHARED") && l.includes("(shared across ["));
+    expect(sharedRows).toHaveLength(1);
+    // …and it is marked as shared across the aliases it spans.
+    expect(out).toContain("(shared across [acme, beta])");
+    // Owner = smallest alias = "acme": real entry there, comment under beta.
+    expect(out).toContain('"C_SHARED",  # #cross');
+    expect(out).toContain("# C_SHARED shared, owned by acme");
+    // Both workspace-private channels still surface untouched.
+    expect(out).toContain("C_A");
+    expect(out).toContain("C_B");
+  });
+
+  test("multi-workspace --json adds sharedAcross for shared channels, omits it otherwise (ADR-0038)", async () => {
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };
+      if (url.includes("auth.teams.list")) {
+        return {
+          body: {
+            ok: true,
+            teams: [
+              { id: "T01", name: "Acme" },
+              { id: "T02", name: "Beta" },
+            ],
+          },
+        };
+      }
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          const team = params.get("team_id");
+          return {
+            body: {
+              ok: true,
+              channels: [
+                { id: "C_SHARED", name: "cross", is_member: true },
+                { id: team === "T01" ? "C_A" : "C_B", name: "solo", is_member: true },
+              ],
+            },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--types", "public", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as {
+      conversations: { id: string; sharedAcross?: string[] }[];
+    };
+    const byId = Object.fromEntries(report.conversations.map((c) => [c.id, c]));
+    // The shared channel appears once, tagged with the aliases it spans (ascending).
+    expect(report.conversations.filter((c) => c.id === "C_SHARED")).toHaveLength(1);
+    expect(byId.C_SHARED?.sharedAcross).toEqual(["acme", "beta"]);
+    // Non-shared channels do not carry the additive field (back-compatible shape).
+    expect(byId.C_A?.sharedAcross).toBeUndefined();
+    expect(byId.C_B?.sharedAcross).toBeUndefined();
+  });
+
+  test("single-workspace --json has no sharedAcross field (back-compatible, ADR-0038)", async () => {
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          return {
+            body: { ok: true, channels: [{ id: "C001", name: "general", is_member: true }] },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--types", "public", "--json"]);
+    expect(code).toBe(0);
+    // The single-workspace shape is unchanged — no sharedAcross key at all.
+    expect(out).not.toContain("sharedAcross");
+  });
+
   test("org-level token falls back to a single sweep when auth.teams.list is unavailable (#350)", async () => {
     const { calls } = installFetch((url, params) => {
       if (url.includes("auth.test"))

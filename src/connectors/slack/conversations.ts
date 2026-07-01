@@ -15,6 +15,7 @@
  */
 
 import { slackFetch } from "./_fetch.ts";
+import { channelOwnership } from "./dedup.ts";
 import { defaultUsersTransport, resolveUserName, type SlackUsersTransport } from "./resolve.ts";
 
 // Re-exported so existing importers (and tests) keep resolving the type from
@@ -281,8 +282,23 @@ export interface WorkspaceConfigInput {
  * form lumps every id under a single `team`, which mis-prefixes ids from other
  * workspaces at sync time (identity is `slack:<team>:<channel>:<ts>`). Grouping
  * by workspace keeps each id under its own team.
+ *
+ * A channel shared across several workspaces (one global channel id listed by
+ * more than one alias) is de-duplicated so pasting the whole block does not
+ * double-configure it (ADR-0038 Layer 2): it is emitted as a real `channels`
+ * entry only under its **owner** — the lexicographically smallest alias, per the
+ * shared {@link channelOwnership} rule sync uses — and shown as a
+ * `# <id> shared, owned by <owner-alias>` comment under every non-owner block.
  */
 export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfigInput[]): string[] {
+  // Owner = lexicographically smallest alias listing the channel (ADR-0038 §2),
+  // reusing the same helper sync/config-doctor use so discovery marks the exact
+  // same owner sync would ingest under. `shared` names the ≥2-alias channels.
+  const { owner, shared } = channelOwnership(
+    workspaces.map((ws) => ({ alias: ws.alias, channels: ws.conversations.map((c) => c.id) })),
+  );
+  const sharedOwner = new Map(shared.map((s) => [s.channel, s.owner]));
+
   const lines = ["[connectors.slack]", "enabled = true"];
   for (const ws of workspaces) {
     lines.push("", `[connectors.slack.workspaces.${ws.alias}]`, `team = "${ws.teamId}"`);
@@ -293,7 +309,15 @@ export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfig
     lines.push("# channels are ids (C…/G…/D…), not names — the # comment is just a label");
     lines.push("channels = [");
     for (const c of ws.conversations) {
-      lines.push(`  "${c.id}",  # ${c.displayName}`);
+      // A shared channel is owned by exactly one alias; under any other alias it
+      // is a comment, not an entry, so pasting every block ingests it once
+      // (owner-wins, ADR-0038 Layer 2). Non-shared channels are unaffected —
+      // their owner is their sole alias, so the `owner === ws.alias` test passes.
+      if (sharedOwner.has(c.id) && owner.get(c.id) !== ws.alias) {
+        lines.push(`  # ${c.id} shared, owned by ${owner.get(c.id)}  # ${c.displayName}`);
+      } else {
+        lines.push(`  "${c.id}",  # ${c.displayName}`);
+      }
     }
     lines.push("]");
   }
