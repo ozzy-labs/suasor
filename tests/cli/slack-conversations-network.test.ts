@@ -331,6 +331,42 @@ describe("suasor slack conversations — network seam", () => {
     expect(err).toContain("ADR-0014");
   });
 
+  test("--team-id + --json on a workspace-level token warns and does not mis-tag rows (#350)", async () => {
+    const seen: (string | null)[] = [];
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+      if (url.includes("users.conversations")) {
+        seen.push(params.get("team_id"));
+        if (params.get("types") === "public_channel") {
+          return {
+            body: { ok: true, channels: [{ id: "C001", name: "general", is_member: true }] },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out, err } = await run([
+      "slack",
+      "conversations",
+      "--types",
+      "public",
+      "--team-id",
+      "T555",
+      "--json",
+    ]);
+    expect(code).toBe(0);
+    // The warning reaches --json users too (it goes to stderr, stdout stays clean JSON).
+    expect(err).toContain("--team-id is ignored");
+    // team_id is NOT sent for a workspace-level token (Slack would ignore it),
+    // so rows are not tagged with a workspace Slack never honoured.
+    expect(seen.every((t) => t === null)).toBe(true);
+    const report = JSON.parse(out) as { conversations: { id: string; teamId?: string }[] };
+    expect(report.conversations.every((c) => c.teamId === undefined)).toBe(true);
+  });
+
   test("a non-scope auth.test failure exits 1 with the Slack error code (token never echoed)", async () => {
     installFetch((url) => {
       if (url.includes("auth.test")) return { body: { ok: false, error: "invalid_auth" } };
