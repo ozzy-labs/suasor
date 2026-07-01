@@ -980,6 +980,12 @@ class SlackConnector implements Connector {
     // the last cadence window; do not sweep.
     if (!ws.discoverNew) return prevMarker;
 
+    // A channel-less workspace (e.g. lists-only) has no message-channel config to
+    // drift against — every visible channel would read as "new" and nag on every
+    // window. First-time discovery for such a workspace is the explicit
+    // `slack conversations --new` path, not a routine sync warn (ADR-0039).
+    if (ws.channels.length === 0) return prevMarker;
+
     const nowMs = this.now();
     const prev = prevMarker ? parseDiscoveryMarkerValue(prevMarker) : null;
     // Cadence: swept recently enough → carry the marker forward without a fetch.

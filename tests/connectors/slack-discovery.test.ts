@@ -183,6 +183,22 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(false);
   });
 
+  test("a channel-less (lists-only) workspace is not swept (no nag about every channel)", async () => {
+    const { transport, calls } = fakeSweep({
+      public_channel: [{ id: "C2", name: "random", is_member: true }],
+    });
+    const warns: string[] = [];
+    // Lists-only: keeps the workspace in the sync pass, but there is no channel
+    // config to drift against, so discovery must stay silent.
+    const connector = createSlackConnector(
+      { channels: [], lists: ["Lx"] },
+      { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 0 },
+    );
+    await drain(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
+    expect(calls.length).toBe(0);
+    expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(false);
+  });
+
   test("per-workspace override wins over the connector-level default", async () => {
     const { transport, calls } = fakeSweep({
       public_channel: [{ id: "C2", name: "random", is_member: true }],
