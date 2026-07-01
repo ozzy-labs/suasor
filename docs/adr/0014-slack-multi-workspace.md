@@ -4,7 +4,7 @@
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#50](https://github.com/ozzy-labs/suasor/issues/50) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)
-- Related: [ADR-0007](0007-connector-contract.md)（connector / config）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（per-channel cursor / Slack 運用 verb / `FEATURE_SCOPES`）
+- Related: [ADR-0007](0007-connector-contract.md)（connector / config）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（per-channel cursor / Slack 運用 verb / `FEATURE_SCOPES`）, [ADR-0038](0038-multi-workspace-shared-channel-dedup.md)（Enterprise Grid 共有チャンネルの owner-wins dedup）
 - Prior art: opshub ADR-0041（slack-multi-workspace）
 
 ## Context
