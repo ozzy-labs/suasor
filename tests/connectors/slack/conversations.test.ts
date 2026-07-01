@@ -310,6 +310,62 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
     ]);
     expect(block.join("\n")).toContain("channels = []");
   });
+
+  test("a shared channel is a real entry only under its owner, a comment elsewhere (ADR-0038)", () => {
+    // C1 is shared by both aliases; owner = lexicographically smallest = "acme".
+    const shared = {
+      id: "C1",
+      type: "public" as const,
+      name: "cross",
+      displayName: "#cross",
+      isArchived: false,
+      isMember: true,
+    };
+    const block = renderWorkspacesConfigBlock([
+      {
+        teamId: "T01",
+        alias: "acme",
+        conversations: [shared, { ...shared, id: "C2", name: "a-only", displayName: "#a-only" }],
+      },
+      {
+        teamId: "T02",
+        alias: "beta",
+        conversations: [shared, { ...shared, id: "C9", name: "b-only", displayName: "#b-only" }],
+      },
+    ]);
+    const acmeIdx = block.indexOf("[connectors.slack.workspaces.acme]");
+    const betaIdx = block.indexOf("[connectors.slack.workspaces.beta]");
+    const acmeLines = block.slice(acmeIdx, betaIdx).join("\n");
+    const betaLines = block.slice(betaIdx).join("\n");
+    // Owner block: C1 is a real quoted entry (ingested there), not a comment.
+    expect(acmeLines).toContain('"C1",  # #cross');
+    expect(acmeLines).not.toContain("shared, owned by");
+    // Non-owner block: C1 is a comment attributing it to the owner, so pasting
+    // the whole block does not double-configure it (owner-wins).
+    expect(betaLines).toContain("# C1 shared, owned by acme");
+    expect(betaLines).not.toContain('"C1",');
+    // Each workspace's non-shared channel stays a normal entry in its own block.
+    expect(acmeLines).toContain('"C2",  # #a-only');
+    expect(betaLines).toContain('"C9",  # #b-only');
+  });
+
+  test("owner is the lexicographically smallest alias regardless of workspace order (ADR-0038 §2)", () => {
+    const shared = {
+      id: "C1",
+      type: "public" as const,
+      name: "cross",
+      displayName: "#cross",
+      isArchived: false,
+      isMember: true,
+    };
+    // Declare "zed" before "acme"; owner must still be "acme" (parser-order-independent).
+    const block = renderWorkspacesConfigBlock([
+      { teamId: "T02", alias: "zed", conversations: [shared] },
+      { teamId: "T01", alias: "acme", conversations: [shared] },
+    ]).join("\n");
+    expect(block).toContain("# C1 shared, owned by acme");
+    expect(block).toContain('"C1",  # #cross');
+  });
 });
 
 describe("conversations — onProgress (#84)", () => {
