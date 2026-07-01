@@ -367,6 +367,123 @@ describe("suasor slack conversations — network seam", () => {
     expect(report.conversations.every((c) => c.teamId === undefined)).toBe(true);
   });
 
+  test("org-level token with no --team-id auto-enumerates workspaces and sweeps each (#350)", async () => {
+    const seenTeamIds: (string | null)[] = [];
+    const { calls } = installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };
+      if (url.includes("auth.teams.list")) {
+        return {
+          body: {
+            ok: true,
+            teams: [
+              { id: "T01", name: "Acme" },
+              { id: "T02", name: "Beta Co" },
+            ],
+          },
+        };
+      }
+      if (url.includes("users.conversations")) {
+        seenTeamIds.push(params.get("team_id"));
+        if (params.get("types") === "public_channel") {
+          const team = params.get("team_id");
+          return {
+            body: {
+              ok: true,
+              channels: [{ id: team === "T01" ? "C_A" : "C_B", name: "general", is_member: true }],
+            },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--types", "public"]);
+    expect(code).toBe(0);
+    // auth.teams.list was consulted and both workspaces were swept by team_id.
+    expect(calls).toContain("auth.teams.list");
+    expect(seenTeamIds).toContain("T01");
+    expect(seenTeamIds).toContain("T02");
+    // Both workspaces' channels are surfaced, grouped with per-workspace blocks.
+    expect(out).toContain("across 2 workspace(s)");
+    expect(out).toContain("C_A");
+    expect(out).toContain("C_B");
+    expect(out).toContain("[connectors.slack.workspaces.acme]");
+    expect(out).toContain('team = "T01"');
+    expect(out).toContain("[connectors.slack.workspaces.beta-co]");
+    expect(out).toContain('team = "T02"');
+  });
+
+  test("multi-workspace --json adds a workspaces grouping and tags rows by team (#350)", async () => {
+    installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };
+      if (url.includes("auth.teams.list")) {
+        return {
+          body: {
+            ok: true,
+            teams: [
+              { id: "T01", name: "Acme" },
+              { id: "T02", name: "Beta" },
+            ],
+          },
+        };
+      }
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          const team = params.get("team_id");
+          return {
+            body: {
+              ok: true,
+              channels: [{ id: team === "T01" ? "C_A" : "C_B", name: "general", is_member: true }],
+            },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--types", "public", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as {
+      conversations: { id: string; teamId?: string }[];
+      workspaces?: { id: string; name: string; alias?: string }[];
+    };
+    expect(report.workspaces?.map((w) => w.id).sort()).toEqual(["T01", "T02"]);
+    const byId = Object.fromEntries(report.conversations.map((c) => [c.id, c.teamId]));
+    expect(byId.C_A).toBe("T01");
+    expect(byId.C_B).toBe("T02");
+  });
+
+  test("org-level token falls back to a single sweep when auth.teams.list is unavailable (#350)", async () => {
+    const { calls } = installFetch((url, params) => {
+      if (url.includes("auth.test"))
+        return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };
+      if (url.includes("auth.teams.list"))
+        return { body: { ok: false, error: "enterprise_is_restricted" } };
+      if (url.includes("users.conversations")) {
+        if (params.get("types") === "public_channel") {
+          return {
+            body: { ok: true, channels: [{ id: "C001", name: "general", is_member: true }] },
+          };
+        }
+        return { body: { ok: true, channels: [] } };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const { code, out } = await run(["slack", "conversations", "--types", "public"]);
+    expect(code).toBe(0);
+    // Enumeration was attempted but returned nothing usable → single flat block.
+    expect(calls).toContain("auth.teams.list");
+    expect(out).toContain("C001");
+    expect(out).toContain("[connectors.slack]");
+    expect(out).not.toContain("across");
+    expect(out).not.toContain("workspaces.");
+  });
+
   test("a non-scope auth.test failure exits 1 with the Slack error code (token never echoed)", async () => {
     installFetch((url) => {
       if (url.includes("auth.test")) return { body: { ok: false, error: "invalid_auth" } };

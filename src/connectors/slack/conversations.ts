@@ -316,3 +316,40 @@ export function renderConfigBlock(teamId: string, result: ConversationsResult): 
   lines.push("]");
   return lines;
 }
+
+/** One workspace's discovered conversations for the multi-workspace config block. */
+export interface WorkspaceConfigInput {
+  readonly teamId: string;
+  /** TOML-safe alias for the `[connectors.slack.workspaces.<alias>]` section. */
+  readonly alias: string;
+  readonly conversations: readonly SlackConversation[];
+}
+
+/**
+ * Render a multi-workspace `[connectors.slack]` block for an Enterprise Grid
+ * sweep (Issue #350 / ADR-0014). Emits the load-bearing `enabled = true` on the
+ * connector once, then one `[connectors.slack.workspaces.<alias>]` sub-section
+ * per workspace carrying that workspace's `team` id + discovered `channels`.
+ *
+ * This is the multi-workspace analogue of {@link renderConfigBlock}: the flat
+ * form lumps every id under a single `team`, which mis-prefixes ids from other
+ * workspaces at sync time (identity is `slack:<team>:<channel>:<ts>`). Grouping
+ * by workspace keeps each id under its own team.
+ */
+export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfigInput[]): string[] {
+  const lines = ["[connectors.slack]", "enabled = true"];
+  for (const ws of workspaces) {
+    lines.push("", `[connectors.slack.workspaces.${ws.alias}]`, `team = "${ws.teamId}"`);
+    if (ws.conversations.length === 0) {
+      lines.push("channels = []");
+      continue;
+    }
+    lines.push("# channels are ids (C…/G…/D…), not names — the # comment is just a label");
+    lines.push("channels = [");
+    for (const c of ws.conversations) {
+      lines.push(`  "${c.id}",  # ${c.displayName}`);
+    }
+    lines.push("]");
+  }
+  return lines;
+}

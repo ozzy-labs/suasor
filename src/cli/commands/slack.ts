@@ -11,6 +11,12 @@
  * inside `execute`. No Slack SDK is pulled by any of these verbs.
  */
 import { Command, Option } from "clipanion";
+// Type-only imports are erased at compile time, so they add no runtime require
+// and keep the lazy-import discipline (NFR-PRF-1) intact.
+import type {
+  ConversationsResult,
+  SlackConversation,
+} from "../../connectors/slack/conversations.ts";
 
 const SLACK = "slack";
 
@@ -164,10 +170,13 @@ export class SlackConversationsCommand extends Command {
       failing the sweep (ADR-0011). Prints a [connectors.slack] block you can
       paste into config.toml, then run 'suasor slack sync'.
 
-      On Enterprise Grid, pass --team-id <T…> to scope the listing to a specific
-      workspace; Slack honours it only for an org-level (org-wide app) token, so
-      a workspace-level token ignores it and warns (Issue #350). To cover several
-      workspaces, use a per-workspace token each via --workspace <alias> (ADR-0014).
+      On Enterprise Grid, an org-level (org-wide app) token auto-enumerates every
+      workspace it is approved for (auth.teams.list) and lists channels across all
+      of them, grouped per workspace with a paste-ready multi-workspace block
+      (Issue #350). Pass --team-id <T…> to scope to a single workspace. A
+      workspace-level token cannot span the grid: it lists its own workspace and,
+      if --team-id is given, warns (Slack ignores it) — use a per-workspace token
+      each via --workspace <alias> instead (ADR-0014).
     `,
     examples: [
       ["List everything visible", "suasor slack conversations"],
@@ -247,12 +256,17 @@ export class SlackConversationsCommand extends Command {
       return 1;
     }
 
-    const [{ testToken }, { listConversations, renderConfigBlock }, { createProgress }] =
-      await Promise.all([
-        import("../../connectors/slack/auth.ts"),
-        import("../../connectors/slack/conversations.ts"),
-        import("../progress.ts"),
-      ]);
+    const [
+      { testToken },
+      { listConversations, renderConfigBlock, renderWorkspacesConfigBlock },
+      { listTeams, workspaceAliases },
+      { createProgress },
+    ] = await Promise.all([
+      import("../../connectors/slack/auth.ts"),
+      import("../../connectors/slack/conversations.ts"),
+      import("../../connectors/slack/teams.ts"),
+      import("../progress.ts"),
+    ]);
 
     // Indeterminate progress on stderr while DM name resolution + search paging
     // run, so a multi-second sweep is not silent (#84; same pattern as
@@ -273,13 +287,49 @@ export class SlackConversationsCommand extends Command {
       // there would tag rows with a workspace Slack never honoured (Issue #350).
       // Only scope when the token can honour it; warn (below) otherwise.
       const scopeTeamId = this.teamId && isEnterpriseInstall ? this.teamId : undefined;
-      const result = await listConversations(token, {
-        ...(types ? { types } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-        ...(scopeTeamId ? { teamId: scopeTeamId } : {}),
-        includeArchived: this.includeArchived,
-        onProgress: () => progress.tick(),
-      });
+
+      // Enterprise Grid auto-enumeration (#350): an org-level token with no
+      // explicit --team-id sweeps every workspace the org-wide app is approved
+      // for (auth.teams.list), not just its default one. Enumeration is
+      // best-effort — a non-Grid token, a missing scope, or a single workspace
+      // falls back to the current single sweep (teams.length <= 1).
+      const teams =
+        isEnterpriseInstall && !this.teamId
+          ? await listTeams(token, { onProgress: () => progress.tick() })
+          : [];
+      const multi = teams.length > 1;
+      const aliasByTeam = multi ? workspaceAliases(teams) : new Map<string, string>();
+
+      let result: ConversationsResult;
+      if (multi) {
+        // Sweep each workspace and merge; every row is tagged with its team so
+        // the listing + config block can group by workspace. Missing listing
+        // scopes are unioned across workspaces (one warning per type).
+        const merged: SlackConversation[] = [];
+        const missingScopes: Record<string, string> = {};
+        for (const team of teams) {
+          const r = await listConversations(token, {
+            ...(types ? { types } : {}),
+            teamId: team.id,
+            includeArchived: this.includeArchived,
+            onProgress: () => progress.tick(),
+          });
+          merged.push(...r.conversations);
+          for (const [type, scope] of Object.entries(r.missingScopes)) missingScopes[type] = scope;
+        }
+        // --limit caps the merged total across workspaces (parity with the
+        // single-sweep limit, which caps the output not the fetch).
+        const capped = limit !== undefined ? merged.slice(0, limit) : merged;
+        result = { conversations: capped, missingScopes };
+      } else {
+        result = await listConversations(token, {
+          ...(types ? { types } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(scopeTeamId ? { teamId: scopeTeamId } : {}),
+          includeArchived: this.includeArchived,
+          onProgress: () => progress.tick(),
+        });
+      }
 
       // Engagement axis (--sort=last_self_post): resolve each conversation's
       // last self-post ts via search.messages and sort by it. Requires a User
@@ -324,8 +374,23 @@ export class SlackConversationsCommand extends Command {
         const withEngagement = lastSelfPost
           ? conversations.map((c) => ({ ...c, lastSelfPost: lastSelfPost?.get(c.id) ?? null }))
           : conversations;
+        // Multi-workspace sweeps add a `workspaces` grouping (each conversation
+        // already carries its `teamId`); the single-workspace shape is unchanged
+        // for back-compat (Issue #350).
+        const workspaces = multi
+          ? teams.map((t) => ({ id: t.id, name: t.name, alias: aliasByTeam.get(t.id) }))
+          : undefined;
         this.context.stdout.write(
-          `${JSON.stringify({ teamId, conversations: withEngagement, missingScopes: result.missingScopes }, null, 2)}\n`,
+          `${JSON.stringify(
+            {
+              teamId,
+              conversations: withEngagement,
+              missingScopes: result.missingScopes,
+              ...(workspaces ? { workspaces } : {}),
+            },
+            null,
+            2,
+          )}\n`,
         );
         return 0;
       }
@@ -333,7 +398,11 @@ export class SlackConversationsCommand extends Command {
       // Humanize the engagement ts for the table (the --json path above keeps
       // the raw ts); "-" stays when there is no recorded self-post (#84).
       const { formatSlackTs } = await import("../slack-time.ts");
-      this.context.stdout.write(`${conversations.length} conversation(s) visible to this token:\n`);
+      this.context.stdout.write(
+        multi
+          ? `${conversations.length} conversation(s) across ${teams.length} workspace(s):\n`
+          : `${conversations.length} conversation(s) visible to this token:\n`,
+      );
       // Label the columns Joined / ID / Name so it is unambiguous that the second
       // column is the value to copy into `channels` (config wants ids, not names —
       // Issue #158) and that the leading mark is reachability. The header is
@@ -351,7 +420,10 @@ export class SlackConversationsCommand extends Command {
           const ts = lastSelfPost.get(c.id);
           engagement = `  last_self_post=${ts ? formatSlackTs(ts, this.now) : "-"}`;
         }
-        this.context.stdout.write(`${formatConversationRow(c, engagement)}\n`);
+        // In a multi-workspace sweep, label each row with its workspace alias so
+        // it is clear which Grid workspace a channel belongs to (Issue #350).
+        const wsLabel = multi && c.teamId ? `  [${aliasByTeam.get(c.teamId) ?? c.teamId}]` : "";
+        this.context.stdout.write(`${formatConversationRow(c, `${wsLabel}${engagement}`)}\n`);
       }
       // Explain the mark only when at least one channel is unjoined, so the common
       // all-joined case stays terse.
@@ -364,10 +436,19 @@ export class SlackConversationsCommand extends Command {
         this.context.stderr.write(`warning: ${type} not listed — missing scope ${scope}\n`);
       }
       this.context.stdout.write("\n");
-      for (const line of renderConfigBlock(teamId, {
-        conversations,
-        missingScopes: result.missingScopes,
-      })) {
+      // A multi-workspace sweep renders per-workspace sub-sections so each id
+      // keeps its own `team` prefix at sync time; a single sweep keeps the flat
+      // block (Issue #350 / ADR-0014).
+      const configLines = multi
+        ? renderWorkspacesConfigBlock(
+            teams.map((t) => ({
+              teamId: t.id,
+              alias: aliasByTeam.get(t.id) ?? t.id,
+              conversations: conversations.filter((c) => c.teamId === t.id),
+            })),
+          )
+        : renderConfigBlock(teamId, { conversations, missingScopes: result.missingScopes });
+      for (const line of configLines) {
         this.context.stdout.write(`${line}\n`);
       }
       this.context.stderr.write(

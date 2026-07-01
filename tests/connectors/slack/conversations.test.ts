@@ -3,6 +3,7 @@ import {
   type ConversationType,
   listConversations,
   renderConfigBlock,
+  renderWorkspacesConfigBlock,
   type SlackConversationsTransport,
   type SlackUsersTransport,
 } from "../../../src/connectors/slack/conversations.ts";
@@ -255,6 +256,59 @@ describe("conversations — renderConfigBlock", () => {
     const block = renderConfigBlock("T1", result).join("\n");
     expect(block).toContain("channels are ids");
     expect(block).toContain("not names");
+  });
+});
+
+describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
+  test("emits one [connectors.slack.workspaces.<alias>] sub-section per workspace with its team + channels", () => {
+    const block = renderWorkspacesConfigBlock([
+      {
+        teamId: "T01",
+        alias: "acme",
+        conversations: [
+          {
+            id: "C1",
+            type: "public",
+            name: "general",
+            displayName: "#general",
+            isArchived: false,
+            isMember: true,
+          },
+        ],
+      },
+      {
+        teamId: "T02",
+        alias: "beta",
+        conversations: [
+          {
+            id: "C9",
+            type: "public",
+            name: "random",
+            displayName: "#random",
+            isArchived: false,
+            isMember: true,
+          },
+        ],
+      },
+    ]);
+    const text = block.join("\n");
+    // The load-bearing enabled line is emitted once on the connector.
+    expect(block[0]).toBe("[connectors.slack]");
+    expect(block).toContain("enabled = true");
+    // Each workspace gets its own sub-section with its own team id + channels.
+    expect(text).toContain("[connectors.slack.workspaces.acme]");
+    expect(text).toContain('team = "T01"');
+    expect(text).toContain('"C1",  # #general');
+    expect(text).toContain("[connectors.slack.workspaces.beta]");
+    expect(text).toContain('team = "T02"');
+    expect(text).toContain('"C9",  # #random');
+  });
+
+  test("a workspace with no visible channels renders an empty channels array", () => {
+    const block = renderWorkspacesConfigBlock([
+      { teamId: "T01", alias: "acme", conversations: [] },
+    ]);
+    expect(block.join("\n")).toContain("channels = []");
   });
 });
 
