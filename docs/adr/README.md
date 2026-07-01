@@ -78,3 +78,4 @@ NNNN-kebab-case-title.md
 | 0035 | Project skills — vendor ecosystem dev skills; stop dogfood-committing assistant mirrors |
 | 0036 | Task external-home management (egress write-back / single-pane; loop avoidance) |
 | 0037 | Slack name enrichment (sync-time resolution + `slack_channels` projection) |
+| 0038 | Multi-workspace shared-channel de-duplication (owner-wins, global channel ID key) |
