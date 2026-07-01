@@ -36,6 +36,8 @@ describe("Slack: sync → projection → FTS", () => {
             replies: async () => ({ messages: [] }),
           },
         }),
+        // Keep the author-name resolution (ADR-0037) off the network in tests.
+        usersTransport: async () => ({ ok: true, user: { name: "U1" } }),
       },
     );
     const out = await syncConnector(store, connector, {
@@ -59,6 +61,8 @@ describe("Slack: sync → projection → FTS", () => {
             replies: async () => ({ messages: [] }),
           },
         }),
+        // Keep the author-name resolution (ADR-0037) off the network in tests.
+        usersTransport: async () => ({ ok: true, user: { name: "U1" } }),
       },
     );
     const out2 = await syncConnector(store, c2, {

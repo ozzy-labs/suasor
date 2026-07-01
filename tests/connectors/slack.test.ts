@@ -87,7 +87,10 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
     ]);
     const connector = createSlackConnector(
       { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
+      {
+        clientFactory: () => client,
+        usersTransport: async () => ({ ok: true, user: { profile: { display_name: "Ada" } } }),
+      },
     );
     const records = await collect(connector.sync(ctx()));
     expect(records).toHaveLength(1);
@@ -96,6 +99,78 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
     expect(records[0]?.body).toBe("hello team");
     expect(records[0]?.meta).toMatchObject({ team: "T1", channel: "C1", user: "U1" });
     expect(records[0]?.observedAt).toBe("2023-11-14T22:13:20.000Z");
+  });
+});
+
+describe("Slack connector — author name resolution (ADR-0037 §2)", () => {
+  test("populates meta.userName from users.info, resolving each id once per run", async () => {
+    const { client } = fakeSlack([
+      {
+        messages: [
+          { ts: "1700000001.000000", text: "a", user: "U1" },
+          { ts: "1700000002.000000", text: "b", user: "U1" }, // same id → cache hit
+          { ts: "1700000003.000000", text: "c", user: "U2" },
+        ],
+      },
+    ]);
+    const lookups: string[] = [];
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      {
+        clientFactory: () => client,
+        usersTransport: async (_token, userId) => {
+          lookups.push(userId);
+          const names: Record<string, string> = { U1: "Ada", U2: "Grace" };
+          return names[userId]
+            ? { ok: true, user: { profile: { display_name: names[userId] } } }
+            : { ok: false, error: "user_not_found" };
+        },
+      },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records.map((r) => (r.meta as { userName?: string }).userName)).toEqual([
+      "Ada",
+      "Ada",
+      "Grace",
+    ]);
+    // Per-run cache: U1 resolved once despite two messages (ADR-0037 §5).
+    expect(lookups).toEqual(["U1", "U2"]);
+  });
+
+  test("degrades to no meta.userName when resolution fails (ADR-0037 §6)", async () => {
+    const { client } = fakeSlack([
+      { messages: [{ ts: "1700000001.000000", text: "a", user: "U1" }] },
+    ]);
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      {
+        clientFactory: () => client,
+        // Simulate missing `users:read` scope — resolution must not abort ingest.
+        usersTransport: async () => ({ ok: false, error: "missing_scope" }),
+      },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records).toHaveLength(1);
+    expect(records[0]?.meta).toMatchObject({ user: "U1" });
+    expect((records[0]?.meta as { userName?: string }).userName).toBeUndefined();
+  });
+
+  test("a message with no user carries no userName (no resolution attempted)", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "1700000001.000000", text: "sys" }] }]);
+    let called = false;
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      {
+        clientFactory: () => client,
+        usersTransport: async () => {
+          called = true;
+          return { ok: true, user: { name: "x" } };
+        },
+      },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(called).toBe(false);
+    expect((records[0]?.meta as { userName?: string }).userName).toBeUndefined();
   });
 });
 
