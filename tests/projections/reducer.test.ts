@@ -720,3 +720,123 @@ describe("person identity reducer (ADR-0022)", () => {
     expect(person(slack)?.identity_count).toBe(0);
   });
 });
+
+describe("SlackChannelObserved (ADR-0037 §3)", () => {
+  const now = new Date("2026-07-01T00:00:00.000Z");
+
+  /** The single slack_channels row for a channel id, or undefined. */
+  function channel(channelId: string) {
+    return store.connection.sqlite
+      .query<
+        { channel_id: string; team_id: string; name: string; kind: string; observed_at: string },
+        [string]
+      >("SELECT * FROM slack_channels WHERE channel_id = ?")
+      .get(channelId);
+  }
+
+  test("inserts a channel row (name + kind + team + observed_at)", () => {
+    store.record(
+      {
+        type: "SlackChannelObserved",
+        channelId: "C1",
+        teamId: "T1",
+        displayName: "general",
+        kind: "public",
+      },
+      now,
+    );
+    expect(channel("C1")).toEqual({
+      channel_id: "C1",
+      team_id: "T1",
+      name: "general",
+      kind: "public",
+      observed_at: now.toISOString(),
+    });
+  });
+
+  test("a degrade insert (no displayName) stores an empty name → id fallback", () => {
+    store.record(
+      { type: "SlackChannelObserved", channelId: "C9", teamId: "T1", kind: "public" },
+      now,
+    );
+    expect(channel("C9")?.name).toBe("");
+  });
+
+  test("re-observe is last-write-wins on name / kind / observed_at (rename追従, §7)", () => {
+    store.record(
+      {
+        type: "SlackChannelObserved",
+        channelId: "C1",
+        teamId: "T1",
+        displayName: "general",
+        kind: "public",
+      },
+      now,
+    );
+    const later = new Date("2026-07-02T00:00:00.000Z");
+    store.record(
+      {
+        type: "SlackChannelObserved",
+        channelId: "C1",
+        teamId: "T1",
+        displayName: "renamed",
+        kind: "private",
+      },
+      later,
+    );
+    const row = channel("C1");
+    expect(row?.name).toBe("renamed");
+    expect(row?.kind).toBe("private");
+    expect(row?.observed_at).toBe(later.toISOString());
+  });
+
+  test("a degrade re-observe (empty name) keeps the prior non-empty name (§6/§7)", () => {
+    store.record(
+      {
+        type: "SlackChannelObserved",
+        channelId: "C1",
+        teamId: "T1",
+        displayName: "general",
+        kind: "public",
+      },
+      now,
+    );
+    // Later scope-degraded sync: no displayName. Must NOT blank the resolved name,
+    // but kind / observed_at still refresh (last-write-wins on those columns).
+    const later = new Date("2026-07-03T00:00:00.000Z");
+    store.record(
+      { type: "SlackChannelObserved", channelId: "C1", teamId: "T1", kind: "private" },
+      later,
+    );
+    const row = channel("C1");
+    expect(row?.name).toBe("general"); // preserved
+    expect(row?.kind).toBe("private"); // refreshed
+    expect(row?.observed_at).toBe(later.toISOString());
+  });
+
+  test("kinds cover dm / group and survive a full rebuild (replay-stable)", () => {
+    store.record(
+      {
+        type: "SlackChannelObserved",
+        channelId: "D1",
+        teamId: "T1",
+        displayName: "Ada",
+        kind: "dm",
+      },
+      now,
+    );
+    store.record(
+      {
+        type: "SlackChannelObserved",
+        channelId: "G1",
+        teamId: "T1",
+        displayName: "Ada, Grace",
+        kind: "group",
+      },
+      now,
+    );
+    store.rebuild();
+    expect(channel("D1")).toMatchObject({ name: "Ada", kind: "dm" });
+    expect(channel("G1")).toMatchObject({ name: "Ada, Grace", kind: "group" });
+  });
+});

@@ -202,3 +202,25 @@ export const personIdentities = sqliteTable("person_identities", {
   displayName: text("display_name").notNull().default(""),
   observedAt: text("observed_at").notNull(),
 });
+
+/**
+ * Slack channel projection (ADR-0037 §3). One row per observed conversation id,
+ * name-resolved at sync time so display layers join `C…/G…/D…` ids → human names
+ * locally, with no live fetch (no-fetch-at-query, ADR-0012). Folded from
+ * `SlackChannelObserved` with last-write-wins on re-observe; a degrade (empty
+ * name) keeps the prior non-empty `name` rather than blanking it (§6/§7). `name`
+ * defaults to `""` so an id-only fallback is representable; `kind` is one of
+ * public / private / group / dm.
+ */
+export const slackChannels = sqliteTable("slack_channels", {
+  /** Slack conversation id (`C…` public/private, `G…` group DM, `D…` single DM). */
+  channelId: text("channel_id").primaryKey(),
+  /** Team / workspace id this channel belongs to (ADR-0014 id-prefix scope). */
+  teamId: text("team_id").notNull().default(""),
+  /** Resolved human-readable name; empty until resolved (id fallback at display). */
+  name: text("name").notNull().default(""),
+  /** Channel kind: public / private / group / dm. */
+  kind: text("kind").notNull(),
+  /** When this channel was last observed/resolved (ISO 8601). */
+  observedAt: text("observed_at").notNull(),
+});

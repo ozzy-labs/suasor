@@ -123,7 +123,7 @@ describe("suasor doctor", () => {
     expect(code).toBe(0);
     expect(out).toContain("[OK  ] config");
     expect(out).toContain("[OK  ] database");
-    expect(out).toContain("10 projection tables");
+    expect(out).toContain("11 projection tables");
     expect(out).toContain("0 error(s)");
   });
 

@@ -423,6 +423,41 @@ export const PersonSplit = z.object({
   newPersonId: z.string().min(1),
 });
 
+/**
+ * Slack channel kinds for the `slack_channels` projection (ADR-0037 §3). Derived
+ * from the conversation id prefix + the `conversations.info` classification:
+ * `public` / `private` channels, a group DM (`group`), or a single DM (`dm`).
+ */
+export const SLACK_CHANNEL_KINDS = ["public", "private", "group", "dm"] as const;
+export const SlackChannelKind = z.enum(SLACK_CHANNEL_KINDS);
+export type SlackChannelKind = z.infer<typeof SlackChannelKind>;
+
+/**
+ * A Slack channel/conversation id was observed and name-resolved at sync time
+ * (ADR-0037 §3). Folded into the `slack_channels` projection (last-write-wins)
+ * so display layers can join a `C…/G…/D…` id to a human name **without a live
+ * fetch** (no-fetch-at-query, ADR-0012). An additive new type on the
+ * discriminated union — `schemaVersion` is unchanged (existing payloads are
+ * untouched, so ADR-0002 needs no upcast).
+ *
+ * `displayName` is optional: on a degrade (missing scope / API error, ADR-0037
+ * §6) it is emitted empty/absent so the reducer keeps any prior resolved name
+ * (last-write-wins with a non-empty guard, mirroring the person display name)
+ * and the display layer falls back to the id.
+ */
+export const SlackChannelObserved = z.object({
+  type: z.literal("SlackChannelObserved"),
+  ...Envelope,
+  /** Slack conversation id (`C…` public/private, `G…` group DM, `D…` single DM). */
+  channelId: z.string().min(1),
+  /** Team / workspace id this channel belongs to (id-prefix scope, ADR-0014). */
+  teamId: z.string().min(1),
+  /** Resolved human-readable name; empty/absent when unresolved (degrade, §6). */
+  displayName: z.string().optional(),
+  /** Channel kind (public / private / group / dm), from id prefix + API. */
+  kind: SlackChannelKind,
+});
+
 /** Direction of a commitment relative to the operator (ADR-0021). */
 export const COMMITMENT_DIRECTIONS = ["owed_by_me", "owed_to_me"] as const;
 export const CommitmentDirection = z.enum(COMMITMENT_DIRECTIONS);
@@ -499,6 +534,7 @@ export const DomainEvent = z.discriminatedUnion("type", [
   PersonIdentityObserved,
   PersonsMerged,
   PersonSplit,
+  SlackChannelObserved,
   CommitmentOpened,
   CommitmentResolved,
   CommitmentDismissed,
@@ -530,6 +566,7 @@ export const EVENT_TYPES = [
   "PersonIdentityObserved",
   "PersonsMerged",
   "PersonSplit",
+  "SlackChannelObserved",
   "CommitmentOpened",
   "CommitmentResolved",
   "CommitmentDismissed",
@@ -564,6 +601,7 @@ export type NewEvent =
   | Omit<z.input<typeof PersonIdentityObserved>, "id" | "recordedAt">
   | Omit<z.input<typeof PersonsMerged>, "id" | "recordedAt">
   | Omit<z.input<typeof PersonSplit>, "id" | "recordedAt">
+  | Omit<z.input<typeof SlackChannelObserved>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentOpened>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentResolved>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentDismissed>, "id" | "recordedAt">

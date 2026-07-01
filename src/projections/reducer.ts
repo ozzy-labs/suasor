@@ -578,6 +578,35 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
       refreshIdentityCount(sqlite, event.newPersonId, event.recordedAt);
       return;
     }
+    case "SlackChannelObserved": {
+      // Upsert the channel name projection (ADR-0037 §3, last-write-wins). team_id
+      // / kind / observed_at always refresh on re-observe (rename追従, §7); the
+      // `name` only overwrites when the incoming value is non-empty, so a degrade
+      // re-observe (displayName absent/empty, §6) keeps a prior resolved name
+      // rather than blanking it — mirroring the person display-name guard
+      // (ensurePerson, decision 2). A fresh row on degrade inserts an empty name,
+      // and the display layer falls back to the id.
+      const name = event.displayName ?? "";
+      sqlite
+        .query(
+          `INSERT INTO slack_channels (channel_id, team_id, name, kind, observed_at)
+           VALUES ($id, $team, $name, $kind, $ts)
+           ON CONFLICT(channel_id) DO UPDATE SET
+             team_id     = excluded.team_id,
+             name        = CASE WHEN excluded.name <> '' THEN excluded.name
+                                ELSE slack_channels.name END,
+             kind        = excluded.kind,
+             observed_at = excluded.observed_at`,
+        )
+        .run({
+          $id: event.channelId,
+          $team: event.teamId,
+          $name: name,
+          $kind: event.kind,
+          $ts: event.recordedAt,
+        });
+      return;
+    }
     case "CommitmentOpened": {
       // A confirmed commitment enters the ledger as `open` (ADR-0021). ON
       // CONFLICT refreshes the descriptive columns but leaves `state` untouched
