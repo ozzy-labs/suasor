@@ -391,6 +391,11 @@ describe("listSlackDemand (ADR-0012)", () => {
     });
   }
 
+  /** Seed the local `slack_teams` projection (ADR-0037 §10, Issue #361). */
+  function team(teamId: string, displayName: string) {
+    store.record({ type: "SlackTeamObserved", teamId, displayName });
+  }
+
   test("detects @mentions of self and DMs; ignores ordinary messages", () => {
     slack("m1", "C1", "hey <@U_ME> can you review", "2026-06-10T00:00:00.000Z"); // mention
     slack("d1", "D9", "direct hello", "2026-06-11T00:00:00.000Z"); // DM
@@ -463,6 +468,30 @@ describe("listSlackDemand (ADR-0012)", () => {
     expect(row?.meta.user).toBe("U_ALICE");
   });
 
+  test("enriches teamName from the local slack_teams projection (Issue #361)", () => {
+    channel("C1", "general");
+    team("T1", "Acme"); // slack() seeds meta.team = "T1"
+    slack("m1", "C1", "hey <@U_ME> please look", "2026-06-10T00:00:00.000Z", "U_ALICE");
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.teamName).toBe("Acme");
+    // Raw id remains in meta for the display-layer fallback.
+    expect(row?.meta.team).toBe("T1");
+  });
+
+  test("unresolved team id falls back to null (id-only, §6)", () => {
+    slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z");
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.teamName).toBeNull();
+    expect(row?.meta.team).toBe("T1");
+  });
+
+  test("an empty resolved team name degrades to null (not an empty string)", () => {
+    team("T1", ""); // observed but unresolved name (degrade path)
+    slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z");
+    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    expect(row?.teamName).toBeNull();
+  });
+
   test("resolves a DM's counterpart name from slack_channels", () => {
     // PR2 folds the DM counterpart's name onto the D… channel row.
     channel("D9", "Bob", "dm");
@@ -502,6 +531,7 @@ describe("listSlackDemand (ADR-0012)", () => {
   test("joins purely from projections — no network at query time (no-fetch-at-query)", () => {
     channel("C1", "general");
     identity("U_ALICE", "Alice");
+    team("T1", "Acme");
     slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_ALICE");
     // listSlackDemand takes only a sqlite handle (no transport/client is injected),
     // so a join cannot reach Slack. Guard it by making any fetch throw.
@@ -515,6 +545,7 @@ describe("listSlackDemand (ADR-0012)", () => {
       const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
       expect(row?.channelName).toBe("general");
       expect(row?.userName).toBe("Alice");
+      expect(row?.teamName).toBe("Acme");
     } finally {
       globalThis.fetch = originalFetch;
     }

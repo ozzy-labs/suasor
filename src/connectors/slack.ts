@@ -35,6 +35,7 @@ import {
   resolveUserName,
   type SlackUsersTransport,
 } from "./slack/resolve.ts";
+import { resolveTeamName } from "./slack/team.ts";
 
 /** One workspace's ingest target (a single Slack team). */
 export const SlackWorkspaceConfig = z.object({
@@ -320,6 +321,11 @@ interface SlackMessageItem {
  * `meta.channelKind` is always set (from the id prefix even on degrade) and
  * `meta.channelName` only when a non-empty name was resolved, so `channelFromMeta`
  * can fold a `SlackChannelObserved` (an empty name degrades to an id fallback).
+ *
+ * `teamName` is the sync-time-resolved workspace name (ADR-0037 §3/§10, Issue
+ * #361): stored under `meta.teamName` only when a non-empty name was resolved, so
+ * `teamFromMeta` can fold a `SlackTeamObserved` (an absent name degrades to the
+ * team id fallback at display).
  */
 function toRecord(
   team: string,
@@ -327,6 +333,7 @@ function toRecord(
   item: SlackMessageItem,
   userName?: string | null,
   channelInfo?: ResolvedChannel,
+  teamName?: string | null,
 ): SourceRecord {
   return {
     externalId: `slack:${team}:${channel}:${item.ts}`,
@@ -340,6 +347,7 @@ function toRecord(
       ts: item.ts,
       user: item.user ?? null,
       ...(userName ? { userName } : {}),
+      ...(teamName ? { teamName } : {}),
       ...(channelInfo
         ? {
             channelKind: channelInfo.kind,
@@ -403,6 +411,22 @@ export interface SlackClientLike {
     items?: SlackListItem[];
     response_metadata?: { next_cursor?: string };
   }>;
+  /**
+   * `auth.test` — the token's own team id / name, for team-name resolution
+   * (ADR-0037 §10, Issue #361). Optional so existing message-only fakes need not
+   * implement it — team-name resolution then degrades to id-only (no live fetch).
+   */
+  authTest?: () => Promise<{ ok?: boolean; team?: string; team_id?: string }>;
+  /**
+   * `auth.teams.list` — Enterprise Grid workspace enumeration for team names
+   * (ADR-0037 §10, Issue #361). Optional; a fake without it (or a non-Grid token)
+   * falls back to `authTest` for the single team.
+   */
+  authTeamsList?: (args: { cursor?: string; limit?: number }) => Promise<{
+    ok?: boolean;
+    teams?: Array<{ id?: string; name?: string }>;
+    response_metadata?: { next_cursor?: string };
+  }>;
 }
 
 /** A Slack List item (record) and its raw cells, as `slackLists.items.list` returns. */
@@ -455,6 +479,16 @@ export const defaultSlackClientFactory: SlackClientFactory = async (token) => {
   like.slackListsItems = (args) =>
     web.apiCall("slackLists.items.list", args) as Promise<{
       items?: SlackListItem[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  // Team-name resolution (ADR-0037 §10, Issue #361): `auth.test` for the token's
+  // own team, `auth.teams.list` (untyped → apiCall) for Grid enumeration.
+  like.authTest = () =>
+    web.auth.test() as Promise<{ ok?: boolean; team?: string; team_id?: string }>;
+  like.authTeamsList = (args) =>
+    web.apiCall("auth.teams.list", args) as Promise<{
+      ok?: boolean;
+      teams?: Array<{ id?: string; name?: string }>;
       response_metadata?: { next_cursor?: string };
     }>;
   return like;
@@ -615,6 +649,13 @@ class SlackConnector implements Connector {
         // resolved via `conversations.info` (+ members for group DMs) at most once
         // this run. Shares `nameCache` for DM / group-DM participant names.
         const channelCache = new Map<string, ResolvedChannel>();
+        // Per-workspace team-name resolution (ADR-0037 §10, Issue #361): resolve
+        // this workspace's team id → workspace name once per run via
+        // `auth.teams.list` (Grid) / `auth.test` (single). Best-effort degrade to
+        // undefined → the display layer falls back to the team id. Stashed into
+        // `meta.teamName` so `teamFromMeta` folds a SlackTeamObserved per team.
+        const teamCache = new Map<string, string | null>();
+        const teamName = (await resolveTeamName(client, ws.team, teamCache)) ?? undefined;
         // Channels this run could not reach (not_in_channel / channel_not_found /
         // is_archived): collected per channel and surfaced as one aggregated warn
         // so READY-but-unjoined channels are no longer silently empty (ADR-0011).
@@ -665,7 +706,7 @@ class SlackConnector implements Connector {
                 nameCache,
                 channelCache,
               );
-              yield toRecord(ws.team, channel, item, userName, channelInfo);
+              yield toRecord(ws.team, channel, item, userName, channelInfo, teamName);
             }
           } catch (error) {
             // A channel-scoped unreachable error (not_in_channel etc.) must not

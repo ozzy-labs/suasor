@@ -607,6 +607,27 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
         });
       return;
     }
+    case "SlackTeamObserved": {
+      // Upsert the team name projection (ADR-0037 §3/§10, Issue #361, last-write-
+      // wins). observed_at always refreshes on re-observe (rename追従, §7); the
+      // `name` only overwrites when the incoming value is non-empty, so a degrade
+      // re-observe (displayName absent/empty, §6) keeps a prior resolved name
+      // rather than blanking it — mirroring the channel / person display-name
+      // guard. A fresh row on degrade inserts an empty name, and the display layer
+      // falls back to the id.
+      const name = event.displayName ?? "";
+      sqlite
+        .query(
+          `INSERT INTO slack_teams (team_id, name, observed_at)
+           VALUES ($id, $name, $ts)
+           ON CONFLICT(team_id) DO UPDATE SET
+             name        = CASE WHEN excluded.name <> '' THEN excluded.name
+                                ELSE slack_teams.name END,
+             observed_at = excluded.observed_at`,
+        )
+        .run({ $id: event.teamId, $name: name, $ts: event.recordedAt });
+      return;
+    }
     case "CommitmentOpened": {
       // A confirmed commitment enters the ledger as `open` (ADR-0021). ON
       // CONFLICT refreshes the descriptive columns but leaves `state` untouched

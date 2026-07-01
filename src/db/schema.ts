@@ -224,3 +224,22 @@ export const slackChannels = sqliteTable("slack_channels", {
   /** When this channel was last observed/resolved (ISO 8601). */
   observedAt: text("observed_at").notNull(),
 });
+
+/**
+ * Slack team / workspace projection (ADR-0037 §3/§10, Issue #361). One row per
+ * observed `T…` id, name-resolved at sync time so display layers join a team id
+ * → human workspace name locally, with no live fetch (no-fetch-at-query,
+ * ADR-0012). Folded from `SlackTeamObserved` with last-write-wins on re-observe;
+ * a degrade (empty name) keeps the prior non-empty `name` rather than blanking it
+ * (§6/§7). A team is 1:N with channels, so it is a separate projection rather
+ * than a denormalised column on `slack_channels`. `name` defaults to `""` so an
+ * id-only fallback is representable.
+ */
+export const slackTeams = sqliteTable("slack_teams", {
+  /** Slack team / workspace id (`T…`); the join key for `meta.team`. */
+  teamId: text("team_id").primaryKey(),
+  /** Resolved workspace name; empty until resolved (id fallback at display). */
+  name: text("name").notNull().default(""),
+  /** When this team was last observed/resolved (ISO 8601). */
+  observedAt: text("observed_at").notNull(),
+});

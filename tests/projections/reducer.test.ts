@@ -840,3 +840,56 @@ describe("SlackChannelObserved (ADR-0037 §3)", () => {
     expect(channel("G1")).toMatchObject({ name: "Ada, Grace", kind: "group" });
   });
 });
+
+describe("SlackTeamObserved (ADR-0037 §10, Issue #361)", () => {
+  const now = new Date("2026-07-01T00:00:00.000Z");
+
+  /** The single slack_teams row for a team id, or undefined. */
+  function team(teamId: string) {
+    return store.connection.sqlite
+      .query<{ team_id: string; name: string; observed_at: string }, [string]>(
+        "SELECT * FROM slack_teams WHERE team_id = ?",
+      )
+      .get(teamId);
+  }
+
+  test("inserts a team row (name + observed_at)", () => {
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Acme" }, now);
+    expect(team("T1")).toEqual({
+      team_id: "T1",
+      name: "Acme",
+      observed_at: now.toISOString(),
+    });
+  });
+
+  test("a degrade insert (no displayName) stores an empty name → id fallback", () => {
+    store.record({ type: "SlackTeamObserved", teamId: "T9" }, now);
+    expect(team("T9")?.name).toBe("");
+  });
+
+  test("re-observe is last-write-wins on name / observed_at (rename追従, §7)", () => {
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Acme" }, now);
+    const later = new Date("2026-07-02T00:00:00.000Z");
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Acme Corp" }, later);
+    const row = team("T1");
+    expect(row?.name).toBe("Acme Corp");
+    expect(row?.observed_at).toBe(later.toISOString());
+  });
+
+  test("a degrade re-observe (empty name) keeps the prior non-empty name (§6/§7)", () => {
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Acme" }, now);
+    // Later scope-degraded sync: no displayName. Must NOT blank the resolved name,
+    // but observed_at still refreshes (last-write-wins on that column).
+    const later = new Date("2026-07-03T00:00:00.000Z");
+    store.record({ type: "SlackTeamObserved", teamId: "T1" }, later);
+    const row = team("T1");
+    expect(row?.name).toBe("Acme"); // preserved
+    expect(row?.observed_at).toBe(later.toISOString()); // refreshed
+  });
+
+  test("survives a full rebuild (replay-stable, §9)", () => {
+    store.record({ type: "SlackTeamObserved", teamId: "T1", displayName: "Acme" }, now);
+    store.rebuild();
+    expect(team("T1")).toMatchObject({ team_id: "T1", name: "Acme" });
+  });
+});

@@ -15,6 +15,13 @@
       "when": 1782889380899,
       "tag": "0001_talented_joshua_kane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1782893003793,
+      "tag": "0002_icy_korath",
+      "breakpoints": true
     }
   ]
 }

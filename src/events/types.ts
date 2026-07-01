@@ -458,6 +458,30 @@ export const SlackChannelObserved = z.object({
   kind: SlackChannelKind,
 });
 
+/**
+ * A Slack team / workspace id was observed and name-resolved at sync time
+ * (ADR-0037 §3/§10, Issue #361). Folded into the `slack_teams` projection
+ * (last-write-wins) so display layers can join a `T…` id to a human workspace
+ * name **without a live fetch** (no-fetch-at-query, ADR-0012). Sibling of
+ * {@link SlackChannelObserved}: an additive new type on the discriminated union,
+ * so `schemaVersion` is unchanged (existing payloads untouched — ADR-0002 needs
+ * no upcast).
+ *
+ * `displayName` is optional: on a degrade (missing scope / API error, ADR-0037
+ * §6) it is emitted empty/absent so the reducer keeps any prior resolved name
+ * (last-write-wins with a non-empty guard, mirroring the channel / person name)
+ * and the display layer falls back to the id. A team is 1:N with channels, so it
+ * gets its own projection rather than being denormalised onto `slack_channels`.
+ */
+export const SlackTeamObserved = z.object({
+  type: z.literal("SlackTeamObserved"),
+  ...Envelope,
+  /** Slack team / workspace id (`T…`); the join key for `meta.team`. */
+  teamId: z.string().min(1),
+  /** Resolved workspace name; empty/absent when unresolved (degrade, §6). */
+  displayName: z.string().optional(),
+});
+
 /** Direction of a commitment relative to the operator (ADR-0021). */
 export const COMMITMENT_DIRECTIONS = ["owed_by_me", "owed_to_me"] as const;
 export const CommitmentDirection = z.enum(COMMITMENT_DIRECTIONS);
@@ -535,6 +559,7 @@ export const DomainEvent = z.discriminatedUnion("type", [
   PersonsMerged,
   PersonSplit,
   SlackChannelObserved,
+  SlackTeamObserved,
   CommitmentOpened,
   CommitmentResolved,
   CommitmentDismissed,
@@ -567,6 +592,7 @@ export const EVENT_TYPES = [
   "PersonsMerged",
   "PersonSplit",
   "SlackChannelObserved",
+  "SlackTeamObserved",
   "CommitmentOpened",
   "CommitmentResolved",
   "CommitmentDismissed",
@@ -602,6 +628,7 @@ export type NewEvent =
   | Omit<z.input<typeof PersonsMerged>, "id" | "recordedAt">
   | Omit<z.input<typeof PersonSplit>, "id" | "recordedAt">
   | Omit<z.input<typeof SlackChannelObserved>, "id" | "recordedAt">
+  | Omit<z.input<typeof SlackTeamObserved>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentOpened>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentResolved>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentDismissed>, "id" | "recordedAt">

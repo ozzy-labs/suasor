@@ -319,3 +319,27 @@ describe("slack_channels rebuild (ADR-0037 §3 / §9)", () => {
     expect(rows).toEqual([{ channel_id: "C1", name: "general" }]);
   });
 });
+
+describe("slack_teams rebuild (ADR-0037 §10 / §9, Issue #361)", () => {
+  test("slack_teams is truncated + replayed on rebuild (not left stale)", () => {
+    const sqlite = store.connection.sqlite;
+    store.record(
+      { type: "SlackTeamObserved", teamId: "T1", displayName: "Acme" },
+      new Date("2026-07-01T00:00:00.000Z"),
+    );
+    // A stray row NOT backed by any event must be removed by the truncate+replay.
+    sqlite
+      .query(
+        "INSERT INTO slack_teams (team_id, name, observed_at) VALUES ('TSTALE','stale','2026-07-01T00:00:00.000Z')",
+      )
+      .run();
+    store.rebuild();
+    const rows = sqlite
+      .query<{ team_id: string; name: string }, []>(
+        "SELECT team_id, name FROM slack_teams ORDER BY team_id",
+      )
+      .all();
+    // Only the event-backed team survives (stray truncated, event replayed).
+    expect(rows).toEqual([{ team_id: "T1", name: "Acme" }]);
+  });
+});

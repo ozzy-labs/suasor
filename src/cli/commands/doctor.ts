@@ -42,6 +42,7 @@ const PROJECTION_TABLES = [
   "persons",
   "person_identities",
   "slack_channels",
+  "slack_teams",
 ];
 
 export class DoctorCommand extends Command {

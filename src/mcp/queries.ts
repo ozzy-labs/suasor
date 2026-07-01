@@ -744,6 +744,13 @@ export interface SlackDemandRecord extends SourceRecord {
    * back to the raw id in `meta.user`. Never live-fetched.
    */
   userName: string | null;
+  /**
+   * Workspace display name joined from the local `slack_teams` projection
+   * (ADR-0037 §3/§10, Issue #361) via `meta.team`. `null` when unresolved (no
+   * projection row / empty name), so display layers fall back to the raw id in
+   * `meta.team`. Never live-fetched (no-fetch-at-query, ADR-0012).
+   */
+  teamName: string | null;
 }
 
 export interface ListSlackDemandOptions {
@@ -760,10 +767,11 @@ export interface ListSlackDemandOptions {
 /** A `slack_message` source id is a DM when its channel id starts with `D`. */
 const DM_CHANNEL_CLAUSE = "json_extract(sources.meta, '$.channel') LIKE 'D%'";
 
-/** A demand source row plus its locally-joined channel / sender names. */
+/** A demand source row plus its locally-joined channel / sender / team names. */
 interface SlackDemandRow extends SourceRow {
   channel_name: string | null;
   user_name: string | null;
+  team_name: string | null;
 }
 
 /** Empty / absent joined name → `null` (id-only fallback, ADR-0037 §6). */
@@ -778,13 +786,13 @@ function nameOrNull(value: string | null): string | null {
  * `mention`. Mentions need `selfUserIds`; without any, only DMs are returned
  * (and a `kinds: ["mention"]` filter then yields nothing).
  *
- * Each row is enriched with `channelName` / `userName` by LEFT JOINing the local
- * `slack_channels` (via `meta.channel`) and `person_identities` (via `meta.user`,
- * `identity_key = 'slack:'||user`) projections that sync populated (ADR-0037
- * §10). This is a pure local join — no Slack API / network is touched at query
- * time (no-fetch-at-query, ADR-0012). Unresolved ids yield `null`, leaving the
- * raw ids in `meta` for an id-only fallback (ADR-0037 §6). teamName is not
- * surfaced: there is no local team-name projection.
+ * Each row is enriched with `channelName` / `userName` / `teamName` by LEFT
+ * JOINing the local `slack_channels` (via `meta.channel`), `person_identities`
+ * (via `meta.user`, `identity_key = 'slack:'||user`), and `slack_teams` (via
+ * `meta.team`) projections that sync populated (ADR-0037 §10, Issue #361). This
+ * is a pure local join — no Slack API / network is touched at query time
+ * (no-fetch-at-query, ADR-0012). Unresolved ids yield `null`, leaving the raw
+ * ids in `meta` for an id-only fallback (ADR-0037 §6).
  */
 export function listSlackDemand(
   sqlite: Database,
@@ -814,12 +822,15 @@ export function listSlackDemand(
       `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
               sources.observed_at, sources.meta,
               slack_channels.name AS channel_name,
-              person_identities.display_name AS user_name
+              person_identities.display_name AS user_name,
+              slack_teams.name AS team_name
          FROM sources
          LEFT JOIN slack_channels
            ON slack_channels.channel_id = json_extract(sources.meta, '$.channel')
          LEFT JOIN person_identities
            ON person_identities.identity_key = 'slack:' || json_extract(sources.meta, '$.user')
+         LEFT JOIN slack_teams
+           ON slack_teams.team_id = json_extract(sources.meta, '$.team')
         WHERE ${clauses.join(" AND ")}
         ORDER BY sources.observed_at DESC
         LIMIT ?`,
@@ -834,6 +845,7 @@ export function listSlackDemand(
       kind: channel.startsWith("D") ? "dm" : "mention",
       channelName: nameOrNull(row.channel_name),
       userName: nameOrNull(row.user_name),
+      teamName: nameOrNull(row.team_name),
     };
   });
 }

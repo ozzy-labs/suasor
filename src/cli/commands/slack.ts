@@ -857,7 +857,7 @@ export class SlackResolveNamesCommand extends Command {
       return 0;
     }
 
-    const { channels, users } = summary;
+    const { channels, users, teams } = summary;
     this.context.stdout.write(
       `channels: ${channels.resolved} resolved, ${channels.skipped} already named, ` +
         `${channels.degraded} unresolved (scope/API)\n`,
@@ -865,6 +865,10 @@ export class SlackResolveNamesCommand extends Command {
     this.context.stdout.write(
       `users:    ${users.resolved} resolved, ${users.skipped} already named, ` +
         `${users.degraded} unresolved (scope/API)\n`,
+    );
+    this.context.stdout.write(
+      `teams:    ${teams.resolved} resolved, ${teams.skipped} already named, ` +
+        `${teams.degraded} unresolved (scope/API)\n`,
     );
     if (summary.tokenlessWorkspaces.length > 0) {
       this.context.stderr.write(
