@@ -121,6 +121,49 @@ describe("MCP read surface", () => {
     expect(demand.find((d) => d.externalId === "d1")?.kind).toBe("dm");
   });
 
+  test("slack.demand.list surfaces channelName / userName from local projections", async () => {
+    store.record({
+      type: "SourceObserved",
+      externalId: "m1",
+      sourceType: "slack_message",
+      body: "please review <@U_ME>",
+      observedAt: "2026-06-14T00:00:00.000Z",
+      fingerprint: "m1",
+      meta: { team: "T1", channel: "C1", user: "U_ALICE" },
+    });
+    store.record({
+      type: "SlackChannelObserved",
+      channelId: "C1",
+      teamId: "T1",
+      displayName: "general",
+      kind: "public",
+    });
+    store.record({
+      type: "PersonIdentityObserved",
+      personId: "person_slack_U_ALICE",
+      connector: "slack",
+      handle: "U_ALICE",
+      displayName: "Alice",
+    });
+
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "disabled",
+      slackSelfUserIds: ["U_ME"],
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const res = await client.callTool({ name: "slack.demand.list", arguments: {} });
+    const { demand } = parseResult(res as never) as {
+      demand: { externalId: string; channelName: string | null; userName: string | null }[];
+    };
+    const row = demand.find((d) => d.externalId === "m1");
+    expect(row?.channelName).toBe("general");
+    expect(row?.userName).toBe("Alice");
+  });
+
   test("brief bundles the period's material by section (ADR-0017)", async () => {
     seedSource("s1", "in-window source"); // observedAt 2026-06-14 (seedSource default)
     store.record(

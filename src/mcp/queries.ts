@@ -730,6 +730,20 @@ export function listCommitments(
 export interface SlackDemandRecord extends SourceRecord {
   /** `dm` when the source is a direct message; otherwise `mention`. */
   kind: "mention" | "dm";
+  /**
+   * Human-readable channel name joined from the local `slack_channels`
+   * projection (ADR-0037 §3/§10) via `meta.channel`. `null` when unresolved
+   * (no projection row / empty name), so display layers fall back to the raw
+   * id in `meta.channel`. Never live-fetched (no-fetch-at-query, ADR-0012).
+   */
+  channelName: string | null;
+  /**
+   * Sender display name joined from the local `person_identities` projection
+   * (ADR-0022 / ADR-0037 §2/§10) via `meta.user` (`identity_key = 'slack:'||user`).
+   * `null` when unresolved (no identity / empty name), so display layers fall
+   * back to the raw id in `meta.user`. Never live-fetched.
+   */
+  userName: string | null;
 }
 
 export interface ListSlackDemandOptions {
@@ -744,7 +758,18 @@ export interface ListSlackDemandOptions {
 }
 
 /** A `slack_message` source id is a DM when its channel id starts with `D`. */
-const DM_CHANNEL_CLAUSE = "json_extract(meta, '$.channel') LIKE 'D%'";
+const DM_CHANNEL_CLAUSE = "json_extract(sources.meta, '$.channel') LIKE 'D%'";
+
+/** A demand source row plus its locally-joined channel / sender names. */
+interface SlackDemandRow extends SourceRow {
+  channel_name: string | null;
+  user_name: string | null;
+}
+
+/** Empty / absent joined name → `null` (id-only fallback, ADR-0037 §6). */
+function nameOrNull(value: string | null): string | null {
+  return value !== null && value !== "" ? value : null;
+}
 
 /**
  * List Slack demand — unread-worthy signals derived (FTS-first, no extra fetch)
@@ -752,6 +777,14 @@ const DM_CHANNEL_CLAUSE = "json_extract(meta, '$.channel') LIKE 'D%'";
  * Newest-first. A row is `dm` when its channel id starts with `D`, else
  * `mention`. Mentions need `selfUserIds`; without any, only DMs are returned
  * (and a `kinds: ["mention"]` filter then yields nothing).
+ *
+ * Each row is enriched with `channelName` / `userName` by LEFT JOINing the local
+ * `slack_channels` (via `meta.channel`) and `person_identities` (via `meta.user`,
+ * `identity_key = 'slack:'||user`) projections that sync populated (ADR-0037
+ * §10). This is a pure local join — no Slack API / network is touched at query
+ * time (no-fetch-at-query, ADR-0012). Unresolved ids yield `null`, leaving the
+ * raw ids in `meta` for an id-only fallback (ADR-0037 §6). teamName is not
+ * surfaced: there is no local team-name projection.
  */
 export function listSlackDemand(
   sqlite: Database,
@@ -765,23 +798,30 @@ export function listSlackDemand(
   if (kinds.includes("dm")) orClauses.push(DM_CHANNEL_CLAUSE);
   if (kinds.includes("mention")) {
     for (const uid of selfUserIds) {
-      orClauses.push("body LIKE ?");
+      orClauses.push("sources.body LIKE ?");
       params.push(`%<@${uid}>%`);
     }
   }
   // No applicable predicate (e.g. mention-only with no self ids) → no demand.
   if (orClauses.length === 0) return [];
 
-  const clauses = ["source_type = 'slack_message'", `(${orClauses.join(" OR ")})`];
-  pushTimeRange(clauses, params, "observed_at", options.observed);
+  const clauses = ["sources.source_type = 'slack_message'", `(${orClauses.join(" OR ")})`];
+  pushTimeRange(clauses, params, "sources.observed_at", options.observed);
   params.push(options.limit ?? DEFAULT_LIST_LIMIT);
 
   const rows = sqlite
-    .query<SourceRow, (string | number)[]>(
-      `SELECT external_id, source_type, body, fingerprint, observed_at, meta
+    .query<SlackDemandRow, (string | number)[]>(
+      `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
+              sources.observed_at, sources.meta,
+              slack_channels.name AS channel_name,
+              person_identities.display_name AS user_name
          FROM sources
+         LEFT JOIN slack_channels
+           ON slack_channels.channel_id = json_extract(sources.meta, '$.channel')
+         LEFT JOIN person_identities
+           ON person_identities.identity_key = 'slack:' || json_extract(sources.meta, '$.user')
         WHERE ${clauses.join(" AND ")}
-        ORDER BY observed_at DESC
+        ORDER BY sources.observed_at DESC
         LIMIT ?`,
     )
     .all(...params);
@@ -789,7 +829,12 @@ export function listSlackDemand(
   return rows.map((row) => {
     const record = toSourceRecord(row);
     const channel = typeof record.meta.channel === "string" ? record.meta.channel : "";
-    return { ...record, kind: channel.startsWith("D") ? "dm" : "mention" };
+    return {
+      ...record,
+      kind: channel.startsWith("D") ? "dm" : "mention",
+      channelName: nameOrNull(row.channel_name),
+      userName: nameOrNull(row.user_name),
+    };
   });
 }
 
