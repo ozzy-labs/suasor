@@ -42,6 +42,17 @@ export interface SyncContext {
    * the connector simply has no place to report and stays silent.
    */
   readonly onWarn?: (message: string) => void;
+  /**
+   * Optional per-run discovery-drift override (ADR-0039 Layer 2), set from
+   * `slack sync --discover` / `--no-discover`. Only the Slack connector honors
+   * it — other connectors have no discovery concept and ignore it (no-op).
+   * `"force"` runs the sweep now, bypassing the 24h cadence (and the
+   * `discover_new` opt-out); `"skip"` suppresses the sweep for this run even when
+   * enabled in config; `undefined` keeps the configured behavior (`discover_new`
+   * + cadence). The override is single-run only: it never mutates config or the
+   * persisted cadence marker.
+   */
+  readonly discover?: "force" | "skip";
 }
 
 /** A single observed source body produced by a connector (read-only). */

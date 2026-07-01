@@ -32,8 +32,40 @@ class ConnectorSyncCommand extends Command {
     description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
   });
 
+  // Per-run discovery-drift override (ADR-0039 Layer 2; Slack only). clipanion
+  // models `--no-discover` as the negation of `--discover`, so this single
+  // option is tri-state: `true` (--discover) → force a sweep now (ignore the 24h
+  // cadence), `false` (--no-discover) → skip the sweep this run, `undefined` →
+  // configured default (`discover_new` + cadence). Generic connectors ignore it.
+  discover = Option.Boolean("--discover", {
+    description:
+      "Force a discovery-drift sweep this run, ignoring the 24h cadence (Slack only; ADR-0039). Use --no-discover to skip the sweep for this run.",
+  });
+
   override async execute(): Promise<number> {
     const name = (this.constructor as typeof ConnectorSyncCommand).connectorName;
+
+    // `--discover` and `--no-discover` are contradictory single-run toggles.
+    // clipanion collapses the resolved boolean to last-wins (so it cannot tell a
+    // contradiction from a plain value), but every occurrence leaves an option
+    // token — and it canonicalizes the negated `--no-discover` token's `.option`
+    // back to the preferred name `--discover`, so both variants share one token
+    // identity. Thus >1 such token means the discovery toggle was given more than
+    // once (the `--discover --no-discover` contradiction, or a redundant repeat),
+    // which we reject. This relies on that token normalization; the behavior is
+    // pinned by the regression test in tests/cli/connector-sync.test.ts.
+    const discoverToggles = this.tokens.filter(
+      (t) => t.type === "option" && t.option === "--discover",
+    ).length;
+    if (discoverToggles > 1) {
+      this.context.stderr.write(
+        "error: the discovery toggle (--discover / --no-discover) may be given at most once\n",
+      );
+      return 1;
+    }
+    // Map the tri-state boolean to the SyncContext override vocabulary.
+    const discover: "force" | "skip" | undefined =
+      this.discover === undefined ? undefined : this.discover ? "force" : "skip";
 
     // The heavier connector SDKs are external to the standalone binary
     // (ADR-0010); only the bundled connectors can sync there. Gate the rest with
@@ -127,6 +159,7 @@ class ConnectorSyncCommand extends Command {
     try {
       const outcome = await syncConnector(store, connector, {
         ...(this.full ? { cursor: null } : {}),
+        ...(discover ? { discover } : {}),
         embedder,
         extractor,
         extractionMaxBytes: config.extraction.maxBytes,

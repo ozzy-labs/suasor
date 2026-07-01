@@ -9,7 +9,7 @@ suasor init [--force]                  # 設定 + DB 初期化 + ネクストス
 suasor onboard [--connector a,b] [--skip-auth] [--skip-sync] [--write-cron] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]）
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild [--no-progress]  # event replay で projection 再構築
-suasor <connector> sync [--full] [--json]  # 取り込み（github / slack / ms-graph / google / box / web / local / notion / jira）
+suasor <connector> sync [--full] [--json] [--discover | --no-discover]  # 取り込み（github / slack / ms-graph / google / box / web / local / notion / jira）。--discover/--no-discover は Slack の discovery sweep 単発トグル（ADR-0039）
 suasor sync [--connector a,b] [--concurrency N] [--continue-on-error] [--full] [--json] [--no-progress]  # 有効 connector を一括取り込み（connector 間並列・one-shot・定期実行は OS スケジューラへ委譲）
 suasor sync status [--json]            # connector 別の sync 鮮度（最終 sync 時刻 / 件数 / 直近の成否）を表示（ADR-0033）
 suasor <connector> auth set [--token T]  # connector の資格情報を OS keychain に保存（github / ms-graph / google / box / notion / jira、省略時 stdin）
@@ -87,6 +87,7 @@ suasor --version                       # バージョン出力
 | `<connector> sync` | `--full` | false | 保存済み cursor を無視して全件再スキャン |
 | `<connector> sync` | `--json` | false | 件数 + cursor（`SyncOutcome`）を JSON で出力 |
 | `<connector> sync` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
+| `<connector> sync` | `--discover` / `--no-discover` | config 依存 | 単発の discovery-drift sweep トグル（Slack のみ honor・[ADR-0039](../adr/0039-conversation-discovery-drift.md) Layer 2）。`--discover` は 24h cadence（および `discover_new = false` opt-out）を無視して即時 sweep、`--no-discover` はその回の sweep を抑止。未指定は config（`discover_new` + cadence）に従う。両指定は error。config / cursor marker は不変で Slack 以外は no-op |
 | `projections rebuild` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
 | `sync` | `--connector a,b` | all enabled | 一括対象を絞り込む connector 名のカンマ列（有効かつ登録済みのみ。非該当は error） |
 | `sync` | `--continue-on-error` / `--no-continue-on-error` | true | 1 connector の失敗で全体を止めない（既定 on）。`--no-` で fail-fast（最初の失敗で停止）。いずれも失敗が 1 つでもあれば exit 1 |

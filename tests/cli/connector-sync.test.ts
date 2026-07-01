@@ -115,6 +115,33 @@ describe("suasor github sync", () => {
     expect(err).toContain("notifications=off");
   });
 
+  test("--discover and --no-discover together fail fast with exit 1 (ADR-0039)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    const { code, err } = await run(["github", "sync", "--discover", "--no-discover"]);
+    expect(code).toBe(1);
+    expect(err).toContain(
+      "discovery toggle (--discover / --no-discover) may be given at most once",
+    );
+  });
+
+  test("--discover on a non-discovery connector is a harmless no-op (no regression)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    // github has no discovery concept; the override flag is accepted and ignored.
+    const { code, out } = await run(["github", "sync", "--discover"]);
+    expect(code).toBe(0);
+    expect(out).toContain("0 observed");
+  });
+
+  test("--no-discover on a non-discovery connector is a harmless no-op (no regression)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    const { code, out } = await run(["github", "sync", "--no-discover"]);
+    expect(code).toBe(0);
+    expect(out).toContain("0 observed");
+  });
+
   test("does NOT warn when notifications stream is enabled (#187)", async () => {
     await run(["init"]);
     // repos empty but notifications=all → the per-token notification stream is a
