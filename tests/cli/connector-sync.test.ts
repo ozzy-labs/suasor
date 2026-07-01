@@ -120,7 +120,9 @@ describe("suasor github sync", () => {
     await writeConfig("[connectors.github]\nrepos = []\n");
     const { code, err } = await run(["github", "sync", "--discover", "--no-discover"]);
     expect(code).toBe(1);
-    expect(err).toContain("--discover and --no-discover cannot be combined");
+    expect(err).toContain(
+      "discovery toggle (--discover / --no-discover) may be given at most once",
+    );
   });
 
   test("--discover on a non-discovery connector is a harmless no-op (no regression)", async () => {

@@ -45,16 +45,21 @@ class ConnectorSyncCommand extends Command {
   override async execute(): Promise<number> {
     const name = (this.constructor as typeof ConnectorSyncCommand).connectorName;
 
-    // `--discover` and `--no-discover` are contradictory single-run toggles, so
-    // reject giving the discovery toggle more than once (e.g. both at once). The
-    // resolved boolean collapses to last-wins, but each occurrence leaves an
-    // option token, so >1 token means the toggle was repeated/contradicted.
+    // `--discover` and `--no-discover` are contradictory single-run toggles.
+    // clipanion collapses the resolved boolean to last-wins (so it cannot tell a
+    // contradiction from a plain value), but every occurrence leaves an option
+    // token — and it canonicalizes the negated `--no-discover` token's `.option`
+    // back to the preferred name `--discover`, so both variants share one token
+    // identity. Thus >1 such token means the discovery toggle was given more than
+    // once (the `--discover --no-discover` contradiction, or a redundant repeat),
+    // which we reject. This relies on that token normalization; the behavior is
+    // pinned by the regression test in tests/cli/connector-sync.test.ts.
     const discoverToggles = this.tokens.filter(
       (t) => t.type === "option" && t.option === "--discover",
     ).length;
     if (discoverToggles > 1) {
       this.context.stderr.write(
-        "error: --discover and --no-discover cannot be combined (specify at most one)\n",
+        "error: the discovery toggle (--discover / --no-discover) may be given at most once\n",
       );
       return 1;
     }
