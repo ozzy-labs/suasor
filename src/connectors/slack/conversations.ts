@@ -14,9 +14,25 @@
  * shared rate-limit-aware `slackFetch` (ADR-0019); top-level imports stay light.
  */
 
+import { secretEnvName } from "../secrets.ts";
 import { slackFetch } from "./_fetch.ts";
 import { channelOwnership } from "./dedup.ts";
 import { defaultUsersTransport, resolveUserName, type SlackUsersTransport } from "./resolve.ts";
+
+/**
+ * The per-connector env override name for a workspace's token (Issue #371 theme
+ * 4): `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN` for a named alias (`-` and other
+ * non-alphanumeric chars normalised to `_`), or `SUASOR_CONNECTOR_SLACK_TOKEN`
+ * for the flat/default workspace. Surfaced as a comment in the paste-ready config
+ * block so the headless / WSL token override is discoverable at setup time. The
+ * secret name mirrors `workspaceSecretName` in `../slack.ts` (`<alias>:token` /
+ * `token`); kept as literals here to avoid a module cycle.
+ */
+function tokenEnvComment(alias?: string): string {
+  const secret = alias ? `${alias}:token` : "token";
+  const cmd = alias ? `suasor slack auth set --workspace ${alias}` : "suasor slack auth set";
+  return `# token: \`${cmd}\` — or env ${secretEnvName("slack", secret)}`;
+}
 
 // Re-exported so existing importers (and tests) keep resolving the type from
 // here; the SSOT now lives in `resolve.ts` (ADR-0037 §2).
@@ -247,7 +263,7 @@ export async function listConversations(
  * conversation type) with a trailing `# <displayName>` comment.
  */
 export function renderConfigBlock(teamId: string, result: ConversationsResult): string[] {
-  const lines = ["[connectors.slack]", "enabled = true", `team = "${teamId}"`];
+  const lines = ["[connectors.slack]", "enabled = true", tokenEnvComment(), `team = "${teamId}"`];
   if (result.conversations.length === 0) {
     lines.push("channels = []");
     return lines;
@@ -301,7 +317,15 @@ export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfig
 
   const lines = ["[connectors.slack]", "enabled = true"];
   for (const ws of workspaces) {
-    lines.push("", `[connectors.slack.workspaces.${ws.alias}]`, `team = "${ws.teamId}"`);
+    // Each workspace needs its own token (Issue #371 theme 4): surface the
+    // per-workspace `slack auth set` command + env override so a pasted multi
+    // block does not silently hit `workspace 'X' skipped: no token` at sync time.
+    lines.push(
+      "",
+      `[connectors.slack.workspaces.${ws.alias}]`,
+      tokenEnvComment(ws.alias),
+      `team = "${ws.teamId}"`,
+    );
     if (ws.conversations.length === 0) {
       lines.push("channels = []");
       continue;

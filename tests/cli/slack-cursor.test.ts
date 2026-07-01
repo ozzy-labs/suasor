@@ -4,7 +4,7 @@
  * via the Store, then the CLI reads/mutates it — no network or token needed.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -109,7 +109,48 @@ async function seedChannel(
   }
 }
 
+/** Seed a `slack_teams` projection row via a SlackTeamObserved event (ADR-0037 §10). */
+async function seedTeam(teamId: string, displayName: string): Promise<void> {
+  const prev = process.env.SUASOR_CONFIG_DIR;
+  process.env.SUASOR_CONFIG_DIR = dir;
+  try {
+    const { loadConfig } = await import("../../src/config/index.ts");
+    const { Store } = await import("../../src/db/index.ts");
+    const config = await loadConfig();
+    const store = Store.open({
+      path: config.storage.dbPath as string,
+      embeddingDim: config.embedding.dim,
+    });
+    try {
+      store.record({ type: "SlackTeamObserved", teamId, displayName });
+    } finally {
+      store.close();
+    }
+  } finally {
+    if (prev === undefined) delete process.env.SUASOR_CONFIG_DIR;
+    else process.env.SUASOR_CONFIG_DIR = prev;
+  }
+}
+
 describe("suasor slack status / cursor reset (ADR-0016)", () => {
+  test("status names the workspace team id + resolved name (Issue #371 theme 3)", async () => {
+    await run(["init"]);
+    // A named-workspace config so the alias joins to a real team id; the flat
+    // `default` placeholder stays label-less (covered by the other status tests).
+    writeFileSync(
+      join(dir, "config.toml"),
+      '[connectors.slack.workspaces.acme]\nteam = "T1"\nchannels = []\n',
+    );
+    await seedCursor(JSON.stringify({ acme: { C1: "111.000000" } }));
+    await seedTeam("T1", "Acme Inc");
+    const { code, out } = await run(["slack", "status"]);
+    expect(code).toBe(0);
+    expect(out).toContain("[acme]");
+    // Team id + resolved name are both surfaced beside the alias header.
+    expect(out).toContain("team T1");
+    expect(out).toContain("Acme Inc");
+  });
+
   test("status reports no cursor on a fresh store", async () => {
     await run(["init"]);
     const { code, out } = await run(["slack", "status"]);
