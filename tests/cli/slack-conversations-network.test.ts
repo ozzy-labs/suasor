@@ -815,4 +815,45 @@ describe("suasor slack conversations --new — drift diff (ADR-0039)", () => {
     // The unswept configured DM is not surfaced as unreachable.
     expect(err).not.toContain("no longer reachable");
   });
+
+  test("multi-workspace config emits a [connectors.slack.workspaces.<alias>] fragment", async () => {
+    // A named-workspace config discards the flat `channels` (resolveWorkspaces), so
+    // the paste-ready block must target the workspace sub-section sync ingests, not
+    // a flat [connectors.slack] block that would be silently ignored.
+    writeFileSync(
+      join(dir, "config.toml"),
+      '[connectors.slack.workspaces.acme]\nteam = "T123"\nchannels = ["C001"]\n',
+    );
+    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxp-acme-token";
+    try {
+      installFetch((url, params) => {
+        if (url.includes("auth.test"))
+          return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+        if (url.includes("users.conversations")) {
+          if (params.get("types") === "public_channel") {
+            return {
+              body: {
+                ok: true,
+                channels: [
+                  { id: "C001", name: "general", is_member: true }, // configured
+                  { id: "C002", name: "random", is_member: true }, // new
+                ],
+              },
+            };
+          }
+          return { body: { ok: true, channels: [] } };
+        }
+        throw new Error(`unexpected url: ${url}`);
+      });
+
+      const { code, out } = await run(["slack", "conversations", "--new", "--workspace", "acme"]);
+      expect(code).toBe(0);
+      expect(out).toContain("C002");
+      // The fragment targets the workspace sub-section (flat renderConfigBlock
+      // never emits a workspaces.<alias> table), so sync actually ingests it.
+      expect(out).toContain("[connectors.slack.workspaces.acme]");
+    } finally {
+      delete process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN;
+    }
+  });
 });
