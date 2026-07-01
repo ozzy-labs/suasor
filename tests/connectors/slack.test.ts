@@ -1127,6 +1127,55 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
       createSlackConnector({ team: "T1", channels: ["C1"], since: "30d" }),
     ).not.toThrow();
   });
+
+  test("validateSlackSince: an invalid flat `since` error carries a backfill recovery hint", () => {
+    let thrown: unknown;
+    try {
+      validateSlackSince(
+        SlackConnectorConfig.parse({ team: "T1", channels: ["C1"], since: "3 weeks" }),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigError);
+    const [issue] = (thrown as ConfigError).issues;
+    // Recovery hint names the backfill verb + the default workspace alias (Issue #380).
+    expect(issue).toContain("suasor slack cursor backfill");
+    expect(issue).toContain("--workspace default");
+    expect(issue).toContain("--channel <channel-id>");
+  });
+
+  test("validateSlackSince: an invalid `channel_since` hint embeds the concrete channel", () => {
+    let thrown: unknown;
+    try {
+      validateSlackSince(
+        SlackConnectorConfig.parse({ team: "T1", channels: ["C1"], channel_since: { C1: "bad" } }),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigError);
+    const [issue] = (thrown as ConfigError).issues;
+    expect(issue).toContain("suasor slack cursor backfill");
+    expect(issue).toContain("--channel C1");
+  });
+
+  test("validateSlackSince: a per-workspace `since` hint embeds the workspace alias", () => {
+    let thrown: unknown;
+    try {
+      validateSlackSince(
+        SlackConnectorConfig.parse({
+          workspaces: { acme: { team: "TA", channels: ["C1"], since: "5y" } },
+        }),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigError);
+    const [issue] = (thrown as ConfigError).issues;
+    expect(issue).toContain("suasor slack cursor backfill");
+    expect(issue).toContain("--workspace acme");
+  });
 });
 
 describe("resolveSelfUserIds (ADR-0012)", () => {
