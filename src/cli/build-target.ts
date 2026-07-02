@@ -25,10 +25,10 @@
  * on-disk path. The gate itself (`standaloneGate`) is likewise pure over an
  * injected `isBinary` flag so command tests can drive both build types.
  */
+import { docsUrl } from "./doc-ref.ts";
 
 /** Doc anchor pointing at the binary-scope caveat in the install guide. */
-export const BINARY_SCOPE_DOC =
-  "https://github.com/ozzy-labs/suasor/blob/main/docs/guide/install.md#binary-scope";
+export const BINARY_SCOPE_DOC = docsUrl("guide/install.md#binary-scope");
 
 /**
  * True when `main` (the value of `Bun.main`) resolves under a compiled-binary

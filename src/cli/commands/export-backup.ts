@@ -19,6 +19,7 @@
  */
 import { existsSync } from "node:fs";
 import { Command, Option } from "clipanion";
+import { docsUrl } from "../doc-ref.ts";
 
 export class ExportBackupCommand extends Command {
   static override paths = [["export", "backup"]];
@@ -39,7 +40,7 @@ export class ExportBackupCommand extends Command {
         --format tgz      gzip tar of the consistent snapshot (archival)
 
       Without --out the backup lands next to the database with a timestamped
-      name. Restore prose: docs/guide/data-audit.md.
+      name. Restore prose: ${docsUrl("guide/data-audit.md")}.
     `,
     examples: [
       ["Back up to a default-named file", "suasor export backup"],

@@ -21,6 +21,7 @@
 import { Command, Option } from "clipanion";
 import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
 import { BINARY_SCOPE_DOC, currentBuildIsBinary } from "../build-target.ts";
+import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
 
 export class SyncAllCommand extends Command {
@@ -40,7 +41,7 @@ export class SyncAllCommand extends Command {
       a bounded pool (default 4 — each hits a different API host / rate-limit
       bucket); --concurrency tunes it (>8 warns but is not capped; per-resource work
       inside a connector stays serial). Periodic runs are delegated to the OS
-      scheduler — see docs/guide/scheduling.md. Use --connector to narrow the set
+      scheduler — see ${docsUrl("guide/scheduling.md")}. Use --connector to narrow the set
       and --json for machine-readable output.
     `,
     examples: [

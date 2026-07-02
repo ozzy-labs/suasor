@@ -25,6 +25,7 @@ import { Command, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
+import { docsUrl } from "../doc-ref.ts";
 import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
 import { renderMcpSnippet } from "../onboard/mcp-snippet.ts";
 import { renderSchedulerSnippet } from "../onboard/scheduler.ts";
@@ -192,7 +193,7 @@ export class OnboardCommand extends Command {
             stdout.write(
               steps
                 ? `${steps}\n`
-                : `${connector}: no generic auth verb — set credentials per docs/guide/connectors.md.\n`,
+                : `${connector}: no generic auth verb — set credentials per ${docsUrl("guide/connectors.md")}.\n`,
             );
           }
         } else if (stored === "no-token") {
@@ -578,7 +579,7 @@ export class OnboardCommand extends Command {
  */
 const CONNECTOR_SPECIFIC_STEPS: Record<string, readonly string[]> = {
   slack: [
-    "suasor slack auth set        # store the bot token (app manifest: docs/guide/connectors.md)",
+    `suasor slack auth set        # store the bot token (app manifest: ${docsUrl("guide/connectors.md")})`,
     "suasor slack auth test       # verify scopes + feature readiness",
     "suasor slack conversations   # list channels; paste the config block into config.toml",
     "suasor slack sync",

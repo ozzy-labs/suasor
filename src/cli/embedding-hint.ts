@@ -12,13 +12,14 @@
  * (the result body and `--json`) stays pipe-clean, and it is suppressed when the
  * caller asked for machine-readable / quiet output (`--json` / `--no-progress`).
  */
+import { docsUrl } from "./doc-ref.ts";
 
 /** The subset of a writable stream this needs (stderr-shaped). */
 export interface HintStream {
   write(s: string): boolean;
 }
 
-const HINT = "note: embedding disabled — searching with FTS only (docs/guide/embedding.md)\n";
+const HINT = `note: embedding disabled — searching with FTS only (${docsUrl("guide/embedding.md")})\n`;
 
 /**
  * Write the embedding-disabled hint to `stderr` when `backend` is `"disabled"`.

@@ -18,6 +18,7 @@
 import { existsSync } from "node:fs";
 import { Command, Option } from "clipanion";
 import { connectorNames, connectorSecretNames } from "../../connectors/registry.ts";
+import { docsUrl } from "../doc-ref.ts";
 
 /** Severity of a single check (worst across checks sets the exit code). */
 type CheckStatus = "ok" | "info" | "warn" | "error";
@@ -177,7 +178,7 @@ export class DoctorCommand extends Command {
           ? {
               name: "embedding",
               status: "info",
-              detail: "backend disabled (recall falls back to FTS; see docs/guide/embedding.md)",
+              detail: `backend disabled (recall falls back to FTS; see ${docsUrl("guide/embedding.md")})`,
             }
           : { name: "embedding", status: "ok", detail: `backend=${backend} model=${model}` },
       );
@@ -220,7 +221,7 @@ export class DoctorCommand extends Command {
                     detail:
                       `model "${model}" returns ${actual}-dim but [embedding].dim is ${config.embedding.dim}; ` +
                       `vector inserts fail and recall degrades to empty. Set [embedding].dim = ${actual} ` +
-                      "(needs a fresh DB / delete + rebuild + re-sync). See docs/guide/embedding.md.",
+                      `(needs a fresh DB / delete + rebuild + re-sync). See ${docsUrl("guide/embedding.md")}.`,
                   },
             );
           } catch (err) {
@@ -242,7 +243,7 @@ export class DoctorCommand extends Command {
           ? {
               name: "extraction",
               status: "info",
-              detail: "backend disabled (Office/PDF stay name-only; see docs/guide/extraction.md)",
+              detail: `backend disabled (Office/PDF stay name-only; see ${docsUrl("guide/extraction.md")})`,
             }
           : {
               name: "extraction",

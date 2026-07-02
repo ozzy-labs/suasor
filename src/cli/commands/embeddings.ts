@@ -13,12 +13,13 @@
  * inside `execute` so the command registry stays cheap (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
+import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
 
 /** Message printed by every verb when no embedding backend is configured. */
 const DISABLED_MESSAGE =
   "embedding backend is disabled — nothing to do " +
-  "(set [embedding].backend to enable; see docs/guide/embedding.md).";
+  `(set [embedding].backend to enable; see ${docsUrl("guide/embedding.md")}).`;
 
 /**
  * Open the store + build the embedder from `[embedding]` config. Returns `null`
