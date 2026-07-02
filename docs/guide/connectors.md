@@ -187,6 +187,7 @@ suasor slack auth test   # 検証 + granted scopes + feature readiness を表示
 ### token / config
 
 - **token**: Bot Token（`channels:history` / `groups:history` の read scope）。env override `SUASOR_CONNECTOR_SLACK_TOKEN`、keychain account `connector:slack:token`
+- **token 未設定は channels の有無に関わらず error**: どの workspace にも token が解決できない場合、`slack sync` は `no token configured for any workspace` の error で **exit 1** する（[#385](https://github.com/ozzy-labs/suasor/issues/385)。channels 未設定の no-op 警告に credential 欠落が隠れない）。token がある workspace が 1 つでもあれば従来どおり（token 無し alias は warning + skip、[ADR-0014](../adr/0014-slack-multi-workspace.md)）
 - **config（単一 workspace / 後方互換）**:
 
 ```toml

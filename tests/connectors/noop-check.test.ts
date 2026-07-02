@@ -43,6 +43,9 @@ describe("noopWarning — empty/no-op slices warn", () => {
   test("slack: flat workspace with no channels", () => {
     expect(noopWarning("slack", { channels: [] })).toContain("channels");
     expect(noopWarning("slack", {})).toContain("取り込み対象なし");
+    // The advisory names the discovery verb so the operator can copy real ids
+    // instead of hand-writing them (#385).
+    expect(noopWarning("slack", {})).toContain("`suasor slack conversations`");
   });
 
   test("slack: multi-workspace where no workspace has channels", () => {
@@ -51,6 +54,7 @@ describe("noopWarning — empty/no-op slices warn", () => {
     });
     expect(warn).toContain("workspaces");
     expect(warn).toContain("取り込み対象なし");
+    expect(warn).toContain("`suasor slack conversations`");
   });
 
   test("notion: no databases + pages disabled", () => {

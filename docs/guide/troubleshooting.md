@@ -52,6 +52,7 @@ event ログを `type` 別に集計（`COUNT(*) GROUP BY type`、read-only）し
      ```
 
    - 詳細は [connectors guide](connectors.md)。`owner/repo` 等を手書きすると typo で silent 0 件になりやすい。
+   - **Slack の token 未設定は本節（exit 0 で 0 件）に該当しない** — どの workspace にも token が無い場合、`slack sync` は channels の有無に関わらず `no token configured for any workspace` の error で **exit 1** する（[#385](https://github.com/ozzy-labs/suasor/issues/385)）。`suasor slack auth set`（または env override `SUASOR_CONNECTOR_SLACK_TOKEN`）で token を設定してから、`suasor slack conversations` で channel id を埋める。
 2. **cursor がすでに最新** — 増分 sync は保存済み cursor 以降のみを取り込む。新規が無ければ 0 件は正常。全件再スキャンするには `--full`:
 
    ```bash

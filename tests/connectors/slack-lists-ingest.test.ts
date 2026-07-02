@@ -117,17 +117,36 @@ describe("slack List ingestion (ADR-0036 §6 read-back)", () => {
 
   test("a named workspace with no token has its lists skipped (warn, not abort)", async () => {
     const warnings: string[] = [];
+    // beta resolves a token, so the run proceeds (#385 throws only when NO
+    // workspace has one); acme's lists are skipped with the per-workspace warn.
     const ctxNoTok: SyncContext = {
       cursor: null,
-      secret: async () => null,
+      secret: async (name) => (name === "beta:token" ? "tok-beta" : null),
       onWarn: (m) => warnings.push(m),
     };
     const connector = createSlackConnector(
-      { workspaces: { acme: { team: "T", channels: [], lists: ["LA"] } } },
+      {
+        workspaces: {
+          acme: { team: "T", channels: [], lists: ["LA"] },
+          beta: { team: "TB", channels: [] },
+        },
+      },
       { clientFactory: () => fakeClient([{ items: [{ id: "R1" }] }]) },
     );
     const records = await collect(connector.sync(ctxNoTok));
     expect(records).toHaveLength(0);
     expect(warnings.some((w) => /lists skipped: no token/.test(w))).toBe(true);
+  });
+
+  test("a lists-only config with no token anywhere throws instead of warning (#385)", async () => {
+    // Token resolution precedes the scope check: with no token for ANY
+    // workspace the sync fails loudly even when only lists are configured.
+    const connector = createSlackConnector(
+      { workspaces: { acme: { team: "T", channels: [], lists: ["LA"] } } },
+      { clientFactory: () => fakeClient([{ items: [{ id: "R1" }] }]) },
+    );
+    await expect(
+      collect(connector.sync({ cursor: null, secret: async () => null, onWarn: () => {} })),
+    ).rejects.toThrow(/no token configured for any workspace/);
   });
 });
