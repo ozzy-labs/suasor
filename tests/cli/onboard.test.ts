@@ -423,6 +423,85 @@ describe("suasor onboard — discovery → config block (ADR-0030, Issue #195)",
   });
 });
 
+describe("suasor onboard — slack connector-specific next steps (Issue #384)", () => {
+  test("prints the 4-step slack auth flow instead of the generic hint", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // slack has no AUTH_SPECS entry, so storeTokenFor returns "no-spec" without
+      // reading stdin — a non-TTY empty stdin (the default) is safe here.
+      const { code, out } = await run(["onboard", "--connector", "slack", "--skip-sync"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("slack: uses its own auth flow");
+      expect(out).toContain("suasor slack auth set");
+      expect(out).toContain("suasor slack auth test");
+      expect(out).toContain("suasor slack conversations");
+      expect(out).toContain("suasor slack sync");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('never leaks the internal "no generic auth verb" phrasing for slack', async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(["onboard", "--connector", "slack", "--skip-sync"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      expect(out).not.toContain("no generic auth verb");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("re-surfaces the slack next steps after the sync summary (ends incomplete)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // Pre-write the slice as enabled = false so the first sync short-circuits to
+      // "no enabled connectors" (no store open / no network), yet a sync summary
+      // line is still printed — the recap must come *after* it.
+      await Bun.write(join(dir, "config.toml"), "[connectors.slack]\nenabled = false\n");
+      const { code, out } = await run(["onboard", "--connector", "slack"], { configDir: dir });
+      expect(code).toBe(0);
+      const syncIdx = out.indexOf("sync:");
+      expect(syncIdx).toBeGreaterThanOrEqual(0);
+      // The final block on screen is the "not complete yet" checklist.
+      expect(out).toContain("slack: setup is not complete yet");
+      const recapIdx = out.lastIndexOf("slack: setup is not complete yet");
+      expect(recapIdx).toBeGreaterThan(syncIdx);
+      // The last slack command line lands after the sync summary too.
+      expect(out.lastIndexOf("suasor slack sync")).toBeGreaterThan(syncIdx);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--json marks slack authFlow=connector-specific and generic connectors as generic", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "github,slack", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as {
+        connectors: { connector: string; authFlow: string; configAppended: boolean }[];
+      };
+      const byName = new Map(report.connectors.map((c) => [c.connector, c]));
+      expect(byName.get("slack")?.authFlow).toBe("connector-specific");
+      expect(byName.get("github")?.authFlow).toBe("generic");
+      // Existing fields are untouched (the new field is purely additive).
+      expect(byName.get("github")?.configAppended).toBe(true);
+      // --json suppresses the human-readable next-steps / recap entirely.
+      expect(out).not.toContain("uses its own auth flow");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("suasor onboard — interactive token entry (Issue #383)", () => {
   const realFetch = globalThis.fetch;
   const secretEnvs = ["SUASOR_CONNECTOR_GITHUB_TOKEN", "SUASOR_CONNECTOR_BOX_TOKEN"];
