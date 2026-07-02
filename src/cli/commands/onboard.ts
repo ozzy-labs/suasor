@@ -34,6 +34,17 @@ import { readSecretLine } from "../read-secret.ts";
 /** One connector's per-step onboarding outcome (for `--json`). */
 interface ConnectorReport {
   connector: string;
+  /**
+   * Which auth path the connector uses (Issue #384; backward-compatible additive
+   * field, defaults to `"generic"`):
+   * - `"generic"` — the data-driven `<connector> auth set` / `auth test` verbs
+   *   (AUTH_SPECS): onboard stores the token and runs the probe itself.
+   * - `"connector-specific"` — the connector maintains its own auth flow (slack's
+   *   `slack auth set` / `slack conversations`, ADR-0011/0014), which onboard
+   *   cannot complete for the user; it prints that connector's own next steps
+   *   instead of the generic guidance.
+   */
+  authFlow: "generic" | "connector-specific";
   authStored: boolean;
   authTest: "ok" | "failed" | "skipped";
   authTestDetail?: string;
@@ -159,6 +170,7 @@ export class OnboardCommand extends Command {
     for (const connector of connectors) {
       const report: ConnectorReport = {
         connector,
+        authFlow: isConnectorSpecific(connector) ? "connector-specific" : "generic",
         authStored: false,
         authTest: "skipped",
         configAppended: false,
@@ -168,9 +180,19 @@ export class OnboardCommand extends Command {
       if (!this.skipAuth) {
         const stored = await this.storeTokenFor(connector, interactive);
         if (stored === "no-spec") {
+          // No generic `auth set` verb. For a connector with its own auth flow
+          // (slack) print that connector's setup steps; otherwise fall back to the
+          // mild "set credentials per docs" hint (Issue #384). The internal
+          // "no generic auth verb" phrasing is never shown for slack.
           if (!this.json) {
+            const steps = renderConnectorSteps(
+              connector,
+              "uses its own auth flow — finish setup with:",
+            );
             stdout.write(
-              `${connector}: no generic auth verb — set credentials per docs/guide/connectors.md.\n`,
+              steps
+                ? `${steps}\n`
+                : `${connector}: no generic auth verb — set credentials per docs/guide/connectors.md.\n`,
             );
           }
         } else if (stored === "no-token") {
@@ -274,6 +296,21 @@ export class OnboardCommand extends Command {
         "\nRegister the MCP server with your agent host (claude_desktop_config.json):\n",
       );
       stdout.write(`${renderMcpSnippet(command)}\n`);
+    }
+
+    // 8. Re-surface the connector-specific setup for connectors whose own auth
+    // flow onboard could not complete for the user (slack). This runs last so the
+    // final thing on screen is the unfinished checklist rather than the sync
+    // summary + scheduler / MCP blocks, which otherwise read as "all done"
+    // (Issue #384).
+    if (!this.json) {
+      for (const connector of connectors) {
+        const recap = renderConnectorSteps(
+          connector,
+          "setup is not complete yet — finish these steps:",
+        );
+        if (recap) stdout.write(`\n${recap}\n`);
+      }
     }
 
     if (this.json) {
@@ -530,6 +567,39 @@ export class OnboardCommand extends Command {
       return false;
     }
   }
+}
+
+/**
+ * Ordered CLI steps for connectors that keep their own auth flow instead of the
+ * generic AUTH_SPECS verbs (Issue #384). Only connectors *not* in AUTH_SPECS that
+ * orchestrate setup through their own commands appear here — currently slack,
+ * whose `slack auth set` / `slack conversations` path onboard cannot drive for
+ * the user (ADR-0011/0014). Each entry is `<command>   # <hint>`.
+ */
+const CONNECTOR_SPECIFIC_STEPS: Record<string, readonly string[]> = {
+  slack: [
+    "suasor slack auth set        # store the bot token (app manifest: docs/guide/connectors.md)",
+    "suasor slack auth test       # verify scopes + feature readiness",
+    "suasor slack conversations   # list channels; paste the config block into config.toml",
+    "suasor slack sync",
+  ],
+};
+
+/** Whether a connector maintains its own auth flow (vs. the generic verbs). */
+function isConnectorSpecific(connector: string): boolean {
+  return Object.hasOwn(CONNECTOR_SPECIFIC_STEPS, connector);
+}
+
+/**
+ * Render a numbered connector-specific setup checklist under a lead line, e.g.
+ * `slack: <lead>\n  1. suasor slack auth set ...`. Returns `""` for a connector
+ * with no connector-specific steps so callers can fall back.
+ */
+function renderConnectorSteps(connector: string, lead: string): string {
+  const steps = CONNECTOR_SPECIFIC_STEPS[connector];
+  if (!steps) return "";
+  const numbered = steps.map((step, i) => `  ${i + 1}. ${step}`).join("\n");
+  return `${connector}: ${lead}\n${numbered}`;
 }
 
 /** Whether stdin is an interactive TTY (so prompts are safe to show). */
