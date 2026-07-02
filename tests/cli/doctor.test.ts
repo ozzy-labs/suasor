@@ -572,4 +572,57 @@ describe("suasor doctor", () => {
     expect(report.checks.some((c) => c.name === "slack.token")).toBe(false);
     expect(report.checks.some((c) => c.name === "slack.demand")).toBe(false);
   });
+
+  // Issue #388 item 3: an enabled connector whose config resolves to no ingest
+  // target (empty scope) is surfaced offline as a `connectors.noop` warning, so
+  // the no-op is visible at diagnosis time instead of only during sync. Reuses
+  // the shared pre-sync `noopWarning` detector; exit code stays unchanged.
+  test("enabled slack with no channels warns nothing-to-ingest (connectors.noop) (#388)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\n');
+    const { code, out } = await run(["doctor", "--json"]);
+    // Nothing-to-ingest is a warning, not an error → still exits 0.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const noop = report.checks.filter((c) => c.name === "connectors.noop");
+    expect(noop).toHaveLength(1);
+    expect(noop[0]?.status).toBe("warn");
+    // The connector name prefixes the shared detector's message body.
+    expect(noop[0]?.detail).toContain("slack");
+    expect(noop[0]?.detail).toContain("channels");
+  });
+
+  test("slack with channels configured emits no nothing-to-ingest warning (#388)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "connectors.noop")).toBe(false);
+  });
+
+  // Issue #388 item 6: the check-name column pads to the widest name in *this*
+  // run (was a fixed pad(11)), so a long name like `connectors.noop` (15) no
+  // longer pushes the detail column out of alignment for the shorter rows.
+  test("check-name column pads to the widest name so detail stays aligned (#388)", async () => {
+    await run(["init"]);
+    // Enabling slack with no channels adds `connectors.noop` (15) — the widest
+    // name in this run — which a fixed pad(11) would have mis-aligned against.
+    await writeConfig('[connectors.slack]\nteam = "T1"\n');
+    const { out } = await run(["doctor"]); // human-readable (not --json)
+    expect(out).toContain("connectors.noop");
+    // Rows render as `  [LABEL] <name padded> <detail>`; the name field starts at
+    // a fixed column after the 9-char `  [LABEL] ` prefix.
+    const PREFIX = 9; // "  [OK  ] ".length
+    const rows = out.split("\n").filter((l) => /^ {2}\[(OK {2}|INFO|WARN|ERR )\] /.test(l));
+    expect(rows.length).toBeGreaterThan(1);
+    // Detail begins one space past the padded name; compute its column per row.
+    const detailCols = rows.map((l) => {
+      const rest = l.slice(PREFIX); // "<name padded> <detail>"
+      return PREFIX + rest.length - rest.replace(/^\S+\s+/, "").length;
+    });
+    // Every row's detail column is identical → aligned, with no drift.
+    expect(new Set(detailCols).size).toBe(1);
+    // Column == prefix + widest-name-width (`connectors.noop`, 15) + 1 separator.
+    expect(detailCols[0]).toBe(PREFIX + 15 + 1);
+  });
 });
