@@ -208,11 +208,13 @@ function readSecretLineFromTTY(
         resolve(outcome.buffer);
       } else {
         // abort (Ctrl-C): restore the terminal, then re-raise SIGINT so the CLI
-        // exits with Ctrl-C semantics rather than storing a half-typed token.
+        // exits with the conventional Ctrl-C semantics (a clean, quiet exit 130)
+        // rather than storing a half-typed token. The promise is intentionally
+        // left unsettled — the default SIGINT action terminates the process, so
+        // resolving/rejecting here would only race a JS error onto the exit.
         stderr.write("\n");
         restore();
         process.kill(process.pid, "SIGINT");
-        reject(new Error("secret entry aborted"));
       }
     };
 
@@ -226,8 +228,9 @@ function readSecretLineFromTTY(
     try {
       input.setRawMode(true);
     } catch (err) {
-      // If raw mode cannot be engaged, fall back to the line-buffered path so we
-      // never leave the terminal in a half-configured state.
+      // Raw mode is required for safe (echo-suppressed) entry; if it cannot be
+      // engaged, surface the error rather than silently reading in cleartext. No
+      // listeners are attached yet, so there is nothing to restore.
       reject(err instanceof Error ? err : new Error(String(err)));
       return;
     }

@@ -13,8 +13,8 @@
  * those come from `AUTH_SPECS` and the shared bulk-sync service — and its only
  * new side effect is the non-destructive config append. Lazy-import discipline
  * (NFR-PRF-1): top-level imports are clipanion + the cheap connector name lists
- * + the pure render helpers; the keychain, config loader, auth probes, and
- * bulk-sync service are imported inside `execute`.
+ * + the pure render / secret-entry helpers; the keychain, config loader, auth
+ * probes, and bulk-sync service are imported inside `execute`.
  *
  * Non-interactive / headless safety (ADR-0029 §4): on a non-TTY stdin the wizard
  * never prompts — `--connector` is required, tokens come from stdin / env

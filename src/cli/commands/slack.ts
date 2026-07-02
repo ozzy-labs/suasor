@@ -5,7 +5,8 @@
  * and exist to close the onboarding gap: store a token, verify its scopes, and
  * discover conversation ids without hand-hunting them.
  *
- * Lazy-import discipline (NFR-PRF-1): top-level imports are clipanion only. The
+ * Lazy-import discipline (NFR-PRF-1): top-level imports are clipanion + the
+ * import-clean secret-entry helper (`../read-secret.ts`, no SDK) only. The
  * keychain (`../../connectors/secrets.ts`, which lazy-loads the native keyring)
  * and the Slack leaf modules (which use the global `fetch`, no SDK) are imported
  * inside `execute`. No Slack SDK is pulled by any of these verbs.

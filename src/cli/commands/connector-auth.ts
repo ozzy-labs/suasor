@@ -13,7 +13,8 @@
  * `sync`-only, ADR-0007); Slack keeps its own richer `slack auth set/test`.
  *
  * Lazy-import discipline (NFR-PRF-1): top-level imports are clipanion + the auth
- * spec **names** only (a cheap list, loads no SDK). The keychain (`secrets.ts`,
+ * spec **names** + the import-clean secret-entry helper (`read-secret.ts`, no
+ * SDK) only — all cheap, loading no native binding. The keychain (`secrets.ts`,
  * which lazy-loads the native keyring), the config loader, and the per-connector
  * `fetch`-only auth probes are imported inside `execute`. No connector SDK is
  * pulled by any of these verbs.
