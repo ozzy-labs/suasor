@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.1.21](https://github.com/ozzy-labs/suasor/compare/v0.1.20...v0.1.21) (2026-07-02)
+
+
+### Features
+
+* **cli:** point init next-steps at onboard and emit resolvable doc URLs ([#393](https://github.com/ozzy-labs/suasor/issues/393)) ([cb8acce](https://github.com/ozzy-labs/suasor/commit/cb8acce5b227a32285b6ffc506814fa5eb73b94f))
+* **doctor:** per-workspace slack token & self_user_id checks ([#372](https://github.com/ozzy-labs/suasor/issues/372)) ([f542117](https://github.com/ozzy-labs/suasor/commit/f542117330163d6f3cb57caebc86316f156d6b96))
+* **onboard:** final per-connector recap with non-zero exit + channel-aware MCP snippet ([#394](https://github.com/ozzy-labs/suasor/issues/394)) ([34a6186](https://github.com/ozzy-labs/suasor/commit/34a6186edfb7cafc182fb36a78f447e38182eef8))
+* **slack:** `slack sync --no-discover` / `--discover` single-run toggle for discovery sweep ([#382](https://github.com/ozzy-labs/suasor/issues/382)) ([a6c3f1f](https://github.com/ozzy-labs/suasor/commit/a6c3f1f4809ab81d52323b9a3043bbe68773a53f))
+* **slack:** de-duplicate shared Enterprise Grid channels at sync (owner-wins) ([#365](https://github.com/ozzy-labs/suasor/issues/365)) ([3dd0e45](https://github.com/ozzy-labs/suasor/commit/3dd0e450606e53f2b9212101ca471e39791d4cb8))
+* **slack:** dedup/mark shared channels in `slack conversations` discovery (ADR-0038 Layer 2) ([#368](https://github.com/ozzy-labs/suasor/issues/368)) ([1c7dd33](https://github.com/ozzy-labs/suasor/commit/1c7dd334fa0023c3b2ad3bad06398a3df0b0ae3c))
+* **slack:** detect newly-joined conversations at sync + doctor drift check ([#378](https://github.com/ozzy-labs/suasor/issues/378)) ([b572b01](https://github.com/ozzy-labs/suasor/commit/b572b013beadd3457c077cb5f02a5502094b1753))
+* **slack:** multi-workspace CLI UX hardening (--workspace resolution, identity, discoverability) ([#374](https://github.com/ozzy-labs/suasor/issues/374)) ([9e303fd](https://github.com/ozzy-labs/suasor/commit/9e303fd9c861b7baa36c1f4d143f87603897708c))
+* **slack:** slack conversations --new (config drift diff) ([#376](https://github.com/ozzy-labs/suasor/issues/376)) ([45a193f](https://github.com/ozzy-labs/suasor/commit/45a193fbd2687f5318041fc546c9aa3b7204ad30))
+* **slack:** surface workspace/team identity in sync summary ([#373](https://github.com/ozzy-labs/suasor/issues/373)) ([7afb415](https://github.com/ozzy-labs/suasor/commit/7afb415173e865357d090d76210c5f6afa356bd4))
+* **slack:** warn in doctor on channels shared across workspace aliases ([#367](https://github.com/ozzy-labs/suasor/issues/367)) ([b9696df](https://github.com/ozzy-labs/suasor/commit/b9696df4c21323b8794fd3b1ef175606bbf3fc7f))
+
+
+### Bug Fixes
+
+* **cli:** line-based masked secret entry for onboard / auth set ([#391](https://github.com/ozzy-labs/suasor/issues/391)) ([006e6ea](https://github.com/ozzy-labs/suasor/commit/006e6ea9bef9f1c0cf0c1b6786473a48dc966069))
+* **onboard:** print slack-specific next steps instead of "no generic auth verb" ([#392](https://github.com/ozzy-labs/suasor/issues/392)) ([572c2ba](https://github.com/ozzy-labs/suasor/commit/572c2bada05f12af272157d4e883b6ffa5f47f7b))
+* **slack:** add cursor-backfill recovery hint to since/channel_since validation errors ([#381](https://github.com/ozzy-labs/suasor/issues/381)) ([e1a81d9](https://github.com/ozzy-labs/suasor/commit/e1a81d968662031327030d0868296aa4515f20c0))
+* **slack:** render workspace sub-section for --new on multi-workspace config ([#377](https://github.com/ozzy-labs/suasor/issues/377)) ([d7d8ed2](https://github.com/ozzy-labs/suasor/commit/d7d8ed2fb5332fce12dd16901f3d43469fc9705f))
+* **slack:** resolve tokens before the empty-channels no-op (tokenless sync now exits 1) ([#389](https://github.com/ozzy-labs/suasor/issues/389)) ([5da47cf](https://github.com/ozzy-labs/suasor/commit/5da47cfbe21e3a06f2f07c6a08a46441f03e61e1))
+
 ## [0.1.20](https://github.com/ozzy-labs/suasor/compare/v0.1.19...v0.1.20) (2026-07-01)
 
 
