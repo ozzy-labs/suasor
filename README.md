@@ -60,7 +60,7 @@ The examples below use the `suasor <cmd>` form. Working from a clone instead? Se
 suasor --version
 
 # First-run setup: writes ~/.config/suasor/config.toml and the local SQLite store.
-# Prints a multi-step next-steps guide (doctor -> connector -> sync -> schedule -> skills).
+# Prints a multi-step next-steps guide (doctor -> onboard -> sync -> skills).
 suasor init
 
 # Guided setup: pick connector(s), store tokens, wire the [connectors.X] config

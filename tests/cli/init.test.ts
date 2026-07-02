@@ -73,6 +73,14 @@ describe("suasor init", () => {
     expect(out).toContain("Initialized database");
     expect(out).toContain("Next steps:");
     expect(out).toContain("suasor doctor");
+    // Guided `onboard` is the first-class setup path, ahead of the manual route
+    // (Issue #386).
+    expect(out).toContain("suasor onboard");
+    expect(out).toContain("suasor skills install");
+    // Doc pointers are resolvable GitHub URLs (docs/guide is not shipped with the
+    // npm / binary / Docker channels), not bare repo-relative paths.
+    expect(out).toContain("https://github.com/ozzy-labs/suasor/blob/main/docs/guide/connectors.md");
+    expect(out).toContain("https://github.com/ozzy-labs/suasor/blob/main/docs/guide/scheduling.md");
 
     // The seeded config carries the documented default sections.
     const seeded = readFileSync(configPath, "utf8");

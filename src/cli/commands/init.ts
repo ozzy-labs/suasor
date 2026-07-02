@@ -7,9 +7,13 @@
  * 2. Opens the configured database, which creates the event store, projection
  *    tables, and FTS5 index (ADR-0002 / ADR-0005).
  *
- * On success it prints a multi-step next-steps guide (doctor -> connector
- * setup -> first `sync` -> periodic scheduling -> optional skills) so users can
- * follow the primary journey without reading the docs first.
+ * On success it prints a multi-step next-steps guide (doctor -> guided
+ * `onboard` -> first `sync` -> optional skills) so users can follow the primary
+ * journey without reading the docs first. `onboard` (ADR-0029) is the first-class
+ * setup path — the manual per-connector route is kept as a fallback pointer.
+ *
+ * Doc pointers are emitted as resolvable GitHub URLs ({@link docsUrl}) because
+ * `docs/guide` is not shipped with the npm / binary / Docker channels.
  *
  * Assistant-skill installation is a separate, explicit step
  * (`suasor skills install`, ADR-0008); `init` points at it rather than running
@@ -19,6 +23,7 @@
  * `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { docsUrl } from "../doc-ref.ts";
 
 const DEFAULT_CONFIG_TOML = `# Suasor configuration (docs/design/config.md).
 # Precedence: init args > env (SUASOR_*) > this file > defaults.
@@ -72,8 +77,8 @@ export class InitCommand extends Command {
       initializes the local SQLite store (event log + projections + FTS index).
       Safe to re-run: existing config is preserved and schema DDL is idempotent.
 
-      On success it prints a multi-step next-steps guide (doctor -> connector
-      setup -> first sync -> periodic scheduling -> optional skills).
+      On success it prints a multi-step next-steps guide (doctor -> guided
+      onboard -> first sync -> optional skills).
 
       Assistant skills are installed separately with \`suasor skills install\`
       (ADR-0008); this command points at that step rather than running it.
@@ -120,17 +125,20 @@ export class InitCommand extends Command {
     db.close();
     this.context.stdout.write(`Initialized database: ${dbPath}\n`);
 
-    // Point users at the real first-run journey rather than a single skills hint:
-    // verify -> configure a connector -> first ingest -> schedule -> optional skills.
+    // Point users at the real first-run journey. `onboard` (ADR-0029) is the
+    // first-class setup path — it drives connector choice, token storage, the
+    // [connectors.X] config slice, and the first sync — so the manual per-connector
+    // route is kept only as a fallback pointer. Doc pointers are resolvable URLs
+    // (docs/guide is not shipped with the npm / binary / Docker channels).
     this.context.stdout.write(
       [
         "",
         "Next steps:",
-        "  1. suasor doctor                  # verify config / DB / connector readiness",
-        "  2. configure a connector          # docs/guide/connectors.md (github / slack / google / …)",
-        "  3. suasor sync                    # first read-only ingest from enabled connectors",
-        "  4. schedule periodic sync         # cron / launchd / systemd — docs/guide/scheduling.md",
-        "  5. suasor skills install          # optional: assistant skills + MCP host registration",
+        "  1. suasor doctor           # verify config / DB / connector readiness",
+        "  2. suasor onboard          # guided setup: connector, token, config, first sync",
+        `     …or configure by hand:  ${docsUrl("guide/connectors.md")}`,
+        `  3. suasor sync             # re-ingest any time; schedule it: ${docsUrl("guide/scheduling.md")}`,
+        "  4. suasor skills install   # optional: assistant skills + MCP host registration",
         "",
       ].join("\n"),
     );

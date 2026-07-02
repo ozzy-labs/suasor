@@ -10,6 +10,7 @@
  * layer, maintenance) are lazy-imported inside `execute` (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
+import { docsUrl } from "../doc-ref.ts";
 
 export class ExtractionStatusCommand extends Command {
   static override paths = [["extraction", "status"]];
@@ -71,7 +72,7 @@ export class ExtractionStatusCommand extends Command {
       );
       if (status.backend === "disabled") {
         this.context.stdout.write(
-          "  backend disabled — Office/PDF stay name-only (set [extraction].backend; see docs/guide/extraction.md)\n",
+          `  backend disabled — Office/PDF stay name-only (set [extraction].backend; see ${docsUrl("guide/extraction.md")})\n`,
         );
       } else if (t.pending > 0 || t.stale > 0) {
         this.context.stdout.write(
@@ -162,7 +163,7 @@ export class ExtractionListPendingCommand extends Command {
       }
       if (config.extraction.backend === "disabled") {
         this.context.stdout.write(
-          "  backend disabled — set [extraction].backend to extract (see docs/guide/extraction.md)\n",
+          `  backend disabled — set [extraction].backend to extract (see ${docsUrl("guide/extraction.md")})\n`,
         );
       } else {
         this.context.stdout.write(
