@@ -259,9 +259,14 @@ export class DoctorCommand extends Command {
     //    hide that token (#161). Only credential *presence* is probed, never the
     //    value (NFR-PRV-4).
     if (config !== null) {
+      const { noopWarning } = await import("../../connectors/noop-check.ts");
       const enabled: string[] = [];
       const missingCred: string[] = [];
       const storedNotEnabled: string[] = [];
+      // Enabled connectors whose config slice resolves to "enabled but no ingest
+      // target" (empty scope). Surfaced offline here so the no-op is visible at
+      // diagnosis time instead of only as a warning during sync (Issue #388).
+      const noopScoped: Array<{ name: string; message: string }> = [];
       for (const name of connectorNames()) {
         const slice = config.connectors[name];
         const isEnabled = slice !== undefined && slice.enabled !== false;
@@ -277,6 +282,13 @@ export class DoctorCommand extends Command {
           continue;
         }
         enabled.push(name);
+        // slice is defined here (isEnabled implies it). `noopWarning` is a pure,
+        // offline detector: it returns a warning body when the slice has no ingest
+        // target, or null otherwise. Exit code stays unchanged (warn only).
+        if (slice !== undefined) {
+          const noop = noopWarning(name, slice);
+          if (noop !== null) noopScoped.push({ name, message: noop });
+        }
         if (secrets.length === 0) continue; // needs no auth (e.g. web)
         for (const secret of secrets) {
           if ((await resolveSecret(name, secret)) === null) {
@@ -312,6 +324,13 @@ export class DoctorCommand extends Command {
             `credential stored but not enabled: ${storedNotEnabled.join(", ")} ` +
             "(add a [connectors.<name>] section, or set enabled = true to start syncing)",
         });
+      }
+      // Enabled-but-nothing-to-ingest: one warn line per connector whose scope is
+      // empty (e.g. slack enabled with no channels). The message body comes from
+      // the shared pre-sync detector; prefix it with the connector name to match
+      // the sync-time `warning: <name>: ...` formatting (Issue #388).
+      for (const { name, message } of noopScoped) {
+        checks.push({ name: "connectors.noop", status: "warn", detail: `${name}: ${message}` });
       }
     }
 
@@ -506,8 +525,12 @@ export class DoctorCommand extends Command {
       error: "ERR ",
     };
     this.context.stdout.write("suasor doctor\n");
+    // Pad the check-name column to the widest name in *this* run so the detail
+    // column stays aligned even when a long name (e.g. `slack.discovery`, 15) is
+    // present (Issue #388). A fixed width mis-aligned those rows.
+    const nameWidth = Math.max(...checks.map((c) => c.name.length));
     for (const c of checks) {
-      this.context.stdout.write(`  [${label[c.status]}] ${c.name.padEnd(11)} ${c.detail}\n`);
+      this.context.stdout.write(`  [${label[c.status]}] ${c.name.padEnd(nameWidth)} ${c.detail}\n`);
     }
     const warnings = checks.filter((c) => c.status === "warn").length;
     const errors = checks.filter((c) => c.status === "error").length;
