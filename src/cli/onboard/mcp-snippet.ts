@@ -63,3 +63,28 @@ export function renderMcpSnippet(invocation: McpInvocation): string {
     "}",
   ].join("\n");
 }
+
+/**
+ * The note printed directly after the MCP snippet. Unlike the scheduler block —
+ * which ships a literal `suasor` and relies on {@link invocationNote} to tell the
+ * user to substitute it — the MCP block is *already* rendered from the detected
+ * channel's invocation ({@link resolveMcpInvocation}). So the note here confirms
+ * the block is ready to paste (global) or explains which resolved invocation the
+ * block already contains (from-source / bunx), rather than telling the user to
+ * replace a `suasor` token that is no longer present.
+ */
+export function mcpInvocationNote(channel: InvocationChannel): string {
+  if (channel === "from-source") {
+    return [
+      "Note: you appear to be running from source — the block above already uses",
+      "`bun run <entry> mcp serve`. Adjust the entry path if you move the checkout.",
+    ].join("\n");
+  }
+  if (channel === "bunx") {
+    return [
+      "Note: you appear to be running via bunx — the block above already uses",
+      "`bunx suasor mcp serve` (or install globally for a plain `suasor`).",
+    ].join("\n");
+  }
+  return "Note: the block above assumes a global `suasor` on PATH (ready to use as-is).";
+}

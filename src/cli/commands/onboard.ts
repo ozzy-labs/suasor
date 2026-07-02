@@ -27,7 +27,11 @@ import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
-import { renderMcpSnippet, resolveMcpInvocation } from "../onboard/mcp-snippet.ts";
+import {
+  mcpInvocationNote,
+  renderMcpSnippet,
+  resolveMcpInvocation,
+} from "../onboard/mcp-snippet.ts";
 import { type RecapConnector, recapHasFailure, renderRecap } from "../onboard/recap.ts";
 import { renderSchedulerSnippet } from "../onboard/scheduler.ts";
 import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
@@ -296,17 +300,19 @@ export class OnboardCommand extends Command {
       stdout.write(`${invocationNote(channel)}\n`);
     }
 
-    // 7. MCP registration snippet. Like the scheduler block, a global `suasor` is
-    // not on PATH from source / bunx, so we substitute the detected channel's real
-    // invocation into command+args (Issue #388 item 2) and print the same
-    // substitution note.
+    // 7. MCP registration snippet. Unlike the scheduler block (which ships a
+    // literal `suasor` + a substitution note), a global `suasor` is not on PATH
+    // from source / bunx, so we substitute the detected channel's real invocation
+    // into command+args (Issue #388 item 2). The note below then confirms the
+    // block is ready to paste rather than telling the user to replace a `suasor`
+    // token the block no longer contains.
     if (!this.json) {
       const mcp = resolveMcpInvocation(channel, process.argv[1] ?? "");
       stdout.write(
         "\nRegister the MCP server with your agent host (claude_desktop_config.json):\n",
       );
       stdout.write(`${renderMcpSnippet(mcp)}\n`);
-      stdout.write(`${invocationNote(channel)}\n`);
+      stdout.write(`${mcpInvocationNote(channel)}\n`);
     }
 
     // 8. Re-surface the connector-specific setup for connectors whose own auth

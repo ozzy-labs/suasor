@@ -609,6 +609,9 @@ describe("suasor onboard — final recap + exit code (Issue #388 item 1)", () =>
       expect(out).toContain("suasor github auth test");
       expect(out).toContain("Setup finished with errors");
       // The recap lands after the scheduler / MCP blocks (it is the final block).
+      // Assert the MCP block is actually present first, so the position check does
+      // not pass vacuously against a -1 (missing) index.
+      expect(out).toContain("mcpServers");
       expect(out.indexOf("Setup recap:")).toBeGreaterThan(out.indexOf("mcpServers"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -648,8 +651,10 @@ describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", () 
       // wizard substitutes the from-source `bun` invocation here.
       const block = out.slice(mcpIdx);
       expect(block).toMatch(/"command": "(suasor|bun|bunx)"/);
-      // The same substitution note the scheduler prints follows the snippet.
-      expect(out.toLowerCase()).toContain("path");
+      // An MCP-specific note is printed directly *after* the snippet (Issue #388
+      // item 2). Asserting on the post-snippet slice (not the whole output) so the
+      // scheduler's own note earlier on cannot stand in for it.
+      expect(block).toContain("Note:");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

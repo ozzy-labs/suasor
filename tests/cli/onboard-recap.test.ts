@@ -93,4 +93,15 @@ describe("renderRecap", () => {
     expect(text).toContain("Setup complete.");
     expect(recapHasFailure(input)).toBe(false);
   });
+
+  test("an already-present slice → `config already present (left untouched)`", () => {
+    const input = {
+      connectors: [ok({ configSource: "skipped" })],
+      synced: false,
+      syncExitCode: null,
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("config already present (left untouched)");
+    expect(recapHasFailure(input)).toBe(false);
+  });
 });

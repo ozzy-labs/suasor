@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { detectInvocationChannel, invocationNote } from "../../src/cli/onboard/invocation.ts";
-import { resolveMcpInvocation } from "../../src/cli/onboard/mcp-snippet.ts";
+import { mcpInvocationNote, resolveMcpInvocation } from "../../src/cli/onboard/mcp-snippet.ts";
 
 describe("detectInvocationChannel", () => {
   test("a .ts entry point is from-source", () => {
@@ -66,5 +66,28 @@ describe("resolveMcpInvocation (Issue #388 item 2)", () => {
       command: "bunx",
       args: ["suasor", "mcp", "serve"],
     });
+  });
+});
+
+describe("mcpInvocationNote (Issue #388 item 2)", () => {
+  test("global confirms the block is ready to paste as-is", () => {
+    const note = mcpInvocationNote("global");
+    expect(note).toContain("ready to use as-is");
+    // The MCP block already renders `suasor`, so the note must NOT tell the user
+    // to replace it (that is the scheduler note's job).
+    expect(note.toLowerCase()).not.toContain("replace");
+  });
+
+  test("from-source explains the block already uses the resolved bun invocation", () => {
+    const note = mcpInvocationNote("from-source");
+    expect(note).toContain("already uses");
+    expect(note).toContain("bun run");
+    expect(note.toLowerCase()).not.toContain("replace `suasor`");
+  });
+
+  test("bunx explains the block already uses the bunx invocation", () => {
+    const note = mcpInvocationNote("bunx");
+    expect(note).toContain("already uses");
+    expect(note).toContain("bunx suasor");
   });
 });
