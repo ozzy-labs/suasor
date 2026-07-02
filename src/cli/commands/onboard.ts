@@ -27,7 +27,8 @@ import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
-import { renderMcpSnippet } from "../onboard/mcp-snippet.ts";
+import { renderMcpSnippet, resolveMcpInvocation } from "../onboard/mcp-snippet.ts";
+import { type RecapConnector, recapHasFailure, renderRecap } from "../onboard/recap.ts";
 import { renderSchedulerSnippet } from "../onboard/scheduler.ts";
 import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
 import { readSecretLine } from "../read-secret.ts";
@@ -166,6 +167,9 @@ export class OnboardCommand extends Command {
     }
 
     const reports: ConnectorReport[] = [];
+    // Connectors whose discovery probe was attempted but failed (a placeholder
+    // slice was written) → the final recap points at the re-run command.
+    const discoverySkips = new Map<string, string>();
 
     // 2-4. Per connector: store token, auth test, append config slice.
     for (const connector of connectors) {
@@ -250,6 +254,7 @@ export class OnboardCommand extends Command {
         stderr.write(
           `${connector}: discovery skipped (${append.discoveryError}); wrote the placeholder slice — edit it by hand or re-run \`suasor ${connector} ${append.discoveryVerb}\`.\n`,
         );
+        if (append.discoveryVerb) discoverySkips.set(connector, append.discoveryVerb);
       }
 
       reports.push(report);
@@ -291,12 +296,17 @@ export class OnboardCommand extends Command {
       stdout.write(`${invocationNote(channel)}\n`);
     }
 
-    // 7. MCP registration snippet.
+    // 7. MCP registration snippet. Like the scheduler block, a global `suasor` is
+    // not on PATH from source / bunx, so we substitute the detected channel's real
+    // invocation into command+args (Issue #388 item 2) and print the same
+    // substitution note.
     if (!this.json) {
+      const mcp = resolveMcpInvocation(channel, process.argv[1] ?? "");
       stdout.write(
         "\nRegister the MCP server with your agent host (claude_desktop_config.json):\n",
       );
-      stdout.write(`${renderMcpSnippet(command)}\n`);
+      stdout.write(`${renderMcpSnippet(mcp)}\n`);
+      stdout.write(`${invocationNote(channel)}\n`);
     }
 
     // 8. Re-surface the connector-specific setup for connectors whose own auth
@@ -314,6 +324,27 @@ export class OnboardCommand extends Command {
       }
     }
 
+    // 9. Final recap: close the screen with a per-connector success / failure
+    // summary so an auth-test / sync failure is not masked by the scheduler / MCP
+    // blocks above, which otherwise read as "all done" (Issue #388 item 1).
+    // Human-readable output only — --json carries the same outcome in
+    // OnboardReport (connectors[].authTest, syncExitCode).
+    const recap: RecapConnector[] = reports.map((r) => {
+      const verb = discoverySkips.get(r.connector);
+      return {
+        connector: r.connector,
+        authFlow: r.authFlow,
+        authTest: r.authTest,
+        configSource: r.configSource,
+        ...(r.discovered !== undefined ? { discovered: r.discovered } : {}),
+        ...(verb !== undefined ? { discoverySkippedVerb: verb } : {}),
+      };
+    });
+    const recapInput = { connectors: recap, synced, syncExitCode };
+    if (!this.json) {
+      stdout.write(`\n${renderRecap(recapInput)}\n`);
+    }
+
     if (this.json) {
       const report: OnboardReport = {
         connectors: reports,
@@ -324,9 +355,9 @@ export class OnboardCommand extends Command {
       stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     }
 
-    // Surface a sync failure via exit code (cron/CI parity) without aborting the
-    // wizard's printed guidance.
-    return syncExitCode && syncExitCode > 0 ? 1 : 0;
+    // Surface an auth-test failure or a sync failure via exit code (cron/CI
+    // parity) without aborting the wizard's printed guidance (Issue #388 item 1).
+    return recapHasFailure(recapInput) ? 1 : 0;
   }
 
   /** Resolve and validate an explicit `--connector` list. */

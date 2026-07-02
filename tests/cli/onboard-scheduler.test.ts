@@ -59,10 +59,28 @@ describe("renderSchedulerSnippet — per OS", () => {
 });
 
 describe("renderMcpSnippet", () => {
-  test("renders a claude_desktop_config.json mcpServers block", () => {
-    const snippet = renderMcpSnippet("suasor");
+  test("renders a claude_desktop_config.json mcpServers block (global invocation)", () => {
+    const snippet = renderMcpSnippet({ command: "suasor", args: ["mcp", "serve"] });
     expect(snippet).toContain('"mcpServers"');
     expect(snippet).toContain('"command": "suasor"');
     expect(snippet).toContain('"args": ["mcp", "serve"]');
+  });
+
+  test("renders a from-source invocation (bun run <abs> mcp serve)", () => {
+    const snippet = renderMcpSnippet({
+      command: "bun",
+      args: ["run", "/repo/src/index.ts", "mcp", "serve"],
+    });
+    expect(snippet).toContain('"command": "bun"');
+    expect(snippet).toContain('"args": ["run", "/repo/src/index.ts", "mcp", "serve"]');
+  });
+
+  test("JSON-encodes special characters (Windows path backslashes stay valid)", () => {
+    const snippet = renderMcpSnippet({
+      command: "bun",
+      args: ["run", "C:\\repo\\src\\index.ts", "mcp", "serve"],
+    });
+    // The rendered block must parse as JSON (backslashes escaped).
+    expect(() => JSON.parse(snippet)).not.toThrow();
   });
 });

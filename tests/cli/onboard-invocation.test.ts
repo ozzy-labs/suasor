@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { detectInvocationChannel, invocationNote } from "../../src/cli/onboard/invocation.ts";
+import { resolveMcpInvocation } from "../../src/cli/onboard/mcp-snippet.ts";
 
 describe("detectInvocationChannel", () => {
   test("a .ts entry point is from-source", () => {
@@ -42,5 +43,28 @@ describe("invocationNote", () => {
     const note = invocationNote("bunx");
     expect(note).toContain("not on PATH");
     expect(note).toContain("bunx suasor");
+  });
+});
+
+describe("resolveMcpInvocation (Issue #388 item 2)", () => {
+  test("global → suasor mcp serve", () => {
+    expect(resolveMcpInvocation("global", "/ignored")).toEqual({
+      command: "suasor",
+      args: ["mcp", "serve"],
+    });
+  });
+
+  test("from-source → bun run <entry> mcp serve", () => {
+    expect(resolveMcpInvocation("from-source", "/repo/src/index.ts")).toEqual({
+      command: "bun",
+      args: ["run", "/repo/src/index.ts", "mcp", "serve"],
+    });
+  });
+
+  test("bunx → bunx suasor mcp serve", () => {
+    expect(resolveMcpInvocation("bunx", "/ignored")).toEqual({
+      command: "bunx",
+      args: ["suasor", "mcp", "serve"],
+    });
   });
 });
