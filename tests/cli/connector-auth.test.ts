@@ -9,6 +9,11 @@ import { describe, expect, test } from "bun:test";
 import { buildCli } from "../../src/cli/index.ts";
 import { AUTH_SPECS, authConnectorNames } from "../../src/connectors/auth-specs.ts";
 import { connectorSecretNames } from "../../src/connectors/registry.ts";
+import {
+  KEYCHAIN_SERVICE,
+  type KeychainBackend,
+  keychainAccount,
+} from "../../src/connectors/secrets.ts";
 
 /** Connector secret env vars cleared so resolution can't pick up host state. */
 const SECRET_ENVS = [
@@ -24,30 +29,35 @@ const SECRET_ENVS = [
 async function run(
   args: string[],
   stdin: AsyncIterable<Buffer | string> = (async function* () {})(),
+  keychain?: KeychainBackend,
 ): Promise<{ code: number; out: string; err: string }> {
   const saved = SECRET_ENVS.map((k) => [k, process.env[k]] as const);
   for (const k of SECRET_ENVS) delete process.env[k];
   let out = "";
   let err = "";
   const cli = buildCli();
+  // Built as a variable so the extra `keychain` field (injected via context so
+  // token storage never touches the OS keyring) is accepted structurally.
+  const context = {
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: {
+      write: (s: string) => {
+        out += s;
+        return true;
+      },
+    } as NodeJS.WriteStream,
+    stderr: {
+      write: (s: string) => {
+        err += s;
+        return true;
+      },
+    } as NodeJS.WriteStream,
+    env: process.env,
+    colorDepth: 1,
+    ...(keychain ? { keychain } : {}),
+  };
   try {
-    const code = await cli.run(args, {
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stdout: {
-        write: (s: string) => {
-          out += s;
-          return true;
-        },
-      } as NodeJS.WriteStream,
-      stderr: {
-        write: (s: string) => {
-          err += s;
-          return true;
-        },
-      } as NodeJS.WriteStream,
-      env: process.env,
-      colorDepth: 1,
-    });
+    const code = await cli.run(args, context);
     return { code, out, err };
   } finally {
     for (const [k, v] of saved) {
@@ -55,6 +65,23 @@ async function run(
       else process.env[k] = v;
     }
   }
+}
+
+/** In-memory keychain backend that records `set` writes (never touches the OS keyring). */
+function memoryKeychain(): KeychainBackend & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    store,
+    get: (service, account) => store.get(`${service}/${account}`) ?? null,
+    set: (service, account, value) => {
+      store.set(`${service}/${account}`, value);
+    },
+  };
+}
+
+/** An async iterable that yields the given chunks then closes (a pipe). */
+async function* pipe(...chunks: string[]): AsyncGenerator<string> {
+  for (const c of chunks) yield c;
 }
 
 describe("suasor <connector> auth — wiring + arg validation (no network)", () => {
@@ -77,6 +104,40 @@ describe("suasor <connector> auth — wiring + arg validation (no network)", () 
     const { code, err } = await run(["ms-graph", "auth", "set"]);
     expect(code).toBe(1);
     expect(err).toContain("no app client secret provided");
+  });
+
+  test("auth set reads a piped token (trailing newline) and stores it (Issue #383)", async () => {
+    const keychain = memoryKeychain();
+    const { code, out } = await run(["github", "auth", "set"], pipe("ghp_piped\n"), keychain);
+    expect(code).toBe(0);
+    expect(out).toContain("Stored github Personal Access Token");
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("github", "token")}`)).toBe(
+      "ghp_piped",
+    );
+  });
+
+  test("auth set reads a piped token with NO trailing newline (pipe compat, Issue #383)", async () => {
+    // `printf 'tok' | suasor github auth set` — the stream closes without a
+    // newline; the read must still return the buffered token.
+    const keychain = memoryKeychain();
+    const { code } = await run(["github", "auth", "set"], pipe("ghp_no_newline"), keychain);
+    expect(code).toBe(0);
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("github", "token")}`)).toBe(
+      "ghp_no_newline",
+    );
+  });
+
+  test("auth set --token still wins over stdin (no read attempted)", async () => {
+    const keychain = memoryKeychain();
+    const { code } = await run(
+      ["github", "auth", "set", "--token", "ghp_inline"],
+      pipe(),
+      keychain,
+    );
+    expect(code).toBe(0);
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("github", "token")}`)).toBe(
+      "ghp_inline",
+    );
   });
 
   test("github auth test without a token exits 1 with onboarding guidance", async () => {

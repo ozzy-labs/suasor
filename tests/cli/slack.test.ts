@@ -8,6 +8,11 @@ import {
   slackChannelLabel,
 } from "../../src/cli/commands/slack.ts";
 import { buildCli } from "../../src/cli/index.ts";
+import {
+  KEYCHAIN_SERVICE,
+  type KeychainBackend,
+  keychainAccount,
+} from "../../src/connectors/secrets.ts";
 
 // An isolated, empty config dir per test so workspace resolution (Issue #371
 // theme 1) reads a known config shape instead of the developer's real
@@ -29,7 +34,10 @@ function writeConfig(toml: string): void {
 }
 
 /** Run the CLI capturing stdout/stderr (Slack token env cleared for isolation). */
-async function run(args: string[]): Promise<{ code: number; out: string; err: string }> {
+async function run(
+  args: string[],
+  opts: { stdin?: AsyncIterable<Buffer | string>; keychain?: KeychainBackend } = {},
+): Promise<{ code: number; out: string; err: string }> {
   const prevToken = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
   const prevDir = process.env.SUASOR_CONFIG_DIR;
   delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
@@ -37,24 +45,28 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
   let out = "";
   let err = "";
   const cli = buildCli();
+  // Built as a variable so the extra `keychain` field (injected via context so
+  // token storage never touches the OS keyring) is accepted structurally.
+  const context = {
+    stdin: (opts.stdin ?? process.stdin) as unknown as NodeJS.ReadStream,
+    stdout: {
+      write: (s: string) => {
+        out += s;
+        return true;
+      },
+    } as NodeJS.WriteStream,
+    stderr: {
+      write: (s: string) => {
+        err += s;
+        return true;
+      },
+    } as NodeJS.WriteStream,
+    env: process.env,
+    colorDepth: 1,
+    ...(opts.keychain ? { keychain: opts.keychain } : {}),
+  };
   try {
-    const code = await cli.run(args, {
-      stdin: process.stdin,
-      stdout: {
-        write: (s: string) => {
-          out += s;
-          return true;
-        },
-      } as NodeJS.WriteStream,
-      stderr: {
-        write: (s: string) => {
-          err += s;
-          return true;
-        },
-      } as NodeJS.WriteStream,
-      env: process.env,
-      colorDepth: 1,
-    });
+    const code = await cli.run(args, context);
     return { code, out, err };
   } finally {
     if (prevToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
@@ -62,6 +74,23 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
     if (prevDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
     else process.env.SUASOR_CONFIG_DIR = prevDir;
   }
+}
+
+/** In-memory keychain backend that records `set` writes (never touches the OS keyring). */
+function memoryKeychain(): KeychainBackend & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    store,
+    get: (service, account) => store.get(`${service}/${account}`) ?? null,
+    set: (service, account, value) => {
+      store.set(`${service}/${account}`, value);
+    },
+  };
+}
+
+/** An async iterable that yields the given chunks then closes (a pipe). */
+async function* pipe(...chunks: string[]): AsyncGenerator<string> {
+  for (const c of chunks) yield c;
 }
 
 describe("suasor slack — wiring + arg validation (no network)", () => {
@@ -103,6 +132,32 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     const { code, err } = await run(["slack", "auth", "test", "--workspace", "acme"]);
     expect(code).toBe(1);
     expect(err).toContain("auth set --workspace acme");
+  });
+
+  test("auth set reads a piped token (trailing newline) and stores it (Issue #383)", async () => {
+    const keychain = memoryKeychain();
+    const { code, out } = await run(["slack", "auth", "set"], {
+      stdin: pipe("xoxb-piped\n"),
+      keychain,
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("Stored Slack token");
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "token")}`)).toBe(
+      "xoxb-piped",
+    );
+  });
+
+  test("auth set reads a piped token with NO trailing newline (pipe compat, Issue #383)", async () => {
+    // `printf 'xoxb-…' | suasor slack auth set` — no trailing newline, then EOF.
+    const keychain = memoryKeychain();
+    const { code } = await run(["slack", "auth", "set"], {
+      stdin: pipe("xoxb-no-newline"),
+      keychain,
+    });
+    expect(code).toBe(0);
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "token")}`)).toBe(
+      "xoxb-no-newline",
+    );
   });
 
   test("the no-token guidance names the env override (Issue #371 theme 4)", async () => {

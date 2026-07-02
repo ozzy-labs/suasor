@@ -13,11 +13,13 @@
 import { Command, Option } from "clipanion";
 // Type-only imports are erased at compile time, so they add no runtime require
 // and keep the lazy-import discipline (NFR-PRF-1) intact.
+import type { KeychainBackend } from "../../connectors/secrets.ts";
 import type {
   ConversationsResult,
   ConversationType,
   SlackConversation,
 } from "../../connectors/slack/conversations.ts";
+import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
 const SLACK = "slack";
 
@@ -104,7 +106,14 @@ export class SlackAuthSetCommand extends Command {
   override async execute(): Promise<number> {
     let token = this.token?.trim();
     if (!token) {
-      token = (await readStdin(this.context.stdin)).trim();
+      // On a TTY prompt to stderr (stdout stays machine-readable over a pipe).
+      // The read is line-based and echo-suppressed (Issue #383).
+      if (isInteractiveStdin(this.context.stdin)) {
+        this.context.stderr.write("Paste the Slack token and press Enter (input is not echoed):\n");
+      }
+      token = (
+        await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
+      ).trim();
     }
     if (!token) {
       this.context.stderr.write("error: no token provided (pass --token or pipe it on stdin)\n");
@@ -122,11 +131,12 @@ export class SlackAuthSetCommand extends Command {
     }
     const alias = resolved.alias;
 
+    const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
     const [{ storeSecret }, { workspaceSecretName }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
     ]);
-    await storeSecret(SLACK, workspaceSecretName(alias), token);
+    await storeSecret(SLACK, workspaceSecretName(alias), token, keychain ? { keychain } : {});
     const where = alias ? ` for workspace '${alias}'` : "";
     this.context.stdout.write(
       `Stored Slack token${where} in the OS keychain (service 'suasor').\n`,
@@ -1454,13 +1464,4 @@ async function readSlackChannelNames(): Promise<Map<string, SlackChannelName>> {
   } finally {
     store.close();
   }
-}
-
-/** Read all of stdin to a string (used when `--token` is omitted). */
-async function readStdin(stdin: AsyncIterable<Buffer | string>): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
