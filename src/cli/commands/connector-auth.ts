@@ -13,7 +13,8 @@
  * `sync`-only, ADR-0007); Slack keeps its own richer `slack auth set/test`.
  *
  * Lazy-import discipline (NFR-PRF-1): top-level imports are clipanion + the auth
- * spec **names** only (a cheap list, loads no SDK). The keychain (`secrets.ts`,
+ * spec **names** + the import-clean secret-entry helper (`read-secret.ts`, no
+ * SDK) only — all cheap, loading no native binding. The keychain (`secrets.ts`,
  * which lazy-loads the native keyring), the config loader, and the per-connector
  * `fetch`-only auth probes are imported inside `execute`. No connector SDK is
  * pulled by any of these verbs.
@@ -21,8 +22,10 @@
 import { Command, type CommandClass, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import { connectorBundledInBinary } from "../../connectors/registry.ts";
+import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { secretEnvName } from "../../connectors/secrets.ts";
 import { standaloneGate } from "../build-target.ts";
+import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
 /** Base class for `<connector> auth set` — stores the connector secret in the keychain. */
 class ConnectorAuthSetCommand extends Command {
@@ -57,7 +60,17 @@ class ConnectorAuthSetCommand extends Command {
 
     let value = this.token?.trim();
     if (!value) {
-      value = (await readStdin(this.context.stdin)).trim();
+      // On a TTY prompt to stderr so the user isn't staring at a blank line
+      // waiting; over a pipe stay silent (stdout stays machine-readable). The
+      // read is line-based and echo-suppressed (Issue #383).
+      if (isInteractiveStdin(this.context.stdin)) {
+        this.context.stderr.write(
+          `Paste the ${connector} ${spec.secretLabel} and press Enter (input is not echoed):\n`,
+        );
+      }
+      value = (
+        await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
+      ).trim();
     }
     if (!value) {
       this.context.stderr.write(
@@ -66,8 +79,9 @@ class ConnectorAuthSetCommand extends Command {
       return 1;
     }
 
+    const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
     const { storeSecret } = await import("../../connectors/secrets.ts");
-    await storeSecret(connector, spec.secretName, value);
+    await storeSecret(connector, spec.secretName, value, keychain ? { keychain } : {});
     this.context.stdout.write(
       `Stored ${connector} ${spec.secretLabel} in the OS keychain ` +
         `(service 'suasor', account 'connector:${connector}:${spec.secretName}').\n`,
@@ -198,13 +212,4 @@ export function connectorAuthCommands(): CommandClass[] {
     commands.push(makeAuthSetCommand(name), makeAuthTestCommand(name));
   }
   return commands;
-}
-
-/** Read all of stdin to a string (used when `--token` is omitted). */
-async function readStdin(stdin: AsyncIterable<Buffer | string>): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }

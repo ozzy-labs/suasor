@@ -13,8 +13,8 @@
  * those come from `AUTH_SPECS` and the shared bulk-sync service — and its only
  * new side effect is the non-destructive config append. Lazy-import discipline
  * (NFR-PRF-1): top-level imports are clipanion + the cheap connector name lists
- * + the pure render helpers; the keychain, config loader, auth probes, and
- * bulk-sync service are imported inside `execute`.
+ * + the pure render / secret-entry helpers; the keychain, config loader, auth
+ * probes, and bulk-sync service are imported inside `execute`.
  *
  * Non-interactive / headless safety (ADR-0029 §4): on a non-TTY stdin the wizard
  * never prompts — `--connector` is required, tokens come from stdin / env
@@ -24,10 +24,12 @@
 import { Command, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import { connectorNames } from "../../connectors/registry.ts";
+import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
 import { renderMcpSnippet } from "../onboard/mcp-snippet.ts";
 import { renderSchedulerSnippet } from "../onboard/scheduler.ts";
 import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
+import { readSecretLine } from "../read-secret.ts";
 
 /** One connector's per-step onboarding outcome (for `--json`). */
 interface ConnectorReport {
@@ -329,6 +331,17 @@ export class OnboardCommand extends Command {
     return resolveSelection(raw, candidates);
   }
 
+  /**
+   * Keychain backend override, injected via the CLI context for tests so token
+   * storage never touches the real OS keyring. Undefined in production, where
+   * {@link import("../../connectors/secrets.ts").storeSecret} lazy-loads the
+   * native `@napi-rs/keyring` backend.
+   */
+  private keychainOptions(): { keychain?: KeychainBackend } {
+    const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
+    return keychain ? { keychain } : {};
+  }
+
   /** Read a token from stdin and store it in the keychain. Returns a status tag. */
   private async storeTokenFor(
     connector: string,
@@ -343,11 +356,17 @@ export class OnboardCommand extends Command {
         `Paste the ${connector} ${spec.secretLabel} and press Enter (input is read from stdin):\n`,
       );
     }
-    const token = (await readStdin(this.context.stdin)).trim();
+    // Line-based, echo-suppressed read (Issue #383): on a TTY this resolves on
+    // Enter instead of hanging for EOF, and never echoes the token in cleartext.
+    // Over a pipe it consumes a single line, so successive connectors each read
+    // their own token line rather than the first draining stdin to EOF.
+    const token = (
+      await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
+    ).trim();
     if (!token) return "no-token";
 
     const { storeSecret } = await import("../../connectors/secrets.ts");
-    await storeSecret(connector, spec.secretName, token);
+    await storeSecret(connector, spec.secretName, token, this.keychainOptions());
     return "stored";
   }
 
@@ -531,15 +550,6 @@ function invocationCommand(): string {
 /** Remove duplicates while preserving order. */
 function dedupe(items: string[]): string[] {
   return [...new Set(items)];
-}
-
-/** Read all of stdin to a string. */
-async function readStdin(stdin: AsyncIterable<Buffer | string>): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**

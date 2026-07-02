@@ -11,11 +11,21 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
+import {
+  KEYCHAIN_SERVICE,
+  type KeychainBackend,
+  keychainAccount,
+} from "../../src/connectors/secrets.ts";
 
 /** Run the CLI capturing stdout/stderr, with a non-TTY stdin by default. */
 async function run(
   args: string[],
-  opts: { configDir?: string; stdin?: AsyncIterable<Buffer | string> } = {},
+  opts: {
+    configDir?: string;
+    stdin?: AsyncIterable<Buffer | string>;
+    /** In-memory keychain injected via context so token storage skips the OS keyring. */
+    keychain?: KeychainBackend;
+  } = {},
 ): Promise<{ code: number; out: string; err: string }> {
   const prevDir = process.env.SUASOR_CONFIG_DIR;
   if (opts.configDir) process.env.SUASOR_CONFIG_DIR = opts.configDir;
@@ -23,29 +33,65 @@ async function run(
   let err = "";
   const cli = buildCli();
   const stdin = opts.stdin ?? (async function* () {})();
+  // Built as a variable (not an inline literal) so the extra `keychain` field is
+  // accepted structurally — clipanion merges custom context fields onto
+  // `this.context`, which the commands read to override the keychain in tests.
+  const context = {
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: {
+      write: (s: string) => {
+        out += s;
+        return true;
+      },
+    } as NodeJS.WriteStream,
+    stderr: {
+      write: (s: string) => {
+        err += s;
+        return true;
+      },
+    } as NodeJS.WriteStream,
+    env: process.env,
+    colorDepth: 1,
+    ...(opts.keychain ? { keychain: opts.keychain } : {}),
+  };
   try {
-    const code = await cli.run(args, {
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stdout: {
-        write: (s: string) => {
-          out += s;
-          return true;
-        },
-      } as NodeJS.WriteStream,
-      stderr: {
-        write: (s: string) => {
-          err += s;
-          return true;
-        },
-      } as NodeJS.WriteStream,
-      env: process.env,
-      colorDepth: 1,
-    });
+    const code = await cli.run(args, context);
     return { code, out, err };
   } finally {
     if (prevDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
     else process.env.SUASOR_CONFIG_DIR = prevDir;
   }
+}
+
+/** An in-memory keychain backend that records `set` writes (never touches the OS keyring). */
+function memoryKeychain(): KeychainBackend & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    store,
+    get: (service, account) => store.get(`${service} ${account}`) ?? null,
+    set: (service, account, value) => {
+      store.set(`${service} ${account}`, value);
+    },
+  };
+}
+
+/**
+ * A TTY-flagged stdin (so the wizard treats entry as interactive) whose async
+ * iterator yields the given token lines and then **hangs** rather than closing —
+ * modeling an open terminal the wizard must not wait on for EOF. It exposes no
+ * `setRawMode`, so `readSecretLine` uses its line-buffered path (the raw-mode
+ * keystroke handling is unit-tested separately via `editRawSecret`).
+ */
+function ttyTokenStdin(...lines: string[]): { isTTY: true } & AsyncIterable<string> {
+  let i = 0;
+  const iterator: AsyncIterator<string> = {
+    next() {
+      if (i < lines.length) return Promise.resolve({ value: lines[i++] as string, done: false });
+      return new Promise<IteratorResult<string>>(() => {}); // hang: never closes
+    },
+    return: () => Promise.resolve({ value: undefined, done: true }),
+  };
+  return { isTTY: true, [Symbol.asyncIterator]: () => iterator };
 }
 
 describe("suasor onboard — wiring + validation", () => {
@@ -371,6 +417,77 @@ describe("suasor onboard — discovery → config block (ADR-0030, Issue #195)",
       const toml = await Bun.file(configPath).text();
       expect(toml).toContain("enabled = false");
       expect(toml).not.toContain('"acme/api"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suasor onboard — interactive token entry (Issue #383)", () => {
+  const realFetch = globalThis.fetch;
+  const secretEnvs = ["SUASOR_CONNECTOR_GITHUB_TOKEN", "SUASOR_CONNECTOR_BOX_TOKEN"];
+  const saved = secretEnvs.map((k) => [k, process.env[k]] as const);
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  /**
+   * The `auth test` / discovery probes resolve the secret from the env override
+   * first, so setting these keeps those probes off the real OS keychain; the
+   * network round-trip itself is disabled by stubbing `fetch` to reject.
+   */
+  function disableNetworkAndKeychainReads(): void {
+    for (const k of secretEnvs) process.env[k] = "env-token";
+    globalThis.fetch = (async () => {
+      throw new Error("network disabled in test");
+    }) as unknown as typeof fetch;
+  }
+
+  test("completes on a TTY whose stdin stays open after the token line (no EOF hang)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    disableNetworkAndKeychainReads();
+    const keychain = memoryKeychain();
+    try {
+      // The stdin yields the token line then never closes — the old read-to-EOF
+      // path hung here; the wizard must resolve on Enter and finish.
+      const { code } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_interactive\n"),
+        keychain,
+      });
+      expect(code).toBe(0);
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
+        "ghp_interactive",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("interactive multi-connector: each token line lands in its own keychain account", async () => {
+    // Previously the first token drained stdin to EOF, so the second connector
+    // aborted with "no token provided". Line-based entry gives each its own line.
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    disableNetworkAndKeychainReads();
+    const keychain = memoryKeychain();
+    try {
+      const { code } = await run(["onboard", "--connector", "github,box", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_first\n", "box_second\n"),
+        keychain,
+      });
+      expect(code).toBe(0);
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
+        "ghp_first",
+      );
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("box", "token")}`)).toBe(
+        "box_second",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
