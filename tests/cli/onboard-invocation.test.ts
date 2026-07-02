@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { detectInvocationChannel, invocationNote } from "../../src/cli/onboard/invocation.ts";
+import { mcpInvocationNote, resolveMcpInvocation } from "../../src/cli/onboard/mcp-snippet.ts";
 
 describe("detectInvocationChannel", () => {
   test("a .ts entry point is from-source", () => {
@@ -41,6 +42,52 @@ describe("invocationNote", () => {
   test("bunx suggests the bunx invocation", () => {
     const note = invocationNote("bunx");
     expect(note).toContain("not on PATH");
+    expect(note).toContain("bunx suasor");
+  });
+});
+
+describe("resolveMcpInvocation (Issue #388 item 2)", () => {
+  test("global → suasor mcp serve", () => {
+    expect(resolveMcpInvocation("global", "/ignored")).toEqual({
+      command: "suasor",
+      args: ["mcp", "serve"],
+    });
+  });
+
+  test("from-source → bun run <entry> mcp serve", () => {
+    expect(resolveMcpInvocation("from-source", "/repo/src/index.ts")).toEqual({
+      command: "bun",
+      args: ["run", "/repo/src/index.ts", "mcp", "serve"],
+    });
+  });
+
+  test("bunx → bunx suasor mcp serve", () => {
+    expect(resolveMcpInvocation("bunx", "/ignored")).toEqual({
+      command: "bunx",
+      args: ["suasor", "mcp", "serve"],
+    });
+  });
+});
+
+describe("mcpInvocationNote (Issue #388 item 2)", () => {
+  test("global confirms the block is ready to paste as-is", () => {
+    const note = mcpInvocationNote("global");
+    expect(note).toContain("ready to use as-is");
+    // The MCP block already renders `suasor`, so the note must NOT tell the user
+    // to replace it (that is the scheduler note's job).
+    expect(note.toLowerCase()).not.toContain("replace");
+  });
+
+  test("from-source explains the block already uses the resolved bun invocation", () => {
+    const note = mcpInvocationNote("from-source");
+    expect(note).toContain("already uses");
+    expect(note).toContain("bun run");
+    expect(note.toLowerCase()).not.toContain("replace `suasor`");
+  });
+
+  test("bunx explains the block already uses the bunx invocation", () => {
+    const note = mcpInvocationNote("bunx");
+    expect(note).toContain("already uses");
     expect(note).toContain("bunx suasor");
   });
 });

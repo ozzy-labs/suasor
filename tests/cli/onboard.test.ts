@@ -539,7 +539,9 @@ describe("suasor onboard — interactive token entry (Issue #383)", () => {
         stdin: ttyTokenStdin("ghp_interactive\n"),
         keychain,
       });
-      expect(code).toBe(0);
+      // The auth probe rejects (network stubbed) → Issue #388 now surfaces that
+      // via exit 1; the token still lands in the keychain (stored before the probe).
+      expect(code).toBe(1);
       expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
         "ghp_interactive",
       );
@@ -560,13 +562,99 @@ describe("suasor onboard — interactive token entry (Issue #383)", () => {
         stdin: ttyTokenStdin("ghp_first\n", "box_second\n"),
         keychain,
       });
-      expect(code).toBe(0);
+      // Both auth probes reject (network stubbed) → exit 1 (Issue #388); the point
+      // of this test is that each token line lands in its own keychain account.
+      expect(code).toBe(1);
       expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
         "ghp_first",
       );
       expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("box", "token")}`)).toBe(
         "box_second",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suasor onboard — final recap + exit code (Issue #388 item 1)", () => {
+  const realFetch = globalThis.fetch;
+  const realToken = process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realToken === undefined) delete process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+    else process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = realToken;
+  });
+
+  test("an auth-test failure prints a FAILED recap line and exits 1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // env override supplies the secret (keeps the probe off the real keychain);
+    // fetch rejects so the github auth probe fails.
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "env-token";
+    globalThis.fetch = (async () => {
+      throw new Error("network disabled in test");
+    }) as unknown as typeof fetch;
+    const keychain = memoryKeychain();
+    try {
+      const { code, out } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_token\n"),
+        keychain,
+      });
+      expect(code).toBe(1);
+      // The recap closes the screen with the failure + its recovery command.
+      expect(out).toContain("Setup recap:");
+      expect(out).toContain("auth test FAILED");
+      expect(out).toContain("suasor github auth test");
+      expect(out).toContain("Setup finished with errors");
+      // The recap lands after the scheduler / MCP blocks (it is the final block).
+      // Assert the MCP block is actually present first, so the position check does
+      // not pass vacuously against a -1 (missing) index.
+      expect(out).toContain("mcpServers");
+      expect(out.indexOf("Setup recap:")).toBeGreaterThan(out.indexOf("mcpServers"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a fully skipped run prints an ok recap and exits 0", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "github", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      expect(out).toContain("Setup recap:");
+      expect(out).not.toContain("FAILED");
+      expect(out).toContain("Setup complete.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", () => {
+  test("prints a channel-aware MCP registration block + substitution note", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "web", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const mcpIdx = out.indexOf('"mcpServers"');
+      expect(mcpIdx).toBeGreaterThanOrEqual(0);
+      // The registration command is one of the known channel invocations, not a
+      // hard-coded "suasor" — the test runner launches from a .ts entry, so the
+      // wizard substitutes the from-source `bun` invocation here.
+      const block = out.slice(mcpIdx);
+      expect(block).toMatch(/"command": "(suasor|bun|bunx)"/);
+      // An MCP-specific note is printed directly *after* the snippet (Issue #388
+      // item 2). Asserting on the post-snippet slice (not the whole output) so the
+      // scheduler's own note earlier on cannot stand in for it.
+      expect(block).toContain("Note:");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
