@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkEmbeddingDim, validateConfig } from "../../src/config/validate.ts";
+import { docsUrl } from "../../src/shared/doc-ref.ts";
 
 let tmp: string;
 beforeEach(() => {
@@ -143,5 +144,7 @@ describe("checkEmbeddingDim", () => {
     expect(f?.fixable).toBe(false); // remedy is a fresh DB / re-sync, never auto-rewrite
     expect(f?.message).toContain("1536");
     expect(f?.message).toContain("1024");
+    // Doc pointer is a followable URL (Issue #396), not a repo-relative path.
+    expect(f?.message).toContain(docsUrl("guide/embedding.md"));
   });
 });

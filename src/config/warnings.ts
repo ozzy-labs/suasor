@@ -17,6 +17,7 @@
  * these through their existing warn paths so the warning is visible whether the
  * operator runs a health check or just starts the server.
  */
+import { docsUrl } from "../shared/doc-ref.ts";
 
 /** A single "accepted but not honored" config finding. */
 export interface ConfigWarning {
@@ -82,7 +83,7 @@ export function collectConfigWarnings(config: ConfigWarningInput): ConfigWarning
       key: "embedding.backend",
       message:
         `embedding backend "${config.embedding.backend}" is accepted but not implemented; ` +
-        "recall falls back to FTS. See docs/guide/embedding.md.",
+        `recall falls back to FTS. See ${docsUrl("guide/embedding.md")}.`,
     });
   } else if (
     EXTERNAL_EMBEDDING_BACKENDS.has(config.embedding.backend) &&
@@ -93,7 +94,7 @@ export function collectConfigWarnings(config: ConfigWarningInput): ConfigWarning
       message:
         `embedding backend "${config.embedding.backend}" is set but no API key is configured ` +
         `(set SUASOR_EMBEDDING_${config.embedding.backend.toUpperCase()}_API_KEY or store it ` +
-        "in the OS keychain); recall falls back to FTS. See docs/guide/embedding.md.",
+        `in the OS keychain); recall falls back to FTS. See ${docsUrl("guide/embedding.md")}.`,
     });
   }
 

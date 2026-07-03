@@ -19,6 +19,7 @@
  */
 import type { EmbeddingBackend, EmbeddingConfig } from "../../config/schema.ts";
 import { resolveEmbeddingApiKey, type SecretStoreOptions } from "../../connectors/secrets.ts";
+import { docsUrl } from "../../shared/doc-ref.ts";
 import { fetchWithRetry, type SleepLike } from "../../util/retry.ts";
 
 /** A thin embedding client. Delegates to a sidecar/API — never in-process ML. */
@@ -385,7 +386,7 @@ export class DimensionCheckedEmbedder implements Embedder {
           `embedding dimension mismatch: model "${this.model}" returned ${actual}-dim vectors ` +
             `but [embedding].dim is ${this.expectedDim}. Set [embedding].dim = ${actual} to match ` +
             "the model (a fresh DB or delete + rebuild + re-sync is needed since dim sizes vec0). " +
-            "See docs/guide/embedding.md.",
+            `See ${docsUrl("guide/embedding.md")}.`,
         );
       }
       this.verified = true;

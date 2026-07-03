@@ -11,6 +11,7 @@ import {
   OpenAIEmbedder,
   VoyageEmbedder,
 } from "../../src/retrieval/embedding/index.ts";
+import { docsUrl } from "../../src/shared/doc-ref.ts";
 
 /** No-op sleep/random so retry/backoff never waits and jitter is deterministic. */
 const noWait = { sleep: async () => {}, random: () => 0 } as const;
@@ -278,6 +279,8 @@ describe("DimensionCheckedEmbedder (Issue #267)", () => {
   test("fail-fasts with an actionable error on a dimension mismatch", async () => {
     const guard = new DimensionCheckedEmbedder(stub(1536), 1024);
     await expect(guard.embed(["x"])).rejects.toThrow(/1536-dim.*\[embedding\].dim is 1024/s);
+    // Doc pointer is a followable URL (Issue #396), not a repo-relative path.
+    await expect(guard.embed(["x"])).rejects.toThrow(docsUrl("guide/embedding.md"));
   });
 
   test("empty input does not trigger the check (no vectors observed)", async () => {

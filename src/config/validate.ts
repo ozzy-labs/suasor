@@ -35,6 +35,7 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { loadConnectorConfigSchema } from "../connectors/registry.ts";
+import { docsUrl } from "../shared/doc-ref.ts";
 import { Config } from "./schema.ts";
 
 /** Classification of a single validation finding. */
@@ -269,7 +270,7 @@ export function checkEmbeddingDim(configDim: number, dbDim: number | null): Find
         `[embedding].dim is ${configDim} but the existing DB's vec0 table is ${dbDim}-dim; ` +
         "vector inserts fail and recall degrades to empty. Either set [embedding].dim = " +
         `${dbDim} to match the store, or start a fresh DB / delete + rebuild + re-sync ` +
-        "to adopt the new dimension. See docs/guide/embedding.md.",
+        `to adopt the new dimension. See ${docsUrl("guide/embedding.md")}.`,
       fixable: false,
     },
   ];
