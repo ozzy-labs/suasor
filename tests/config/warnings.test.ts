@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type ConfigWarningInput, collectConfigWarnings } from "../../src/config/index.ts";
+import { docsUrl } from "../../src/shared/doc-ref.ts";
 
 /**
  * Unit tests for the "accepted but silently dropped" config warning check
@@ -37,6 +38,8 @@ describe("collectConfigWarnings", () => {
       expect(warnings[0]?.message).toContain(backend);
       expect(warnings[0]?.message).toContain("API key");
       expect(warnings[0]?.message).toContain(`SUASOR_EMBEDDING_${backend.toUpperCase()}_API_KEY`);
+      // Doc pointer is a followable URL (Issue #396), not a repo-relative path.
+      expect(warnings[0]?.message).toContain(docsUrl("guide/embedding.md"));
     });
 
     test(`does not warn when embedding.backend = ${backend} and an API key is present`, () => {

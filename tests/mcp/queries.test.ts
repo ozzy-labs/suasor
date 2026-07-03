@@ -14,6 +14,7 @@ import {
   listSources,
   listTasks,
 } from "../../src/mcp/queries.ts";
+import { docsUrl } from "../../src/shared/doc-ref.ts";
 
 let store: Store;
 
@@ -641,6 +642,8 @@ describe("deriveBriefWarnings (Issue #189)", () => {
     const w = deriveBriefWarnings({ slackConfigured: true, embeddingBackend: "disabled" });
     expect(w.map((x) => x.key)).toEqual(["embedding_disabled"]);
     expect(w[0]?.message).toContain("embedding");
+    // Doc pointer is a followable URL (Issue #396), not a repo-relative path.
+    expect(w[0]?.message).toContain(docsUrl("guide/embedding.md"));
   });
 
   test("flags both when Slack is unconfigured and embedding is disabled", () => {

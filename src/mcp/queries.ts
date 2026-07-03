@@ -21,6 +21,7 @@
  * lexicographically (valid because the stored timestamps are zero-padded UTC).
  */
 import type { Database } from "bun:sqlite";
+import { docsUrl } from "../shared/doc-ref.ts";
 
 /** Default page size for the list queries (matches retrieval's default). */
 export const DEFAULT_LIST_LIMIT = 50;
@@ -965,8 +966,9 @@ export interface BriefWarning {
 
 const BRIEF_WARNING_MESSAGE: Record<BriefWarningKey, string> = {
   slack_not_configured: "Slack connector not configured — demand (@mention / DM) is always empty",
-  embedding_disabled:
-    "embedding backend off — recall-backed material degrades to FTS-only (docs/guide/embedding.md)",
+  embedding_disabled: `embedding backend off — recall-backed material degrades to FTS-only (${docsUrl(
+    "guide/embedding.md",
+  )})`,
 };
 
 /** Inputs for {@link deriveBriefWarnings} — the config facts that gate categories. */
