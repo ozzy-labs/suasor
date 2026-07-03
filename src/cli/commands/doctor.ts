@@ -409,31 +409,53 @@ export class DoctorCommand extends Command {
         }
       }
 
-      // 5d. slack discovery drift (ADR-0039 Layer 2, offline) — surface how many
-      //    newly-joined conversations the last `slack sync` sweep found that are
-      //    still not in `channels`. Doctor is a diagnostic and does NOT sweep the
-      //    network itself (ADR-0039 §Decision): it reads the drift marker the
-      //    sync-time sweep persisted in the connector cursor. Warn (actionable),
-      //    exit code unchanged. Only workspaces with discovery enabled and a
-      //    positive count emit a line, so a settled / opted-out store stays quiet.
-      //    Requires a migrated store (the cursor lives in the event log).
+      // 5d. slack discovery drift + freshness (ADR-0039 Layer 2, offline) —
+      //    surface how many newly-joined conversations the last `slack sync` sweep
+      //    found that are still not in `channels`, and *when* that sweep ran.
+      //    Doctor is a diagnostic and does NOT sweep the network itself (ADR-0039
+      //    §Decision): it reads the `__discovery__` drift marker the sync-time
+      //    sweep persisted in the connector cursor. The last-sweep freshness lets
+      //    an operator tell "skipped inside the 24h cadence" apart from "never
+      //    swept", and a `discover_new = false` workspace is shown as an explicit
+      //    opt-out (INFO) rather than silently — resolving the ambiguity Issue
+      //    #388 item 4 called out. Exit code unchanged (warn/info only). A marker
+      //    that is enabled-and-settled (count 0) or absent stays quiet. Requires a
+      //    migrated store (the cursor lives in the event log).
       if (dbReady && dbPath !== null) {
-        const { lastCursor } = await import("../../connectors/sync.ts");
+        const [{ lastCursor }, { formatSlackTs }] = await Promise.all([
+          import("../../connectors/sync.ts"),
+          import("../slack-time.ts"),
+        ]);
         const driftStore = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
         try {
           const markers = readDiscoveryMarkers(lastCursor(driftStore.connection.sqlite, "slack"));
           const enabledByAlias = new Map(workspaces.map((w) => [w.alias, w.discoverNew]));
           for (const m of markers) {
-            // Skip a marker whose workspace has since opted out of discovery (a
-            // stale count should not nag) or found nothing new.
-            if (m.newCount <= 0 || enabledByAlias.get(m.alias) === false) continue;
             const label = m.alias === "default" ? "" : `workspace '${m.alias}': `;
+            // Opted out (discover_new = false): show the disabled state instead of
+            // a now-frozen drift count, so it reads as a deliberate opt-out rather
+            // than a cadence skip. No freshness for the disabled case (the marker
+            // is stale — the sweep no longer runs here).
+            if (enabledByAlias.get(m.alias) === false) {
+              checks.push({
+                name: "slack.discovery",
+                status: "info",
+                detail: `${label}discovery disabled (discover_new = false)`,
+              });
+              continue;
+            }
+            // Enabled but nothing new: settled, stay quiet.
+            if (m.newCount <= 0) continue;
+            // Enabled + drift: the actionable warning, annotated with the last
+            // sweep's freshness. `lastSweptMs` is epoch ms; formatSlackTs takes a
+            // Slack `ts` (epoch seconds), so scale down by 1000 to reuse it.
             checks.push({
               name: "slack.discovery",
               status: "warn",
               detail:
                 `${label}${m.newCount} new Slack conversation(s) visible but not in config — ` +
-                "run `suasor slack conversations --new` to review (none ingested, ADR-0039)",
+                "run `suasor slack conversations --new` to review (none ingested, ADR-0039); " +
+                `last swept ${formatSlackTs(String(m.lastSweptMs / 1000))}`,
             });
           }
         } finally {
