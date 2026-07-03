@@ -36,13 +36,30 @@ When you onboard a connector that has a discovery verb (**github** = `repos` / *
 
 - For a discovery-capable connector where the **token can be resolved** (keychain / env override) → it runs discovery and appends a block containing the discovered ids (`--json` reports `configSource` as `"discovery"` and a count in `discovered`)
 - Even for a discovery-capable connector, when the **token is missing / the probe fails** → it falls back to appending a minimal template slice (required keys as comment stubs) and prints the reason to stderr (`configSource` is `"template"`). You can run `suasor <connector> <verb>` by hand later and swap it in
-- **Connectors without discovery** (slack / ms-graph / web / local) → as before, a template slice with comment stubs is appended (`configSource` is `"template"`)
+- **Connectors without discovery** (ms-graph / web / local) → as before, a template slice with comment stubs is appended (`configSource` is `"template"`)
+- **Slack** has its own bridge (below), not the generic discovery table
 - If a slice already exists, discovery is not run and it is preserved non-destructively (`configSource` is `"skipped"`)
 
 ```bash
 # pass the token via env override, discover github repos, and paste into config (headless)
 SUASOR_CONNECTOR_GITHUB_TOKEN=ghp_xxx suasor onboard --connector github --skip-auth --json
 ```
+
+### Slack onboarding bridge (flat / single-workspace, [ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) / [ADR-0014](../adr/0014-slack-multi-workspace.md) / #384)
+
+Slack keeps its own operational verbs (`slack auth set` / `auth test` / `conversations`) rather than the generic `auth set` / discovery table, so `suasor onboard --connector slack` **bridges that flow inline** (calling the same probes as functions, not shelling out to the CLI):
+
+```bash
+suasor onboard --connector slack   # paste the bot token → auth test → channels → first sync
+```
+
+1. **Token** → read (echo-suppressed) and stored under the flat `token` secret (`connector:slack:token`); with `--skip-auth` it comes from `SUASOR_CONNECTOR_SLACK_TOKEN` / the binary instead
+2. **`auth test`** → the same probe as `slack auth test`, printing the granted scopes + per-feature readiness
+3. **Channels** → the `slack conversations` listing leaf enumerates the **joined** public / private channels the token can see and appends a `[connectors.slack]` block carrying their ids (non-destructive). Unjoined channels (would be empty until the bot joins) and DMs / group-DMs are left for you to add by hand; if the probe fails, a placeholder slice is written and the reason printed to stderr
+4. **First sync** picks up the appended slice
+
+- **Multi-workspace is out of scope.** If your config already uses `[connectors.slack.workspaces.<alias>]`, the wizard does **not** bridge it (one stdin cannot carry N per-workspace tokens): it points you at the manual per-workspace path (`suasor slack auth set --workspace <alias>`, etc.) and leaves the config untouched
+- This bridge is **not** registered in the generic discovery table (it would duplicate `slack conversations`), so it stays an onboard-only special case
 
 The following per-connector sections show the details for configuring by hand without the wizard (token kind, required config keys).
 
@@ -237,6 +254,14 @@ channels = ["C0BETA1"]
 - **thread replies** ([ADR-0015](../adr/0015-slack-thread-replies.md)): for each message in `conversations.history` whose parent has `reply_count > 0`, it follows `conversations.replies` and ingests the replies too (messages without replies are not called = N+1 suppression). Replies use the same identity / `threadTs` meta, and the per-channel cursor shares the maximum `ts` of history and replies. Note: a new reply to a thread whose parent is older than the cursor/floor is out of scope (by design there is no per-thread cursor)
 - **delta detection**: the `oldest` cursor of `conversations.history`. The cursor is a JSON map holding the latest `ts` per **alias → channel** (`{ "<alias>": { "<channel>": "<ts>" } }`), and each channel resumes from its own high-water mark ([ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md) / [ADR-0014](../adr/0014-slack-multi-workspace.md)). A legacy flat map (`{ "<channel>": "<ts>" }`) is interpreted for backward compatibility as the `default` alias, and a single `ts` as the floor for the first run after upgrade
 - **onboarding** ([ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)):
+
+For a flat / single-workspace setup, the wizard does all of the below in one command (the recommended path, #384):
+
+```bash
+suasor onboard --connector slack       # token → auth test → joined channels → first sync (flat/single-workspace only)
+```
+
+To wire it by hand (or for a multi-workspace setup, which the wizard does not bridge):
 
 ```bash
 suasor slack auth set                  # save the token to the keychain (stdin / --token)

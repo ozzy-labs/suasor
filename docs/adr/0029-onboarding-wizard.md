@@ -3,8 +3,8 @@
 - Status: Accepted
 - Date: 2026-06-20
 - Deciders: Suasor maintainers
-- Related: [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（`auth set` / `auth test` 運用 verb）, [ADR-0027](0027-bulk-sync-orchestration.md)（`suasor sync` 一括取り込み・OS スケジューラ委譲）, [ADR-0003](0003-local-first-and-content-minimization.md) / [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（local-first / HITL）
-- Tracks: #160 / Epic #153
+- Related: [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（`auth set` / `auth test` 運用 verb）, [ADR-0014](0014-slack-multi-workspace.md)（Slack multi-workspace）, [ADR-0030](0030-connector-discovery-verbs.md)（discovery verb）, [ADR-0027](0027-bulk-sync-orchestration.md)（`suasor sync` 一括取り込み・OS スケジューラ委譲）, [ADR-0003](0003-local-first-and-content-minimization.md) / [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（local-first / HITL）
+- Tracks: #160 / Epic #153 / #384（Slack onboarding bridge）
 
 ## Context
 
@@ -30,6 +30,14 @@
    7. MCP 登録スニペット（`claude_desktop_config.json`）を表示
 
    **discovery 連携（非 Slack connector への拡張、[ADR-0030](0030-connector-discovery-verbs.md) / #195）。** step 4 の config slice 追記は、対象 connector が discovery verb（github `repos` / google `calendars` / box `folders`）を持つ場合、`auth test` 後にその discovery probe を実行し、token から発見した id を含む `[connectors.X]` ブロック（discovery の `renderConnectorConfigBlock` 出力）を生成して**非破壊追記**する（`appendConnectorBlock`）。これにより onboard 1 コマンドで `enabled = true` だけでなく取り込み対象 id まで config に入り、id 手探りによる silent 0 件（[ADR-0007](0007-connector-contract.md)）を回避できる。discovery は best-effort: verb を持たない connector・token 未解決・probe 失敗時は最小雛形 slice（`appendConnectorSlice`）にフォールバックし、理由を stderr に出す。`--json` は追記方法を `configSource`（`discovery` / `template` / `skipped`）+ `discovered` 件数で機械可読出力する。ウィザードは discovery ロジックを持たず `DISCOVERY_SPECS` の probe を呼ぶオーケストレータに留まる（責務境界・import-clean 維持）。
+
+   **Slack onboarding bridge（flat/single-workspace 限定、[ADR-0011](0011-slack-operational-verbs-and-readiness.md) / [ADR-0014](0014-slack-multi-workspace.md) / #384）。** Slack は `AUTH_SPECS`（generic `auth set/test`）にも `DISCOVERY_SPECS`（generic discovery verb）にも**意図的に非登録**で、独自の `slack auth set` / `slack auth test` / `slack conversations` を維持する。そのためウィザードは Slack を **special-case** し、上記 generic 経路の代わりに Slack 独自経路を**関数として**オーケストレーションする（CLI コマンドの exec はしない・責務境界維持）:
+   - **(a) token**: `readSecretLine`（マスク入力・[#383](https://github.com/ozzy-labs/suasor/issues/383)）で読み、`storeSecret("slack", workspaceSecretName(), token)` = flat/default の `connector:slack:token` に格納する（`--skip-auth` 時は env override `SUASOR_CONNECTOR_SLACK_TOKEN` / binary 前提でこの手順を skip）。
+   - **(b) auth test**: `slack auth test` と同じ probe（`testToken`）を**関数呼び出し**し、`renderFeaturesBlock` で per-feature scope readiness を表示する（`team_id` は次の config block に使う）。
+   - **(c) config slice**: `slack conversations` の listing leaf（`listConversations`）＋ `renderConfigBlock` を直接呼び、principal が member の public/private channel（[ADR-0039](0039-conversation-discovery-drift.md) の「channels に入れるべき」慣行に合わせる。unjoined は `not_in_channel` で 0 件、DM/group-DM は手動）の id を含む `[connectors.slack]` を**非破壊追記**する（`appendConnectorBlock`）。probe 失敗時は既存 discovery 同様 placeholder slice（`appendConnectorSlice`）＋理由を stderr に出す。
+   - **(d)** その後、既存の初回 `sync` フローが追記済み slice を拾って取り込む。
+   - **`DISCOVERY_SPECS` には登録しない**: データ駆動の汎用 discovery verb 表面と既存 `slack conversations` が二重化するため、onboard 側の special-case に留める（[ADR-0030](0030-connector-discovery-verbs.md) の discovery table は非 Slack 用のまま）。
+   - **multi-workspace は対象外**: `[connectors.slack.workspaces.<alias>]` を検出したら、onboard の単一 stdin 前提では N 個の per-workspace token を曖昧なく運べないため、bridge せず `suasor slack auth set --workspace <alias>` の手動導線（`auth test` / `conversations` / `sync`）を案内して従来フォールバックする（config は非破壊・未変更）。recap は当該 connector を manual-pending として要約し、「Setup needs manual steps」で締める。
 
 3. **config 自動追記の安全性（既存値を壊さない）。** 純粋関数 `appendConnectorSlice(toml, connector, defaults)` を SSOT とする:
    - 対象 connector の `[connectors.X]` セクションが**既に存在する**場合は**追記しない**（冪等。`enabled = false` を含む既存ユーザー設定を勝手に書き換えない）
