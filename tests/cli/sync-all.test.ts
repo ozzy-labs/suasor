@@ -172,6 +172,6 @@ describe("suasor sync (bulk)", () => {
     expect(out).toContain("2 succeeded, 0 failed");
     expect(err).toContain("warning: github:");
     expect(err).toContain("warning: web:");
-    expect(err).toContain("取り込み対象なし");
+    expect(err).toContain("nothing to ingest");
   });
 });

@@ -52,42 +52,42 @@ const DETECTORS: Record<string, (slice: ConnectorConfig) => string | null> = {
   github(slice) {
     const cfg = GithubConnectorConfig.parse(slice ?? {});
     if (cfg.repos.length === 0 && cfg.notifications === "off") {
-      return "repos 未設定かつ notifications=off — 取り込み対象なし（config の repos を設定するか notifications を all/repos に）";
+      return "repos unset and notifications=off — nothing to ingest (set repos in config, or set notifications to all/repos)";
     }
     return null;
   },
   box(slice) {
     const cfg = BoxConnectorConfig.parse(slice ?? {});
     if (cfg.folders.length === 0) {
-      return "folders 未設定 — 取り込み対象なし（config の folders を設定）";
+      return "folders unset — nothing to ingest (set folders in config)";
     }
     return null;
   },
   local(slice) {
     const cfg = LocalConnectorConfig.parse(slice ?? {});
     if (cfg.roots.length === 0) {
-      return "roots 未設定 — 取り込み対象なし（config の roots を設定）";
+      return "roots unset — nothing to ingest (set roots in config)";
     }
     return null;
   },
   web(slice) {
     const cfg = WebConnectorConfig.parse(slice ?? {});
     if (cfg.urls.length === 0) {
-      return "urls 未設定 — 取り込み対象なし（config の urls を設定）";
+      return "urls unset — nothing to ingest (set urls in config)";
     }
     return null;
   },
   google(slice) {
     const cfg = GoogleConnectorConfig.parse(slice ?? {});
     if (cfg.resources.length === 0) {
-      return "resources 未設定 — 取り込み対象なし（config の resources を設定）";
+      return "resources unset — nothing to ingest (set resources in config)";
     }
     return null;
   },
   "ms-graph"(slice) {
     const cfg = MsGraphConnectorConfig.parse(slice ?? {});
     if (cfg.resources.length === 0) {
-      return "resources 未設定 — 取り込み対象なし（config の resources を設定）";
+      return "resources unset — nothing to ingest (set resources in config)";
     }
     return null;
   },
@@ -96,7 +96,7 @@ const DETECTORS: Record<string, (slice: ConnectorConfig) => string | null> = {
     // A target exists if any database is configured or standalone-page discovery
     // is on (the default). Both off = nothing to ingest.
     if (cfg.databases.length === 0 && !cfg.pages) {
-      return "databases 未設定かつ pages=false — 取り込み対象なし（config の databases を設定するか pages を true に）";
+      return "databases unset and pages=false — nothing to ingest (set databases in config, or set pages to true)";
     }
     return null;
   },
@@ -105,7 +105,7 @@ const DETECTORS: Record<string, (slice: ConnectorConfig) => string | null> = {
     // An explicit `jql` is its own target (it overrides per-project queries).
     // Otherwise a target exists only when `projects` is non-empty.
     if (cfg.projects.length === 0 && (cfg.jql ?? "") === "") {
-      return "projects 未設定かつ jql 未設定 — 取り込み対象なし（config の projects を設定するか jql を指定）";
+      return "projects unset and jql unset — nothing to ingest (set projects in config, or specify jql)";
     }
     return null;
   },
@@ -119,11 +119,11 @@ const DETECTORS: Record<string, (slice: ConnectorConfig) => string | null> = {
       const anyChannels = aliases.some((alias) => (workspaces[alias]?.channels?.length ?? 0) > 0);
       return anyChannels
         ? null
-        : "workspaces のどの channel も未設定 — 取り込み対象なし（各 workspace の channels を設定 — id は `suasor slack conversations` で取得）";
+        : "none of the workspaces have channels set — nothing to ingest (set channels for each workspace — get ids with `suasor slack conversations`)";
     }
     // Flat/default workspace: a target exists when `channels` is non-empty.
     if (cfg.channels.length === 0) {
-      return "channels 未設定 — 取り込み対象なし（config の channels を設定 — id は `suasor slack conversations` で取得）";
+      return "channels unset — nothing to ingest (set channels in config — get ids with `suasor slack conversations`)";
     }
     return null;
   },

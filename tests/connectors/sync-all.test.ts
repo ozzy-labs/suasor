@@ -236,10 +236,12 @@ describe("runBulkSync", () => {
     });
     expect(result.succeeded).toBe(2);
     expect(result.failed).toBe(0);
-    expect(warnings.some((w) => w.startsWith("github:") && w.includes("取り込み対象なし"))).toBe(
+    expect(warnings.some((w) => w.startsWith("github:") && w.includes("nothing to ingest"))).toBe(
       true,
     );
-    expect(warnings.some((w) => w.startsWith("web:") && w.includes("取り込み対象なし"))).toBe(true);
+    expect(warnings.some((w) => w.startsWith("web:") && w.includes("nothing to ingest"))).toBe(
+      true,
+    );
   });
 
   test("does not warn for a connector slice with an ingest target (#187)", async () => {
