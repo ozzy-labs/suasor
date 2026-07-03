@@ -66,7 +66,9 @@ suasor init
 # Guided setup: pick connector(s), store tokens, wire the [connectors.X] config
 # slice (enabled = true), run the first sync, and print the scheduler + MCP
 # snippets — all in the correct order (ADR-0029).
-suasor onboard --connector github   # interactive on a TTY; --json for a summary
+suasor onboard --connector github,slack   # interactive on a TTY; --json for a summary
+# slack now completes here too: onboard bridges its flat/single-workspace setup
+# (multi-workspace still uses `suasor slack auth set --workspace <alias>`).
 
 # Verify config / DB / connector readiness (diagnostic only; creates nothing).
 suasor doctor
