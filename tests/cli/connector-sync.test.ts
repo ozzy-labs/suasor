@@ -5,6 +5,13 @@
  * on-disk store. To stay network-free, the config sets `repos = []`, so the
  * GitHub connector yields no records (and never builds an Octokit client) while
  * the full CLI → config → registry → sync-service path still runs.
+ *
+ * Credential ordering (#404, generalizing #385): the GitHub connector now
+ * resolves its token *before* the empty-scope no-op, so an empty `repos` with no
+ * token exits 1 (missing credential), just like slack. The "0 observed" no-op
+ * path therefore requires a token to be present — the empty-scope tests below
+ * inject one via the `SUASOR_CONNECTOR_GITHUB_TOKEN` env override (no keychain,
+ * no network: the token is never used because the empty scope returns first).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -57,6 +64,27 @@ async function writeConfig(toml: string): Promise<void> {
   await Bun.write(join(dir, "config.toml"), toml);
 }
 
+/**
+ * Run a CLI invocation with a GitHub token present via the env override (no
+ * keychain, no network). Used by the empty-`repos` no-op tests: under the #404
+ * credential ordering, "0 observed" requires a token to be resolvable — without
+ * one the run correctly exits 1 (see the tokenless test). The token itself is
+ * never used because the empty scope returns before any Octokit client is built.
+ */
+async function runWithGithubToken(
+  args: string[],
+): Promise<{ code: number; out: string; err: string }> {
+  const ENV = "SUASOR_CONNECTOR_GITHUB_TOKEN";
+  const prev = process.env[ENV];
+  process.env[ENV] = "ghp-test-token";
+  try {
+    return await run(args);
+  } finally {
+    if (prev === undefined) delete process.env[ENV];
+    else process.env[ENV] = prev;
+  }
+}
+
 describe("suasor github sync", () => {
   test("--help lists the github sync command", async () => {
     const { code, out } = await run(["--help"]);
@@ -67,7 +95,8 @@ describe("suasor github sync", () => {
   test("runs end-to-end with no repos (no network) and reports counts", async () => {
     await run(["init"]);
     await writeConfig("[connectors.github]\nrepos = []\n");
-    const { code, out } = await run(["github", "sync"]);
+    // Token present + empty scope → the 0-observed no-op (regression, #404).
+    const { code, out } = await runWithGithubToken(["github", "sync"]);
     expect(code).toBe(0);
     expect(out).toContain("0 observed");
   });
@@ -75,7 +104,7 @@ describe("suasor github sync", () => {
   test("--json emits the sync outcome", async () => {
     await run(["init"]);
     await writeConfig("[connectors.github]\nrepos = []\n");
-    const { code, out } = await run(["github", "sync", "--json"]);
+    const { code, out } = await runWithGithubToken(["github", "sync", "--json"]);
     expect(code).toBe(0);
     const parsed = JSON.parse(out) as { connector: string; observed: number };
     expect(parsed.connector).toBe("github");
@@ -105,14 +134,36 @@ describe("suasor github sync", () => {
 
   test("warns (stderr, exit 0) when repos empty and notifications=off (#187)", async () => {
     await run(["init"]);
-    // Enabled but no ingest target: no repos and notifications off. The run still
-    // succeeds (0 observed) but a pre-sync warning surfaces the no-op config.
+    // Enabled but no ingest target: no repos and notifications off. With a token
+    // present the run still succeeds (0 observed) and the pre-sync no-op advisory
+    // surfaces the config; the advisory is emitted before sync, independent of the
+    // credential check (#404).
     await writeConfig("[connectors.github]\nrepos = []\n");
-    const { code, out, err } = await run(["github", "sync"]);
+    const { code, out, err } = await runWithGithubToken(["github", "sync"]);
     expect(code).toBe(0);
     expect(out).toContain("0 observed");
     expect(err).toContain("warning: github:");
     expect(err).toContain("notifications=off");
+  });
+
+  test("no token + repos empty + notifications=off exits 1 (#404 credential ordering)", async () => {
+    await run(["init"]);
+    // The fresh-onboard state: enabled slice, no repos, notifications off, no
+    // token. Credential resolution precedes the empty-scope no-op, so the missing
+    // token is a loud error (exit 1) rather than a silent 0-observed exit 0 that
+    // hides the missing credential — the github analogue of the slack #385 fix.
+    const ENV = "SUASOR_CONNECTOR_GITHUB_TOKEN";
+    const prev = process.env[ENV];
+    delete process.env[ENV];
+    try {
+      await writeConfig("[connectors.github]\nrepos = []\n");
+      const { code, err } = await run(["github", "sync"]);
+      expect(code).toBe(1);
+      expect(err).toContain("no token configured");
+    } finally {
+      if (prev === undefined) delete process.env[ENV];
+      else process.env[ENV] = prev;
+    }
   });
 
   test("--discover and --no-discover together fail fast with exit 1 (ADR-0039)", async () => {
@@ -129,7 +180,7 @@ describe("suasor github sync", () => {
     await run(["init"]);
     await writeConfig("[connectors.github]\nrepos = []\n");
     // github has no discovery concept; the override flag is accepted and ignored.
-    const { code, out } = await run(["github", "sync", "--discover"]);
+    const { code, out } = await runWithGithubToken(["github", "sync", "--discover"]);
     expect(code).toBe(0);
     expect(out).toContain("0 observed");
   });
@@ -137,7 +188,7 @@ describe("suasor github sync", () => {
   test("--no-discover on a non-discovery connector is a harmless no-op (no regression)", async () => {
     await run(["init"]);
     await writeConfig("[connectors.github]\nrepos = []\n");
-    const { code, out } = await run(["github", "sync", "--no-discover"]);
+    const { code, out } = await runWithGithubToken(["github", "sync", "--no-discover"]);
     expect(code).toBe(0);
     expect(out).toContain("0 observed");
   });

@@ -6,6 +6,13 @@
  * `repos = []` (yields no records, builds no Octokit client) and the auth-free
  * `web` connector with no pages, so the full CLI → config → registry →
  * bulk-sync → sync-service path runs without touching the network.
+ *
+ * Credential ordering (#404, generalizing #385): github now resolves its token
+ * before the empty-scope no-op, so a `repos = []` github with no token fails
+ * (exit 1) rather than silently succeeding. The tests that expect github to
+ * *succeed* as a 0-observed no-op therefore inject a token via the
+ * `SUASOR_CONNECTOR_GITHUB_TOKEN` env override; the token is never used because
+ * the empty scope returns before any Octokit client is built (still no network).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -58,6 +65,27 @@ async function writeConfig(toml: string): Promise<void> {
   await Bun.write(join(dir, "config.toml"), toml);
 }
 
+/**
+ * Run a CLI invocation with a GitHub token present via the env override (no
+ * keychain, no network). Used by the bulk-sync tests that expect github to
+ * succeed as a 0-observed no-op: under the #404 credential ordering that path
+ * requires a resolvable token. The token is never used — the empty `repos` scope
+ * returns before any Octokit client is built.
+ */
+async function runWithGithubToken(
+  args: string[],
+): Promise<{ code: number; out: string; err: string }> {
+  const ENV = "SUASOR_CONNECTOR_GITHUB_TOKEN";
+  const prev = process.env[ENV];
+  process.env[ENV] = "ghp-test-token";
+  try {
+    return await run(args);
+  } finally {
+    if (prev === undefined) delete process.env[ENV];
+    else process.env[ENV] = prev;
+  }
+}
+
 describe("suasor sync (bulk)", () => {
   test("--help lists the bulk sync command", async () => {
     const { code, out } = await run(["--help"]);
@@ -76,7 +104,7 @@ describe("suasor sync (bulk)", () => {
   test("runs all enabled connectors and reports per-connector counts", async () => {
     await run(["init"]);
     await writeConfig("[connectors.github]\nrepos = []\n[connectors.web]\nurls = []\n");
-    const { code, out } = await run(["sync"]);
+    const { code, out } = await runWithGithubToken(["sync"]);
     expect(code).toBe(0);
     expect(out).toContain("github: 0 observed");
     expect(out).toContain("web: 0 observed");
@@ -104,7 +132,7 @@ describe("suasor sync (bulk)", () => {
   test("--concurrency runs the bounded pool and reports counts (Issue #269)", async () => {
     await run(["init"]);
     await writeConfig("[connectors.github]\nrepos = []\n[connectors.web]\nurls = []\n");
-    const { code, out } = await run(["sync", "--concurrency", "2"]);
+    const { code, out } = await runWithGithubToken(["sync", "--concurrency", "2"]);
     expect(code).toBe(0);
     expect(out).toContain("2 succeeded, 0 failed");
   });
@@ -164,10 +192,12 @@ describe("suasor sync (bulk)", () => {
   test("no-op connector configs warn (stderr) but the aggregate still succeeds (#187)", async () => {
     await run(["init"]);
     // Both connectors are enabled but have no ingest target (github: no repos +
-    // notifications off; web: no urls). The bulk run still succeeds (0 observed
-    // each) but a pre-sync no-op warning surfaces for each connector.
+    // notifications off; web: no urls). With a github token present the bulk run
+    // still succeeds (0 observed each) and a pre-sync no-op warning surfaces for
+    // each connector (the advisory is emitted before sync, independent of the
+    // credential check, #404).
     await writeConfig("[connectors.github]\nrepos = []\n[connectors.web]\nurls = []\n");
-    const { code, out, err } = await run(["sync"]);
+    const { code, out, err } = await runWithGithubToken(["sync"]);
     expect(code).toBe(0);
     expect(out).toContain("2 succeeded, 0 failed");
     expect(err).toContain("warning: github:");
