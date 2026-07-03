@@ -65,6 +65,7 @@ registry は併せて name → **lazy config-slice schema loader** を保持し�
 - **差分** — delta API があれば cursor を `SyncContext`/`SyncResult` で授受、なければ `fingerprint` 比較（sync service が body の SHA-256 を自動付与）
 - **import-clean** — connector の登録 import で重い SDK を pull しない。SDK は `sync` 内で lazy import（CLI の lazy-import 規律と同じ。NFR-PRF-1）
 - **secrets** — トークンは `ctx.secret(name)` で取得（keychain + env override、[config](config.md)）。config.toml には書かない
+- **credential 解決は scope-emptiness 判定に先行する**（[ADR-0007](../adr/0007-connector-contract.md)） — credential を要する connector の `sync` は、`ctx.secret(...)` 解決を「取り込みスコープが空か」（`repos` / `folders` / `roots` / `urls` / `resources` / `databases` / `projects` / `jql` 等）の early-return 判定より**前**に置く。credential 皆無なら scope の空・非空に関わらず throw（exit 1）し、token 不在が空スコープの陰で silent 0-ingest + exit 0 に化けるのを防ぐ（"no silent wrong answer"）。**credential あり + スコープ空 → 従来どおり 0 件 no-op（client も build しない）** を厳守。multi-account（slack）は per-account 隔離で、全 account 皆無時のみ throw（[ADR-0014](../adr/0014-slack-multi-workspace.md)）。`web` / `local` は credential 不要のため対象外。先行事例は slack #385、#404 で github / box / google / ms-graph / notion / jira へ横展開
 
 ### actuator（write capability・read 契約とは別経路・ADR-0036）
 

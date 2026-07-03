@@ -323,8 +323,12 @@ class MsGraphConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    if (this.config.resources.length === 0) return;
-
+    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
+    // missing clientSecret must fail loudly (throw → exit 1) even when no
+    // resources are configured, rather than hiding behind the empty-scope early
+    // return below — which would report a silent 0-ingest + exit 0 and mask the
+    // missing credential (ADR-0007 "no silent wrong answer"). A configured secret +
+    // empty scope keeps the old behaviour: the no-op return below (0 records, no client).
     const clientSecret = await ctx.secret("clientSecret");
     if (!clientSecret) {
       throw new Error(
@@ -332,6 +336,9 @@ class MsGraphConnector implements Connector {
           "(set SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET or store it in the OS keychain)",
       );
     }
+
+    if (this.config.resources.length === 0) return;
+
     if (!this.config.tenantId || !this.config.clientId) {
       throw new Error("ms-graph connector: tenantId and clientId are required in config");
     }

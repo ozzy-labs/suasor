@@ -254,6 +254,26 @@ describe("Box connector — guards", () => {
     expect(await collect(connector.sync(ctx()))).toEqual([]);
     expect(built).toBe(false);
   });
+
+  test("no folders + no token still throws (credential precedes the empty-scope no-op, #404)", async () => {
+    // The fresh-onboard state (enabled slice, no folders, no token): a missing
+    // credential must fail loudly rather than hiding behind the empty-scope no-op
+    // (a silent 0-ingest + exit 0). Regression of the credential ordering (#385).
+    let built = false;
+    const connector = createBoxConnector(
+      { folders: [] },
+      {
+        clientFactory: () => {
+          built = true;
+          return fakeBox({}).client;
+        },
+      },
+    );
+    await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
+      /no token configured/,
+    );
+    expect(built).toBe(false);
+  });
 });
 
 /** Extractor that returns text from a table; `null` ⇒ unsupported. */

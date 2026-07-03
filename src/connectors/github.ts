@@ -222,10 +222,12 @@ class GithubConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    const wantsNotifications = this.config.notifications !== "off";
-    // Nothing to do when there are no repos to scan and notifications are off.
-    if (this.config.repos.length === 0 && !wantsNotifications) return;
-
+    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
+    // missing token must fail loudly (throw → exit 1) even when nothing is
+    // configured to scan, rather than hiding behind the empty-scope early return
+    // below — which would report a silent 0-ingest + exit 0 and mask the missing
+    // credential (ADR-0007 "no silent wrong answer"). A configured token + empty
+    // scope keeps the old behaviour: the no-op return below (0 records, no client).
     const token = await ctx.secret("token");
     if (!token) {
       throw new Error(
@@ -233,6 +235,10 @@ class GithubConnector implements Connector {
           "(set SUASOR_CONNECTOR_GITHUB_TOKEN or store it in the OS keychain)",
       );
     }
+
+    const wantsNotifications = this.config.notifications !== "off";
+    // Nothing to do when there are no repos to scan and notifications are off.
+    if (this.config.repos.length === 0 && !wantsNotifications) return;
 
     const octokit = await this.octokitFactory({
       auth: token,

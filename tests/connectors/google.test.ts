@@ -456,6 +456,26 @@ describe("Google connector — guards", () => {
     expect(await collect(connector.sync(ctx()))).toEqual([]);
     expect(built).toBe(false);
   });
+
+  test("no resources + no refreshToken still throws (credential precedes the empty-scope no-op, #404)", async () => {
+    // The fresh-onboard state (enabled slice, no resources, no refreshToken): a
+    // missing credential must fail loudly rather than hiding behind the
+    // empty-scope no-op (a silent 0-ingest + exit 0). Regression of #385.
+    let built = false;
+    const connector = createGoogleConnector(
+      { resources: [] },
+      {
+        clientFactory: () => {
+          built = true;
+          return fakeGoogle({}).client;
+        },
+      },
+    );
+    await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
+      /no refreshToken configured/,
+    );
+    expect(built).toBe(false);
+  });
 });
 
 /** Extractor that returns text from a table; `null` ⇒ unsupported. */
