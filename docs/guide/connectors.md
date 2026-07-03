@@ -12,7 +12,7 @@ There are two ways to trigger ingestion. Both call the same sync service:
 Even when a connector is **enabled** (a `[connectors.X]` section exists and is not `enabled = false`), if its ingest scope is empty (github with `repos` unset and `notifications = "off"`, box with `folders` unset, local with `roots` unset, web with `urls` unset, google / ms-graph with an **explicit** `resources = []`, notion with `databases` unset and `pages = false`, jira with `projects` unset and `jql` unset, slack with no workspace declaring `channels`), sync silently finishes with 0 observed and you cannot notice until you inspect the DB ([#187](https://github.com/ozzy-labs/suasor/issues/187)). To prevent this, sync detects an empty config before running and prints a warning to stderr (e.g. `warning: github: repos unset and notifications=off — nothing to ingest (set repos in config, or set notifications to all/repos)`).
 
 - The same warning appears on both paths: single sync (`suasor <connector> sync`) and bulk sync (`suasor sync`, [ADR-0027](../adr/0027-bulk-sync-orchestration.md))
-- It is **warning-only** and does not change the exit code (an empty config is not a failure; the run succeeds normally with `0 observed`)
+- It is **warning-only** and does not change the exit code **when a credential is configured** — an empty scope with a valid credential is not a failure; the run succeeds normally with `0 observed`. A **missing** credential is a different case: credential resolution now precedes the empty-scope check, so a connector with no resolvable credential fails loudly (**exit 1**) regardless of whether its scope is empty ([#404](https://github.com/ozzy-labs/suasor/issues/404), generalizing Slack's [#385](https://github.com/ozzy-labs/suasor/issues/385); see [ADR-0007](../adr/0007-connector-contract.md))
 
 ## Start with `suasor onboard` (recommended setup path)
 
@@ -124,7 +124,7 @@ notifications = "off"                          # off | all | repos (default off)
 # baseUrl = "https://github.example.com/api/v3"  # for GitHub Enterprise
 ```
 
-When `repos` is empty and `notifications = "off"`, nothing is ingested (and no token is required).
+When `repos` is empty and `notifications = "off"`, nothing is ingested. A token is still required: credential resolution precedes the empty-scope check, so a github connector with no resolvable token exits 1 rather than silently succeeding ([#404](https://github.com/ozzy-labs/suasor/issues/404); [ADR-0007](../adr/0007-connector-contract.md)).
 
 #### notifications (per-token notification stream)
 
