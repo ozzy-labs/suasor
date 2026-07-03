@@ -423,56 +423,198 @@ describe("suasor onboard — discovery → config block (ADR-0030, Issue #195)",
   });
 });
 
-describe("suasor onboard — slack connector-specific next steps (Issue #384)", () => {
-  test("prints the 4-step slack auth flow instead of the generic hint", async () => {
+/**
+ * Stub `globalThis.fetch` for the slack bridge probes (Issue #384 Phase 2/3): the
+ * one `auth.test` round-trip (`testToken`) and the `users.conversations` listing
+ * leaf. No real network / SDK: both slack `fetch`-based leaves go through
+ * `slackFetch` → `globalThis.fetch`. The bridge sweeps public then private, so the
+ * public channels are returned for the `public_channel` type and nothing for the
+ * rest (a compact fixture). `conversationsError` makes the listing throw so the
+ * discovery-fallback path can be exercised.
+ */
+function stubSlackApi(
+  opts: {
+    authError?: string;
+    scopes?: string;
+    teamId?: string;
+    publicChannels?: { id: string; name?: string; is_member?: boolean }[];
+    conversationsError?: string;
+  } = {},
+): void {
+  globalThis.fetch = (async (input: string | URL) => {
+    const url = input.toString();
+    if (url.includes("auth.test")) {
+      const body = opts.authError
+        ? { ok: false, error: opts.authError }
+        : {
+            ok: true,
+            team: "Acme",
+            team_id: opts.teamId ?? "T0ACME",
+            user: "suasor-bot",
+            user_id: "U0BOT",
+            bot_id: "B0BOT",
+          };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "x-oauth-scopes": opts.scopes ?? "channels:history,groups:history,users:read",
+        },
+      });
+    }
+    if (url.includes("users.conversations")) {
+      if (opts.conversationsError) {
+        return new Response(JSON.stringify({ ok: false, error: opts.conversationsError }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const type = new URL(url).searchParams.get("types");
+      const channels = type === "public_channel" ? (opts.publicChannels ?? []) : [];
+      return new Response(JSON.stringify({ ok: true, channels }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch in slack bridge test: ${url}`);
+  }) as unknown as typeof fetch;
+}
+
+describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
+  const realFetch = globalThis.fetch;
+  const realToken = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+    else process.env.SUASOR_CONNECTOR_SLACK_TOKEN = realToken;
+  });
+
+  test("stores the pasted token under the flat `token` secret", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // The env override keeps the probe off the real keychain; the pasted token is
+    // the one asserted to land in the (in-memory) keychain under `slack:token`.
+    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    stubSlackApi();
+    const keychain = memoryKeychain();
     try {
-      // slack has no AUTH_SPECS entry, so storeTokenFor returns "no-spec" without
-      // reading stdin — a non-TTY empty stdin (the default) is safe here.
-      const { code, out } = await run(["onboard", "--connector", "slack", "--skip-sync"], {
+      const { code } = await run(["onboard", "--connector", "slack", "--skip-sync"], {
         configDir: dir,
+        stdin: ttyStdin("xoxb-pasted"),
+        keychain,
       });
       expect(code).toBe(0);
-      expect(out).toContain("slack: uses its own auth flow");
-      expect(out).toContain("suasor slack auth set");
-      expect(out).toContain("suasor slack auth test");
-      expect(out).toContain("suasor slack conversations");
-      expect(out).toContain("suasor slack sync");
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("slack", "token")}`)).toBe(
+        "xoxb-pasted",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('never leaks the internal "no generic auth verb" phrasing for slack', async () => {
+  test("appends a [connectors.slack] block with only the joined channels from the probe", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    // C0JOIN is a member channel (goes into config); C0NOPE is not joined (excluded
+    // — it would ingest nothing until the bot joins, ADR-0011).
+    stubSlackApi({
+      publicChannels: [
+        { id: "C0JOIN", name: "general", is_member: true },
+        { id: "C0NOPE", name: "random", is_member: false },
+      ],
+    });
     try {
-      const { code, out } = await run(["onboard", "--connector", "slack", "--skip-sync"], {
-        configDir: dir,
-      });
+      const { code, out } = await run(
+        ["onboard", "--connector", "slack", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
       expect(code).toBe(0);
-      expect(out).not.toContain("no generic auth verb");
+      const report = JSON.parse(out) as {
+        connectors: { configSource: string; discovered?: number }[];
+      };
+      expect(report.connectors[0]?.configSource).toBe("discovery");
+      expect(report.connectors[0]?.discovered).toBe(1);
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.slack]");
+      expect(toml).toContain("enabled = true");
+      expect(toml).toContain('team = "T0ACME"');
+      expect(toml).toContain('"C0JOIN"');
+      // The unjoined channel is not auto-configured.
+      expect(toml).not.toContain("C0NOPE");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("re-surfaces the slack next steps after the sync summary (ends incomplete)", async () => {
+  test("falls back to the placeholder slice + reason when the conversations probe fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    // auth.test succeeds (so a team id resolves) but the listing leaf throws.
+    stubSlackApi({ conversationsError: "internal_error" });
     try {
-      // Pre-write the slice as enabled = false so the first sync short-circuits to
-      // "no enabled connectors" (no store open / no network), yet a sync summary
-      // line is still printed — the recap must come *after* it.
-      await Bun.write(join(dir, "config.toml"), "[connectors.slack]\nenabled = false\n");
-      const { code, out } = await run(["onboard", "--connector", "slack"], { configDir: dir });
+      const { code, out, err } = await run(
+        ["onboard", "--connector", "slack", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
       expect(code).toBe(0);
-      const syncIdx = out.indexOf("sync:");
-      expect(syncIdx).toBeGreaterThanOrEqual(0);
-      // The final block on screen is the "not complete yet" checklist.
-      expect(out).toContain("slack: setup is not complete yet");
-      const recapIdx = out.lastIndexOf("slack: setup is not complete yet");
-      expect(recapIdx).toBeGreaterThan(syncIdx);
-      // The last slack command line lands after the sync summary too.
-      expect(out.lastIndexOf("suasor slack sync")).toBeGreaterThan(syncIdx);
+      const report = JSON.parse(out) as { connectors: { configSource: string }[] };
+      expect(report.connectors[0]?.configSource).toBe("template");
+      // The fallback reason is surfaced on stderr (kept out of --json stdout).
+      expect(err).toContain("discovery skipped");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.slack]");
+      // The commented placeholder, not a populated channels array.
+      expect(toml).toContain("# channels =");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves an existing [connectors.slack] (enabled = false) untouched", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    stubSlackApi({ publicChannels: [{ id: "C0JOIN", name: "general", is_member: true }] });
+    try {
+      const configPath = join(dir, "config.toml");
+      await Bun.write(configPath, "[connectors.slack]\nenabled = false\n");
+      const { code, out } = await run(
+        ["onboard", "--connector", "slack", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { configSource: string }[] };
+      expect(report.connectors[0]?.configSource).toBe("skipped");
+      const toml = await Bun.file(configPath).text();
+      expect(toml).toContain("enabled = false");
+      expect(toml).not.toContain("enabled = true");
+      // Discovery must not run / write channels when the slice already exists.
+      expect(toml).not.toContain("C0JOIN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a multi-workspace config falls back to the manual per-workspace導線", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // No env override / fetch stub: a multi-workspace config bails before the token
+    // read + probe, so nothing touches stdin or the network.
+    try {
+      const configPath = join(dir, "config.toml");
+      const original =
+        "[connectors.slack]\nenabled = true\n\n" +
+        '[connectors.slack.workspaces.acme]\nteam = "T0ACME"\nchannels = ["C0AAA"]\n';
+      await Bun.write(configPath, original);
+      const { code, out } = await run(["onboard", "--connector", "slack", "--skip-sync"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      // The wizard points at the per-workspace導線 and re-surfaces the checklist.
+      expect(out).toContain("multiple workspaces configured (acme)");
+      expect(out).toContain("suasor slack auth set --workspace");
+      expect(out).toContain("setup is not complete yet");
+      expect(out).toContain("Setup needs manual steps");
+      // Config is left byte-for-byte untouched (no flat bridge write).
+      expect(await Bun.file(configPath).text()).toBe(original);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -492,10 +634,10 @@ describe("suasor onboard — slack connector-specific next steps (Issue #384)", 
       const byName = new Map(report.connectors.map((c) => [c.connector, c]));
       expect(byName.get("slack")?.authFlow).toBe("connector-specific");
       expect(byName.get("github")?.authFlow).toBe("generic");
-      // Existing fields are untouched (the new field is purely additive).
+      // Existing fields are untouched (the field is purely additive).
       expect(byName.get("github")?.configAppended).toBe(true);
-      // --json suppresses the human-readable next-steps / recap entirely.
-      expect(out).not.toContain("uses its own auth flow");
+      // --json suppresses the human-readable bridge output entirely.
+      expect(out).not.toContain("token stored in the OS keychain");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
