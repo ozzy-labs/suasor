@@ -620,8 +620,39 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
     }
   });
 
+  test("a pre-existing invalid config does not hard-fail the slack workspace detection", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // An unrelated connector slice with an unknown key fails loadConfig's strict
+    // per-slice validation. The multi-workspace detection loads the config, so it
+    // must degrade to "no aliases → flat bridge" rather than letting the throw
+    // hard-fail `onboard --connector slack` (Issue #384 review). --skip-auth keeps
+    // it off the keychain/network; --skip-sync avoids the later loadConfig at sync.
+    await Bun.write(join(dir, "config.toml"), "[connectors.github]\nbogus_key = true\n");
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "slack", "--skip-auth", "--skip-sync", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { connector: string }[] };
+      expect(report.connectors[0]?.connector).toBe("slack");
+      // The flat bridge still ran and appended a slack slice next to the (untouched)
+      // invalid github slice.
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.slack]");
+      expect(toml).toContain("bogus_key = true");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("--json marks slack authFlow=connector-specific and generic connectors as generic", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // Hermetic: the env override keeps the slack probe off the real OS keychain,
+    // and the fetch stub keeps its auth.test / conversations round-trips off the
+    // network (a flat, unconfigured slack config runs the bridge under --skip-auth).
+    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    stubSlackApi();
     try {
       const { code, out } = await run(
         ["onboard", "--connector", "github,slack", "--skip-auth", "--skip-sync", "--json"],

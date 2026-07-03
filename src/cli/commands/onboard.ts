@@ -877,13 +877,26 @@ export class OnboardCommand extends Command {
   /**
    * The configured `[connectors.slack.workspaces.<alias>]` aliases (Issue #384).
    * Non-empty → a multi-workspace config the inline bridge cannot drive. Reads the
-   * raw `workspaces` keys (not a Zod parse) so an unrelated validation error in the
-   * slice never turns this detection into a hard failure — mirrors the resolution
-   * `slack.ts`'s operational verbs use.
+   * raw `workspaces` keys (not a per-slice Zod parse — `SlackConnectorConfig` is
+   * never applied here), mirroring the resolution `slack.ts`'s operational verbs
+   * use.
+   *
+   * `loadConfig` strictly re-validates every connector slice (loader
+   * `validateConnectorSlices`), so a pre-existing invalid config anywhere in
+   * `[connectors.*]` would otherwise throw and hard-fail `onboard --connector
+   * slack` before it can do anything useful. Detection degrades to `[]` (treat as
+   * flat) on that throw so the flat bridge still runs — its config append reads the
+   * file directly and is non-destructive; a still-invalid config surfaces later at
+   * the first `sync` (as it does for every other connector), not from this probe.
    */
   private async slackWorkspaceAliases(): Promise<string[]> {
     const { loadConfig } = await import("../../config/index.ts");
-    const config = await loadConfig();
+    let config: Awaited<ReturnType<typeof loadConfig>>;
+    try {
+      config = await loadConfig();
+    } catch {
+      return [];
+    }
     const slack = config.connectors[SLACK_CONNECTOR] as
       | { workspaces?: Record<string, unknown> }
       | undefined;
