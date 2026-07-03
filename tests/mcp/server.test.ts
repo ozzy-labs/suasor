@@ -925,14 +925,25 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
 
   test("connector.sync runs the shared service and returns the outcome", async () => {
     // repos:[] → no records (no network), but the write path runs end-to-end.
-    const client = await connectWrite({ github: { repos: [] } });
-    const res = await client.callTool({
-      name: "connector.sync",
-      arguments: { connector: "github" },
-    });
-    const parsed = parseResult(res as never) as { connector: string; observed: number };
-    expect(parsed.connector).toBe("github");
-    expect(parsed.observed).toBe(0);
+    // Credential ordering (#404): github resolves its token before the empty-scope
+    // no-op, so a token must be present for the 0-observed no-op path; inject one
+    // via the env override (never used — the empty scope returns before any client).
+    const ENV = "SUASOR_CONNECTOR_GITHUB_TOKEN";
+    const prev = process.env[ENV];
+    process.env[ENV] = "ghp-test-token";
+    try {
+      const client = await connectWrite({ github: { repos: [] } });
+      const res = await client.callTool({
+        name: "connector.sync",
+        arguments: { connector: "github" },
+      });
+      const parsed = parseResult(res as never) as { connector: string; observed: number };
+      expect(parsed.connector).toBe("github");
+      expect(parsed.observed).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env[ENV];
+      else process.env[ENV] = prev;
+    }
   });
 
   test("connector.sync surfaces an unknown connector as a tool error", async () => {

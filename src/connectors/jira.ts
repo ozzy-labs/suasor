@@ -253,9 +253,12 @@ class JiraConnector implements Connector {
   }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    const resources = this.resources();
-    if (resources.length === 0) return;
-
+    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
+    // missing token must fail loudly (throw → exit 1) even when no projects / jql
+    // are configured, rather than hiding behind the empty-scope early return
+    // below — which would report a silent 0-ingest + exit 0 and mask the missing
+    // credential (ADR-0007 "no silent wrong answer"). A configured token + empty
+    // scope keeps the old behaviour: the no-op return below (0 records, no client).
     const token = await ctx.secret("token");
     if (!token) {
       throw new Error(
@@ -263,6 +266,9 @@ class JiraConnector implements Connector {
           "(set SUASOR_CONNECTOR_JIRA_TOKEN or run `suasor jira auth set`)",
       );
     }
+
+    const resources = this.resources();
+    if (resources.length === 0) return;
 
     // Resolve auth once (host + Authorization header + REST base). A config error
     // (e.g. missing host / email for basic) throws before any fetch.

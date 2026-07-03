@@ -330,8 +330,12 @@ class GoogleConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    if (this.config.resources.length === 0) return;
-
+    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
+    // missing refreshToken must fail loudly (throw → exit 1) even when no
+    // resources are configured, rather than hiding behind the empty-scope early
+    // return below — which would report a silent 0-ingest + exit 0 and mask the
+    // missing credential (ADR-0007 "no silent wrong answer"). A configured token +
+    // empty scope keeps the old behaviour: the no-op return below (0 records, no client).
     const refreshToken = await ctx.secret("refreshToken");
     if (!refreshToken) {
       throw new Error(
@@ -339,6 +343,8 @@ class GoogleConnector implements Connector {
           "(set SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN or store it in the OS keychain)",
       );
     }
+
+    if (this.config.resources.length === 0) return;
 
     const client = await this.clientFactory({
       clientId: this.config.clientId,

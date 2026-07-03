@@ -286,6 +286,26 @@ describe("Jira connector — project sweep (issues + comments interleaved)", () 
     expect(await collect(connector.sync(ctx()))).toEqual([]);
     expect(built).toBe(false);
   });
+
+  test("no projects + no token still throws (credential precedes the empty-scope no-op, #404)", async () => {
+    // The fresh-onboard state (enabled slice, no projects/jql, no token): a
+    // missing credential must fail loudly rather than hiding behind the
+    // empty-scope no-op (a silent 0-ingest + exit 0). Regression of #385.
+    let built = false;
+    const connector = createJiraConnector(
+      { host: HOST, email: "me@example.com", projects: [] },
+      {
+        clientFactory: () => {
+          built = true;
+          return fakeClient({});
+        },
+      },
+    );
+    await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
+      /no token configured/,
+    );
+    expect(built).toBe(false);
+  });
 });
 
 describe("Jira connector — per-project cursor (delta)", () => {
