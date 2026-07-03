@@ -521,7 +521,11 @@ describe("suasor doctor", () => {
     expect(demand.some((c) => c.detail.includes("'acme'"))).toBe(false);
   });
 
-  test("slack discovery drift: a persisted marker with new conversations warns (ADR-0039)", async () => {
+  // Issue #388 item 4: the discovery-drift WARN now also carries the last-sweep
+  // freshness (`last swept <YYYY-MM-DD HH:MM> (<relative>)`), so an operator can
+  // tell "skipped inside the 24h cadence" apart from "never swept". Read offline
+  // from the `__discovery__` marker; freshness formatting reuses slack-time.ts.
+  test("slack discovery drift: a persisted marker with new conversations warns with freshness (ADR-0039, #388)", async () => {
     await run(["init"]);
     await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
     // Marker: workspace 'default' had a sweep that found 3 new conversations.
@@ -537,6 +541,8 @@ describe("suasor doctor", () => {
     expect(drift[0]?.status).toBe("warn");
     expect(drift[0]?.detail).toContain("3 new Slack conversation(s)");
     expect(drift[0]?.detail).toContain("slack conversations --new");
+    // Freshness annotation: `last swept YYYY-MM-DD HH:MM (<relative>)`.
+    expect(drift[0]?.detail).toMatch(/last swept \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(.+\)/);
   });
 
   test("slack discovery drift: a zero-count marker stays quiet (ADR-0039)", async () => {
@@ -550,15 +556,36 @@ describe("suasor doctor", () => {
     expect(report.checks.some((c) => c.name === "slack.discovery")).toBe(false);
   });
 
-  test("slack discovery drift: opting out (discover_new = false) suppresses a stale marker (ADR-0039)", async () => {
+  // No `__discovery__` marker at all (never swept) stays quiet — nothing to say
+  // offline (#388 item 4).
+  test("slack discovery drift: no marker stays quiet (ADR-0039, #388)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await seedSlackCursor(JSON.stringify({ default: { C1: "1.0" } }));
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "slack.discovery")).toBe(false);
+  });
+
+  // Issue #388 item 4: a `discover_new = false` workspace is shown as an explicit
+  // opt-out (INFO) rather than silently, so it reads as "disabled" not "cadence
+  // skip". No freshness for the disabled case, and exit code stays 0.
+  test("slack discovery drift: opting out (discover_new = false) shows disabled, not the stale count (ADR-0039, #388)", async () => {
     await run(["init"]);
     await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\ndiscover_new = false\n');
     await seedSlackCursor(
       JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:5" } }),
     );
-    const { out } = await run(["doctor", "--json"]);
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0);
     const report = JSON.parse(out) as DoctorReport;
-    expect(report.checks.some((c) => c.name === "slack.discovery")).toBe(false);
+    const disc = report.checks.filter((c) => c.name === "slack.discovery");
+    expect(disc).toHaveLength(1);
+    expect(disc[0]?.status).toBe("info");
+    expect(disc[0]?.detail).toContain("discovery disabled (discover_new = false)");
+    // The (now-frozen) drift count is not nagged, and no freshness is shown.
+    expect(disc[0]?.detail).not.toContain("new Slack conversation(s)");
+    expect(disc[0]?.detail).not.toContain("last swept");
   });
 
   test("flat single-workspace slack config emits no per-workspace token/identity checks (#371)", async () => {
