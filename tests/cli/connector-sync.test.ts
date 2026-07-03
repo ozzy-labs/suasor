@@ -149,7 +149,7 @@ describe("suasor github sync", () => {
     // missing token, but the no-op advisory must not fire — that is what we assert.)
     await writeConfig('[connectors.github]\nrepos = []\nnotifications = "all"\n');
     const { err } = await run(["github", "sync"]);
-    expect(err).not.toContain("取り込み対象なし");
+    expect(err).not.toContain("nothing to ingest");
   });
 });
 

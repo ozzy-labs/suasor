@@ -11,38 +11,38 @@ import { noopWarning } from "../../src/connectors/noop-check.ts";
 
 describe("noopWarning — empty/no-op slices warn", () => {
   test("github: no repos + notifications off", () => {
-    expect(noopWarning("github", { repos: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("github", { repos: [] })).toContain("nothing to ingest");
     // Default slice (no fields) resolves to repos=[] + notifications=off.
     expect(noopWarning("github", {})).toContain("notifications=off");
   });
 
   test("box: no folders", () => {
-    expect(noopWarning("box", { folders: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("box", { folders: [] })).toContain("nothing to ingest");
     expect(noopWarning("box", {})).toContain("folders");
   });
 
   test("local: no roots", () => {
-    expect(noopWarning("local", { roots: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("local", { roots: [] })).toContain("nothing to ingest");
     expect(noopWarning("local", {})).toContain("roots");
   });
 
   test("web: no urls", () => {
-    expect(noopWarning("web", { urls: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("web", { urls: [] })).toContain("nothing to ingest");
     expect(noopWarning("web", {})).toContain("urls");
   });
 
   test("google: empty resources", () => {
-    expect(noopWarning("google", { resources: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("google", { resources: [] })).toContain("nothing to ingest");
     expect(noopWarning("google", { resources: [] })).toContain("resources");
   });
 
   test("ms-graph: empty resources", () => {
-    expect(noopWarning("ms-graph", { resources: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("ms-graph", { resources: [] })).toContain("nothing to ingest");
   });
 
   test("slack: flat workspace with no channels", () => {
     expect(noopWarning("slack", { channels: [] })).toContain("channels");
-    expect(noopWarning("slack", {})).toContain("取り込み対象なし");
+    expect(noopWarning("slack", {})).toContain("nothing to ingest");
     // The advisory names the discovery verb so the operator can copy real ids
     // instead of hand-writing them (#385).
     expect(noopWarning("slack", {})).toContain("`suasor slack conversations`");
@@ -53,17 +53,17 @@ describe("noopWarning — empty/no-op slices warn", () => {
       workspaces: { acme: { team: "T1", channels: [] } },
     });
     expect(warn).toContain("workspaces");
-    expect(warn).toContain("取り込み対象なし");
+    expect(warn).toContain("nothing to ingest");
     expect(warn).toContain("`suasor slack conversations`");
   });
 
   test("notion: no databases + pages disabled", () => {
-    expect(noopWarning("notion", { databases: [], pages: false })).toContain("取り込み対象なし");
+    expect(noopWarning("notion", { databases: [], pages: false })).toContain("nothing to ingest");
     expect(noopWarning("notion", { databases: [], pages: false })).toContain("pages=false");
   });
 
   test("jira: no projects + no jql", () => {
-    expect(noopWarning("jira", { projects: [] })).toContain("取り込み対象なし");
+    expect(noopWarning("jira", { projects: [] })).toContain("nothing to ingest");
     // Default slice (no fields) resolves to projects=[] + jql unset.
     expect(noopWarning("jira", {})).toContain("projects");
   });
