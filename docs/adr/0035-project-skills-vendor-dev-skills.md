@@ -1,8 +1,14 @@
 # 0035. Project skills — vendor ecosystem dev skills; stop dogfood-committing assistant mirrors
 
-- Status: Accepted
+- Status: Accepted（一部撤回・下記注記参照）
 - Date: 2026-06-22
 - Deciders: Suasor maintainers
+
+> **[2026-07-04] 一部撤回**: 決定 (1)「エコシステム共通 dev skill を project-scope に
+> commit する（vendoring）」は撤回し、dev skill は user-scope install
+> （`npx @ozzylabs/skills install`）へ移行した。`.claude/skills/` `.agents/skills/` に
+> committed だった dev skill と companion agent（`code-reviewer.md`）は削除済み。
+> 決定 (2)「assistant mirror を dogfood-commit せず `.gitignore` する」は**維持**する。
 
 ## Context
 
