@@ -74,4 +74,4 @@ suasor skills info <name>             # 単一 skill の category / 境界 / tri
 [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo dogfood-commit は廃止した。host dir（`.claude/skills/` / `.agents/skills/`）の扱いは次の 2 系統に分かれる:
 
 - **assistant skill の mirror** — `docs/skills/` SSOT のローカル install 物。**commit しない**（`.gitignore` 済み）。各開発者が必要に応じ `suasor skills install` で展開する。install の正しさは `tests/skills/install.test.ts`（synthetic SSOT 上の `installSkills` / `detectDrift`）が担保する。
-- **エコシステム共通 dev skill（drive / lint / commit 等）** — suasor 開発に使う **project skill として commit 済み**。更新手順は [dev-skills-refresh.md](dev-skills-refresh.md) を参照。
+- **エコシステム共通 dev skill（drive / lint / commit 等）** — `@ozzylabs/skills` 由来。**user-scope install（`npx @ozzylabs/skills install`）で利用**する（以前は project-scope に commit していたが撤回・[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) の一部撤回注記を参照）。
