@@ -805,13 +805,28 @@ export class SlackStatusCommand extends Command {
     // (Issue #371 theme 3). Local projection join — no live fetch; unknown → alias
     // only.
     const identities = await readSlackWorkspaceIdentities();
+    const { parseThreadCursorKey } = await import("../../connectors/slack.ts");
     this.context.stdout.write("slack cursors:\n");
     for (const alias of aliases) {
       this.context.stdout.write(`  [${alias}]${workspaceIdentityLabel(identities.get(alias))}\n`);
+      // Per-thread cursors (`<channel>#<thread_ts>`, ADR-0015 R1) are a
+      // steady-state-capture detail. Fold them into a per-channel active count
+      // rather than printing one noisy row each; `--json` keeps the raw keys.
+      const threadCounts = new Map<string, number>();
+      for (const key of Object.keys(map[alias] ?? {})) {
+        const parsed = parseThreadCursorKey(key);
+        if (parsed) threadCounts.set(parsed.channel, (threadCounts.get(parsed.channel) ?? 0) + 1);
+      }
       for (const [channel, ts] of Object.entries(map[alias] ?? {})) {
+        if (parseThreadCursorKey(channel)) continue; // thread cursor — summarised below
         const rec = channelNames.get(channel);
         const label = rec ? `  ${slackChannelLabel(rec.name, rec.kind)}` : "";
-        this.context.stdout.write(`    ${channel}${label}  ${formatSlackTs(ts, this.now)}\n`);
+        const threads = threadCounts.get(channel) ?? 0;
+        const threadNote =
+          threads > 0 ? `  (+${threads} active thread${threads === 1 ? "" : "s"})` : "";
+        this.context.stdout.write(
+          `    ${channel}${label}  ${formatSlackTs(ts, this.now)}${threadNote}\n`,
+        );
       }
     }
     return 0;
@@ -868,11 +883,12 @@ export class SlackCursorResetCommand extends Command {
     // (`[alias] C0123 #general`) beside the id (ADR-0037 §1). No live fetch.
     const channelNames = await readSlackChannelNames();
 
-    const [{ serializeCursor }, { loadConfig }, { Store }] = await Promise.all([
-      import("../../connectors/slack.ts"),
-      import("../../config/index.ts"),
-      import("../../db/index.ts"),
-    ]);
+    const [{ serializeCursor, parseThreadCursorKey }, { loadConfig }, { Store }] =
+      await Promise.all([
+        import("../../connectors/slack.ts"),
+        import("../../config/index.ts"),
+        import("../../db/index.ts"),
+      ]);
 
     const next: Record<string, Record<string, string>> = structuredClone(current);
     const targets: string[] = [];
@@ -902,11 +918,25 @@ export class SlackCursorResetCommand extends Command {
       } else {
         const aliasMap = next[alias] ?? {};
         for (const ch of channels) {
-          if (aliasMap[ch] !== undefined) {
+          let matched = aliasMap[ch] !== undefined;
+          delete aliasMap[ch];
+          // Resetting a channel also clears its per-thread high-water marks
+          // (`<channel>#<thread_ts>`, ADR-0015 R1) so its threads re-discover
+          // from the floor rather than resuming from a stale mark.
+          let threadN = 0;
+          for (const key of Object.keys(aliasMap)) {
+            const parsed = parseThreadCursorKey(key);
+            if (parsed && parsed.channel === ch) {
+              delete aliasMap[key];
+              threadN += 1;
+              matched = true;
+            }
+          }
+          if (matched) {
             const rec = channelNames.get(ch);
             const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
-            targets.push(`[${alias}] ${ch}${label}`);
-            delete aliasMap[ch];
+            const threadNote = threadN > 0 ? ` (+${threadN} thread)` : "";
+            targets.push(`[${alias}] ${ch}${label}${threadNote}`);
           }
         }
         next[alias] = aliasMap;
@@ -980,7 +1010,9 @@ export class SlackCursorBackfillCommand extends Command {
       return 1;
     }
 
-    const { parseSinceToTs, serializeCursor } = await import("../../connectors/slack.ts");
+    const { parseSinceToTs, serializeCursor, parseThreadCursorKey } = await import(
+      "../../connectors/slack.ts"
+    );
     const floorTs = parseSinceToTs(this.since, Date.now());
     if (floorTs === null) {
       this.context.stderr.write(
@@ -1020,11 +1052,24 @@ export class SlackCursorBackfillCommand extends Command {
       );
     }
     aliasMap[this.channel] = floorTs;
+    // Lowering the channel cursor re-fetches its older history; also drop the
+    // channel's per-thread high-water marks (`<channel>#<thread_ts>`, ADR-0015
+    // R1) so threads in the re-fetched window are rediscovered rather than
+    // resuming from a mark ahead of the new floor.
+    let threadCleared = 0;
+    for (const key of Object.keys(aliasMap)) {
+      const parsed = parseThreadCursorKey(key);
+      if (parsed && parsed.channel === this.channel) {
+        delete aliasMap[key];
+        threadCleared += 1;
+      }
+    }
     next[alias] = aliasMap;
 
     const rec = channelNames.get(this.channel);
     const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
-    const summary = `[${alias}] ${this.channel}${label}: ${before ?? "(none)"} → ${floorTs}`;
+    const threadNote = threadCleared > 0 ? ` (+${threadCleared} thread cursor(s) cleared)` : "";
+    const summary = `[${alias}] ${this.channel}${label}: ${before ?? "(none)"} → ${floorTs}${threadNote}`;
     if (!this.yes) {
       this.context.stdout.write(`would backfill: ${summary}\n`);
       this.context.stdout.write("(preview — re-run with --yes to apply)\n");

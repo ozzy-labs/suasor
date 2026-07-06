@@ -361,3 +361,67 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     expect(err).toContain("invalid --since");
   });
 });
+
+describe("suasor slack status / cursor — per-thread cursors (ADR-0015 R1, #418)", () => {
+  test("status folds per-thread cursors into a per-channel active count", async () => {
+    await run(["init"]);
+    await seedCursor(
+      JSON.stringify({
+        default: { C1: "111.000000", "C1#100.000000": "150.000000", "C1#200.000000": "250.000000" },
+      }),
+    );
+    const { code, out } = await run(["slack", "status"]);
+    expect(code).toBe(0);
+    // The channel row shows the count; the raw `<channel>#<thread_ts>` keys are
+    // not printed as their own rows.
+    expect(out).toContain("C1");
+    expect(out).toContain("(+2 active threads)");
+    expect(out).not.toContain("C1#100.000000");
+  });
+
+  test("status --json keeps the raw per-thread cursor keys", async () => {
+    await run(["init"]);
+    const cursor = { default: { C1: "111.000000", "C1#100.000000": "150.000000" } };
+    await seedCursor(JSON.stringify(cursor));
+    const { code, out } = await run(["slack", "status", "--json"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual(cursor);
+  });
+
+  test("cursor reset --channel --yes clears the channel's thread cursors too", async () => {
+    await run(["init"]);
+    await seedCursor(
+      JSON.stringify({
+        default: { C1: "111.000000", "C1#100.000000": "150.000000", C2: "222.000000" },
+      }),
+    );
+    const reset = await run(["slack", "cursor", "reset", "--channel", "C1", "--yes"]);
+    expect(reset.code).toBe(0);
+    expect(reset.out).toContain("(+1 thread)");
+    const status = await run(["slack", "status", "--json"]);
+    // C1 and its thread mark are gone; C2 (and any of its threads) untouched.
+    expect(JSON.parse(status.out)).toEqual({ default: { C2: "222.000000" } });
+  });
+
+  test("cursor backfill --channel --yes clears the channel's thread cursors", async () => {
+    await run(["init"]);
+    await seedCursor(
+      JSON.stringify({ default: { C1: "999999999.000000", "C1#100.000000": "150.000000" } }),
+    );
+    const floorTs = `${Math.floor(Date.parse("2026-01-01") / 1000)}.000000`;
+    const backfill = await run([
+      "slack",
+      "cursor",
+      "backfill",
+      "--channel",
+      "C1",
+      "--since",
+      "2026-01-01",
+      "--yes",
+    ]);
+    expect(backfill.code).toBe(0);
+    expect(backfill.out).toContain("thread cursor(s) cleared");
+    const status = await run(["slack", "status", "--json"]);
+    expect(JSON.parse(status.out)).toEqual({ default: { C1: floorTs } });
+  });
+});
