@@ -610,7 +610,7 @@ demand の seen-state 側の write tool 群。`demand.list` は取り込み済�
 
 ### `draft.export`（確定・write / HITL・[ADR-0025](../adr/0025-local-draft-export.md)）
 
-下書き（返信 / 引き継ぎ / 告知 / 計画 等のテキスト）を**ローカルファイルに書き出す** write tool。実体は `src/export/draft-export.ts`。**送信しない・source に書き戻さない**（local-first / no-egress）。`[export].dir` の sandbox 配下のみに書き、書き込み後に **body-less `DraftExported`** event を append（content-minimization・監査）。HITL（`readOnlyHint: false`、auto-apply なし）。
+下書き（返信 / 引き継ぎ / 告知 / 計画 等のテキスト）を**ローカルファイルに書き出す** write tool。実体は `src/export/draft-export.ts`。**既定で送信しない・source に書き戻さない**（local-first / no-egress）。唯一の例外は Office 形式（docx/pptx/xlsx）を **remote な `[export].composition` サイドカー**（`composition.allowRemote` で opt-in・非 loopback）で合成する場合で、そのとき本文がサイドカーへ egress し、戻り値の `composedViaRemoteSidecar: true` で開示される（Issue #436）。`[export].dir` の sandbox 配下のみに書き、書き込み後に **body-less `DraftExported`** event を append（content-minimization・監査）。HITL（`readOnlyHint: false`、auto-apply なし）。
 
 引数（Zod）:
 
@@ -621,13 +621,14 @@ demand の seen-state 側の write tool 群。`demand.list` は取り込み済�
 | `format` | `enum`（`md` / `txt` / `docx` / `pptx` / `xlsx`） | 出力形式（拡張子が無ければ付与）。`docx`/`pptx`/`xlsx` は `[export].composition` 有効時のみ（#138）。無効で要求すると tool error |
 | `sourceExternalId` | `string`（任意） | provenance |
 
-戻り値: `{ "path": "<書き出した絶対パス>", "status": "exported" }`。
+戻り値: `{ "path": "<書き出した絶対パス>", "status": "exported" }`。remote な composition サイドカーで合成した場合のみ `"composedViaRemoteSidecar": true` を併記（egress 開示・Issue #436。loopback / md / txt では省略＝egress なし）。
 
 - **sandbox**: `[export].dir` 配下のみ。`filename` basename 限定・traversal 拒否。`[export].dir` が無ければ作成
 - **`local.roots` 重複拒否**: `[export].dir` が `[connectors.local].roots` 配下/一致だと再取り込みループになるため tool error（[ADR-0023](../adr/0023-local-filesystem-connectors.md)）
 - **衝突**: 既存ファイルがあれば連番付与（`name.md` → `name-1.md`）で非破壊
 - **順序**: ファイル書き込み → 成功時のみ `DraftExported` を append（write 失敗時は event を残さない）。replay は reducer no-op でファイルを再生成しない
 - Office 形式（docx/pptx/xlsx）は `[export].composition` サイドカー（md→Office、抽出 [ADR-0024](../adr/0024-document-extraction-sidecar.md) の逆方向・#138）で変換してから書き出す。無効時は md/txt のみ（Office 要求は tool error）。docx を第一級、pptx/xlsx はサイドカー対応次第のベストエフォート
+- **remote サイドカー egress ゲート（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）**: `composition.baseUrl` は loopback allowlist（`localhost` / `127.0.0.0/8` / `::1`）でゲートされ、非 loopback は `composition.allowRemote = true` を明示しない限り config load で `ConfigError`（fail-fast）。opt-in 済み remote サイドカーで Office 合成したときは本文が egress するため、戻り値に `composedViaRemoteSidecar: true` を返し、起動 / doctor / validate-config も config WARN で開示する
 
 ### `source.forget`（確定・write / HITL・[ADR-0026](../adr/0026-source-forgetting.md)）
 

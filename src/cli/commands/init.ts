@@ -44,6 +44,7 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 # maxBatch = 64                         # max texts per request; larger inputs split in order
 # requestTimeoutMs = 60000              # per-request timeout (ms); 0 disables
 # maxRetries = 3                        # 429/5xx retry attempts incl. first; 1 disables
+# allowRemote = false                   # opt in to a non-loopback ollama sidecar (egress; Issue #436)
 
 [llm]
 # NOTE: [llm].backend is accepted by the schema but NOT read by the runtime today
@@ -55,6 +56,7 @@ backend = "disabled"   # disabled | anthropic | openai | ollama
 backend = "disabled"   # disabled | markitdown — Office/PDF body extraction sidecar (ADR-0024)
 # Run the bundled sidecar with \`suasor extraction serve\` (needs the markitdown CLI on PATH).
 # baseUrl = "http://localhost:8929"   # markitdown sidecar (/extract is appended)
+# allowRemote = false                 # opt in to a non-loopback sidecar (egress; Issue #436)
 # maxBytes = 5000000                  # cap on extracted text; larger inputs stay name-only
 # version = "1"                       # extractor version; bump to re-extract on next sync
 
@@ -65,6 +67,7 @@ backend = "disabled"   # disabled | markitdown — Office/PDF body extraction si
 [export.composition]
 backend = "disabled"   # disabled | pandoc — md->Office (docx/pptx/xlsx) sidecar (#138)
 # baseUrl = "http://localhost:8930"   # pandoc sidecar (/compose is appended)
+# allowRemote = false                 # opt in to a non-loopback sidecar (egress; Issue #436)
 `;
 
 export class InitCommand extends Command {

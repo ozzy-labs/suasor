@@ -68,9 +68,11 @@ interface MarkitdownExtractResponse {
  * Extractor over a markitdown-style sidecar `POST {baseUrl}/extract` (ADR-0024).
  *
  * Sends the raw bytes with the original filename (so the sidecar can dispatch by
- * extension) and expects `{ text }` JSON back (`text: null` ⇒ unsupported). The
- * call is local (no egress) and carries no secrets. A non-2xx response or a
- * malformed body raises `ExtractionError` so the caller degrades to name-only.
+ * extension) and expects `{ text }` JSON back (`text: null` ⇒ unsupported). No
+ * secrets. Local (no egress) for a loopback `baseUrl`; a remote `baseUrl` egresses
+ * the document bytes and requires `[extraction].allowRemote` (Issue #436 — gated
+ * at config load). A non-2xx response or a malformed body raises `ExtractionError`
+ * so the caller degrades to name-only.
  */
 export class MarkitdownExtractor implements Extractor {
   readonly version: string;

@@ -140,6 +140,36 @@ describe("draftExport (ADR-0025 / #138)", () => {
     ).toBe("docx");
   });
 
+  test("discloses composedViaRemoteSidecar when an Office format uses a remote sidecar (#436)", async () => {
+    const out = await draftExport(
+      store,
+      { content: "# Doc\n\nbody", filename: "spec", format: "docx" },
+      { exportDir, composer: fakeComposer(), composerRemote: true },
+    );
+    expect(out.status).toBe("exported");
+    expect(out.composedViaRemoteSidecar).toBe(true);
+  });
+
+  test("omits composedViaRemoteSidecar for a local composer", async () => {
+    const local = await draftExport(
+      store,
+      { content: "x", filename: "loc", format: "docx" },
+      { exportDir, composer: fakeComposer(), composerRemote: false },
+    );
+    expect(local.composedViaRemoteSidecar).toBeUndefined();
+  });
+
+  test("md/txt never disclose remote egress even if composerRemote is set (no composer call)", async () => {
+    const calls: { content: string; format: OfficeFormat }[] = [];
+    const out = await draftExport(
+      store,
+      { content: "x", filename: "note", format: "md" },
+      { exportDir, composer: fakeComposer(calls), composerRemote: true },
+    );
+    expect(out.composedViaRemoteSidecar).toBeUndefined();
+    expect(calls).toEqual([]); // md is written directly; the composer is never touched
+  });
+
   test("errors on an Office format when no composer is configured", async () => {
     await expect(
       draftExport(store, { content: "x", filename: "a", format: "docx" }, { exportDir }),

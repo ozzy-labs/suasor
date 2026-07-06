@@ -38,6 +38,7 @@
 [export.composition]
 backend = "pandoc"
 # baseUrl = "http://localhost:8930"   # /compose が付加される
+# allowRemote = false                 # 非 loopback baseUrl のとき true 必須（Issue #436）
 ```
 
 環境変数でも上書き可（CI / headless）:
@@ -45,7 +46,11 @@ backend = "pandoc"
 ```bash
 export SUASOR_EXPORT__COMPOSITION__BACKEND=pandoc
 # export SUASOR_EXPORT__COMPOSITION__BASEURL=http://sidecar:8930
+# 非 loopback sidecar は egress opt-in が必須:
+# export SUASOR_EXPORT__COMPOSITION__ALLOWREMOTE=true
 ```
+
+> **remote サイドカーは opt-in（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）**: `baseUrl` が loopback（`localhost` / `127.0.0.0/8` / `::1`）なら egress は無い。非 loopback host は下書き本文をサイドカーへ送るため、`allowRemote = true` を明示しない限り config load で `ConfigError`（fail-fast）。opt-in すると `draft.export` は戻り値に `composedViaRemoteSidecar: true` を返し、起動 / `doctor` / `validate-config` も remote egress を WARN で開示する。
 
 ### 書き出し
 

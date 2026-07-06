@@ -79,3 +79,76 @@ describe("collectConfigWarnings", () => {
     expect(warnings.map((w) => w.key)).toEqual(["embedding.backend", "llm.backend"]);
   });
 });
+
+describe("collectConfigWarnings — remote sidecar disclosure (Issue #436)", () => {
+  test("discloses a remote (non-loopback) composition sidecar", () => {
+    const warnings = collectConfigWarnings({
+      embedding: { backend: "disabled" },
+      llm: { backend: "disabled" },
+      export: {
+        composition: {
+          backend: "pandoc",
+          baseUrl: "https://compose.example.com",
+          allowRemote: true,
+        },
+      },
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.key).toBe("export.composition.baseUrl");
+    expect(warnings[0]?.message).toContain("https://compose.example.com");
+    expect(warnings[0]?.message).toContain("remote");
+    expect(warnings[0]?.message).toContain("export.composition.allowRemote");
+  });
+
+  test("discloses remote extraction and ollama embedding sidecars", () => {
+    const extraction = collectConfigWarnings({
+      embedding: { backend: "disabled" },
+      llm: { backend: "disabled" },
+      extraction: { backend: "markitdown", baseUrl: "http://sidecar:8929", allowRemote: true },
+    });
+    expect(extraction.map((w) => w.key)).toEqual(["extraction.baseUrl"]);
+
+    const embedding = collectConfigWarnings({
+      embedding: { backend: "ollama", baseUrl: "http://sidecar:11434", allowRemote: true },
+      llm: { backend: "disabled" },
+    });
+    expect(embedding.map((w) => w.key)).toEqual(["embedding.baseUrl"]);
+  });
+
+  test("does not disclose a loopback sidecar (local, no egress)", () => {
+    expect(
+      collectConfigWarnings({
+        embedding: { backend: "ollama", baseUrl: "http://localhost:11434" },
+        llm: { backend: "disabled" },
+        extraction: { backend: "markitdown", baseUrl: "http://127.0.0.1:8929" },
+        export: { composition: { backend: "pandoc", baseUrl: "http://localhost:8930" } },
+      }),
+    ).toEqual([]);
+  });
+
+  test("a remote openai baseUrl is not a sidecar disclosure (only the key warning)", () => {
+    const warnings = collectConfigWarnings({
+      embedding: { backend: "openai", baseUrl: "https://api.openai.com" },
+      llm: { backend: "disabled" },
+    });
+    // Only the existing external-backend key-readiness warning, no *.baseUrl entry.
+    expect(warnings.map((w) => w.key)).toEqual(["embedding.backend"]);
+  });
+
+  test("orders sidecar disclosures after embedding/llm, in config order", () => {
+    const warnings = collectConfigWarnings({
+      embedding: { backend: "ollama", baseUrl: "http://sidecar:11434", allowRemote: true },
+      llm: { backend: "anthropic" },
+      extraction: { backend: "markitdown", baseUrl: "http://sidecar:8929", allowRemote: true },
+      export: {
+        composition: { backend: "pandoc", baseUrl: "http://sidecar:8930", allowRemote: true },
+      },
+    });
+    expect(warnings.map((w) => w.key)).toEqual([
+      "llm.backend",
+      "embedding.baseUrl",
+      "extraction.baseUrl",
+      "export.composition.baseUrl",
+    ]);
+  });
+});

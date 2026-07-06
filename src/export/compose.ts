@@ -40,8 +40,10 @@ export interface PandocComposerOptions {
  * Composer over a pandoc-style sidecar `POST {baseUrl}/compose` (#138).
  *
  * Sends `{ content, format }` JSON and expects the converted file bytes back
- * (binary body). Local (no egress), no secrets. A non-2xx response raises
- * `ComposeError` so `draft.export` surfaces a tool error (no partial file).
+ * (binary body). No secrets. Local (no egress) for a loopback `baseUrl`; a remote
+ * `baseUrl` egresses the draft body and requires `[export].composition.allowRemote`
+ * (Issue #436 — gated at config load). A non-2xx response raises `ComposeError`
+ * so `draft.export` surfaces a tool error (no partial file).
  */
 export class PandocComposer implements Composer {
   private readonly endpoint: string;
@@ -80,7 +82,7 @@ export class PandocComposer implements Composer {
  * errors on a binary format (md/txt still work without a sidecar).
  */
 export function createComposer(
-  config: ExportConfig["composition"],
+  config: Pick<ExportConfig["composition"], "backend" | "baseUrl">,
   fetchImpl?: FetchLike,
 ): Composer | null {
   if (config.backend === "pandoc") {
