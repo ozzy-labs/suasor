@@ -213,12 +213,12 @@ export class SlackAuthTestCommand extends Command {
       `ok: ${result.principal} token for ${result.user} @ ${result.team} (${result.teamId})\n`,
     );
     // Surface the resolved user id (Issue #371 theme 2): it is the value the
-    // operator copies into `self_user_id` so `slack.demand.list` can detect their
+    // operator copies into `self_user_id` so `demand.list` can detect their
     // own @mentions. Without it, demand silently degrades to DM-only (ADR-0012).
     const section = alias ? `[connectors.slack.workspaces.${alias}]` : "[connectors.slack]";
     this.context.stdout.write(`user_id: ${result.userId}\n`);
     this.context.stdout.write(
-      `note: add \`self_user_id = "${result.userId}"\` under ${section} so slack.demand.list ` +
+      `note: add \`self_user_id = "${result.userId}"\` under ${section} so demand.list ` +
         "detects your @mentions — without it, demand degrades to DM-only (ADR-0012).\n",
     );
     this.context.stdout.write(`scopes: ${result.scopes || "(none reported)"}\n`);

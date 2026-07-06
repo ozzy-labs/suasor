@@ -65,7 +65,7 @@ export const SlackWorkspaceConfig = z.object({
   channel_since: z.record(z.string(), z.string().min(1)).optional(),
   /**
    * The operator's own Slack user id (`Uxxxx`) for this workspace, used by
-   * `slack.demand.list` to detect `<@you>` mentions (ADR-0012). Resolve it from
+   * `demand.list` to detect `<@you>` mentions (ADR-0012/ADR-0041). Resolve it from
    * `slack auth test` (the `userId` field). Optional: without it, demand falls
    * back to DM-only.
    */
@@ -127,8 +127,8 @@ export type SlackConnectorConfig = z.infer<typeof SlackConnectorConfig>;
 /**
  * Collect the operator's Slack user ids from the connector config slice across
  * the flat/default workspace and every `workspaces.<alias>` (ADR-0012). Used by
- * the `slack.demand.list` MCP tool to detect `<@you>` mentions. Returns a
- * de-duplicated list (empty when none configured → DM-only demand).
+ * the `demand.list` / `priority.list` MCP tools to detect `<@you>` mentions.
+ * Returns a de-duplicated list (empty when none configured → DM-only demand).
  */
 export function resolveSelfUserIds(config: ConnectorConfig): string[] {
   const parsed = SlackConnectorConfig.parse(config ?? {});

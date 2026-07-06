@@ -30,6 +30,7 @@ const PROJECTION_TABLES = [
   "inbox",
   "proposals",
   "commitments",
+  "demand_seen",
   "links",
   "persons",
   "person_identities",

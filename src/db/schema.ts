@@ -147,6 +147,26 @@ export const commitments = sqliteTable("commitments", {
 });
 
 /**
+ * Demand seen-state projection (ADR-0041). Demand rows are *derived* — from
+ * ingested `slack_message` @mentions / DMs (ADR-0012) and `github_notification`
+ * threads — not stored entities, so the durable "I've dealt with this" marker
+ * lives here, keyed by the source `externalId`. `state` is `acked` (handled) or
+ * `dismissed` (not relevant); `demand.list` hides a seen row by default so
+ * "unprocessed" is finally true. Folded from `DemandAcknowledged` /
+ * `DemandDismissed` (last-write-wins on `externalId`). Supersedes ADR-0012 決定 4's
+ * host-delegated seen-marker — the state now lives in the event log (ADR-0002),
+ * not host memory. Rebuildable.
+ */
+export const demandSeen = sqliteTable("demand_seen", {
+  /** Source id of the demand row (the seen key). */
+  externalId: text("external_id").primaryKey(),
+  /** Seen state: "acked" (handled) / "dismissed" (not relevant). */
+  state: text("state").notNull(),
+  /** When the demand was last marked seen (ISO 8601). */
+  seenAt: text("seen_at").notNull(),
+});
+
+/**
  * Relation graph between projection entities (provenance links).
  * e.g. task → source, decision → source, reply_draft → source.
  *

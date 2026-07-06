@@ -893,3 +893,48 @@ describe("SlackTeamObserved (ADR-0037 §10, Issue #361)", () => {
     expect(team("T1")).toMatchObject({ team_id: "T1", name: "Acme" });
   });
 });
+
+describe("DemandAcknowledged / DemandDismissed (ADR-0041)", () => {
+  const now = new Date("2026-06-20T00:00:00.000Z");
+
+  function seen(externalId: string): { state: string; seen_at: string } | null {
+    return (
+      store.connection.sqlite
+        .query<{ state: string; seen_at: string }, [string]>(
+          "SELECT state, seen_at FROM demand_seen WHERE external_id = ?",
+        )
+        .get(externalId) ?? null
+    );
+  }
+
+  test("DemandAcknowledged upserts an 'acked' seen row keyed by external_id", () => {
+    store.record({ type: "DemandAcknowledged", externalId: "gh:notification:1" }, now);
+    expect(seen("gh:notification:1")).toMatchObject({
+      state: "acked",
+      seen_at: "2026-06-20T00:00:00.000Z",
+    });
+  });
+
+  test("DemandDismissed upserts a 'dismissed' seen row", () => {
+    store.record({ type: "DemandDismissed", externalId: "slack:d1" }, now);
+    expect(seen("slack:d1")?.state).toBe("dismissed");
+  });
+
+  test("last-write-wins: ack then dismiss ends dismissed (and updates seen_at)", () => {
+    store.record({ type: "DemandAcknowledged", externalId: "x" }, now);
+    const later = new Date("2026-06-21T00:00:00.000Z");
+    store.record({ type: "DemandDismissed", externalId: "x" }, later);
+    expect(seen("x")).toMatchObject({ state: "dismissed", seen_at: "2026-06-21T00:00:00.000Z" });
+    // Exactly one row per external_id (upsert, not append).
+    const count = store.connection.sqlite
+      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM demand_seen WHERE external_id = ?")
+      .get("x");
+    expect(count?.n).toBe(1);
+  });
+
+  test("seen-state survives a full rebuild (replay-stable)", () => {
+    store.record({ type: "DemandAcknowledged", externalId: "y" }, now);
+    store.rebuild();
+    expect(seen("y")?.state).toBe("acked");
+  });
+});

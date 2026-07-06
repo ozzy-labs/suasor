@@ -71,15 +71,16 @@ describe("MCP read surface", () => {
         "brief",
         "commitment.list",
         "decision.list",
+        "demand.list",
         "graph.expand",
         "graph.related",
         "inbox.list",
         "person.list",
+        "priority.list",
         "propose.list",
         "recall.search",
         "search",
         "search.hybrid",
-        "slack.demand.list",
         "source.get",
         "source.get.full",
         "source.history",
@@ -89,7 +90,7 @@ describe("MCP read surface", () => {
     );
   });
 
-  test("slack.demand.list returns @mentions (config self id) and DMs", async () => {
+  test("demand.list returns @mentions (config self id) + DMs + github notifications", async () => {
     const slack = (id: string, channel: string, body: string) =>
       store.record({
         type: "SourceObserved",
@@ -103,6 +104,16 @@ describe("MCP read surface", () => {
     slack("m1", "C1", "please review <@U_ME>");
     slack("d1", "D9", "direct ping");
     slack("n1", "C1", "ordinary chatter");
+    // A demand-worthy github notification (review request) — must appear (#419).
+    store.record({
+      type: "SourceObserved",
+      externalId: "gh1",
+      sourceType: "github_notification",
+      body: "review requested",
+      observedAt: "2026-06-15T00:00:00.000Z",
+      fingerprint: "gh1",
+      meta: { repo: "o/r", reason: "review_requested", unread: true },
+    });
 
     const server = buildMcpServer({
       sqlite: store.connection.sqlite,
@@ -113,15 +124,17 @@ describe("MCP read surface", () => {
     const client = new Client({ name: "test", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-    const res = await client.callTool({ name: "slack.demand.list", arguments: {} });
+    const res = await client.callTool({ name: "demand.list", arguments: {} });
     const { demand } = parseResult(res as never) as {
-      demand: { externalId: string; kind: string }[];
+      demand: { externalId: string; kind: string; source: string }[];
     };
-    expect(demand.map((d) => d.externalId).sort()).toEqual(["d1", "m1"]);
+    expect(demand.map((d) => d.externalId).sort()).toEqual(["d1", "gh1", "m1"]);
     expect(demand.find((d) => d.externalId === "d1")?.kind).toBe("dm");
+    expect(demand.find((d) => d.externalId === "gh1")?.source).toBe("github");
+    expect(demand.find((d) => d.externalId === "gh1")?.kind).toBe("review_requested");
   });
 
-  test("slack.demand.list surfaces channelName / userName from local projections", async () => {
+  test("demand.list surfaces channelName / userName from local projections", async () => {
     store.record({
       type: "SourceObserved",
       externalId: "m1",
@@ -155,13 +168,91 @@ describe("MCP read surface", () => {
     const client = new Client({ name: "test", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-    const res = await client.callTool({ name: "slack.demand.list", arguments: {} });
+    const res = await client.callTool({ name: "demand.list", arguments: {} });
     const { demand } = parseResult(res as never) as {
       demand: { externalId: string; channelName: string | null; userName: string | null }[];
     };
     const row = demand.find((d) => d.externalId === "m1");
     expect(row?.channelName).toBe("general");
     expect(row?.userName).toBe("Alice");
+  });
+
+  test("priority.list ranks tasks + demand deterministically; ack drops a mention", async () => {
+    // A dated task (tier 2) and an un-acked slack mention (tier 1).
+    store.record({
+      type: "TaskProposed",
+      taskId: "t-soon",
+      title: "dated task",
+      dueDate: "2099-01-01T00:00:00.000Z",
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId: "t-soon", state: "open" });
+    store.record({
+      type: "SourceObserved",
+      externalId: "m1",
+      sourceType: "slack_message",
+      body: "ping <@U_ME>",
+      observedAt: "2026-06-14T00:00:00.000Z",
+      fingerprint: "m1",
+      meta: { team: "T1", channel: "C1" },
+    });
+
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "disabled",
+      slackSelfUserIds: ["U_ME"],
+      write: { store, config: { connectors: {} } },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    // Un-acked mention (tier 1) ranks above the dated task (tier 2).
+    const before = parseResult(
+      (await client.callTool({ name: "priority.list", arguments: {} })) as never,
+    ) as { items: { id: string; reason: string }[] };
+    expect(before.items.map((i) => i.id)).toEqual(["m1", "t-soon"]);
+    expect(before.items[0]?.reason).toBe("unacked_demand");
+
+    // Acknowledge the mention → it leaves the demand tier.
+    const ack = parseResult(
+      (await client.callTool({
+        name: "demand.ack",
+        arguments: { externalId: "m1" },
+      })) as never,
+    ) as { status: string; seenState: string };
+    expect(ack.status).toBe("acked");
+    expect(ack.seenState).toBe("acked");
+
+    const after = parseResult(
+      (await client.callTool({ name: "priority.list", arguments: {} })) as never,
+    ) as { items: { id: string }[] };
+    expect(after.items.map((i) => i.id)).toEqual(["t-soon"]);
+
+    // The acked mention no longer appears in the default demand.list either.
+    const demandRes = parseResult(
+      (await client.callTool({ name: "demand.list", arguments: {} })) as never,
+    ) as { demand: { externalId: string }[] };
+    expect(demandRes.demand.map((d) => d.externalId)).toEqual([]);
+  });
+
+  test("demand.dismiss reports missing for an unknown source", async () => {
+    const server = buildMcpServer({
+      sqlite: store.connection.sqlite,
+      embedding: "disabled",
+      write: { store, config: { connectors: {} } },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const res = parseResult(
+      (await client.callTool({
+        name: "demand.dismiss",
+        arguments: { externalId: "nope" },
+      })) as never,
+    ) as { status: string; seenState: string | null };
+    expect(res.status).toBe("missing");
+    expect(res.seenState).toBeNull();
   });
 
   test("brief bundles the period's material by section (ADR-0017)", async () => {
@@ -843,15 +934,16 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "brief",
         "commitment.list",
         "decision.list",
+        "demand.list",
         "graph.expand",
         "graph.related",
         "inbox.list",
         "person.list",
+        "priority.list",
         "propose.list",
         "recall.search",
         "search",
         "search.hybrid",
-        "slack.demand.list",
         "source.get",
         "source.get.full",
         "source.history",
@@ -876,6 +968,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "commitment.resolve",
         "commitment.dismiss",
         "commitment.reopen",
+        "demand.ack",
+        "demand.dismiss",
         "person.merge",
         "person.split",
         "draft.export",

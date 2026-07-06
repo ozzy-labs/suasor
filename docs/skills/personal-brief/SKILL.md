@@ -13,10 +13,13 @@ pairs:
   - external-brief
 mcp_tools_read:
   - brief
+  - priority.list
   - recall.search
   - task.list
   - decision.list
   - inbox.list
+  - demand.list
+  - commitment.list
 mcp_tools_write: []
 ---
 
@@ -34,12 +37,13 @@ mcp_tools_write: []
 すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。副作用なし・エージェント自律 OK。
 
 1. 期間を決める。明示がなければ直近 24h。ISO 8601（offset 付き）の `since` を作る
-2. `brief` で期間サマリを取る（LLM 要約。委譲先で生成、[ADR-0006](../../adr/0006-ml-delegation.md)）
-3. 補強が要れば次を時間フィルタ付きで叩く（下限 inclusive `*After` / 上限 exclusive `*Before`）:
+2. `brief` で期間サマリを取る（LLM 要約。委譲先で生成、[ADR-0006](../../adr/0006-ml-delegation.md)）。`brief` の `demand` は **un-acked のみ**（対応済み / 不要と印された mention は除外・[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）＝「未処理」が真
+3. 補強が要れば次を叩く（時間フィルタは下限 inclusive `*After` / 上限 exclusive `*Before`）:
+   - `priority.list` — 「いま何が優先か」の決定論的 cross-entity ランキング（tasks + open commitments + un-acked demand を固定 comparator で合成、[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md) 決定 3）。状況要約の「やるべきこと」節はこの基線を消費する（順位を散文で作り直さない）
    - `task.list`（`updatedAfter=since`）— 動いた task
    - `decision.list`（`recordedAfter=since`）— 記録された決定
    - `inbox.list`（`state=open`）— 未処理シグナル
-   - `slack.demand.list`（`observedAfter=since`）— Slack の @mention / DM の未処理 signal（「読むべきが未処理」、[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ。各 demand の `channelName` / `userName`（ローカル join した人間可読名、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）で要約に **id ではなく名前**（「`#<channelName>` の `<userName>` から」）を出し、`null`（未解決）のときだけ `meta` の生 id に fallback する（id-only が続くなら `slack resolve-names` で遡及解決、§11）
+   - `demand.list`（`observedAfter=since`）— connector 中立の未処理 demand（Slack @mention/DM + demand 相当の github notification。「読むべきが未処理」、[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。既定は un-acked のみ。`selfUserId` 未設定時 slack は DM のみ。各 demand の `channelName` / `userName`（ローカル join した人間可読名、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）で要約に **id ではなく名前**（「`#<channelName>` の `<userName>` から」）を出し、`null`（未解決）のときだけ `meta` の生 id に fallback する（id-only が続くなら `slack resolve-names` で遡及解決、§11）
    - `commitment.list`（`state=open`）— 未解決の commitment（約束/コミットメント。「能動的にやるべき約束」、[ADR-0021](../../adr/0021-commitment-ledger.md)）
    - `recall.search` — トピックの関連 context（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 4. 集めた結果をホスト LLM が「主要な動き」として要約して返す

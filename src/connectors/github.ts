@@ -51,6 +51,10 @@ export const GithubConnectorConfig = z.object({
    * stream independent of `repos` — when `all`, every notified repo is ingested;
    * when `repos`, the stream is filtered to the configured allowlist (Issue #93).
    * Defaults off so existing installs keep their issues/PR-only behaviour.
+   * Surfaced (with slack demand) by the neutral `demand.list` / `priority.list`
+   * MCP tools: a `github_notification` whose `reason` is demand-worthy
+   * (review_requested / mention / team_mention / assign / author) becomes an
+   * outstanding demand row (ADR-0041).
    */
   notifications: z.enum(["off", "all", "repos"]).default("off"),
   /** GitHub API base URL (override for GitHub Enterprise). */
