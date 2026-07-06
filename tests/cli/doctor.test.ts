@@ -113,6 +113,50 @@ async function seedExtractionMeta(externalId: string, version: string): Promise<
   store.close();
 }
 
+/**
+ * Insert an `embeddings_meta` row with no matching vec0 vector — the exact
+ * divergence a pre-fix `projections rebuild` left behind (meta kept, vector
+ * cleared). doctor must flag this as an error (ADR-0005 §5, #414).
+ */
+async function seedOrphanEmbeddingMeta(externalId: string): Promise<void> {
+  const { Store } = await import("../../src/db/index.ts");
+  const store = Store.open({ path: join(dir, "suasor.db") });
+  store.connection.sqlite
+    .query(
+      "INSERT INTO embeddings_meta (external_id, model_id, model_version, embedded_at) VALUES (?, 'bge-m3', '1', ?)",
+    )
+    .run(externalId, "2026-06-14T00:00:00.000Z");
+  store.close();
+}
+
+/** Seed a source WITH a matching vec0 vector + embeddings_meta row (healthy). */
+async function seedEmbeddedSource(externalId: string): Promise<void> {
+  const [{ Store, DEFAULT_EMBEDDING_DIM }, { upsertSourceVector }] = await Promise.all([
+    import("../../src/db/index.ts"),
+    import("../../src/retrieval/embedding/recall.ts"),
+  ]);
+  const store = Store.open({ path: join(dir, "suasor.db") });
+  store.record({
+    type: "SourceObserved",
+    externalId,
+    sourceType: "github_issue",
+    body: "embedded",
+    observedAt: "2026-06-14T00:00:00.000Z",
+    fingerprint: externalId,
+    meta: {},
+  });
+  upsertSourceVector(
+    store.connection.sqlite,
+    externalId,
+    new Array(DEFAULT_EMBEDDING_DIM).fill(0.1),
+    {
+      modelId: "bge-m3",
+      modelVersion: "1",
+    },
+  );
+  store.close();
+}
+
 type DoctorReport = { ok: boolean; checks: { name: string; status: string; detail: string }[] };
 
 describe("suasor doctor", () => {
@@ -264,6 +308,33 @@ describe("suasor doctor", () => {
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.some((c) => c.name === "maintenance")).toBe(false);
+  });
+
+  // ADR-0005 §5 / Issue #414: vec0 (vectors) and embeddings_meta (provenance) are
+  // written and cleared together, so a row-count divergence is silent corruption
+  // (recall returns empty while status claims coverage). doctor flags it as an
+  // error — regardless of the active backend — so the mismatch can never hide.
+  test("vec0 ↔ embeddings_meta divergence is an error (ADR-0005 §5, #414)", async () => {
+    await run(["init"]);
+    await seed("gh:1", "alpha");
+    await seedOrphanEmbeddingMeta("gh:1"); // meta row, no vec0 vector → divergence
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(1); // an error fails the exit code (cron / CI gate)
+    const report = JSON.parse(out) as DoctorReport;
+    const sub = report.checks.find((c) => c.name === "embedding.substrate");
+    expect(sub?.status).toBe("error");
+    expect(sub?.detail).toContain("vec0 has 0 vector(s)");
+    expect(sub?.detail).toContain("embeddings_meta has 1 provenance row(s)");
+    expect(sub?.detail).toContain("embeddings drain");
+  });
+
+  test("matched vec0 / embeddings_meta counts stay quiet (ADR-0005 §5, #414)", async () => {
+    await run(["init"]);
+    await seedEmbeddedSource("gh:1"); // vec0 = 1, embeddings_meta = 1 → aligned
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "embedding.substrate")).toBe(false);
   });
 
   test("extraction version drift emits a maintenance hint (#202)", async () => {

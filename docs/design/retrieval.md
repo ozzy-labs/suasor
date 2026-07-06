@@ -48,7 +48,7 @@ FTS-first（ADR-0005）を保ったままの additive 拡張。`search.hybrid` r
 
 - `recall.search` は backend=disabled / 外部 backend のキー未設定（embedder が `null`）のとき **hard error にせず空 + `embedding_disabled` シグナル**を返す（`reason: "backend_disabled"`）→ host が `search`(FTS) に寄る
 - backend 有効でも**サイドカー到達不能**（Ollama down 等）のときは同じく degrade（`reason: "backend_unreachable"`）。**ただし帰属する層が異なる**: core の `recallSearch`（`src/retrieval/embedding/recall.ts`）の `RecallReason` は `backend_disabled | ok` のみで、サイドカー失敗時は `EmbeddingError` を **throw** する。これを `recall.search` / `search.hybrid` の MCP handler（`src/mcp/server-read.ts`）が catch し、空 hits + `embedding_disabled` シグナル + `reason: "backend_unreachable"` を**合成して返す**（host を hard-error から守る境界）。`signal` はいずれも `embedding_disabled` で host の fallback 判断は一貫
-- `vec0` は基盤として常設（安価）。populate は backend 次第。`projections rebuild` は vec0 を truncate せず、`external_id` キーのベクトルは source 再構築後も有効なまま JOIN される（次回 ingest で再 populate）
+- `vec0` は基盤として常設（安価）。populate は backend 次第。埋め込みは event replay で再構築できない sidecar substrate なので、`projections rebuild` は **`vec0` と provenance サイドカー `embeddings_meta` を両方 truncate** し、正直な「全件 pending」状態に戻す（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md) §5）。片方だけ消すと `embeddings status` / `doctor` / `drain` が「埋め込み済み」と偽り recall が無音全損するため、対称に消すのが不変条件で、`doctor` が `vec0`↔`embeddings_meta` の行数乖離を error で検出する。rebuild 後の復旧は `suasor embeddings drain` 一発（次回 sync では未変更 source が再埋め込みされないため復旧しない）
 
 ## 使い分け
 

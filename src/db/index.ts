@@ -27,6 +27,7 @@ export {
   openDatabase,
   readVecDim,
   type SuasorDb,
+  VEC_META_TABLE,
 } from "./connection.ts";
 export { countEventRows, createEventsTable, readAllEventRows } from "./events-table.ts";
 export * as schema from "./schema.ts";

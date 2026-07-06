@@ -96,7 +96,9 @@ suasor doctor
 suasor store info        # event 数 / projection 行数を確認
 ```
 
-WAL/SHM サイドカーは復元不要（バックアップは単一ファイルに畳み込み済み）。projection / FTS / vec0 がずれた場合は `suasor projections rebuild` で event log から再構築できる。
+WAL/SHM サイドカーは復元不要（バックアップは単一ファイルに畳み込み済み）。projection / FTS がずれた場合は `suasor projections rebuild` で event log から再構築できる。
+
+> **注意（embedding 有効時）**: `projections rebuild` は replay 不能な embedding サイドカー（vec0 ベクトル＋`embeddings_meta`）を **両方消去** し、正直な「全件 pending」状態に戻す（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md) §5）。実行直後は semantic recall（意味検索）が空になるため、`suasor embeddings drain` を 1 回流して再埋め込みし復旧する（次回 sync では未変更ソースが再埋め込みされず復旧しない）。rebuild CLI もベクトルを消したときはこの案内を出力する。
 
 ## 設定の検証と編集（`validate-config` / `config edit`）
 

@@ -222,6 +222,38 @@ describe("embeddingDrain", () => {
   });
 });
 
+// The acceptance criterion of Issue #414 / ADR-0005 §5: a `projections rebuild`
+// must leave the embedding layer in an HONEST state (status reports the true
+// pending count) so a single `embeddings drain` restores semantic recall. The
+// pre-fix rebuild cleared vec0 but left embeddings_meta, so status reported the
+// source as still embedded (pending 0) and drain found nothing to do — recall
+// stayed silently empty with no repair path.
+describe("projections rebuild → drain recovery (ADR-0005 §5, #414)", () => {
+  test("after rebuild, status reports pending honestly and drain recovers in one shot", async () => {
+    seed("gh:1", "alpha");
+    const embedder = fakeEmbedder({ alpha: [1, 0, 0] });
+    await embedSources(store.connection.sqlite, embedder, [{ externalId: "gh:1", body: "alpha" }]);
+
+    // Baseline: the source is embedded (recall works).
+    let status = embeddingStatus(store.connection.sqlite, embedder, "ollama");
+    expect(status.totals).toEqual({ total: 1, embedded: 1, pending: 0, stale: 0 });
+
+    // Rebuild clears the (non-replayable) embedding sidecar. status must now be
+    // honest: the source is pending, NOT reported as embedded.
+    const rebuilt = store.rebuild();
+    expect(rebuilt.clearedEmbeddings).toBe(1);
+    status = embeddingStatus(store.connection.sqlite, embedder, "ollama");
+    expect(status.totals).toEqual({ total: 1, embedded: 0, pending: 1, stale: 0 });
+
+    // A single drain re-embeds the pending source → recall restored.
+    const drained = await embeddingDrain(store.connection.sqlite, embedder);
+    expect(drained.candidates).toBe(1);
+    expect(drained.embedded).toBe(1);
+    status = embeddingStatus(store.connection.sqlite, embedder, "ollama");
+    expect(status.totals).toEqual({ total: 1, embedded: 1, pending: 0, stale: 0 });
+  });
+});
+
 describe("progress + batching (long-running maintenance verbs)", () => {
   test("embeddingRebuild fires onProgress once per source processed", async () => {
     seed("gh:1", "alpha");

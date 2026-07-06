@@ -78,13 +78,17 @@ export class DoctorCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig, resolveConfigDir }, { Store }, { resolveSecret }, { join }] =
-      await Promise.all([
-        import("../../config/index.ts"),
-        import("../../db/index.ts"),
-        import("../../connectors/secrets.ts"),
-        import("node:path"),
-      ]);
+    const [
+      { loadConfig, resolveConfigDir },
+      { Store, DEFAULT_VEC_TABLE, VEC_META_TABLE },
+      { resolveSecret },
+      { join },
+    ] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../connectors/secrets.ts"),
+      import("node:path"),
+    ]);
 
     const checks: Check[] = [];
 
@@ -473,6 +477,40 @@ export class DoctorCommand extends Command {
       const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
       try {
         const sqlite = store.connection.sqlite;
+        // Embedding substrate integrity: vec0 (vectors) and embeddings_meta
+        // (provenance) are written together on ingest and cleared together on
+        // rebuild (ADR-0005 §5), so their row counts must match. A divergence is
+        // silent corruption — the pre-fix `projections rebuild` cleared vec0 but
+        // left embeddings_meta, so `embeddings status` / `drain` reported full
+        // coverage while every vector was gone and recall returned empty. Error
+        // (not warn) so cron / CI catches it; the fix is a `projections rebuild`
+        // (now symmetric) followed by `embeddings drain`. Runs whenever both
+        // tables exist, regardless of the active backend (leftover drift outlives
+        // a since-disabled backend). Read-only COUNT(*)s; quiet when they match.
+        const tableNames = new Set(
+          sqlite
+            .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .all()
+            .map((r) => r.name),
+        );
+        if (tableNames.has(DEFAULT_VEC_TABLE) && tableNames.has(VEC_META_TABLE)) {
+          const vecN =
+            sqlite.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${DEFAULT_VEC_TABLE}`).get()
+              ?.n ?? 0;
+          const metaN =
+            sqlite.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${VEC_META_TABLE}`).get()
+              ?.n ?? 0;
+          if (vecN !== metaN) {
+            checks.push({
+              name: "embedding.substrate",
+              status: "error",
+              detail:
+                `vec0 has ${vecN} vector(s) but embeddings_meta has ${metaN} provenance row(s) — ` +
+                "the two must match (they diverge silently and recall breaks). Run " +
+                "`suasor projections rebuild` then `suasor embeddings drain` to resync (ADR-0005 §5).",
+            });
+          }
+        }
         // Embeddings: pending (no vector) / stale (different model) backlog.
         if (config.embedding.backend !== "disabled") {
           const { createEmbedderResolved, embeddingStatus } = await import(

@@ -16,6 +16,12 @@ export class ProjectionsRebuildCommand extends Command {
     details: `
       Truncates all projection tables and replays the append-only event log to
       reconstruct them (ADR-0002 / FR-MNT-1). The event store is never modified.
+
+      The embedding sidecar (vec0 vectors + their embeddings_meta provenance) is
+      NOT replayable — it comes from the delegated embedder (ADR-0006) — so it is
+      cleared and left in an honest "all pending" state (ADR-0005 §5). When
+      vectors were present, semantic recall is empty until you run
+      \`suasor embeddings drain\` to re-embed; the command prints a reminder.
     `,
     examples: [["Rebuild projections", "suasor projections rebuild"]],
   });
@@ -52,6 +58,16 @@ export class ProjectionsRebuildCommand extends Command {
       const result = store.rebuild({ onProgress: () => progress.tick() });
       progress.finish();
       this.context.stdout.write(`Rebuilt projections from ${result.events} event(s).\n`);
+      // The embedding sidecar is not replayable (ADR-0006), so rebuild left it
+      // empty. When vectors were actually cleared, semantic recall is now empty
+      // until they are re-embedded — point the operator at the one-shot recovery
+      // (`embeddings drain`) instead of leaving it silently broken (ADR-0005 §5).
+      if (result.clearedEmbeddings > 0) {
+        this.context.stdout.write(
+          `${result.clearedEmbeddings} embedding vector(s) cleared; semantic recall is empty until you run ` +
+            "`suasor embeddings drain` to re-embed (ADR-0005 §5).\n",
+        );
+      }
       return 0;
     } finally {
       store.close();
