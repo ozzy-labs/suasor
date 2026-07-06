@@ -6,7 +6,7 @@
  * - **identity** — externalId is `jira:<host>:<projectKey>:<issueKey>`, identical
  *   to the read connector's issue id, so a later sync dedups against the native
  *   task (loop avoidance, ADR-0036 §8). The `host` MUST be the same host the read
- *   connector ingests from (configured on `[tasks.home].host`).
+ *   connector ingests from (configured on `[tasks.homes.jira].host`).
  * - **auth** — Cloud HTTP Basic (`email:apiToken`, the default) or self-hosted
  *   bearer (PAT), reusing `./jira/auth.ts`. The token is the `jira-actuator`
  *   secret; `email` is non-secret config.
@@ -30,7 +30,7 @@ import type {
 import { buildJiraAuth } from "./jira/auth.ts";
 import type { JiraAuth } from "./jira/client.ts";
 
-/** `[tasks.home]` jira config slice. */
+/** `[tasks.homes.jira]` config slice. */
 export const JiraActuatorConfig = z.object({
   /** Jira site host, e.g. `example.atlassian.net` (no scheme) — must match the read connector. */
   host: z.string().min(1),
@@ -213,7 +213,9 @@ export function createJiraActuator(
       // Best-effort drop: without a configured won't-do transition, no-op + warn
       // (don't throw — the local cache still records the drop, ADR-0036 §3).
       if (action.kind === "drop" && !cfg.dropTransitionId) {
-        ctx.onWarn?.("jira: drop is a no-op (no dropTransitionId configured in [tasks.home])");
+        ctx.onWarn?.(
+          "jira: drop is a no-op (no dropTransitionId configured in [tasks.homes.jira])",
+        );
         return;
       }
       const jira = await client(ctx);
@@ -226,7 +228,7 @@ export function createJiraActuator(
             throw new Error(
               `jira: ${action.kind} requires ${
                 action.kind === "complete" ? "doneTransitionId" : "reopenTransitionId"
-              } in [tasks.home] (workflow-specific transition id)`,
+              } in [tasks.homes.jira] (workflow-specific transition id)`,
             );
           }
           await jira.transition({ issueKey, transitionId });

@@ -125,70 +125,85 @@ describe("reducer: TaskPublished / TaskActionIssued (ADR-0036)", () => {
   });
 });
 
-describe("[tasks] config (ADR-0036)", () => {
-  test("defaults: no home, slack exclusion on", () => {
+describe("[tasks] config — per-destination homes (ADR-0036 R1)", () => {
+  test("defaults: no homes, no default, slack exclusion on", () => {
     const c = TasksConfig.parse({});
-    expect(c.home).toBeNull();
+    expect(c.homes).toEqual({});
+    expect(c.default).toBeNull();
     expect(c.slackListExcludeFromIngest).toBe(true);
   });
 
-  test("parses a github home", () => {
-    const c = TasksConfig.parse({ home: { destination: "github", repo: "acme/widgets" } });
-    expect(c.home?.destination).toBe("github");
-    expect(c.home?.repo).toBe("acme/widgets");
+  test("R1-2: parses [tasks].default", () => {
+    const c = TasksConfig.parse({ homes: { github: { repo: "acme/widgets" } }, default: "github" });
+    expect(c.default).toBe("github");
   });
 
-  test("rejects an unknown destination", () => {
-    expect(() => TasksConfig.parse({ home: { destination: "trello" } })).toThrow();
+  test("rejects an unknown default destination", () => {
+    expect(() => TasksConfig.parse({ default: "trello" })).toThrow();
   });
 
-  test("parses a github home with an optional Projects v2 board (ADR-0036)", () => {
+  test("R1-1: parses [tasks.homes.github] (incl. optional Projects v2 board)", () => {
     const c = TasksConfig.parse({
-      home: {
-        destination: "github",
-        repo: "acme/widgets",
-        project: "PVT_kw1",
-        statusFieldId: "PVTSSF_s",
-        doneOptionId: "od",
-        todoOptionId: "ot",
+      homes: {
+        github: {
+          repo: "acme/widgets",
+          project: "PVT_kw1",
+          statusFieldId: "PVTSSF_s",
+          doneOptionId: "od",
+          todoOptionId: "ot",
+        },
       },
     });
-    expect(c.home?.destination).toBe("github");
-    expect(c.home?.project).toBe("PVT_kw1");
-    expect(c.home?.statusFieldId).toBe("PVTSSF_s");
+    expect(c.homes.github?.repo).toBe("acme/widgets");
+    expect(c.homes.github?.project).toBe("PVT_kw1");
+    expect(c.homes.github?.statusFieldId).toBe("PVTSSF_s");
   });
 
-  test("rejects github_projects (folded into the github home, ADR-0036)", () => {
-    expect(() => TasksConfig.parse({ home: { destination: "github_projects" } })).toThrow();
+  test("R1-1: a github home requires repo", () => {
+    expect(() => TasksConfig.parse({ homes: { github: {} } })).toThrow();
   });
 
-  test("parses a jira home (host + project + transition ids, ADR-0036)", () => {
+  test("R1-1: parses [tasks.homes.jira] (host + project + transition ids)", () => {
     const c = TasksConfig.parse({
-      home: {
-        destination: "jira",
-        host: "acme.atlassian.net",
-        project: "ENG",
-        email: "me@acme.com",
-        doneTransitionId: "31",
-        reopenTransitionId: "11",
+      homes: {
+        jira: {
+          host: "acme.atlassian.net",
+          project: "ENG",
+          email: "me@acme.com",
+          doneTransitionId: "31",
+          reopenTransitionId: "11",
+        },
       },
     });
-    expect(c.home?.destination).toBe("jira");
-    expect(c.home?.host).toBe("acme.atlassian.net");
-    expect(c.home?.doneTransitionId).toBe("31");
+    expect(c.homes.jira?.host).toBe("acme.atlassian.net");
+    expect(c.homes.jira?.project).toBe("ENG");
+    expect(c.homes.jira?.doneTransitionId).toBe("31");
   });
 
-  test("parses a slack home (list + column/option ids, ADR-0036)", () => {
+  test("R1-1: a jira home requires host + project", () => {
+    expect(() => TasksConfig.parse({ homes: { jira: { host: "h" } } })).toThrow();
+  });
+
+  test("R1-1: parses [tasks.homes.slack] (list + column/option ids)", () => {
     const c = TasksConfig.parse({
-      home: {
-        destination: "slack",
-        list: "L1",
-        slackTitleColumnId: "ColTitle",
-        slackCheckboxColumnId: "ColDone",
+      homes: {
+        slack: { list: "L1", slackTitleColumnId: "ColTitle", slackCheckboxColumnId: "ColDone" },
       },
     });
-    expect(c.home?.destination).toBe("slack");
-    expect(c.home?.list).toBe("L1");
-    expect(c.home?.slackTitleColumnId).toBe("ColTitle");
+    expect(c.homes.slack?.list).toBe("L1");
+    expect(c.homes.slack?.slackTitleColumnId).toBe("ColTitle");
+  });
+
+  test("R1-1: multiple homes coexist (switched-default scenario)", () => {
+    const c = TasksConfig.parse({
+      homes: {
+        github: { repo: "acme/widgets" },
+        jira: { host: "acme.atlassian.net", project: "ENG" },
+      },
+      default: "github",
+    });
+    expect(c.homes.github?.repo).toBe("acme/widgets");
+    expect(c.homes.jira?.host).toBe("acme.atlassian.net");
+    expect(c.default).toBe("github");
   });
 });

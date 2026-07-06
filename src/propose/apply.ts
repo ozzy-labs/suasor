@@ -28,14 +28,15 @@ import type { NewEvent } from "../events/types.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type Candidate, Candidate as CandidateSchema } from "./candidates.ts";
 import { entityId } from "./id.ts";
-import { type TaskHomeConfig, taskPublish } from "./task-publish.ts";
+import { hasDefaultHome, type TaskHomeConfig, taskPublish } from "./task-publish.ts";
 
 /** Input to `propose.apply`: the approved, id-stamped candidates to persist. */
 export const ProposeApplyInput = z.object({
   candidates: z.array(CandidateSchema).min(1),
   /**
    * When true, each applied/skipped **task** candidate is also published to the
-   * single external home (`[tasks.home]`) in one motion (ADR-0036). Default false
+   * default external home (`[tasks].default` → `[tasks.homes.<dest>]`) in one
+   * motion (ADR-0036). Default false
    * (apply only). Non-task candidates ignore it; HITL is unchanged (the apply
    * approval gates the egress too). Publish is best-effort per task — a failure
    * is reported in `published[]`, never thrown (apply results are preserved).
@@ -249,13 +250,15 @@ async function publishTasks(
   deps: ProposeApplyDeps,
 ): Promise<PublishedTask[]> {
   if (taskIds.length === 0) return [];
-  // A single home check up-front: if unset, report each task as failed rather
-  // than throwing ACTUATOR_NOT_CONFIGURED per task (apply still succeeded).
-  if (!deps.config?.tasks?.home) {
+  // A single home check up-front: if the default destination + its home slice are
+  // not configured, report each task as failed rather than throwing
+  // ACTUATOR_NOT_CONFIGURED per task (apply still succeeded). Batch publish always
+  // targets the default; per-task destinations are a task.publish-only affordance.
+  if (!deps.config || !hasDefaultHome(deps.config)) {
     return taskIds.map((taskId) => ({
       taskId,
       status: "failed" as const,
-      error: "no task home configured ([tasks].home)",
+      error: "no task home configured ([tasks].default + [tasks.homes.<default>])",
     }));
   }
   const published: PublishedTask[] = [];
