@@ -51,6 +51,8 @@ export interface ServeOptions {
     store: ServeStore;
     config: Config;
     embedder?: Embedder | null;
+    /** Diagnostics sink for the elicitation-capability startup warning (ADR-0004). */
+    log?: (message: string) => void;
   }) => ServeServer;
   /**
    * Test seam: secret store options (env / keychain) for resolving an external
@@ -75,13 +77,17 @@ function defaultBuildServer({
   store,
   config,
   embedder,
+  log,
 }: {
   store: ServeStore;
   config: Config;
   embedder?: Embedder | null;
+  log?: (message: string) => void;
 }): ServeServer {
   return buildMcpServer({
     sqlite: store.connection.sqlite,
+    // Diagnostics sink for the elicitation-capability startup warning (ADR-0004).
+    ...(log !== undefined ? { log } : {}),
     // Full [embedding] config drives recall.search (real vec0 search when a
     // backend is enabled, else graceful degrade to FTS — ADR-0005/0006).
     embedding: config.embedding,
@@ -162,7 +168,7 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
   // verifyReadiness guarantees dbPath is non-null here; assert for the type.
   const dbPath = config.storage.dbPath as string;
   const store = openStore({ path: dbPath, embeddingDim: config.embedding.dim });
-  const server = buildServer({ store, config, embedder });
+  const server = buildServer({ store, config, embedder, log });
   const transport = options.transport ?? new StdioServerTransport();
 
   // Resolve when the transport tears down (host disconnect / stdin EOF). The

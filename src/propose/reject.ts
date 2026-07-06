@@ -11,8 +11,10 @@
  * stays `applied` (its entity is persisted; reject must not "un-apply" it), and a
  * candidate id with no ledger row is reported `missing`. Re-rejecting an
  * already-rejected candidate is a no-op (`already_rejected`). This makes a
- * rejected candidate un-appliable — `propose.list` no longer surfaces it as
- * pending, so the host won't re-offer it for approval.
+ * rejected candidate un-appliable: `propose.apply` / `propose.batch` consult the
+ * ledger and refuse a `rejected` candidateId with `REJECTED_CANDIDATE`
+ * (src/propose/apply.ts, ADR-0004), and `propose.list` / `propose.generate` no
+ * longer surface it as pending, so the host won't re-offer it for approval.
  *
  * Reject also redacts the candidate's `ProposalGenerated.summary` (ADR-0026 R1-3):
  * a reply_draft candidate's summary is its full body, so a human's rejection must

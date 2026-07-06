@@ -70,6 +70,25 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
   registerReadTools(server, { sqlite, embedder, embeddingConfig, deps });
   if (write) {
     registerWriteTools(server, write);
+    // Defense-in-depth notice (ADR-0004, [boundary/hitl-1]): the irreversible/
+    // egress write tools ask the client to confirm via elicitInput, but only
+    // when the client advertises that capability. Client capabilities are known
+    // only after the handshake, so warn once on `oninitialized` (not at boot)
+    // when elicitation is absent — those tools then run in fallback (proceed)
+    // mode. HITL remains host-enforced either way (readOnlyHint is advisory).
+    if (deps.log) {
+      const log = deps.log;
+      server.server.oninitialized = () => {
+        if (server.server.getClientCapabilities()?.elicitation == null) {
+          log(
+            "suasor mcp serve: client does not advertise the elicitation capability; " +
+              "irreversible/egress write tools (source.forget, task.publish, task.act, " +
+              "person.merge, propose.apply publish:true) run without a server-side " +
+              "confirmation round-trip. HITL stays host-enforced (ADR-0004).",
+          );
+        }
+      };
+    }
   }
 
   return server;

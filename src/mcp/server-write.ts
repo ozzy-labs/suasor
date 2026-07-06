@@ -4,10 +4,16 @@
  * `server.ts`.
  *
  * Every tool here carries `readOnlyHint: false` so MCP hosts gate it behind
- * human approval (no auto-apply, ADR-0004 / FR-PRO-2). Structured tool errors
- * (ADR-0031) are preserved exactly. These tools are registered only when a
- * writable `Store` + config are supplied; the registration order matches the
- * pre-split server so the tool catalog stays byte-identical.
+ * human approval (no auto-apply, ADR-0004 / FR-PRO-2). That annotation is
+ * *advisory* — HITL is host-enforced, the server does not itself block a write
+ * on missing approval — so for the irreversible/egress subset (source.forget,
+ * task.publish, task.act, person.merge, propose.apply publish:true) these
+ * handlers add a defense-in-depth `elicitInput` confirmation when the client
+ * advertises the elicitation capability (src/mcp/elicit.ts; fallback to current
+ * behavior + a startup warning otherwise). Structured tool errors (ADR-0031) are
+ * preserved exactly. These tools are registered only when a writable `Store` +
+ * config are supplied; the registration order matches the pre-split server so
+ * the tool catalog stays byte-identical.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -40,6 +46,7 @@ import { proposeReject } from "../propose/reject.ts";
 import { taskCreate } from "../propose/task-create.ts";
 import { taskAct, taskPublish } from "../propose/task-publish.ts";
 import { taskUpdate } from "../propose/task-update.ts";
+import { confirmSensitiveAction } from "./elicit.ts";
 import { toolError, toToolError } from "./errors.ts";
 import { isoDateTime, jsonResult, type McpServerDeps } from "./server-shared.ts";
 
@@ -56,6 +63,20 @@ function anyConnectorEnabled(connectors: Record<string, Record<string, unknown>>
   return Object.values(connectors).some((slice) => slice?.enabled !== false);
 }
 
+/**
+ * Structured tool error for a declined `elicitInput` confirmation (ADR-0004,
+ * [boundary/hitl-1]). Returned when the client advertised elicitation but the
+ * human declined/cancelled the round-trip, so the irreversible/egress action was
+ * not performed. `detail` states what did NOT happen (e.g. "nothing was applied").
+ */
+function confirmationDeclined(tool: string, detail: string) {
+  return toolError({
+    code: "CONFIRMATION_DECLINED",
+    message: `${tool} was not confirmed by the human`,
+    hint: `The elicitInput confirmation was declined; ${detail}.`,
+  });
+}
+
 /** Register every write/HITL tool onto `server` in the original order. */
 export function registerWriteTools(server: McpServer, write: WriteDeps): void {
   // --- connector.sync: read-only ingest into the local store (WRITE / HITL). ---
@@ -69,7 +90,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Connector sync (ingest)",
       description:
         "Run a read-only connector ingest pass into the local store (e.g. " +
-        "github). Write tool: requires human approval — no auto-apply. Incremental " +
+        "github). Write tool: hosts must gate behind human approval — no auto-apply. Incremental " +
         "via fingerprint/cursor delta; pass cursor=null to force a full re-scan.",
       inputSchema: {
         connector: z.string().min(1).describe('Connector to run (e.g. "github").'),
@@ -146,7 +167,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Propose (apply candidates)",
       description:
         "Persist approved candidates (from propose.generate) as domain events. " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
         "Idempotent: candidates whose entity already exists are skipped. " +
         "Optionally `publish: true` also pushes applied task candidates to the " +
         "single external home in one motion (ADR-0036; best-effort per task).",
@@ -168,6 +189,21 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
     async ({ candidates, publish }) => {
       try {
+        // Defense-in-depth (ADR-0004): the publish path egresses to the external
+        // home, so confirm it via elicitInput when the client supports it. Local
+        // apply (publish falsey) stays ungated. Decline ⇒ nothing applied/published.
+        if (publish === true) {
+          const decision = await confirmSensitiveAction(server, {
+            tool: "propose.apply (publish)",
+            summary: `apply ${candidates.length} candidate(s) and publish task(s) to the external home`,
+          });
+          if (!decision.proceed) {
+            return confirmationDeclined(
+              "propose.apply publish",
+              "nothing was applied or published",
+            );
+          }
+        }
         const result = await applyAndPublish(
           write.store,
           { candidates, ...(publish !== undefined ? { publish } : {}) },
@@ -193,7 +229,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Reject a pending proposal candidate (from propose.generate) with an " +
         "optional reason, recording the decision in the proposal ledger. " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
         "Acts only on a pending candidate; an applied or missing one is reported, " +
         "not changed. Idempotent: re-rejecting is a no-op.",
       inputSchema: {
@@ -227,7 +263,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "{ action: 'apply', candidate } or { action: 'reject', candidateId, " +
         "reason? }. Reuses propose.apply / propose.reject semantics (idempotent " +
         "apply skips existing entities; reject acts only on pending candidates). " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004).",
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004).",
       inputSchema: {
         operations: z
           .array(
@@ -249,18 +285,24 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ operations }) => {
-      const result = proposeBatch(write.store, {
-        operations: operations.map((op) =>
-          op.action === "reject"
-            ? {
-                action: "reject" as const,
-                candidateId: op.candidateId,
-                ...(op.reason !== undefined ? { reason: op.reason } : {}),
-              }
-            : op,
-        ),
-      });
-      return jsonResult(result);
+      try {
+        const result = proposeBatch(write.store, {
+          operations: operations.map((op) =>
+            op.action === "reject"
+              ? {
+                  action: "reject" as const,
+                  candidateId: op.candidateId,
+                  ...(op.reason !== undefined ? { reason: op.reason } : {}),
+                }
+              : op,
+          ),
+        });
+        return jsonResult(result);
+      } catch (error) {
+        // An apply op targeting a rejected candidate throws REJECTED_CANDIDATE
+        // (ADR-0004), rolling the whole atomic batch back; surface it structured.
+        return toToolError(error);
+      }
     },
   );
 
@@ -278,7 +320,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Record a regeneration hint (reason) on a pending proposal candidate " +
         "without applying or rejecting it (Issue #279) — the candidate stays " +
         "`pending` and the host can use the recorded reason to steer the next " +
-        "propose.generate. Write tool: requires human approval — no auto-apply " +
+        "propose.generate. Write tool: hosts must gate behind human approval — no auto-apply " +
         "(ADR-0004). Acts only on a pending candidate; an applied / rejected / " +
         "missing one is reported, not changed. Re-recording overwrites (latest wins).",
       inputSchema: {
@@ -302,7 +344,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Create task",
       description:
         "Create a task directly (appends TaskProposed → tasks projection). " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
         "Idempotent: re-creating the same task (title + provenance) is a no-op. " +
         "Optional dueDate / priority scheduling fields (ADR-0028).",
       inputSchema: {
@@ -396,7 +438,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Publish a confirmed task to an external home (GitHub Issues / Jira / " +
         "Slack List) and record TaskPublished (ADR-0036). The destination is the " +
         "explicit `destination` argument or [tasks].default; its config comes from " +
-        "[tasks.homes.<dest>]. Egress write tool: requires human approval — no " +
+        "[tasks.homes.<dest>]. Egress write tool: hosts must gate behind human approval — no " +
         "auto-apply (ADR-0004). Idempotent: an already-published task is a no-op " +
         "(returns existing, in its own recorded destination).",
       inputSchema: {
@@ -409,6 +451,15 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
     async ({ taskId, destination }) => {
       try {
+        // Defense-in-depth (ADR-0004): publish egresses to the external home;
+        // confirm via elicitInput when the client supports it.
+        const decision = await confirmSensitiveAction(server, {
+          tool: "task.publish",
+          summary: `publish task ${taskId} to its external home${destination ? ` (${destination})` : ""}`,
+        });
+        if (!decision.proceed) {
+          return confirmationDeclined("task.publish", "the task was not published");
+        }
         const result = await taskPublish(write.store, write.config, {
           taskId,
           ...(destination !== undefined ? { destination } : {}),
@@ -431,7 +482,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Issue a lifecycle operation (complete / reopen / comment) to a published " +
         "task's external home and record TaskActionIssued (ADR-0036). The external " +
         "tool is the state authority; suasor reflects it back via read-back. " +
-        "Egress write tool: requires human approval — no auto-apply (ADR-0004).",
+        "Egress write tool: hosts must gate behind human approval — no auto-apply (ADR-0004).",
       inputSchema: {
         taskId: z.string().min(1).describe("Id of the published task to act on."),
         action: z
@@ -447,6 +498,15 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
     async ({ taskId, action, body }) => {
       try {
+        // Defense-in-depth (ADR-0004): a lifecycle op is issued to the external
+        // home; confirm via elicitInput when the client supports it.
+        const decision = await confirmSensitiveAction(server, {
+          tool: "task.act",
+          summary: `issue '${action}' to the external home of task ${taskId}`,
+        });
+        if (!decision.proceed) {
+          return confirmationDeclined("task.act", "no action was issued to the external home");
+        }
         const result = await taskAct(write.store, write.config, {
           taskId,
           action,
@@ -469,7 +529,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Record decision",
       description:
         "Record a decision directly (appends DecisionRecorded → decisions projection). " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
         "Idempotent: re-recording the same decision (title + provenance) is a no-op.",
       inputSchema: {
         title: z.string().min(1).describe("Decision title."),
@@ -530,7 +590,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         `Resolve an open inbox item (actions: ${triageActions}). \`task\` / ` +
         "`decision` create a derived task/decision from the item's source and " +
         "mark it `done`; `discard` marks it `dismissed`. Only `open` items may " +
-        "be triaged. Write tool: requires human approval — no auto-apply (ADR-0004).",
+        "be triaged. Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004).",
       inputSchema: {
         inboxId: z.string().min(1).describe("Inbox item id to triage."),
         action: z.enum(TRIAGE_ACTIONS).describe(`Triage action (${triageActions}).`),
@@ -584,7 +644,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Create a manual provenance link (relation `manual_link`) between two " +
         "entities so graph.related / graph.expand can traverse it — beyond the " +
         "reducer-derived edges (derived_from / replies_to / references). Write " +
-        "tool: requires human approval — no auto-apply (ADR-0004). Idempotent: " +
+        "tool: hosts must gate behind human approval — no auto-apply (ADR-0004). Idempotent: " +
         "re-adding the same directed link is a no-op; a self-loop is rejected.",
       inputSchema: {
         fromKind: z.string().min(1).describe("Origin entity kind (e.g. task / decision / source)."),
@@ -626,7 +686,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Remove a manual link by its id (the `linkId` returned by link.add). " +
         "Only manual links are removable — reducer-derived provenance edges are " +
-        "owned by the reducer. Write tool: requires human approval — no " +
+        "owned by the reducer. Write tool: hosts must gate behind human approval — no " +
         "auto-apply (ADR-0004). Removing a non-existent link is a tool error.",
       inputSchema: {
         linkId: z.string().min(1).describe("Manual link id to remove (from link.add)."),
@@ -664,7 +724,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Merge two resolved persons into one: reassign every identity of the source " +
         "person to the target (ADR-0022). Operator-driven — there is no automatic " +
-        "fuzzy de-duplication. Write tool: requires human approval — no auto-apply " +
+        "fuzzy de-duplication. Write tool: hosts must gate behind human approval — no auto-apply " +
         "(ADR-0004). Reversible via person.split. A self-merge or unknown source " +
         "person is a tool error.",
       inputSchema: {
@@ -681,6 +741,15 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
     async ({ targetPersonId, sourcePersonId }) => {
       try {
+        // Defense-in-depth (ADR-0004): merging reassigns identities across the
+        // graph; confirm via elicitInput when the client supports it.
+        const decision = await confirmSensitiveAction(server, {
+          tool: "person.merge",
+          summary: `merge person ${sourcePersonId} into ${targetPersonId}`,
+        });
+        if (!decision.proceed) {
+          return confirmationDeclined("person.merge", "the persons were not merged");
+        }
         const result = personMerge(write.store, { targetPersonId, sourcePersonId });
         return jsonResult(result);
       } catch (error) {
@@ -713,7 +782,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Split one (connector, handle) identity off its current person into another " +
         "person (ADR-0022) — the inverse of person.merge, to correct an over-merge. " +
         "Omit newPersonId to send the identity to its own content-derived person. " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). An unknown " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). An unknown " +
         "identity is a tool error.",
       inputSchema: {
         connector: z.string().min(1).describe("Connector of the identity to move out."),
@@ -761,7 +830,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Resolve commitment",
       description:
         "Mark an open commitment fulfilled (appends CommitmentResolved → open → " +
-        "resolved). Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "resolved). Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
         "Idempotent: an already-resolved commitment is a no-op; a dismissed one is " +
         "reported invalid_state (reopen first); a missing one is reported missing.",
       inputSchema: {
@@ -802,7 +871,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Reopen commitment",
       description:
         "Move a resolved / dismissed commitment back to open (appends " +
-        "CommitmentReopened). Write tool: requires human approval — no auto-apply " +
+        "CommitmentReopened). Write tool: hosts must gate behind human approval — no auto-apply " +
         "(ADR-0004). Idempotent: an already-open commitment is a no-op; a missing " +
         "one is reported missing.",
       inputSchema: {
@@ -831,7 +900,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Mark a demand row (from demand.list) as handled — appends DemandAcknowledged → " +
         "demand_seen, so it drops out of the default (un-acked) demand.list (ADR-0041). " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). Idempotent: an " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). Idempotent: an " +
         "already-acked row is a no-op; a dismissed row is re-marked acked (last-write-wins); " +
         "an unknown source is reported missing.",
       inputSchema: {
@@ -855,7 +924,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Mark a demand row (from demand.list) as not relevant — appends DemandDismissed → " +
         "demand_seen, so it drops out of the default (un-acked) demand.list (ADR-0041). " +
-        "Write tool: requires human approval — no auto-apply (ADR-0004). Idempotent: an " +
+        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). Idempotent: an " +
         "already-dismissed row is a no-op; an acked row is re-marked dismissed " +
         "(last-write-wins); an unknown source is reported missing.",
       inputSchema: {
@@ -888,7 +957,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "summaries, exported-draft paths) in `derived`; pass cascade=true to also " +
         "redact those derived free-text fields (ADR-0026 R1-2). Draft-export " +
         "files, backups and host chat history are out of scope. Write tool: " +
-        "requires human approval — no auto-apply (ADR-0004). Idempotent: " +
+        "hosts must gate behind human approval — no auto-apply (ADR-0004). Idempotent: " +
         "re-forgetting is a no-op (a cascade may still run); an unknown source is " +
         "reported missing. Use source.unforget to re-allow ingestion.",
       inputSchema: {
@@ -902,6 +971,15 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ externalId, reason, cascade }) => {
+      // Defense-in-depth (ADR-0004): forget is an irreversible local purge;
+      // confirm via elicitInput when the client supports it. Decline ⇒ no-op.
+      const decision = await confirmSensitiveAction(server, {
+        tool: "source.forget",
+        summary: `permanently purge source ${externalId} locally${cascade ? " (cascade: also redact derived entities)" : ""}`,
+      });
+      if (!decision.proceed) {
+        return confirmationDeclined("source.forget", `source ${externalId} was not forgotten`);
+      }
       const result = sourceForget(write.store, {
         externalId,
         cascade,
@@ -930,7 +1008,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Lift a forget tombstone (ADR-0026): append SourceUnforgotten so the " +
         "connector may re-ingest the source on the next sync. Does not restore " +
         "any content (the source is re-observed from upstream if it still " +
-        "exists). Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "exists). Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
         "Idempotent: unforgetting a source that was never forgotten is a no-op.",
       inputSchema: {
         externalId: z.string().min(1).describe("Source id to unforget (re-allow ingest)."),

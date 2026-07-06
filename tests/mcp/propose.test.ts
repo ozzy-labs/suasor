@@ -217,11 +217,19 @@ describe("MCP propose / task.create write surface (#12, HITL)", () => {
     expect(listed.proposals).toHaveLength(1);
     expect(listed.proposals[0]?.reason).toBe("not now");
 
-    // A rejected candidate's ledger stays rejected even if apply is attempted.
-    await client.callTool({
+    // Re-applying a rejected candidate is refused with a structured
+    // REJECTED_CANDIDATE error (ADR-0004) — not silently applied.
+    const blocked = (await client.callTool({
       name: "propose.apply",
       arguments: { candidates: generated.candidates },
-    });
+    })) as { isError?: boolean; content: { text?: string }[] };
+    expect(blocked.isError).toBe(true);
+    expect((JSON.parse(blocked.content[0]?.text ?? "") as { code: string }).code).toBe(
+      "REJECTED_CANDIDATE",
+    );
+
+    // No domain entity was created; the ledger row is still rejected.
+    expect(store.connection.sqlite.query("SELECT 1 FROM tasks").all()).toHaveLength(0);
     const after = parseResult(
       (await client.callTool({ name: "propose.list", arguments: {} })) as never,
     ) as { proposals: { state: string }[] };

@@ -25,6 +25,7 @@ import type { loadActuator } from "../connectors/actuator-registry.ts";
 import type { Store } from "../db/index.ts";
 import { appendEvent } from "../events/store.ts";
 import type { NewEvent } from "../events/types.ts";
+import { McpToolError } from "../mcp/errors.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type Candidate, Candidate as CandidateSchema } from "./candidates.ts";
 import { entityId } from "./id.ts";
@@ -75,6 +76,38 @@ export interface ProposeApplyOutput {
 export interface ProposeApplyDeps {
   config?: TaskHomeConfig;
   loadActuatorImpl?: typeof loadActuator;
+}
+
+/**
+ * Current proposals-ledger state for a candidateId, or `null` when no ledger row
+ * exists (e.g. a pure `proposeGenerate` candidate never persisted, or a direct
+ * `task.create` entity that skips the proposal ledger entirely).
+ */
+export function proposalLedgerState(store: Store, candidateId: string): string | null {
+  return (
+    store.connection.sqlite
+      .query<{ state: string }, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
+      .get(candidateId)?.state ?? null
+  );
+}
+
+/**
+ * Enforce a human's recorded rejection (ADR-0004, [boundary/missed-reject]).
+ * apply/batch used to persist a candidate without ever consulting the proposals
+ * ledger, so a `rejected` candidate applied cleanly — minting the domain entity
+ * while the ledger row still read `rejected` (a self-contradicting audit trail)
+ * and silently overriding the human's "no". A rejected candidateId is now a
+ * structured `REJECTED_CANDIDATE` tool error; a candidate with no ledger row is
+ * unaffected (idempotence + direct-create paths are unchanged).
+ */
+export function assertNotRejected(store: Store, candidate: Candidate): void {
+  if (proposalLedgerState(store, candidate.candidateId) === "rejected") {
+    throw new McpToolError(
+      "REJECTED_CANDIDATE",
+      `candidate ${candidate.candidateId} was rejected and cannot be applied`,
+      "A human rejected this candidate (propose.reject); applying it would contradict that recorded decision.",
+    );
+  }
 }
 
 /** True when an entity with this id already exists in the relevant projection. */
@@ -167,6 +200,10 @@ export function applyCandidateStep(
   candidate: Candidate,
   now: Date,
 ): AppliedCandidate {
+  // Consult the ledger before touching the domain: a rejected candidate must not
+  // apply (ADR-0004). Throwing here rolls the whole propose.batch transaction
+  // back (all-or-nothing), so a rejected member can't half-commit the batch.
+  assertNotRejected(store, candidate);
   const id = entityId(candidate);
   if (entityExists(store, candidate, id)) {
     return {
@@ -197,6 +234,15 @@ export function proposeApply(
   now: Date = new Date(),
 ): ProposeApplyOutput {
   const { candidates } = ProposeApplyInput.parse(input);
+
+  // Pre-flight the whole set against the ledger BEFORE appending anything: apply
+  // is per-candidate (not one transaction), so refusing a rejected candidate
+  // up-front keeps a rejected member from partially applying the batch and
+  // enforces the recorded "no" (ADR-0004) rather than silently overriding it.
+  for (const candidate of candidates) {
+    assertNotRejected(store, candidate);
+  }
+
   const results: AppliedCandidate[] = [];
 
   for (const candidate of candidates) {

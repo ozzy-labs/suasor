@@ -117,11 +117,12 @@ describe("propose lifecycle ledger (#89)", () => {
     const cid = candidates[0]?.candidateId as string;
 
     proposeReject(store, { candidateId: cid, reason: "bad" });
-    // The host should not apply a rejected candidate, but if it tries, the ledger
-    // must stay `rejected` (apply still persists the entity since the projection
-    // entity is independent — but the ledger flip only acts on pending rows).
-    proposeApply(store, { candidates });
+    // Apply must REFUSE a rejected candidate (ADR-0004 / [boundary/missed-reject]):
+    // it throws REJECTED_CANDIDATE, appends no entity event, and leaves the ledger
+    // row `rejected` — so a recorded "no" can't be silently overridden.
+    expect(() => proposeApply(store, { candidates })).toThrow(/rejected/i);
 
+    expect(sqlite().query("SELECT 1 FROM tasks").all()).toHaveLength(0);
     const ledger = listProposals(sqlite(), {});
     expect(ledger).toHaveLength(1);
     expect(ledger[0]?.state).toBe("rejected");
