@@ -171,6 +171,8 @@ suasor db migrate                # migrate first if the projection schema is not
 
 Projections are disposable and can be rebuilt (the event log is the source of truth). When in doubt, try `projections rebuild` first.
 
+> **Caution (embedding enabled):** `projections rebuild` also clears the embedding sidecar — both the vec0 vectors and their `embeddings_meta` provenance — because neither is replayable from the event log ([ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md) §5). Right after a rebuild, semantic recall returns empty. Recover it with a single `suasor embeddings drain` (a plain `sync` will not, since it only re-embeds new or changed sources). The rebuild command prints this reminder whenever it actually cleared vectors, and `suasor doctor` flags a vec0 ↔ `embeddings_meta` row-count mismatch as an error.
+
 ## Further reading
 
 - Full command / flag reference: [docs/design/cli.md](../design/cli.md)

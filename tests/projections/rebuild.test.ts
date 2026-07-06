@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { DEFAULT_EMBEDDING_DIM, DEFAULT_VEC_TABLE, Store } from "../../src/db/index.ts";
+import {
+  DEFAULT_EMBEDDING_DIM,
+  DEFAULT_VEC_TABLE,
+  Store,
+  VEC_META_TABLE,
+} from "../../src/db/index.ts";
 import type { NewEvent } from "../../src/events/types.ts";
 import { upsertSourceVector } from "../../src/retrieval/embedding/recall.ts";
 
@@ -150,7 +155,7 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
     }
   });
 
-  test("rebuild clears the vec0 substrate (vectors are re-synced, not replayed)", () => {
+  test("rebuild clears BOTH vec0 and embeddings_meta symmetrically (ADR-0005 §5, #414)", () => {
     const sqlite = store.connection.sqlite;
     store.record(
       {
@@ -164,23 +169,77 @@ describe("rebuild idempotence (append → rebuild → deep-equal)", () => {
       },
       new Date("2026-06-14T00:00:01.000Z"),
     );
-    // Vectors come from the delegated embedder (ADR-0006), not the event payload.
-    upsertSourceVector(sqlite, "gh:vec", new Array(DEFAULT_EMBEDDING_DIM).fill(0.1));
-    const vecBefore = sqlite.query(`SELECT count(*) AS n FROM ${DEFAULT_VEC_TABLE}`).get() as {
+    // Vectors + their provenance come from the delegated embedder (ADR-0006), not
+    // the event payload — both the vec0 row and its embeddings_meta row are set.
+    upsertSourceVector(sqlite, "gh:vec", new Array(DEFAULT_EMBEDDING_DIM).fill(0.1), {
+      modelId: "bge-m3",
+      modelVersion: "1",
+    });
+    const count = (table: string) =>
+      (sqlite.query(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+    expect(count(DEFAULT_VEC_TABLE)).toBe(1);
+    expect(count(VEC_META_TABLE)).toBe(1);
+
+    const result = store.rebuild();
+
+    // The source projection is replayed back, but the embedding sidecar is cleared
+    // in BOTH substrates. Leaving embeddings_meta behind (the pre-fix bug) would
+    // make `embeddings status` claim the source is embedded while its vector is
+    // gone — recall silently empty (ADR-0005 §5). Recovery is `embeddings drain`.
+    expect(count(DEFAULT_VEC_TABLE)).toBe(0);
+    expect(count(VEC_META_TABLE)).toBe(0);
+    expect(count("sources")).toBe(1);
+    // The rebuild reports how many vectors it invalidated so the CLI can prompt
+    // for a drain (0 on an embedding-less store).
+    expect(result.clearedEmbeddings).toBe(1);
+  });
+
+  test("rebuild on an embedding-less store reports clearedEmbeddings = 0", () => {
+    store.record(
+      {
+        type: "SourceObserved",
+        externalId: "gh:plain",
+        sourceType: "github_issue",
+        body: "no vector here",
+        observedAt: "2026-06-14T00:00:00.000Z",
+        fingerprint: "fp",
+        meta: {},
+      },
+      new Date("2026-06-14T00:00:01.000Z"),
+    );
+    const result = store.rebuild();
+    expect(result.clearedEmbeddings).toBe(0);
+  });
+
+  test("rebuild clears a diverged sidecar (vec0 empty, embeddings_meta populated) and reports the loss", () => {
+    // Reproduce the pre-fix corrupt state directly: a stale embeddings_meta row
+    // with no matching vec0 vector (what the old rebuild left behind). The fixed
+    // rebuild must clear the orphan meta AND count it as an invalidated embedding.
+    const sqlite = store.connection.sqlite;
+    store.record(
+      {
+        type: "SourceObserved",
+        externalId: "gh:orphan",
+        sourceType: "github_issue",
+        body: "orphaned meta",
+        observedAt: "2026-06-14T00:00:00.000Z",
+        fingerprint: "fp",
+        meta: {},
+      },
+      new Date("2026-06-14T00:00:01.000Z"),
+    );
+    sqlite
+      .query(
+        `INSERT INTO ${VEC_META_TABLE} (external_id, model_id, model_version, embedded_at)
+         VALUES ('gh:orphan', 'bge-m3', '1', '2026-06-14T00:00:00.000Z')`,
+      )
+      .run();
+    const result = store.rebuild();
+    const metaN = sqlite.query(`SELECT count(*) AS n FROM ${VEC_META_TABLE}`).get() as {
       n: number;
     };
-    expect(vecBefore.n).toBe(1);
-
-    store.rebuild();
-
-    // The source projection is replayed back, but the vector is cleared (no stale
-    // rows survive) and is regenerated on the next `<connector> sync`.
-    const vecAfter = sqlite.query(`SELECT count(*) AS n FROM ${DEFAULT_VEC_TABLE}`).get() as {
-      n: number;
-    };
-    expect(vecAfter.n).toBe(0);
-    const sources = sqlite.query("SELECT count(*) AS n FROM sources").get() as { n: number };
-    expect(sources.n).toBe(1);
+    expect(metaN.n).toBe(0);
+    expect(result.clearedEmbeddings).toBe(1);
   });
 
   test("FTS index is rebuilt and searchable after replay", () => {
