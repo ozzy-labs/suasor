@@ -826,18 +826,28 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Purge an ingested source locally (ADR-0026): redact its body from the " +
         "event log and delete it from the projection / FTS / vectors, then lay a " +
         "tombstone so the next sync does not re-ingest it. Keeps a body-less " +
-        "audit record. Write tool: requires human approval — no auto-apply " +
-        "(ADR-0004). Idempotent: re-forgetting is a no-op; an unknown source is " +
+        "audit record. ALWAYS discloses the entities derived from the source " +
+        "(task/decision/reply_draft/commitment titles+bodies, proposal-ledger " +
+        "summaries, exported-draft paths) in `derived`; pass cascade=true to also " +
+        "redact those derived free-text fields (ADR-0026 R1-2). Draft-export " +
+        "files, backups and host chat history are out of scope. Write tool: " +
+        "requires human approval — no auto-apply (ADR-0004). Idempotent: " +
+        "re-forgetting is a no-op (a cascade may still run); an unknown source is " +
         "reported missing. Use source.unforget to re-allow ingestion.",
       inputSchema: {
         externalId: z.string().min(1).describe("Source id to forget."),
         reason: z.string().min(1).optional().describe("Optional audit reason."),
+        cascade: z
+          .boolean()
+          .default(false)
+          .describe("Also redact the free-text of derived entities (ADR-0026 R1-2)."),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ externalId, reason }) => {
+    async ({ externalId, reason, cascade }) => {
       const result = sourceForget(write.store, {
         externalId,
+        cascade,
         ...(reason !== undefined ? { reason } : {}),
       });
       // Tombstone notice (ADR-0026 R1-1): when a connector is still enabled, tell

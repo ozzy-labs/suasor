@@ -32,11 +32,19 @@
  */
 import { DEFAULT_VEC_TABLE, VEC_META_TABLE } from "../db/connection.ts";
 import type { Store } from "../db/index.ts";
+import { type DerivedEntity, enumerateDerived, redactDerived } from "./cascade.ts";
 
 export interface SourceForgetInput {
   externalId: string;
   /** Optional human reason recorded on the audit event. */
   reason?: string;
+  /**
+   * Cascade-redact the free-text of entities derived from this source (ADR-0026
+   * R1-2): task/decision titles, decision rationale, reply-draft bodies,
+   * commitment titles, and proposal-ledger summaries. Off by default — the caller
+   * must opt in after reviewing the disclosed `derived` list (HITL, ADR-0004).
+   */
+  cascade?: boolean;
 }
 
 export interface SourceForgetOutput {
@@ -53,6 +61,20 @@ export interface SourceForgetOutput {
    * source until `source.unforget` clears it. `false` for `missing`.
    */
   tombstoned: boolean;
+  /**
+   * Entities derived from the source that still quote / reference it (ADR-0026
+   * R1-2). ALWAYS populated for disclosure — enumeration is mandatory regardless
+   * of `cascade` (so the caller sees what survives a plain forget). Includes
+   * out-of-scope `draft_export` paths (disclosed, never redacted). Empty for a
+   * `missing` source.
+   */
+  derived: DerivedEntity[];
+  /**
+   * Whether the derived free-text was cascade-redacted (the `cascade` opt-in ran).
+   * `false` on a plain forget — the `derived` list then still holds verbatim
+   * quotes and the caller can re-run with `cascade` to purge them.
+   */
+  cascaded: boolean;
 }
 
 export interface SourceUnforgetInput {
@@ -115,7 +137,7 @@ export function sourceForget(
   input: SourceForgetInput,
   now: Date = new Date(),
 ): SourceForgetOutput {
-  const { externalId, reason } = input;
+  const { externalId, reason, cascade = false } = input;
   const sqlite = store.connection.sqlite;
 
   const ingested = countEvents(store, externalId, ["SourceObserved", "SourceBodyUpdated"]);
@@ -125,10 +147,22 @@ export function sourceForget(
       .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM sources WHERE external_id = ?")
       .get(externalId)?.n ?? 0) > 0;
 
+  // A never-ingested id has no derived content to disclose.
   if (ingested === 0 && forgottenBefore === 0)
-    return { externalId, status: "missing", tombstoned: false };
-  if (forgottenBefore > 0 && !rowExists)
-    return { externalId, status: "already_forgotten", tombstoned: true };
+    return { externalId, status: "missing", tombstoned: false, derived: [], cascaded: false };
+
+  // Disclosure is mandatory (ADR-0026 R1-2): enumerate the derived entities up
+  // front so they are reported whether or not the caller opts into cascade. The
+  // set keys off links + the events' `sourceExternalIds`, which redaction leaves
+  // intact, so the value is the same before and after the transaction below.
+  const derived = enumerateDerived(sqlite, externalId);
+
+  const alreadyForgotten = forgottenBefore > 0 && !rowExists;
+  // A plain re-forget of an already-purged source is a no-op (the fast path,
+  // unchanged). With `cascade`, fall through so the derived redaction can still
+  // run even though the source body was purged on the first forget.
+  if (alreadyForgotten && !cascade)
+    return { externalId, status: "already_forgotten", tombstoned: true, derived, cascaded: false };
 
   // Physical erasure (ADR-0026 R1-5): enable secure_delete so the pages freed by
   // the redaction UPDATE / sidecar DELETEs below are zeroed rather than left as
@@ -138,32 +172,41 @@ export function sourceForget(
   if (!priorSecureDelete) sqlite.exec("PRAGMA secure_delete = ON");
   try {
     // Atomicity (ADR-0026 R1-4): one transaction wraps redaction + sidecar purge
-    // + the SourceForgotten append (store.record nests as a SAVEPOINT), so a
-    // crash partway through cannot leave a half-forgotten state.
+    // + the SourceForgotten append + the derived cascade (store.record nests as a
+    // SAVEPOINT), so a crash partway through cannot leave a half-forgotten state.
     const tx = sqlite.transaction(() => {
-      // 1. Redact the body in the historical source events (ADR-0026 exception).
-      sqlite
-        .query(
-          `UPDATE events
-              SET payload = json_set(payload, '$.body', '')
-            WHERE type IN ('SourceObserved', 'SourceBodyUpdated')
-              AND json_extract(payload, '$.externalId') = ?`,
-        )
-        .run(externalId);
+      // The body purge + audit event only run on a first forget; a cascade-only
+      // re-forget of an already-purged source skips straight to the cascade.
+      if (!alreadyForgotten) {
+        // 1. Redact the body in the historical source events (ADR-0026 exception).
+        sqlite
+          .query(
+            `UPDATE events
+                SET payload = json_set(payload, '$.body', '')
+              WHERE type IN ('SourceObserved', 'SourceBodyUpdated')
+                AND json_extract(payload, '$.externalId') = ?`,
+          )
+          .run(externalId);
 
-      // 2. Purge non-event sidecar substrate (not rebuilt by replay).
-      if (tableExists(store, DEFAULT_VEC_TABLE)) {
-        sqlite.query(`DELETE FROM ${DEFAULT_VEC_TABLE} WHERE external_id = ?`).run(externalId);
+        // 2. Purge non-event sidecar substrate (not rebuilt by replay).
+        if (tableExists(store, DEFAULT_VEC_TABLE)) {
+          sqlite.query(`DELETE FROM ${DEFAULT_VEC_TABLE} WHERE external_id = ?`).run(externalId);
+        }
+        sqlite.query(`DELETE FROM ${VEC_META_TABLE} WHERE external_id = ?`).run(externalId);
+        sqlite.query("DELETE FROM extraction_meta WHERE external_id = ?").run(externalId);
+
+        // 3. Append SourceForgotten — its reducer DELETEs sources / sources_fts and
+        //    lays the forgotten_sources tombstone (append + fold; replay-stable).
+        store.record(
+          { type: "SourceForgotten", externalId, ...(reason !== undefined ? { reason } : {}) },
+          now,
+        );
       }
-      sqlite.query(`DELETE FROM ${VEC_META_TABLE} WHERE external_id = ?`).run(externalId);
-      sqlite.query("DELETE FROM extraction_meta WHERE external_id = ?").run(externalId);
 
-      // 3. Append SourceForgotten — its reducer DELETEs sources / sources_fts and
-      //    lays the forgotten_sources tombstone (append + fold; replay-stable).
-      store.record(
-        { type: "SourceForgotten", externalId, ...(reason !== undefined ? { reason } : {}) },
-        now,
-      );
+      // 4. Derived-content cascade (ADR-0026 R1-2, opt-in): blank the free-text of
+      //    every derived entity (task/decision/reply_draft/commitment/proposal),
+      //    on the same transaction / secure_delete path as the body redaction.
+      if (cascade) redactDerived(sqlite, externalId, now);
     });
     tx();
   } finally {
@@ -176,7 +219,13 @@ export function sourceForget(
   // in-memory / non-WAL database.
   sqlite.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 
-  return { externalId, status: "forgotten", tombstoned: true };
+  return {
+    externalId,
+    status: alreadyForgotten ? "already_forgotten" : "forgotten",
+    tombstoned: true,
+    derived,
+    cascaded: cascade,
+  };
 }
 
 /**
