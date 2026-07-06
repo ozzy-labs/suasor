@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCli } from "../../src/cli/index.ts";
+import { buildCli, categoryHelp, registeredCommandClasses } from "../../src/cli/index.ts";
 
 let dir: string;
 
@@ -130,5 +130,38 @@ describe("suasor extraction list-pending (Issue #202)", () => {
     const { code, out } = await run(["extraction", "list-pending"]);
     expect(code).toBe(0);
     expect(out).toContain("No sources awaiting (re)extraction.");
+  });
+});
+
+describe("suasor extraction serve (Issue #439)", () => {
+  test("fails fast with structured install guidance when markitdown is absent", async () => {
+    await run(["init"]);
+    // A definitely-missing binary forces the not-installed path deterministically
+    // (independent of whether markitdown is installed on the test host), and the
+    // preflight returns before the blocking server ever starts.
+    const { code, err } = await run([
+      "extraction",
+      "serve",
+      "--command",
+      "suasor-no-such-markitdown-xyz",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("not installed or not on PATH");
+    expect(err).toContain("markitdown[all]");
+  });
+
+  test("rejects an out-of-range --port before starting the server", async () => {
+    await run(["init"]);
+    const { code, err } = await run(["extraction", "serve", "--port", "70000"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--port must be an integer");
+  });
+
+  test("is discoverable in the extraction category help", () => {
+    const text = categoryHelp(["extraction", "--help"], registeredCommandClasses(), "suasor");
+    expect(text).not.toBeNull();
+    expect(text as string).toContain("suasor extraction serve");
+    expect(text as string).toContain("suasor extraction status");
+    expect(text as string).toContain("suasor extraction list-pending");
   });
 });

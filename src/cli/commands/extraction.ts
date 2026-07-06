@@ -1,13 +1,17 @@
 /**
- * `suasor extraction status [--json]` / `extraction list-pending [--limit N]`
- * — document-extraction coverage + drilldown (ADR-0024, Issue #202).
+ * `suasor extraction status [--json]` / `extraction list-pending [--limit N]` /
+ * `extraction serve` — document-extraction coverage + drilldown + the reference
+ * sidecar (ADR-0024, Issue #202 / #439).
  *
  * `status` reports the configured backend / version and, from the
  * `extraction_meta` sidecar, how many sources are extracted / unsupported /
  * too-large / stale (version drift → re-extract next sync) / pending
  * (extractable, never attempted). `list-pending` is the drilldown: the actual
- * sources awaiting (re)extraction. Read-only. Heavy deps (config loader, DB
- * layer, maintenance) are lazy-imported inside `execute` (NFR-PRF-1).
+ * sources awaiting (re)extraction. `serve` runs the shipped extraction sidecar
+ * (a markitdown-CLI shim) so an install no longer has to author its own HTTP
+ * wrapper (retrieval-4). Read-only apart from `serve`'s subprocess spawns. Heavy
+ * deps (config loader, DB layer, maintenance, server) are lazy-imported inside
+ * `execute` (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
 import { docsUrl } from "../doc-ref.ts";
@@ -72,7 +76,9 @@ export class ExtractionStatusCommand extends Command {
       );
       if (status.backend === "disabled") {
         this.context.stdout.write(
-          `  backend disabled — Office/PDF stay name-only (set [extraction].backend; see ${docsUrl("guide/extraction.md")})\n`,
+          "  backend disabled — Office/PDF stay name-only. Start the bundled sidecar with " +
+            '`suasor extraction serve` and set [extraction].backend = "markitdown" ' +
+            `(see ${docsUrl("guide/extraction.md")})\n`,
         );
       } else if (t.pending > 0 || t.stale > 0) {
         this.context.stdout.write(
@@ -163,7 +169,8 @@ export class ExtractionListPendingCommand extends Command {
       }
       if (config.extraction.backend === "disabled") {
         this.context.stdout.write(
-          `  backend disabled — set [extraction].backend to extract (see ${docsUrl("guide/extraction.md")})\n`,
+          "  backend disabled — start the bundled sidecar with `suasor extraction serve` and set " +
+            `[extraction].backend = "markitdown" to extract (see ${docsUrl("guide/extraction.md")})\n`,
         );
       } else {
         this.context.stdout.write(
@@ -175,5 +182,91 @@ export class ExtractionListPendingCommand extends Command {
     } finally {
       store.close();
     }
+  }
+}
+
+export class ExtractionServeCommand extends Command {
+  static override paths = [["extraction", "serve"]];
+
+  static override usage = Command.Usage({
+    category: "Maintenance",
+    description: "Run the bundled document-extraction sidecar (markitdown shim).",
+    details: `
+      Starts the reference extraction sidecar that implements the extraction
+      contract (POST /extract, ADR-0024): a thin HTTP shim that spawns the
+      markitdown CLI once per request to convert Office/PDF bytes to Markdown. All
+      ML runs in the markitdown subprocess — Suasor holds no in-process parser
+      (ADR-0006). Point [extraction].backend = "markitdown" at this sidecar and it
+      powers search / recall / research over document bodies (Issue #439).
+
+      Binds to the host/port from [extraction].baseUrl by default
+      (http://localhost:8929); override with --host / --port. Requires the
+      markitdown CLI on PATH (\`uv tool install 'markitdown[all]'\`) — it exits with
+      install guidance when absent. The process blocks until interrupted (Ctrl-C).
+    `,
+    examples: [
+      ["Start the sidecar (default localhost:8929)", "suasor extraction serve"],
+      ["Bind a custom port", "suasor extraction serve --port 9000"],
+      ["Use a specific markitdown binary", "suasor extraction serve --command /opt/bin/markitdown"],
+    ],
+  });
+
+  host = Option.String("--host", {
+    description: "Bind host (default: the host from [extraction].baseUrl).",
+  });
+
+  port = Option.String("--port", {
+    description: "Bind port 1-65535 (default: the port from [extraction].baseUrl).",
+  });
+
+  command = Option.String("--command", {
+    description: "markitdown executable to spawn (default: markitdown).",
+  });
+
+  override async execute(): Promise<number> {
+    const [{ loadConfig }, serve] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../extraction/serve.ts"),
+    ]);
+
+    const config = await loadConfig();
+    const address = serve.resolveServeAddress(config.extraction.baseUrl, this.host, this.port);
+    if ("error" in address) {
+      this.context.stderr.write(`error: ${address.error}\n`);
+      return 1;
+    }
+
+    const command = this.command ?? serve.DEFAULT_MARKITDOWN_COMMAND;
+
+    // Preflight: fail fast with structured install guidance rather than serving a
+    // sidecar that 503s on every request (Issue #439).
+    if (!(await serve.probeMarkitdown({ command }))) {
+      const hint = serve.MARKITDOWN_INSTALL_HINT;
+      this.context.stderr.write(`error: ${hint.message} (command: ${command})\n`);
+      this.context.stderr.write("install one of:\n");
+      for (const step of hint.install) this.context.stderr.write(`  ${step}\n`);
+      this.context.stderr.write(`docs: ${hint.docs}\n`);
+      return 1;
+    }
+
+    const server = serve.startExtractionServer({
+      host: address.host,
+      port: address.port,
+      deps: { command, log: (m) => this.context.stderr.write(`${m}\n`) },
+    });
+    this.context.stdout.write(
+      `suasor extraction serve: listening on ${server.url} (POST /extract) — markitdown='${command}'\n`,
+    );
+    this.context.stdout.write("Press Ctrl-C to stop.\n");
+
+    await new Promise<void>((resolvePromise) => {
+      const shutdown = () => {
+        server.stop();
+        resolvePromise();
+      };
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+    });
+    return 0;
   }
 }

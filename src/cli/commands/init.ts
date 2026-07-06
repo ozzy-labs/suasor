@@ -53,6 +53,7 @@ backend = "disabled"   # disabled | anthropic | openai | ollama
 
 [extraction]
 backend = "disabled"   # disabled | markitdown — Office/PDF body extraction sidecar (ADR-0024)
+# Run the bundled sidecar with \`suasor extraction serve\` (needs the markitdown CLI on PATH).
 # baseUrl = "http://localhost:8929"   # markitdown sidecar (/extract is appended)
 # maxBytes = 5000000                  # cap on extracted text; larger inputs stay name-only
 # version = "1"                       # extractor version; bump to re-extract on next sync
