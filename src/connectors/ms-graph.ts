@@ -43,10 +43,12 @@ import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** Graph resource families this connector can ingest. */
@@ -67,6 +69,14 @@ export const MsGraphConnectorConfig = z.object({
 export type MsGraphConnectorConfig = z.infer<typeof MsGraphConnectorConfig>;
 
 export const MS_GRAPH_CONNECTOR_NAME = "ms-graph";
+
+/** Credential precondition enforced centrally by the sync service (Issue #440). */
+const MS_GRAPH_CREDENTIALS: CredentialRequirement = {
+  secretNames: ["clientSecret"],
+  missingMessage:
+    "ms-graph connector: no clientSecret configured " +
+    "(set SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET or store it in the OS keychain)",
+};
 
 /** DriveItem content hashes (any one drives the content fingerprint, ADR-0024 §6). */
 interface GraphFileHashes {
@@ -313,6 +323,7 @@ export interface MsGraphConnectorOptions {
 class MsGraphConnector implements Connector {
   readonly name = MS_GRAPH_CONNECTOR_NAME;
   readonly sourceType = "ms365";
+  readonly credentials = MS_GRAPH_CREDENTIALS;
 
   /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
   private isolation: IsolationResult | null = null;
@@ -323,21 +334,15 @@ class MsGraphConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
-    // missing clientSecret must fail loudly (throw → exit 1) even when no
-    // resources are configured, rather than hiding behind the empty-scope early
-    // return below — which would report a silent 0-ingest + exit 0 and mask the
-    // missing credential (ADR-0007 "no silent wrong answer"). A configured secret +
-    // empty scope keeps the old behaviour: the no-op return below (0 records, no client).
-    const clientSecret = await ctx.secret("clientSecret");
-    if (!clientSecret) {
-      throw new Error(
-        "ms-graph connector: no clientSecret configured " +
-          "(set SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET or store it in the OS keychain)",
-      );
-    }
-
+    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+    // above) is enforced centrally by the sync service before `sync()` runs, so
+    // this early return can never mask a missing clientSecret (ADR-0007
+    // "credential 解決は scope-emptiness 判定に先行する", Issue #440).
     if (this.config.resources.length === 0) return;
+
+    const clientSecret = await ctx.secret("clientSecret");
+    // Guaranteed present by the central credential check; narrow for the client.
+    if (clientSecret === null) throw new Error(MS_GRAPH_CREDENTIALS.missingMessage);
 
     if (!this.config.tenantId || !this.config.clientId) {
       throw new Error("ms-graph connector: tenantId and clientId are required in config");
@@ -406,3 +411,38 @@ export function createMsGraphConnector(
   const parsed = MsGraphConnectorConfig.parse(config ?? {});
   return new MsGraphConnector(parsed, options.clientFactory ?? defaultMsGraphClientFactory);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: MS_GRAPH_CONNECTOR_NAME,
+  sourceType: "ms365",
+  configSchema: MsGraphConnectorConfig,
+  secretNames: MS_GRAPH_CREDENTIALS.secretNames,
+  needsAuth: true,
+  bundledInBinary: false,
+  sliceTemplate: {
+    body: [
+      "enabled = true",
+      '# tenantId = "<tenant-guid>"   # required for auth',
+      '# clientId = "<app-client-id>" # required for auth',
+    ],
+  },
+  noopWarning(slice) {
+    const cfg = MsGraphConnectorConfig.parse(slice ?? {});
+    if (cfg.resources.length === 0) {
+      return "resources unset — nothing to ingest (set resources in config)";
+    }
+    return null;
+  },
+  genericAuth: true,
+  // No id-discovery seam: Graph resources are named by fixed family
+  // (mail / calendar / files / teams), not enumerated ids, so there is no
+  // `ms-graph <verb>` discovery command in DISCOVERY_SPECS.
+  genericDiscovery: false,
+  surfacesChannels: false,
+  surfacesTeams: false,
+  capabilityNotes: {
+    genericDiscovery:
+      "resources are a fixed family (mail/calendar/files/teams), not enumerated ids — no discovery verb",
+  },
+};

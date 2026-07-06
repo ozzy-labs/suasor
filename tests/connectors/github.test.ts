@@ -194,25 +194,10 @@ describe("GitHub connector — guards", () => {
     expect(built).toBe(false);
   });
 
-  test("no repos + notifications off + no token still throws (credential precedes the empty-scope no-op, #404)", async () => {
-    // The fresh-onboard state (enabled slice, no repos, notifications off, no
-    // token): a missing credential must fail loudly rather than hiding behind the
-    // empty-scope no-op (a silent 0-ingest + exit 0). Regression of #385.
-    let built = false;
-    const connector = createGithubConnector(
-      { repos: [] },
-      {
-        octokitFactory: () => {
-          built = true;
-          return fakeOctokit([]).octokit;
-        },
-      },
-    );
-    await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
-      /no token configured/,
-    );
-    expect(built).toBe(false);
-  });
+  // The "empty scope + no credential still throws" invariant (#385 / #404) is now
+  // enforced centrally by the sync service (ADR-0007, Issue #440), so it is
+  // covered once for every connector by the registry-driven completeness test in
+  // `tests/connectors/manifest.test.ts` rather than hand-copied per connector.
 
   test("no repos but notifications on still ingests the stream", async () => {
     const { octokit, calls } = fakeRoutedOctokit({ notificationPages: [{ data: [notification] }] });

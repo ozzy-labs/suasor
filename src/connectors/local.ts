@@ -44,6 +44,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 
 /** Default file extensions treated as text bodies (lower-case, with dot). */
 const DEFAULT_TEXT_EXTENSIONS = [
@@ -334,3 +335,35 @@ export function createLocalConnector(
   const parsed = LocalConnectorConfig.parse(config ?? {});
   return new LocalConnector(parsed, options.walkerFactory ?? defaultLocalWalkerFactory);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: LOCAL_CONNECTOR_NAME,
+  sourceType: "local",
+  // The load-time schema (FS existence check, Issue #188) — matches the registry
+  // `CONFIG_SCHEMAS` entry that `loadConfig` validates against.
+  configSchema: LocalConnectorConfigSchema,
+  // Reads the local filesystem only — no credential (ADR-0007 credential-free).
+  secretNames: [],
+  needsAuth: false,
+  bundledInBinary: true,
+  sliceTemplate: {
+    body: ["enabled = true", '# roots = ["/absolute/path"]      # local directories to ingest'],
+  },
+  noopWarning(slice) {
+    // Structural schema (no FS check) for the pure scope-emptiness advisory.
+    const cfg = LocalConnectorConfig.parse(slice ?? {});
+    if (cfg.roots.length === 0) {
+      return "roots unset — nothing to ingest (set roots in config)";
+    }
+    return null;
+  },
+  genericAuth: false,
+  genericDiscovery: false,
+  surfacesChannels: false,
+  surfacesTeams: false,
+  capabilityNotes: {
+    genericAuth: "local filesystem only — no credential to store or test",
+    genericDiscovery: "roots are user-supplied paths — no upstream namespace to enumerate",
+  },
+};

@@ -331,6 +331,20 @@ async function runSyncPass(
     ...(options.discover ? { discover: options.discover } : {}),
   };
 
+  // Central credential precondition (ADR-0007 "credential 解決は scope-emptiness
+  // 判定に先行する", Issue #440). Resolve the connector's declared secrets before
+  // iterating `sync()` and throw loudly when NONE resolves — so a missing token
+  // fails (exit 1) even when the ingest scope is empty, instead of hiding behind
+  // a silent 0-ingest no-op. `any-of` semantics: for a single-token connector the
+  // one name must resolve; for multi-account Slack at least one workspace token
+  // must (a partial absence is left to the connector's own per-account skip).
+  // This replaces the guard formerly copy-pasted into every connector's `sync()`.
+  const requirement = connector.credentials;
+  if (requirement && requirement.secretNames.length > 0) {
+    const resolved = await Promise.all(requirement.secretNames.map((name) => ctx.secret(name)));
+    if (resolved.every((value) => value === null)) throw new Error(requirement.missingMessage);
+  }
+
   let observed = 0;
   let updated = 0;
   let unchanged = 0;

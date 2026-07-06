@@ -38,6 +38,15 @@ const CHANNEL_META_KEYS: Record<string, ChannelMetaKeys> = {
   slack: { id: "channel", team: "team", name: "channelName", kind: "channelKind" },
 };
 
+/**
+ * Connector names that emit `SlackChannelObserved` (i.e. have channel meta keys).
+ * Cross-checked against each manifest's `surfacesChannels` flag by the connector
+ * completeness test (Issue #440) so the two can never drift.
+ */
+export function channelMetaConnectors(): string[] {
+  return Object.keys(CHANNEL_META_KEYS).sort();
+}
+
 /** One observed channel derived from a record's meta (the `SlackChannelObserved` payload). */
 export interface ObservedChannel {
   channelId: string;

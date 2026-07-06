@@ -33,10 +33,12 @@ import { z } from "zod";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 import {
   DEFAULT_NOTION_CLIENT,
   type NotionClientFactory,
@@ -73,6 +75,14 @@ export const NotionConnectorConfig = z
 export type NotionConnectorConfig = z.infer<typeof NotionConnectorConfig>;
 
 export const NOTION_CONNECTOR_NAME = "notion";
+
+/** Credential precondition enforced centrally by the sync service (Issue #440). */
+const NOTION_CREDENTIALS: CredentialRequirement = {
+  secretNames: ["token"],
+  missingMessage:
+    "notion connector: no token configured " +
+    "(set SUASOR_CONNECTOR_NOTION_TOKEN or store it in the OS keychain)",
+};
 
 /** The two Notion resource kinds this connector ingests. */
 export type NotionResource = { kind: "pages" } | { kind: "database"; id: string };
@@ -114,6 +124,7 @@ export interface NotionConnectorOptions {
 class NotionConnector implements Connector {
   readonly name = NOTION_CONNECTOR_NAME;
   readonly sourceType = "notion";
+  readonly credentials = NOTION_CREDENTIALS;
 
   /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
   private isolation: IsolationResult | null = null;
@@ -132,23 +143,16 @@ class NotionConnector implements Connector {
   }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
-    // missing token must fail loudly (throw → exit 1) even when no resources
-    // (pages / databases) are configured, rather than hiding behind the
-    // empty-scope early return below — which would report a silent 0-ingest +
-    // exit 0 and mask the missing credential (ADR-0007 "no silent wrong answer").
-    // A configured token + empty scope keeps the old behaviour: the no-op return
-    // below (0 records, no client).
-    const token = await ctx.secret("token");
-    if (!token) {
-      throw new Error(
-        "notion connector: no token configured " +
-          "(set SUASOR_CONNECTOR_NOTION_TOKEN or store it in the OS keychain)",
-      );
-    }
-
+    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+    // above) is enforced centrally by the sync service before `sync()` runs, so
+    // this early return can never mask a missing token (ADR-0007 "credential 解決
+    // は scope-emptiness 判定に先行する", Issue #440).
     const resources = this.resources();
     if (resources.length === 0) return;
+
+    const token = await ctx.secret("token");
+    // Guaranteed present by the central credential check; narrow for the client.
+    if (token === null) throw new Error(NOTION_CREDENTIALS.missingMessage);
 
     const client = await this.clientFactory(token);
     this.isolation = null;
@@ -208,3 +212,33 @@ export function createNotionConnector(
   const parsed = NotionConnectorConfig.parse(config ?? {});
   return new NotionConnector(parsed, options.clientFactory ?? DEFAULT_NOTION_CLIENT);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: NOTION_CONNECTOR_NAME,
+  sourceType: "notion",
+  configSchema: NotionConnectorConfig,
+  secretNames: NOTION_CREDENTIALS.secretNames,
+  needsAuth: true,
+  bundledInBinary: true,
+  sliceTemplate: {
+    body: [
+      "enabled = true",
+      '# databases = ["<database-id>"]  # db rows to ingest (`suasor notion databases`)',
+      "# pages = true               # also ingest standalone pages the integration can see",
+    ],
+  },
+  noopWarning(slice) {
+    const cfg = NotionConnectorConfig.parse(slice ?? {});
+    // A target exists if any database is configured or standalone-page discovery
+    // is on (the default). Both off = nothing to ingest.
+    if (cfg.databases.length === 0 && !cfg.pages) {
+      return "databases unset and pages=false — nothing to ingest (set databases in config, or set pages to true)";
+    }
+    return null;
+  },
+  genericAuth: true,
+  genericDiscovery: true,
+  surfacesChannels: false,
+  surfacesTeams: false,
+};

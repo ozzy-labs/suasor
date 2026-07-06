@@ -25,6 +25,7 @@ import type {
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 
 /** `[connectors.web]` config (docs/design/config.md). */
 export const WebConnectorConfig = z.object({
@@ -170,3 +171,32 @@ export function createWebConnector(
     options.now ?? (() => new Date()),
   );
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: WEB_CONNECTOR_NAME,
+  sourceType: "web",
+  configSchema: WebConnectorConfig,
+  // Public pages only — no credential (ADR-0007 credential-free connector).
+  secretNames: [],
+  needsAuth: false,
+  bundledInBinary: false,
+  sliceTemplate: {
+    body: ["enabled = true", '# urls = ["https://example.com"]  # public pages to ingest'],
+  },
+  noopWarning(slice) {
+    const cfg = WebConnectorConfig.parse(slice ?? {});
+    if (cfg.urls.length === 0) {
+      return "urls unset — nothing to ingest (set urls in config)";
+    }
+    return null;
+  },
+  genericAuth: false,
+  genericDiscovery: false,
+  surfacesChannels: false,
+  surfacesTeams: false,
+  capabilityNotes: {
+    genericAuth: "public pages only — no credential to store or test",
+    genericDiscovery: "urls are user-supplied — no upstream namespace to enumerate",
+  },
+};
