@@ -1,10 +1,10 @@
 # 0041. Connector 中立の demand / 優先度基盤（`demand.list` + seen-state + deterministic scorer）
 
-- Status: Proposed
+- Status: Accepted（2026-07-06 承認）
 - Date: 2026-07-06
 - Deciders: Suasor maintainers
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（seen-state は event）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（write は HITL）, [ADR-0006](0006-ml-delegation.md)（決定論的算術は委譲対象外＝プロダクトコードに置いてよい）, [ADR-0012](0012-slack-demand-digest.md)（本 ADR が決定 3 / 4 を supersede）, [ADR-0021](0021-commitment-ledger.md)（commitment 期限）, [ADR-0028](0028-task-scheduling-fields.md)（dueDate / priority / overdue 派生）, [ADR-0036](0036-task-external-home.md)（差別化宣言「横断捕捉 + AI 提案 + 優先付け」）, [ADR-0040](0040-proactive-push-lane.md)（digest の内容源として消費）
-- Tracks: #412
+- Tracks: #412（決定）/ [#419](https://github.com/ozzy-labs/suasor/issues/419)（実装）
 
 ## Context
 

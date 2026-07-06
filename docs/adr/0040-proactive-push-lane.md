@@ -1,10 +1,10 @@
 # 0040. Proactive push lane（cron one-shot digest + standing consent）
 
-- Status: Proposed
+- Status: Accepted（2026-07-06 承認）
 - Date: 2026-07-06
 - Deciders: Suasor maintainers
 - Related: [ADR-0003](0003-local-first-and-content-minimization.md)（egress 最小化）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（HITL）, [ADR-0017](0017-brief-period-bundle.md)（brief bundle）, [ADR-0025](0025-local-draft-export.md)（ローカル出力の先例）, [ADR-0027](0027-bulk-sync-orchestration.md)（scheduling は OS scheduler へ委譲）, [ADR-0036](0036-task-external-home.md)（「行動する場所・タイミングで目に入ること」の価値論理・actuator 経路）, [ADR-0041](0041-neutral-demand-priority-substrate.md)（digest の内容源）
-- Tracks: #412
+- Tracks: #412（決定）/ [#420](https://github.com/ozzy-labs/suasor/issues/420)（実装）
 
 ## Context
 
