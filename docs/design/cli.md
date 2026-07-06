@@ -33,7 +33,7 @@ suasor embeddings rebuild [--full] [--json] [--no-progress]  # 現行 model と�
 suasor embeddings drain [--json] [--no-progress]  # pending（ベクトル未生成）の catch-up 再埋め込み
 suasor embeddings list-failed [--limit N] [--json]  # 現行 model ベクトルを欠く source の drilldown（pending / stale）
 suasor embeddings find-duplicates [--threshold T] [--json] [--no-progress]  # cosine 類似度が閾値超の near-dup ペア列挙
-suasor search [--limit N] [--source-type T] [--observed-after ISO] [--observed-before ISO] [--json] <query>  # FTS 検索
+suasor search [--limit N] [--source-type T] [--observed-after ISO] [--observed-before ISO] [--full-body] [--max-body-chars N] [--json] <query>  # FTS 検索
 suasor source list [--type T] [--limit N] [--since ISO] [--until ISO] [--json]  # 取り込み済み source の監査一覧（本文・secret 非表示・ADR-0026）
 suasor source forget <externalId> [--reason R] [--cascade] [--yes]  # source をローカル purge（本文 redaction + projection 削除・破壊的・--yes で適用・--cascade で派生 content も redact・ADR-0026）
 suasor source unforget <externalId>   # forget の tombstone を解除し再取り込みを許可（redact 済み本文は復元しない・冪等・ADR-0026 R1）
@@ -74,6 +74,8 @@ suasor --version                       # バージョン出力
 | `search` | `--source-type <type>` | （任意） | `source_type` 完全一致で絞る（例: `github_issue`） |
 | `search` | `--observed-after <iso>` | （任意） | `observed_at` 下限（ISO 8601、inclusive `>=`） |
 | `search` | `--observed-before <iso>` | （任意） | `observed_at` 上限（ISO 8601、exclusive `<`） |
+| `search` | `--full-body` | false | excerpt ではなく hit ごとの全文 `body` を返す（既定は上限付き excerpt・retrieval-m2） |
+| `search` | `--max-body-chars <N>` | 240 | excerpt の最大文字数（正の整数。非正値は error） |
 | `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy + totalHits / truncated / analyzedQuery）を JSON で出力 |
 | `source list` | `--type <type>` | （任意） | `source_type` 完全一致で絞る（例: `github_issue`） |
 | `source list` | `--since <iso>` | （任意） | `observed_at` 下限（ISO 8601、inclusive `>=`） |
@@ -180,6 +182,8 @@ suasor --version                       # バージョン出力
   - **透明性（ADR-0007「no silent wrong answer」）**: 人間向け出力は使われた strategy を併記（`3 result(s) [fts]:` / `No results [fts].`）し、`--limit` で打ち切られた場合は `3 of 12 result(s) [fts]:` と総数を示す。`--json` は `totalHits` / `truncated` / `analyzedQuery`（トークン化結果）を加えて返し、「打ち切り」と「完全」をエージェントが区別できる
   - **クエリはリテラル**: FTS5 演算子（`AND`/`OR`/`NOT`・`*`・`""`・`()`・`NEAR`）は解釈されず、各トークンをそのまま検索する（インジェクション・構文エラー防止、[retrieval](retrieval.md)）
   - **フィルタ**: `--source-type` / `--observed-after` / `--observed-before` は FTS / 短クエリ fallback の両経路に同一適用（ランキング不変、候補集合を絞るのみ・#142）
+  - **短クエリ fallback（retrieval-2）**: 複数短トークン（例: 「予算 承認」）は per-token AND の `LIKE '%token%'` に分割して検索し、body 中の出現回数合計でランクする（[retrieval](retrieval.md)）
+  - **payload（retrieval-m2 / [ADR-0018](../adr/0018-knowledge-graph-traversal.md)）**: 既定は hit ごとの上限付き excerpt（240 文字）を返し、全文は `source.get` / `source list` に委譲する。`--full-body` で全文 `body`、`--max-body-chars N` で excerpt 長を上書き
 - `brief` は `brief` MCP tool（[ADR-0017](../adr/0017-brief-period-bundle.md)）と同じ `buildBrief` バンドル（tasks/decisions/sources/demand + open inbox）を **非対話に stdout 出力**する read CLI。対話エージェント不在の **定期実行**（cron / CI、knowledge `ai/practice` の「AI エージェント定期実行」）で日次/週次ダイジェストを出す用途。要約はプロセス外（`--json` を外部 summarizer にパイプ、ML 委譲 [ADR-0006](../adr/0006-ml-delegation.md)）。`--since` は相対（`24h`/`7d`/`2w`）または ISO、Slack demand の `selfUserIds` は `[connectors.slack]` config から解決する。サービス本体は `src/cli/commands/brief.ts`（query は `src/mcp/queries.ts` の `buildBrief` を流用）
 - `digest` は **proactive push lane**（[ADR-0040](../adr/0040-proactive-push-lane.md)）の cron one-shot（no daemon）。`brief` が「尋ねられたときに stdout へ出す」pull なのに対し、`digest` は `[digest.jobs]` に事前構成した **standing consent** の job を **構成済みチャネルへ push** する。内容は priority scorer 上位 N（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md) の `buildPriorities`＝overdue / un-acked demand / due-soon commitment を 1 本に合成）+ brief warnings を bundle・render（要約なし＝ML 委譲維持）。チャネルは `file`（`[export].dir` sandbox・[ADR-0025](../adr/0025-local-draft-export.md)）/ `os-notification`（osascript / notify-send / PowerShell）/ `slack-dm`（actuator 経路の自分宛て DM・token は keychain・失敗は構造化エラー・[ADR-0036](../adr/0036-task-external-home.md)）。**job が 1 件も無ければ何も送らない**（事前同意のない通知なし）。cadence は OS scheduler へ委譲（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)・[scheduling guide](../guide/scheduling.md)）。本体は `src/cli/commands/digest.ts`（content は `src/digest/content.ts`、チャネルは `src/digest/channels.ts`、orchestration は `src/digest/run.ts`）
 - `<connector> sync` は `[embedding].backend` 有効時、新規 / 本文変更 source を埋め込んで vec0 に populate する（`SyncOutcome.embedded`、人間可読出力では `… , N embedded`）。embedding は best-effort でサイドカー失敗は warning（stderr）に留め取り込みは成功する（[embedding setup](../guide/embedding.md) / [retrieval](retrieval.md)）

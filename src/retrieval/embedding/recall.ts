@@ -15,7 +15,12 @@
  */
 import type { Database } from "bun:sqlite";
 import { DEFAULT_VEC_TABLE, VEC_META_TABLE } from "../../db/connection.ts";
-import type { SearchFilters, SearchHit } from "../search.ts";
+import {
+  buildExcerpt,
+  DEFAULT_EXCERPT_CHARS,
+  type SearchFilters,
+  type SearchHit,
+} from "../search.ts";
 import { type Embedder, EmbeddingError } from "./embedder.ts";
 
 /** Default number of nearest neighbours to retrieve. */
@@ -48,6 +53,14 @@ export interface RecallResult {
 export interface RecallOptions extends SearchFilters {
   /** Max neighbours to return (default {@link DEFAULT_RECALL_LIMIT}). */
   limit?: number;
+  /**
+   * Return each hit's full `body` instead of a bounded `excerpt` (opt-in,
+   * retrieval-m2). Default `false` — hits carry only the leading-N-chars excerpt
+   * and the full text is fetched via `source.get` (ADR-0018 payload suppression).
+   */
+  fullBody?: boolean;
+  /** Max characters per bounded excerpt (default {@link DEFAULT_EXCERPT_CHARS}). */
+  maxBodyChars?: number;
 }
 
 /** Encode an embedding vector as a little-endian float32 blob for sqlite-vec. */
@@ -154,8 +167,9 @@ interface VecRow {
  * Semantic search over ingested sources (FR-RET-2).
  *
  * Embeds `query` with the same model used at ingest, runs a vec0 KNN search, and
- * joins back to the `sources` projection for metadata/body. The `score` is the
- * vec0 L2 distance (smaller = closer; hits are returned best-first).
+ * joins back to the `sources` projection for metadata + a bounded body excerpt
+ * (pass `fullBody` for the full body; retrieval-m2 / ADR-0018). The `score` is
+ * the vec0 L2 distance (smaller = closer; hits are returned best-first).
  *
  * Graceful degradation (ADR-0005): when `embedder` is `null` (no backend, or a
  * backend not yet implemented) this returns empty hits with the
@@ -225,12 +239,21 @@ export async function recallSearch(
     )
     .all(toVectorBlob(vector), k, ...filterParams, limit);
 
-  const hits: SearchHit[] = rows.map((r) => ({
-    externalId: r.external_id,
-    sourceType: r.source_type,
-    observedAt: r.observed_at,
-    score: r.distance,
-    body: r.body,
-  }));
+  // Payload suppression (retrieval-m2 / ADR-0018): default to a bounded excerpt
+  // (leading N chars — there is no lexical token to centre on for a semantic
+  // hit) and delegate the full body to `source.get`. `fullBody` opts back in.
+  const fullBody = options.fullBody ?? false;
+  const maxChars = options.maxBodyChars ?? DEFAULT_EXCERPT_CHARS;
+  const hits: SearchHit[] = rows.map((r) => {
+    const hit: SearchHit = {
+      externalId: r.external_id,
+      sourceType: r.source_type,
+      observedAt: r.observed_at,
+      score: r.distance,
+    };
+    if (fullBody) hit.body = r.body;
+    else hit.excerpt = buildExcerpt(r.body, maxChars);
+    return hit;
+  });
   return { hits, reason: "ok" };
 }

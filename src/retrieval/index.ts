@@ -47,7 +47,9 @@ export {
   type HybridHit,
 } from "./hybrid.ts";
 export {
+  buildExcerpt,
   buildFtsMatch,
+  DEFAULT_EXCERPT_CHARS,
   DEFAULT_SEARCH_LIMIT,
   type SearchFilters,
   type SearchHit,

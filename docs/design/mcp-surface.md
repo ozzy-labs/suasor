@@ -41,6 +41,8 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 | `observedAfter` | `iso` | （任意） | `observed_at` 下限（inclusive `>=`） |
 | `observedBefore` | `iso` | （任意） | `observed_at` 上限（exclusive `<`） |
 | `limit` | `int > 0` | `20` | 返す最大 hit 数 |
+| `fullBody` | `bool` | `false` | excerpt ではなく全文 `body` を返す（既定は excerpt のみ・全文は `source.get` に委譲、[ADR-0018](0018-knowledge-graph-traversal.md) payload 抑制・retrieval-m2） |
+| `maxBodyChars` | `int > 0` | `240` | hit ごとの excerpt 最大文字数 |
 
 フィルタは FTS / 短クエリ LIKE fallback の両経路に同一適用され、未指定時は従来結果と一致する（additive、#142）。
 
@@ -53,25 +55,26 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
       "externalId": "gh:1",      // connector 付与 id（ADR-0007）
       "sourceType": "github_issue",
       "observedAt": "2026-06-14T00:00:00.000Z",
-      "score": -1.43,             // bm25（昇順=より関連）。fallback 時は sentinel 0
-      "body": "..."               // ローカル保持本文（ADR-0003）
+      "score": -1.43,             // bm25（昇順=より関連）。fallback 時は token 出現回数（多いほど関連）
+      "excerpt": "…match 周辺…"    // 既定の上限付き excerpt（[ADR-0018](0018-knowledge-graph-traversal.md) payload 抑制・retrieval-m2）。fullBody 指定時は代わりに "body"（全文・ADR-0003）
     }
   ],
   "strategy": "fts",              // "fts" | "like-fallback"（短クエリは後者）
   "totalHits": 5,                 // limit 適用前の総マッチ数（>= hits.length）
   "truncated": false,             // limit で打ち切られたか（totalHits > hits.length）
-  "analyzedQuery": ["rocket"]     // 実際に検索に使われたトークン（fallback 時は [trimmed query] 1 要素）
+  "analyzedQuery": ["rocket"]     // 実際に検索に使われたトークン（FTS / fallback とも whitespace 分割）
 }
 ```
 
 - `totalHits` / `truncated` は「20/20 打ち切り」と「5/5 完全」をエージェントが区別するための透明性フィールド（ADR-0007「no silent wrong answer」）
-- `analyzedQuery` は FTS パスでは whitespace 分割トークン、LIKE fallback では trimmed query 1 要素。痩せ/空結果の原因（何が検索されたか）を可視化する
+- `analyzedQuery` は FTS / LIKE fallback とも whitespace 分割トークン（fallback も per-token AND のため）。痩せ/空結果の原因（何が検索されたか）を可視化する
+- **payload 抑制（retrieval-m2）**: 既定は全文ではなく hit ごとの上限付き `excerpt`（既定 240 code point）。lexical hit はマッチ位置中心、recall は先頭 N chars を切り出す。全文は `source.get` に委譲し、`fullBody: true` で `body`（全文）、`maxBodyChars` で excerpt 長を上書き（[ADR-0018](0018-knowledge-graph-traversal.md) の payload 抑制原則を search に適用）
 - ランキング・短クエリ fallback・クエリエスケープの詳細は [retrieval](retrieval.md) を参照
 - 意味検索が要るケースは `recall.search`（embedding 有効時）へ
 
 ### `recall.search`（意味検索・graceful degradation・ADR-0005）
 
-引数は `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit`）。embedding backend が有効なときは query を埋め込み、`vec0` の KNN で最近傍 source を引いて `search` と同形の hits を返す（`strategy` は無く、`score` は L2 distance ＝ 小さいほど近い・best-first）。`sourceType` / `observed*` フィルタは JOIN 済み `sources` 行への post-filter で適用する（KNN は多めに引いてから絞る、#142）。詳細は [retrieval](retrieval.md)。
+引数は `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit` / `fullBody?` / `maxBodyChars?`）。embedding backend が有効なときは query を埋め込み、`vec0` の KNN で最近傍 source を引いて `search` と同形の hits を返す（`strategy` は無く、`score` は L2 distance ＝ 小さいほど近い・best-first）。hits も `search` と同様、既定は上限付き `excerpt`（recall は先頭 N chars）で `fullBody` / `maxBodyChars` に対応する（retrieval-m2）。`sourceType` / `observed*` フィルタは JOIN 済み `sources` 行への post-filter で適用する（KNN は多めに引いてから絞る、#142）。詳細は [retrieval](retrieval.md)。
 
 graceful degradation（host は常に `signal === "embedding_disabled"` だけで FTS フォールバックを判断できる）:
 
@@ -84,7 +87,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 
 `search`（FTS）と `recall.search`（vec）を**両方走らせ**、2 つのランク済みリストを Reciprocal Rank Fusion（RRF）で融合する read tool。lexical（完全一致）と semantic（言語跨ぎ・語彙ミスマッチ）の盲点を相互補完する。FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）を保ったままの additive 拡張で、新 ADR は不要（融合方式の詳細は [retrieval](retrieval.md) の Hybrid 節）。
 
-引数（Zod）: `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit`）。フィルタ・limit は両経路に適用される。
+引数（Zod）: `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit` / `fullBody?` / `maxBodyChars?`）。フィルタ・limit・body 射影は両経路に適用される。
 
 戻り値:
 
@@ -96,7 +99,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
       "sourceType": "github_issue",
       "observedAt": "2026-06-14T00:00:00.000Z",
       "score": -1.43,            // 代表 hit の元 score（FTS=bm25 / vec=L2）
-      "body": "...",
+      "excerpt": "…match 周辺…",  // 既定の上限付き excerpt（fullBody 指定時は代わりに "body" 全文・retrieval-m2）
       "rrfScore": 0.0328         // RRF 融合スコア（降順=より関連、best-first）
     }
   ],
@@ -104,7 +107,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 }
 ```
 
-- **融合**: 各リストの 0-based rank に `1 / (k + rank)`（`k` 既定 60）を寄与とし `externalId` ごとに合算。両リストにヒットした文書は両寄与を得て上位化。重複 `externalId` は dedup（両側に居れば FTS 側 hit を代表とし lexical の `body` / `score` を保持）。同点は `externalId` 昇順で決定的
+- **融合**: 各リストの 0-based rank に `1 / (k + rank)`（`k` 既定 60）を寄与とし `externalId` ごとに合算。両リストにヒットした文書は両寄与を得て上位化。重複 `externalId` は dedup（両側に居れば FTS 側 hit を代表とし lexical の `excerpt` / `body` / `score` を保持）。同点は `externalId` 昇順で決定的
 - **graceful degrade**: embedding 無効 / サイドカー到達不能のときは FTS のみで融合（実質パススルー）し、`recall.search` と同じ `embedding_disabled` シグナルを付与する（hard error にしない）
 
 ### `source.list` / `source.get`

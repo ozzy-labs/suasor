@@ -152,6 +152,31 @@ describe("suasor search", () => {
     expect(JSON.parse(out).strategy).toBe("like-fallback");
   });
 
+  test("--json returns a bounded excerpt (not the full body) by default (retrieval-m2)", async () => {
+    await seed("deploy the rocket");
+    const { code, out } = await run(["search", "--json", "rocket"]);
+    expect(code).toBe(0);
+    const hit = JSON.parse(out).hits[0];
+    expect(hit.body).toBeUndefined();
+    expect(hit.excerpt).toBeDefined();
+  });
+
+  test("--full-body includes the full body per hit (retrieval-m2)", async () => {
+    await seed("deploy the rocket");
+    const { code, out } = await run(["search", "--json", "--full-body", "rocket"]);
+    expect(code).toBe(0);
+    const hit = JSON.parse(out).hits[0];
+    expect(hit.excerpt).toBeUndefined();
+    expect(hit.body).toBe("deploy the rocket");
+  });
+
+  test("rejects a non-positive --max-body-chars", async () => {
+    await seed("deploy the rocket");
+    const { code, err } = await run(["search", "--max-body-chars", "0", "rocket"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--max-body-chars must be a positive integer");
+  });
+
   test("hints on stderr when the embedding backend is disabled (Issue #159)", async () => {
     await seed("deploy the rocket");
     const { code, out, err } = await run(["search", "rocket"]);

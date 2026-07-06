@@ -33,12 +33,18 @@ export class SearchCommand extends Command {
       The human output annotates the strategy used ([fts] or [like-fallback]);
       --json additionally reports totalHits / truncated / analyzedQuery so a
       caller can tell a complete result set from a limit-truncated one.
+
+      Each hit carries a bounded excerpt (not the full body) by default so a
+      multi-hit result stays small; fetch full text via source.get / source list.
+      Use --full-body to include the full body per hit, or --max-body-chars N to
+      size the excerpt.
     `,
     examples: [
       ["Search for a keyword", "suasor search rocket"],
       ["Search a Japanese phrase", "suasor search ロケット"],
       ["Limit and emit JSON", "suasor search --limit 5 --json deploy"],
       ["Restrict to one source type", "suasor search --source-type github_issue rocket"],
+      ["Include the full body per hit", "suasor search --full-body rocket"],
       [
         "Restrict to an observed window",
         "suasor search --observed-after 2026-06-01T00:00:00Z --observed-before 2026-07-01T00:00:00Z rocket",
@@ -60,6 +66,14 @@ export class SearchCommand extends Command {
 
   observedBefore = Option.String("--observed-before", {
     description: "Exclusive upper bound on observed_at (ISO 8601, <).",
+  });
+
+  fullBody = Option.Boolean("--full-body", false, {
+    description: "Return each hit's full body instead of a bounded excerpt (default: excerpt).",
+  });
+
+  maxBodyChars = Option.String("--max-body-chars", {
+    description: "Max characters per excerpt (default 240).",
   });
 
   json = Option.Boolean("--json", false, {
@@ -89,6 +103,16 @@ export class SearchCommand extends Command {
       limit = parsed;
     }
 
+    let maxBodyChars: number | undefined;
+    if (this.maxBodyChars !== undefined) {
+      const parsed = Number(this.maxBodyChars);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        this.context.stderr.write("error: --max-body-chars must be a positive integer\n");
+        return 1;
+      }
+      maxBodyChars = parsed;
+    }
+
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
@@ -108,6 +132,8 @@ export class SearchCommand extends Command {
         ...(this.sourceType !== undefined ? { sourceType: this.sourceType } : {}),
         ...(this.observedAfter !== undefined ? { observedAfter: this.observedAfter } : {}),
         ...(this.observedBefore !== undefined ? { observedBefore: this.observedBefore } : {}),
+        ...(this.fullBody ? { fullBody: true } : {}),
+        ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
       });
 
       if (this.json) {
@@ -130,8 +156,9 @@ export class SearchCommand extends Command {
         : `${result.hits.length} result(s) [${result.strategy}]:`;
       this.context.stdout.write(`${header}\n`);
       for (const hit of result.hits) {
-        const snippet = hit.body.replaceAll(/\s+/g, " ").slice(0, 120);
-        this.context.stdout.write(`  ${hit.externalId} (${hit.sourceType})\n    ${snippet}\n`);
+        // Default hits carry `excerpt`; `--full-body` swaps in the full `body`.
+        const text = (hit.body ?? hit.excerpt ?? "").replaceAll(/\s+/g, " ").slice(0, 120);
+        this.context.stdout.write(`  ${hit.externalId} (${hit.sourceType})\n    ${text}\n`);
       }
       return 0;
     } finally {

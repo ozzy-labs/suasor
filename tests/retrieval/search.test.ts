@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
-import { buildFtsMatch, searchSources, TRIGRAM_LENGTH } from "../../src/retrieval/index.ts";
+import {
+  buildExcerpt,
+  buildFtsMatch,
+  DEFAULT_EXCERPT_CHARS,
+  searchSources,
+  TRIGRAM_LENGTH,
+} from "../../src/retrieval/index.ts";
+
+/** Code-point length (CJK counts as 1), matching the excerpt's own accounting. */
+function cpLen(s: string): number {
+  return [...s].length;
+}
 
 let store: Store;
 
@@ -378,6 +389,143 @@ describe("searchSources — ranking determinism & limit boundaries", () => {
     const second = ids(searchSources(store.connection.sqlite, "go"));
     expect(first).toHaveLength(2);
     expect(second).toEqual(first);
+  });
+});
+
+describe("searchSources — short-query fallback: per-token AND (retrieval-2)", () => {
+  test("a multi-token short JA query matches docs containing BOTH tokens (not the contiguous substring)", () => {
+    // "予算 承認" — both tokens are 2 chars, so this takes the LIKE fallback.
+    // Old behavior searched "%予算 承認%" (contiguous, incl. the space) → 0 hits
+    // in spaceless Japanese. Per-token AND matches a doc with both tokens.
+    seed("both", "来月の予算を承認する会議", "2026-06-14T00:00:00.000Z");
+    seed("budget", "予算だけの資料", "2026-06-14T00:01:00.000Z");
+    seed("approve", "承認フローの説明", "2026-06-14T00:02:00.000Z");
+
+    const result = searchSources(store.connection.sqlite, "予算 承認");
+    expect(result.strategy).toBe("like-fallback");
+    expect(ids(result)).toEqual(["both"]); // only the doc with BOTH tokens
+  });
+
+  test("analyzedQuery is the per-token split on the fallback path", () => {
+    seed("both", "予算と承認", "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "予算 承認");
+    expect(result.strategy).toBe("like-fallback");
+    expect(result.analyzedQuery).toEqual(["予算", "承認"]);
+  });
+
+  test("a token order swap yields the same AND result set", () => {
+    seed("both", "承認済みの予算", "2026-06-14T00:00:00.000Z");
+    seed("one", "承認のみ", "2026-06-14T00:01:00.000Z");
+    expect(ids(searchSources(store.connection.sqlite, "予算 承認"))).toEqual(["both"]);
+    expect(ids(searchSources(store.connection.sqlite, "承認 予算"))).toEqual(["both"]);
+  });
+});
+
+describe("searchSources — short-query fallback: occurrence ranking (retrieval-2)", () => {
+  test("a doc with more token occurrences ranks first (crude occurrence count)", () => {
+    seed("few", "予算の話", "2026-06-14T00:00:00.000Z"); // 予算 ×1
+    seed("many", "予算予算予算の予算会議", "2026-06-14T00:01:00.000Z"); // 予算 ×4
+
+    const result = searchSources(store.connection.sqlite, "予算");
+    expect(result.strategy).toBe("like-fallback");
+    expect(ids(result)).toEqual(["many", "few"]);
+    // score is the occurrence count (higher = more relevant on this path).
+    expect(result.hits[0]?.score).toBe(4);
+    expect(result.hits[1]?.score).toBe(1);
+  });
+
+  test("occurrence count sums across multiple tokens", () => {
+    seed("a", "予算 予算 承認", "2026-06-14T00:00:00.000Z"); // 予算×2 + 承認×1 = 3
+    const result = searchSources(store.connection.sqlite, "予算 承認");
+    expect(result.hits[0]?.score).toBe(3);
+  });
+
+  test("ties on occurrence count fall back to recency (most recent first)", () => {
+    seed("old", "予算メモ", "2026-06-14T00:00:00.000Z"); // 予算 ×1
+    seed("new", "予算資料", "2026-06-15T00:00:00.000Z"); // 予算 ×1
+    expect(ids(searchSources(store.connection.sqlite, "予算"))).toEqual(["new", "old"]);
+  });
+
+  test("ASCII occurrence counting is case-insensitive (consistent with LIKE)", () => {
+    seed("mix", "Go go GO", "2026-06-14T00:00:00.000Z"); // 3 occurrences ignoring case
+    const result = searchSources(store.connection.sqlite, "go");
+    expect(result.strategy).toBe("like-fallback");
+    expect(result.hits[0]?.score).toBe(3);
+  });
+});
+
+describe("searchSources — bounded excerpt payload (retrieval-m2 / ADR-0018)", () => {
+  const longBody = `${"あ".repeat(200)}ロケット${"い".repeat(200)}`;
+
+  test("FTS hits carry a bounded excerpt (not the full body) by default", () => {
+    seed("a", longBody, "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "ロケット");
+    expect(result.strategy).toBe("fts");
+    const hit = result.hits[0];
+    expect(hit?.body).toBeUndefined();
+    expect(hit?.excerpt).toBeDefined();
+    // Bounded to ~DEFAULT_EXCERPT_CHARS (+ up to 2 ellipsis chars).
+    expect(cpLen(hit?.excerpt ?? "")).toBeLessThanOrEqual(DEFAULT_EXCERPT_CHARS + 2);
+    // Lexical excerpt is centred on the match, so the token is visible.
+    expect(hit?.excerpt).toContain("ロケット");
+  });
+
+  test("the LIKE fallback carries a bounded excerpt too", () => {
+    seed("a", `${"x".repeat(500)}go${"y".repeat(500)}`, "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "go");
+    expect(result.strategy).toBe("like-fallback");
+    const hit = result.hits[0];
+    expect(hit?.body).toBeUndefined();
+    expect(cpLen(hit?.excerpt ?? "")).toBeLessThanOrEqual(DEFAULT_EXCERPT_CHARS + 2);
+    expect(hit?.excerpt).toContain("go");
+  });
+
+  test("fullBody: true returns the full body and omits the excerpt", () => {
+    seed("a", longBody, "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "ロケット", { fullBody: true });
+    const hit = result.hits[0];
+    expect(hit?.excerpt).toBeUndefined();
+    expect(hit?.body).toBe(longBody);
+  });
+
+  test("maxBodyChars sizes the excerpt", () => {
+    seed("a", longBody, "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "ロケット", { maxBodyChars: 20 });
+    expect(cpLen(result.hits[0]?.excerpt ?? "")).toBeLessThanOrEqual(20 + 2);
+  });
+
+  test("a short body is returned verbatim as the excerpt (no ellipsis)", () => {
+    seed("a", "deploy the rocket", "2026-06-14T00:00:00.000Z");
+    const result = searchSources(store.connection.sqlite, "rocket");
+    expect(result.hits[0]?.excerpt).toBe("deploy the rocket");
+  });
+});
+
+describe("buildExcerpt", () => {
+  test("returns a body already within the budget unchanged", () => {
+    expect(buildExcerpt("short body", 240)).toBe("short body");
+  });
+
+  test("leading window (no tokens) marks the trailing cut with an ellipsis", () => {
+    const body = "0123456789abcdef";
+    const ex = buildExcerpt(body, 10);
+    expect(ex).toBe("0123456789…");
+  });
+
+  test("centres the window on the first matching token", () => {
+    const body = `${"a".repeat(100)}TARGET${"b".repeat(100)}`;
+    const ex = buildExcerpt(body, 20, ["target"]);
+    expect(ex).toContain("TARGET");
+    expect(ex.startsWith("…")).toBe(true);
+    expect(ex.endsWith("…")).toBe(true);
+    expect(cpLen(ex)).toBeLessThanOrEqual(20 + 2);
+  });
+
+  test("counts length in code points so CJK counts as one", () => {
+    const body = "あ".repeat(300);
+    const ex = buildExcerpt(body, 50);
+    // 50 kept chars + one trailing ellipsis.
+    expect(cpLen(ex)).toBe(51);
   });
 });
 
