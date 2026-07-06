@@ -44,5 +44,5 @@
 
 - **skill prose の精緻化のみ（現状維持）** — 却下。非再現・host 依存・テスト不能のまま。宣言した差別化が「32 本の markdown と host の即興」で終わる
 - **ML / embedding による ranking** — 却下。[ADR-0006](0006-ml-delegation.md) に抵触する上、必要ですらない（規則ベースで十分に説明可能・予測可能。説明可能性は secretary の信頼に直結）
-- **demand を inbox lifecycle に fold（mention を自動で inbox item 化）** — 却下。inbox は人が curate する triage 面（[ADR-0016 系の HITL 捕捉]）であり、自動由来で大量に湧く demand と意味論が異なる。demand は導出 + seen-state の軽量モデルが適する
+- **demand を inbox lifecycle に fold（mention を自動で inbox item 化）** — 却下。inbox は人が curate する triage 面であり、自動由来で大量に湧く demand と意味論が異なる。demand は導出 + seen-state の軽量モデルが適する
 - **seen-marker を引き続き host 委譲（ADR-0012 決定 4 維持）** — 却下。2 週間の実運用で どの host にも実装されず、実装されない構造（host ごとに N 回作る・永続場所がない）自体が原因。store 側 1 箇所が正しい置き場

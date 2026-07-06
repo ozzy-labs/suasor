@@ -1,11 +1,13 @@
 # 0012. Slack demand digest（mention/DM signal）+ `slack.demand.list`
 
-- Status: Accepted（決定 3 / 4 は [ADR-0041](0041-neutral-demand-priority-substrate.md) が supersede — `slack.demand.list` は中立 `demand.list` へ fold、seen-marker は store 側 seen-state へ移行。2026-07-06・#412）
+- Status: Accepted
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#48](https://github.com/ozzy-labs/suasor/issues/48) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)
 - Related: [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP read 境界 / HITL）, [ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md)（FTS-first）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（Slack 運用 verb・本 ADR の前段）
 - Prior art: opshub ADR-0033（slack-mention-demand-digest）
+
+> **改訂注記（2026-07-06・#412）**: 決定 3 / 4 は [ADR-0041](0041-neutral-demand-priority-substrate.md) が supersede — `slack.demand.list` は connector 中立の `demand.list` へ fold し、「未処理」判定の seen-marker は host 委譲から store 側 seen-state（`demand.ack` / `demand.dismiss` event）へ移行する。
 
 ## Context
 
