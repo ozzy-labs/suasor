@@ -12,7 +12,7 @@
 ## Out of scope（現時点で非目標）
 
 - **外部 SaaS への自動書き戻し / 自動送信**（HITL で人が行う。auto-apply/auto-send なし）（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）
-- **常時稼働の能動エージェント / プロアクティブ通知**（初期は人/エージェント起点）
+- **常時稼働の能動エージェント（daemon）** — 常駐プロセス・watcher は持たない（[ADR-0040](../adr/0040-proactive-push-lane.md)）。proactive な digest push は導入したが、それも **daemon ではなく cron one-shot**（`suasor digest`・OS scheduler 起動）で、**事前構成した名前付き job（standing consent）が無ければ一切送らない**（[ADR-0027](../adr/0027-bulk-sync-orchestration.md) と同型・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の per-event HITL は write tool に対して不変）。**同意なしの通知（unsolicited notification）**は引き続き非目標
 - **重い in-process ML**（学習・自前モデル実行。委譲する）（[ADR-0006](../adr/0006-ml-delegation.md)）
 - **マルチユーザー / チーム共有 / サーバ集約**（単一ユーザー・ローカル前提）
 - Web / モバイル UI（境界は CLI / MCP）

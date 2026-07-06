@@ -162,6 +162,36 @@ suasor sync status --json | jq -e --argjson maxAgeSec 5400 '
 - `status == "error"`（直近 run が失敗）と `never_synced`（一度も sync していない）も stale 同様に拾う。
 - `jq -e` は最後の出力が `false` / `null` なら exit 1 になるため、上例は **stale が 1 件でもあれば非ゼロ終了**して監視に乗せられる。`suasor sync` の exit code（前節・実行時の失敗検知）と、この `sync status --json` の鮮度判定（「そもそも最近走ったか」）は補完関係にある。
 
+## プロアクティブな digest の push `suasor digest`
+
+`sync` が「情報を手元に集める」入り口なら、`suasor digest` は集めた結果を**行動するタイミングで目に入るよう能動的に push する**出口（[ADR-0040](../adr/0040-proactive-push-lane.md) proactive push lane）。`brief` が「尋ねられたときに stdout へ出す」pull なのに対し、`digest` は `config.toml` に事前構成した **standing consent（定常同意）** の job を、構成済みチャネル（OS 通知 / ファイル / 自分宛て Slack DM）へ届ける。これも**常駐しない**: `sync` と同じく OS スケジューラが `suasor digest` を 1 回起動して終わる cron one-shot（[ADR-0027](../adr/0027-bulk-sync-orchestration.md) と同型）。
+
+内容は priority scorer 上位 N（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)＝overdue / un-acked demand / 期限接近 commitment を 1 本に合成）+ brief warnings を bundle・render する（要約生成はしない＝ML 委譲 [ADR-0006](../adr/0006-ml-delegation.md)）。**`[digest.jobs]` に job を 1 件も構成していなければ何も送らない**（事前同意のない通知は出さない）。
+
+```toml
+# config.toml — 毎朝の digest をローカルファイルへ、@mention/DM の緊急分を Slack DM へ
+[[digest.jobs]]
+name = "morning"
+channel = "file"          # <export.dir>/morning.md に書く（ADR-0025 sandbox）
+limit = 10
+schedule = "0 8 * * *"    # 案内用の cron 式（起動は下の crontab が担う）
+
+[[digest.jobs]]
+name = "slack-urgent"
+channel = "slack-dm"      # actuator 経路で自分宛て DM（token は keychain）
+limit = 5
+```
+
+job ごとに 1 本ずつ crontab 行を置く（frequency は cron 側が正本・job の `schedule` は案内用）。`suasor digest --job <name>` はその 1 job だけを 1 回実行する:
+
+```cron
+# 毎朝 8 時にファイル digest、平日 1 時間ごとに Slack へ緊急 digest。
+0 8 * * *   suasor digest --job morning       >> "$HOME/.local/state/suasor/digest.log" 2>&1
+0 9-18 * * 1-5  suasor digest --job slack-urgent  >> "$HOME/.local/state/suasor/digest.log" 2>&1
+```
+
+launchd / systemd timer でも同様に `ExecStart=/usr/local/bin/suasor digest --job morning` を割り当てる（前掲の sync 例の `sync` を `digest --job <name>` に置き換えるだけ）。`suasor digest`（`--job` 無し）は構成済み全 job を 1 回ずつ実行するので、手元での動作確認に使える。事前確認は `suasor digest --dry-run`（配信せず render 内容を stdout に出す）。1 つのチャネルが失敗しても他 job の配信は止まらず、失敗は構造化エラーコード付きで報告される（`--json` で機械可読）。
+
 ## なぜ常駐デーモンにしないのか
 
-常駐 `--watch` は多重起動ロック・クラッシュ復旧・再起動管理という複雑性を持ち込む。Suasor は single-user / local-first 前提でこの種の調整機構を意図的に持たない（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）。OS スケジューラは既にこれらを解決しているので、定期実行はそちらに委譲する（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）。`brief`（期間ダイジェスト）も同じく cron / CI 前提で設計されており、運用モデルは一貫している（[ADR-0017](../adr/0017-brief-period-bundle.md)）。
+常駐 `--watch` は多重起動ロック・クラッシュ復旧・再起動管理という複雑性を持ち込む。Suasor は single-user / local-first 前提でこの種の調整機構を意図的に持たない（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）。OS スケジューラは既にこれらを解決しているので、定期実行はそちらに委譲する（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）。`brief`（期間ダイジェスト）・`digest`（proactive push lane・[ADR-0040](../adr/0040-proactive-push-lane.md)）も同じく cron 前提で設計されており、運用モデルは一貫している（[ADR-0017](../adr/0017-brief-period-bundle.md)）。push を導入しても daemon は増やさない: 変わるのは「同意の粒度」（per-event HITL に加えて standing consent）であり、「同意なしに送らない・常駐しない」原則は不変。

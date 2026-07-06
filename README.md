@@ -22,7 +22,7 @@ Suasor is a local-first AI secretary. It gathers your scattered work context - c
 These boundaries keep Suasor a local-first, human-in-the-loop advisor (see [docs/requirements/scope.md](docs/requirements/scope.md)):
 
 - **No auto write-back / auto-send** — it never writes to your sources or sends on your behalf; you apply proposals yourself ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)).
-- **No always-on proactive agent** — no daemon and no unsolicited notifications; everything is human/agent-initiated.
+- **No daemon, no unsolicited notifications** — nothing runs always-on. Proactive digests exist (`suasor digest`), but only as an OS-scheduled cron one-shot that sends a preconfigured, named job (standing consent) — with no configured job it sends nothing, and per-event write approval is unchanged ([ADR-0040](docs/adr/0040-proactive-push-lane.md) / [ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)).
 - **No heavy in-process ML** — model training/inference is delegated, not run in-process ([ADR-0006](docs/adr/0006-ml-delegation.md)).
 - **Single-user, local-only** — no multi-user, team sharing, or server-side aggregation.
 - **No web / mobile UI** — the boundary is the CLI and MCP.
@@ -123,6 +123,13 @@ bun run src/index.ts sync            # same bulk ingest as `suasor sync`
 ```
 
 See [docs/guide/scheduling.md](docs/guide/scheduling.md) for launchd / systemd timer examples and failure monitoring ([ADR-0027](docs/adr/0027-bulk-sync-orchestration.md)).
+
+The same cron model drives the **proactive push lane** ([ADR-0040](docs/adr/0040-proactive-push-lane.md)): once you configure a named `[digest.jobs]` entry (standing consent), `suasor digest` bundles your top priorities (overdue / demand / due-soon, [ADR-0041](docs/adr/0041-neutral-demand-priority-substrate.md)) and pushes them to a channel — OS notification, a file in the export sandbox, or a Slack DM-to-self. No job configured means nothing is sent.
+
+```cron
+# Every morning, write a file digest; hourly on weekdays, DM the urgent items.
+0 8 * * *  suasor digest --job morning >> "$HOME/.local/state/suasor/digest.log" 2>&1
+```
 
 ## Connect an agent host (MCP)
 

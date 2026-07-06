@@ -32,6 +32,7 @@ import { connectorDiscoveryCommands } from "./commands/connector-discovery.ts";
 import { connectorSyncCommands } from "./commands/connector-sync.ts";
 import { ConnectorsListCommand } from "./commands/connectors-list.ts";
 import { DbMigrateCommand } from "./commands/db-migrate.ts";
+import { DigestCommand } from "./commands/digest.ts";
 import { DoctorCommand } from "./commands/doctor.ts";
 import { embeddingsCommands } from "./commands/embeddings.ts";
 import { ExportBackupCommand } from "./commands/export-backup.ts";
@@ -85,6 +86,7 @@ export function registeredCommandClasses(): CommandClass[] {
     SourceForgetCommand,
     SourceUnforgetCommand,
     BriefCommand,
+    DigestCommand,
     ...(connectorSyncCommands() as CommandClass[]),
     SyncAllCommand,
     SyncStatusCommand,
