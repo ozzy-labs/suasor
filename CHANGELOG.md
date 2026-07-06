@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.22](https://github.com/ozzy-labs/suasor/compare/v0.1.21...v0.1.22) (2026-07-06)
+
+
+### Features
+
+* **demand:** connector-neutral demand.list + seen-state + deterministic priority scorer (ADR-0041) ([#431](https://github.com/ozzy-labs/suasor/issues/431)) ([95e6ffe](https://github.com/ozzy-labs/suasor/commit/95e6ffee93d80fab16a0d444fe9787ddfe69f40a))
+* **digest:** proactive push lane — cron one-shot digest + standing consent (ADR-0040) ([#432](https://github.com/ozzy-labs/suasor/issues/432)) ([700dd11](https://github.com/ozzy-labs/suasor/commit/700dd112deefd133bcefbece6e7fd843fb30660b))
+* **forget:** derived-content cascade redaction + reject-time summary redaction (ADR-0026 R1-2/3) ([#430](https://github.com/ozzy-labs/suasor/issues/430)) ([9fa8929](https://github.com/ozzy-labs/suasor/commit/9fa8929bbd9b8ecdb10d8ebcdf2bf7ffe2165840))
+* **onboard:** surface digest standing-consent jobs in the scheduler step ([#433](https://github.com/ozzy-labs/suasor/issues/433)) ([9876fdc](https://github.com/ozzy-labs/suasor/commit/9876fdc53d00e92a3cdc97c58ef90131e06e30b1))
+* **tasks:** per-destination homes + published_destination-keyed resolution + local tier (ADR-0036 R1) ([#423](https://github.com/ozzy-labs/suasor/issues/423)) ([816665a](https://github.com/ozzy-labs/suasor/commit/816665af70578f38a8aa38123c62360a36c68e56))
+
+
+### Bug Fixes
+
+* **forget:** tombstone + single transaction + physical erasure (ADR-0026 R1-1/4/5) ([#424](https://github.com/ozzy-labs/suasor/issues/424)) ([fc50c47](https://github.com/ozzy-labs/suasor/commit/fc50c474210a4cbd468fa8aa24a11c18c71e7282))
+* gate pre-commit trivy on HIGH/CRITICAL severity ([#410](https://github.com/ozzy-labs/suasor/issues/410)) ([e59374e](https://github.com/ozzy-labs/suasor/commit/e59374e71f41d92609946333161ef774f0726715))
+* **retrieval:** projections rebuild clears embeddings_meta alongside vec0 (ADR-0005 §5) ([#422](https://github.com/ozzy-labs/suasor/issues/422)) ([5b3e44b](https://github.com/ozzy-labs/suasor/commit/5b3e44b2f342c5d42b58bd9d4f7bcf85d6ae033c))
+* **slack:** per-thread cursor for steady-state thread reply capture (ADR-0015 R1) ([#426](https://github.com/ozzy-labs/suasor/issues/426)) ([2498bca](https://github.com/ozzy-labs/suasor/commit/2498bca9a619bc9e971b38f3da984e2c1e285e3c))
+
 ## [0.1.21](https://github.com/ozzy-labs/suasor/compare/v0.1.20...v0.1.21) (2026-07-03)
 
 
