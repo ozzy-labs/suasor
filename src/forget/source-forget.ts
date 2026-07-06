@@ -131,6 +131,12 @@ function secureDeleteOn(store: Store): boolean {
  * The redaction + sidecar purge + audit append run in one transaction (ADR-0026
  * R1-4) so a mid-forget failure rolls back cleanly; physical erasure is applied
  * around it (ADR-0026 R1-5).
+ *
+ * Always returns the `derived` entities that quote / reference the source
+ * (disclosure is mandatory, ADR-0026 R1-2). When `input.cascade` is set, their
+ * free-text is redacted on this same transaction / secure_delete path — a
+ * cascade-only re-forget of an already-purged source still redacts (the derived
+ * content may have survived a prior plain forget).
  */
 export function sourceForget(
   store: Store,
