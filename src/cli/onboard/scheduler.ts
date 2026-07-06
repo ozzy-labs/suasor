@@ -114,3 +114,68 @@ export function renderSchedulerSnippet(
         : renderCron(command);
   return { kind, label: LABELS[kind], snippet };
 }
+
+/**
+ * The slice of a `[digest.jobs]` entry the scheduler step needs (ADR-0040).
+ * `schedule` is the job's informational cron expression — the OS scheduler owns
+ * the actual cadence (ADR-0027); config's `DigestJob.schedule` doc marks it as
+ * consumed here to emit a crontab line.
+ */
+export interface DigestJobRef {
+  readonly name: string;
+  readonly schedule?: string | undefined;
+}
+
+/**
+ * Fallback cadence when a job omits its informational `schedule` (mirrors the
+ * scheduling guide's morning-digest example).
+ */
+const DEFAULT_DIGEST_SCHEDULE = "0 8 * * *";
+
+/**
+ * Quote a job name for the rendered cron line when it is not shell-safe.
+ * `DigestJob.name` is any non-empty string, so a name with whitespace or shell
+ * metacharacters would otherwise split into extra argv words in crontab.
+ */
+function shellSafeJobName(name: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(name)) return name;
+  return `'${name.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Render ready-to-paste scheduler lines for configured digest jobs (ADR-0040
+ * standing consent). cron gets one paste-ready crontab line per job; launchd /
+ * systemd get the guide's substitution guidance (duplicate the sync unit with
+ * `digest --job <name>` — rendering a full plist/unit per job would drown the
+ * onboarding output). Returns `null` when no job is configured: the digest
+ * lane stays silent without standing consent, so there is nothing to schedule.
+ */
+export function renderDigestSchedulerLines(
+  kind: SchedulerKind,
+  command: string,
+  jobs: readonly DigestJobRef[],
+): string | null {
+  if (jobs.length === 0) return null;
+  if (kind === "cron") {
+    const lines = jobs.map(
+      (j) =>
+        `${j.schedule ?? DEFAULT_DIGEST_SCHEDULE} ${command} digest --job ${shellSafeJobName(j.name)} ` +
+        `>> "$HOME/.local/state/suasor/digest.log" 2>&1`,
+    );
+    return ["# Digest push — one crontab line per standing-consent job (ADR-0040).", ...lines].join(
+      "\n",
+    );
+  }
+  if (kind === "launchd") {
+    return [
+      "# Digest push (ADR-0040): duplicate the sync plist once per job —",
+      "# Label com.suasor.digest-<name>, ProgramArguments ending in `digest --job <name>`:",
+      ...jobs.map((j) => `#   com.suasor.digest-${j.name}: ${command} digest --job ${j.name}`),
+    ].join("\n");
+  }
+  return [
+    "# Digest push (ADR-0040): copy the sync service+timer once per job with",
+    "# ExecStart ending in `digest --job <name>` (pick each timer's OnCalendar):",
+    ...jobs.map((j) => `#   suasor-digest-${j.name}: ExecStart=${command} digest --job ${j.name}`),
+  ].join("\n");
+}

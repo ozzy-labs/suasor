@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderMcpSnippet } from "../../src/cli/onboard/mcp-snippet.ts";
 import {
+  renderDigestSchedulerLines,
   renderSchedulerSnippet,
   schedulerKindForPlatform,
 } from "../../src/cli/onboard/scheduler.ts";
@@ -82,5 +83,48 @@ describe("renderMcpSnippet", () => {
     });
     // The rendered block must parse as JSON (backslashes escaped).
     expect(() => JSON.parse(snippet)).not.toThrow();
+  });
+});
+
+describe("renderDigestSchedulerLines — digest push jobs (ADR-0040)", () => {
+  const jobs = [
+    { name: "morning", schedule: "0 8 * * *" },
+    { name: "slack-urgent" }, // no schedule → default cadence
+  ];
+
+  test("no configured job → null (standing consent: nothing to schedule)", () => {
+    expect(renderDigestSchedulerLines("cron", "suasor", [])).toBeNull();
+  });
+
+  test("cron renders one paste-ready line per job, honouring job.schedule", () => {
+    const out = renderDigestSchedulerLines("cron", "suasor", jobs);
+    expect(out).toContain(
+      '0 8 * * * suasor digest --job morning >> "$HOME/.local/state/suasor/digest.log" 2>&1',
+    );
+    expect(out).toContain("ADR-0040");
+  });
+
+  test("cron falls back to the default cadence when schedule is omitted", () => {
+    const out = renderDigestSchedulerLines("cron", "suasor", [{ name: "slack-urgent" }]);
+    expect(out).toContain("0 8 * * * suasor digest --job slack-urgent");
+  });
+
+  test("launchd renders per-job substitution guidance (no full plist)", () => {
+    const out = renderDigestSchedulerLines("launchd", "/usr/local/bin/suasor", jobs);
+    expect(out).toContain("com.suasor.digest-morning: /usr/local/bin/suasor digest --job morning");
+    expect(out).toContain("com.suasor.digest-slack-urgent");
+    expect(out).not.toContain("<plist");
+  });
+
+  test("systemd renders per-job ExecStart guidance", () => {
+    const out = renderDigestSchedulerLines("systemd", "suasor", jobs);
+    expect(out).toContain("suasor-digest-morning: ExecStart=suasor digest --job morning");
+    expect(out).toContain("OnCalendar");
+  });
+  test("cron single-quotes a job name that is not shell-safe", () => {
+    const out = renderDigestSchedulerLines("cron", "suasor", [{ name: "my job" }]);
+    expect(out).toContain("digest --job 'my job' ");
+    const quoted = renderDigestSchedulerLines("cron", "suasor", [{ name: "it's" }]);
+    expect(quoted).toContain("digest --job 'it'\\''s' ");
   });
 });

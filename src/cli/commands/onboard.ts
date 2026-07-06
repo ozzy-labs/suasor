@@ -33,7 +33,11 @@ import {
   resolveMcpInvocation,
 } from "../onboard/mcp-snippet.ts";
 import { type RecapConnector, recapHasFailure, renderRecap } from "../onboard/recap.ts";
-import { renderSchedulerSnippet } from "../onboard/scheduler.ts";
+import {
+  type DigestJobRef,
+  renderDigestSchedulerLines,
+  renderSchedulerSnippet,
+} from "../onboard/scheduler.ts";
 import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
 import { readSecretLine } from "../read-secret.ts";
 
@@ -88,6 +92,8 @@ interface OnboardReport {
   synced: boolean;
   syncExitCode: number | null;
   scheduler: string;
+  /** Names of configured [digest.jobs] surfaced in the scheduler step (ADR-0040). */
+  digestJobs: string[];
 }
 
 /**
@@ -112,7 +118,9 @@ export class OnboardCommand extends Command {
       [connectors.X] slice to config.toml** (enabled = true — the step people
       forget, which leaves 'suasor sync' silently doing nothing), run the first
       'suasor sync', then print an OS scheduler template (cron / launchd /
-      systemd) and the MCP registration block.
+      systemd) — including ready-to-paste digest lines for any configured
+      [digest.jobs] (standing consent, ADR-0040) — and the MCP registration
+      block.
 
       The config append is non-destructive: an existing [connectors.X] section
       (including one you set enabled = false) is never rewritten.
@@ -326,6 +334,27 @@ export class OnboardCommand extends Command {
       stdout.write(`${invocationNote(channel)}\n`);
     }
 
+    // 6b. Digest push lane (ADR-0040). If the operator already configured
+    // [digest.jobs] (standing consent), surface ready-to-paste scheduler lines
+    // right next to the sync template; otherwise a one-line pointer to the
+    // scheduling guide. Config-load failures degrade to the pointer — the
+    // wizard must never fail on a half-written config (#403 precedent).
+    const digestJobs = await this.digestJobRefs();
+    if (!this.json) {
+      const digestLines = renderDigestSchedulerLines(scheduler.kind, command, digestJobs);
+      if (digestLines !== null) {
+        stdout.write(
+          `\nDigest push — ${digestJobs.length} standing-consent job(s) in [digest.jobs] (ADR-0040):\n`,
+        );
+        stdout.write(`${digestLines}\n`);
+      } else {
+        stdout.write(
+          "\nDigest push: no [digest.jobs] configured — proactive digests stay off " +
+            `(standing consent, ADR-0040). Enable via ${docsUrl("guide/scheduling.md")}.\n`,
+        );
+      }
+    }
+
     // 7. MCP registration snippet. Unlike the scheduler block (which ships a
     // literal `suasor` + a substitution note), a global `suasor` is not on PATH
     // from source / bunx, so we substitute the detected channel's real invocation
@@ -390,6 +419,7 @@ export class OnboardCommand extends Command {
         synced,
         syncExitCode,
         scheduler: scheduler.kind,
+        digestJobs: digestJobs.map((j) => j.name),
       };
       stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     }
@@ -397,6 +427,21 @@ export class OnboardCommand extends Command {
     // Surface an auth-test failure or a sync failure via exit code (cron/CI
     // parity) without aborting the wizard's printed guidance (Issue #388 item 1).
     return recapHasFailure(recapInput) ? 1 : 0;
+  }
+
+  /**
+   * Read the configured `[digest.jobs]` for the scheduler step (ADR-0040).
+   * Best-effort: any config-load failure degrades to "none configured" — the
+   * wizard's guidance must never fail on a half-written config (#403).
+   */
+  private async digestJobRefs(): Promise<DigestJobRef[]> {
+    try {
+      const { loadConfig } = await import("../../config/index.ts");
+      const config = await loadConfig();
+      return config.digest.jobs.map((j) => ({ name: j.name, schedule: j.schedule }));
+    } catch {
+      return [];
+    }
   }
 
   /** Resolve and validate an explicit `--connector` list. */
