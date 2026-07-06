@@ -122,7 +122,10 @@ export function upsertSourceVector(
  * space (mixing models silently degrades recall). Embedding is best-effort over
  * the optional sidecar: on an {@link EmbeddingError} the vectors are simply not
  * written (FTS still works), and the error is returned so the caller can log it
- * without failing the ingest. Returns the count actually embedded.
+ * without failing the ingest. Per-text failure isolation (retrieval-m1) means a
+ * single oversized/poison body yields a hole rather than throwing, so its
+ * siblings are still embedded (one long document no longer zeroes the whole
+ * sync). Returns the count actually embedded (holes are skipped).
  */
 export async function embedSources(
   sqlite: Database,
@@ -130,7 +133,7 @@ export async function embedSources(
   sources: { externalId: string; body: string }[],
 ): Promise<{ embedded: number; error?: EmbeddingError }> {
   if (sources.length === 0) return { embedded: 0 };
-  let vectors: number[][];
+  let vectors: (number[] | undefined)[];
   try {
     vectors = await embedder.embed(sources.map((s) => s.body));
   } catch (cause) {

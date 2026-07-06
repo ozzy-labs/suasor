@@ -179,7 +179,14 @@ export class SyncAllCommand extends Command {
 
     // Embedder/extractor from config (null when disabled), shared across the run
     // — same best-effort degrade as single-connector sync (ADR-0005/0006/0024).
-    const embedder = await createEmbedderResolved(config.embedding);
+    // `onTruncate` counts long bodies capped to `[embedding].maxInputChars`
+    // before embedding (retrieval-m1) so the deterministic truncation surfaces.
+    let truncatedCount = 0;
+    const embedder = await createEmbedderResolved(config.embedding, {
+      onTruncate: () => {
+        truncatedCount += 1;
+      },
+    });
     const extractor = createExtractor(config.extraction);
 
     const progress = createProgress(
@@ -218,6 +225,14 @@ export class SyncAllCommand extends Command {
         },
       });
       progress.finish();
+
+      if (truncatedCount > 0) {
+        this.context.stderr.write(
+          `warning: ${truncatedCount} long document(s) truncated to ` +
+            `${config.embedding.maxInputChars} chars before embedding ` +
+            "(recall covers the head only; see docs/guide/embedding.md)\n",
+        );
+      }
 
       if (this.json) {
         this.context.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

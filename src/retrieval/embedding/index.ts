@@ -18,6 +18,7 @@ export {
   type Embedder,
   type EmbedderRobustnessOptions,
   EmbeddingError,
+  type EmbedTruncation,
   EXTERNAL_EMBEDDING_BACKENDS,
   type FetchLike,
   OllamaEmbedder,
