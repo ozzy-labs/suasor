@@ -38,6 +38,33 @@ Suasor の「忘れられる権利」のローカル実装（[ADR-0026](../adr/0
 
 `projections rebuild`（truncate + replay）後も source は復活しない（redaction 済みの `SourceObserved` が空行を再挿入し、replay された `SourceForgotten` がそれを削除する・replay-stable。tombstone も replay で再現される）。
 
+### 派生 content の開示と cascade redaction（[ADR-0026](../adr/0026-source-forgetting.md) R1-2）
+
+source 本文は propose / apply 時に**派生 entity の自由文**へ流れている（task/decision の title、decision の rationale、reply draft の本文、commitment の title、proposals ledger の `ProposalGenerated.summary`）。source だけを forget するとこれらの引用が残る。そこで forget は:
+
+- **必ず派生 entity を開示する**（`--yes` の有無に関わらず。links provenance + proposals ledger（**reject 済み候補も含む**）+ `DraftExported` パスを辿る）。preview でも一覧が出るので、`--cascade` を付けるべきか判断できる
+- `--cascade` を付けると派生 event の自由文 field を本文 redaction と同じ方式（`json_set` で `[redacted]` に置換）で消し、対応する projection 列も更新する。**同一 forget transaction・secure_delete 経路**に乗り、replay 後も維持される
+- `draft_export` のパス・backup・host 会話履歴は**開示のみ**で redact しない（DB 外なので射程外）
+
+```bash
+# preview（派生 entity が一覧され、--cascade の要否が分かる）
+suasor source forget gh:owner/repo#1
+# → would forget: gh:owner/repo#1 (github_issue)
+#     derived entities referencing this source (2):
+#       - task task_ab12 (derived_from)
+#       - proposal cand_cd34 (proposal)
+#     ...
+#   (preview — re-run with --yes to apply; add --cascade to redact derived text)
+
+# 本文 + 派生引用まで消す
+suasor source forget gh:owner/repo#1 --cascade --yes
+# → forgotten: gh:owner/repo#1
+#   ...
+#   cascade: redacted the quoted free-text of 2 derived entities
+```
+
+> 補足: 派生 event を消してもうっかり **reject した候補の本文**（`ProposalGenerated.summary`）が残らないよう、`propose reject`（MCP `propose.reject`）は forget と独立に却下時点で当該 summary を redaction する（R1-3。reply_draft の summary は下書き全文のため）。
+
 ### 確認フロー（HITL）
 
 破壊的操作のため、`--yes` を付けない場合は**対象を preview するだけで何も適用しない**:
@@ -58,6 +85,7 @@ suasor source forget gh:owner/repo#1 --reason "GDPR request" --yes
 
 - `--reason R`: `SourceForgotten` 監査 event に記録する人間可読の理由
 - `--yes`: 適用（省略時は preview のみ）
+- `--cascade`: 派生 entity の自由文まで redaction する（[ADR-0026](../adr/0026-source-forgetting.md) R1-2。省略時は派生を**開示するのみ**で消さない）
 
 ### べき等性とエラー
 

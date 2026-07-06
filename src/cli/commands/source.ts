@@ -9,7 +9,8 @@
  *   - `source forget`   — the "right to be forgotten" purge `sourceForget`
  *     (src/forget/source-forget.ts, ADR-0026): redact the body from the event
  *     log + delete the projection / FTS / vectors, lay a re-ingestion tombstone,
- *     keeping a body-less audit event.
+ *     keeping a body-less audit event. Always discloses the entities derived from
+ *     the source; `--cascade` also redacts their quoted free-text (ADR-0026 R1-2).
  *   - `source unforget` — lift that tombstone (`sourceUnforget`, ADR-0026 R1-1)
  *     so the owning connector may re-ingest the source on its next sync.
  *
@@ -162,6 +163,12 @@ export class SourceForgetCommand extends Command {
       previews the target and applies nothing; re-run with --yes to apply
       (ADR-0004 — no auto-apply). The source body is never printed.
 
+      The source text also flowed into derived entities (task/decision titles, a
+      decision rationale, reply-draft bodies, commitment titles, proposal-ledger
+      summaries). These are ALWAYS disclosed (ADR-0026 R1-2); pass --cascade to
+      also redact their quoted free-text. Exported-draft files, backups and host
+      conversation history are out of scope (disclosed, not purged).
+
       Idempotent: re-forgetting a purged id reports 'already forgotten'; an id
       that was never ingested reports 'missing' and exits non-zero so a typo is
       not silently treated as success.
@@ -169,6 +176,10 @@ export class SourceForgetCommand extends Command {
     examples: [
       ["Preview the purge", "suasor source forget gh:owner/repo#1"],
       ["Apply the purge", "suasor source forget gh:owner/repo#1 --yes"],
+      [
+        "Apply and cascade-redact derived content",
+        "suasor source forget gh:owner/repo#1 --cascade --yes",
+      ],
       [
         "Apply with an audit reason",
         'suasor source forget gh:owner/repo#1 --reason "GDPR request" --yes',
@@ -186,14 +197,24 @@ export class SourceForgetCommand extends Command {
     description: "Apply the purge (without it the target is previewed only).",
   });
 
+  cascade = Option.Boolean("--cascade", false, {
+    description: "Also redact the free-text of derived entities (ADR-0026 R1-2).",
+  });
+
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { Store }, { getSource, listSourceHistory }, { sourceForget }] =
-      await Promise.all([
-        import("../../config/index.ts"),
-        import("../../db/index.ts"),
-        import("../../mcp/queries.ts"),
-        import("../../forget/source-forget.ts"),
-      ]);
+    const [
+      { loadConfig },
+      { Store },
+      { getSource, listSourceHistory },
+      { sourceForget },
+      { enumerateDerived },
+    ] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../mcp/queries.ts"),
+      import("../../forget/source-forget.ts"),
+      import("../../forget/cascade.ts"),
+    ]);
 
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
@@ -218,12 +239,20 @@ export class SourceForgetCommand extends Command {
         }
         const typeHint = present !== null ? ` (${present.sourceType})` : "";
         this.context.stdout.write(`would forget: ${this.externalId}${typeHint}\n`);
+        // Disclosure is mandatory (ADR-0026 R1-2): show the derived entities so the
+        // operator can decide whether to add --cascade before applying.
+        const previewDerived = enumerateDerived(store.connection.sqlite, this.externalId);
+        this.writeDerivedDisclosure(previewDerived);
         this.context.stdout.write("(preview — re-run with --yes to apply)\n");
+        if (!this.cascade && previewDerived.some((d) => d.redactable)) {
+          this.context.stdout.write("  add --cascade to also redact the derived free-text\n");
+        }
         return 0;
       }
 
       const result = sourceForget(store, {
         externalId: this.externalId,
+        cascade: this.cascade,
         ...(this.reason !== undefined ? { reason: this.reason } : {}),
       });
 
@@ -241,10 +270,12 @@ export class SourceForgetCommand extends Command {
         case "forgotten":
           this.context.stdout.write(`forgotten: ${this.externalId}\n`);
           if (connectorEnabled) this.context.stdout.write(tombstoneNote);
+          this.writeDerivedDisclosure(result.derived, result.cascaded);
           return 0;
         case "already_forgotten":
           this.context.stdout.write(`already forgotten: ${this.externalId}\n`);
           if (connectorEnabled) this.context.stdout.write(tombstoneNote);
+          this.writeDerivedDisclosure(result.derived, result.cascaded);
           return 0;
         case "missing":
           this.context.stderr.write(`error: no source with external id '${this.externalId}'\n`);
@@ -253,6 +284,34 @@ export class SourceForgetCommand extends Command {
     } finally {
       store.close();
     }
+  }
+
+  /**
+   * Disclose the entities derived from the source (ADR-0026 R1-2 — mandatory).
+   * `cascaded` is undefined in preview (nothing applied yet), `true`/`false` after
+   * an apply. Never prints source bodies (NFR-PRV-4) — only ids / kinds.
+   */
+  private writeDerivedDisclosure(
+    derived: { kind: string; id: string; relation: string; redactable: boolean }[],
+    cascaded?: boolean,
+  ): void {
+    const out = this.context.stdout;
+    if (derived.length === 0) {
+      out.write("  (no derived entities reference this source)\n");
+      return;
+    }
+    out.write(`  derived entities referencing this source (${derived.length}):\n`);
+    for (const d of derived) {
+      const scope = d.redactable ? "" : " — out of scope";
+      out.write(`    - ${d.kind} ${d.id} (${d.relation}${scope})\n`);
+    }
+    const redactable = derived.filter((d) => d.redactable).length;
+    if (cascaded === true) {
+      out.write(`  cascade: redacted the quoted free-text of ${redactable} derived entities\n`);
+    } else if (cascaded === false && redactable > 0) {
+      out.write("  (quoted text NOT redacted — re-run with --cascade to purge it)\n");
+    }
+    out.write("  out of scope (not purged): draft exports, backups, host conversation history\n");
   }
 }
 

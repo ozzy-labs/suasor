@@ -206,6 +206,44 @@ describe("suasor source forget", () => {
     }
   });
 
+  test("discloses derived entities and cascade-redacts them with --cascade (ADR-0026 R1-2)", async () => {
+    await seed("gh:1", "secret rocket plans");
+    // Seed a task derived from the source (carries a verbatim quote in its title).
+    const { Store } = await import("../../src/db/index.ts");
+    {
+      const store = Store.open({ path: join(dir, "suasor.db") });
+      store.record({
+        type: "TaskProposed",
+        taskId: "task_x",
+        title: "secret rocket task",
+        sourceExternalIds: ["gh:1"],
+      });
+      store.close();
+    }
+
+    // Preview discloses the derived task and hints at --cascade (mandatory R1-2).
+    const preview = await run(["source", "forget", "gh:1"]);
+    expect(preview.out).toContain("derived entities referencing this source");
+    expect(preview.out).toContain("task task_x (derived_from)");
+    expect(preview.out).toContain("add --cascade");
+    // Never prints the derived body/quote (NFR-PRV-4).
+    expect(preview.out).not.toContain("secret rocket task");
+
+    // Apply with --cascade: the derived title is blanked.
+    const applied = await run(["source", "forget", "gh:1", "--cascade", "--yes"]);
+    expect(applied.code).toBe(0);
+    expect(applied.out).toContain("cascade: redacted the quoted free-text");
+    const store = Store.open({ path: join(dir, "suasor.db") });
+    try {
+      const title = store.connection.sqlite
+        .query<{ title: string }, [string]>("SELECT title FROM tasks WHERE id = ?")
+        .get("task_x")?.title;
+      expect(title).toBe("[redacted]");
+    } finally {
+      store.close();
+    }
+  });
+
   test("an unknown id errors (preview path)", async () => {
     await seed("gh:1", "x");
     const { code, err } = await run(["source", "forget", "gh:nope"]);

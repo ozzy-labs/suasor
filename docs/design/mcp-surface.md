@@ -379,6 +379,8 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 
 **状態依存の挙動**: `pending` のときのみ却下（event append）。`applied`（既に適用済み）/ `missing`（該当 ledger 行なし）は遷移させず status で報告し、`rejected` 再呼び出しは `already_rejected`（no-op、idempotent）。却下済み候補は `propose.list` で `pending` として現れなくなるため、ホストは再び承認候補として提示しない。
 
+**summary redaction（[ADR-0026](../adr/0026-source-forgetting.md) R1-3）**: `rejected` 遷移時に当該候補の `ProposalGenerated.summary` を `json_set` で空白化する（マーカー `[redacted]`。event payload + `proposals.summary` 列の両方）。reply_draft 候補の summary は**下書き全文**なので、人が却下した本文を ledger / event に残さない（発生源対策）。`source.forget` とは独立に適用する。同一 reject transaction 内で原子的に実行（実体は `src/forget/cascade.ts` の `redactProposalSummary`）。
+
 戻り値: `{ "candidateId": "cand_...", "status": "rejected" | "already_rejected" | "applied" | "missing" }`。
 
 ### `proposal.feedback`（確定・write / HITL・#279）
@@ -605,11 +607,13 @@ commitment id は content 由来（`title` + `direction` + provenance）なの�
 - **sidecar substrate**（`vec0`/`embeddings_meta`/`extraction_meta`）は tool が imperative に DELETE（replay 管理外）
 - **原子性（R1-4）**: redaction + sidecar 削除 + `SourceForgotten` append を**単一 sqlite transaction** で包む（`store.record` は SAVEPOINT で入れ子）。mid-forget クラッシュで中間状態が残らない
 - **物理消去（R1-5）**: 削除前後で `secure_delete` を有効化（free page をゼロ埋め）し、commit 後に `PRAGMA wal_checkpoint(TRUNCATE)` で WAL を畳み込む。redact 済み平文が free page / WAL に残らない。Suasor の外に出た copy（draft export 済み・`VACUUM INTO` backup・OS backup・host 会話履歴）は射程外
+- **派生 content 開示（R1-2・必須）**: forget 時に links provenance（`derived_from` / `replies_to` / `references`、`idx_links_to`）+ proposals ledger（`ProposalGenerated.sourceExternalIds`。**reject 済み候補も含む**）+ `DraftExported` パスを辿り、派生 entity を **`derived` で必ず開示**する（`cascade` 指定の有無に関わらず。実体は `src/forget/cascade.ts`）
+- **cascade redaction（R1-2・HITL opt-in）**: `cascade: true` のとき、派生 event の自由文 field（`TaskProposed.title` / `DecisionRecorded.title`・`rationale` / `ReplyDraftProposed.body` / `CommitmentOpened.title` / `ProposalGenerated.summary`）を body redaction と同じ `json_set` 方式で空白化し、対応する projection 列も更新する（同一 forget transaction・secure_delete 経路に乗る・replay-stable）。空白化は `title` の `min(1)` を満たすマーカー（`[redacted]`）で行う（redact 済み event が replay 時の Zod 再検証を通るため）。`draft_export` パス・backup 等は開示のみで redact しない（射程外）
 - links は残す（provenance・`source.get` は null）
 
-引数（Zod）: `externalId: string`（min 1）/ `reason?: string`（監査用）。
+引数（Zod）: `externalId: string`（min 1）/ `reason?: string`（監査用）/ `cascade?: boolean`（既定 `false`。派生 content の redaction）。
 
-戻り値: `{ "externalId": "...", "status": "forgotten" | "already_forgotten" | "missing", "tombstoned": boolean, "note"?: string }`。`tombstoned` は tombstone が張られたか（`forgotten`/`already_forgotten` で `true`、`missing` で `false`）。`note` は enabled な connector がある場合のみ付き、tombstone が再取り込みを防いでいる旨を通知する。idempotent（再 forget は `already_forgotten`、未取り込みは `missing`）。HITL（`readOnlyHint: false`、auto-apply なし）。
+戻り値: `{ "externalId": "...", "status": "forgotten" | "already_forgotten" | "missing", "tombstoned": boolean, "derived": DerivedEntity[], "cascaded": boolean, "note"?: string }`。`tombstoned` は tombstone が張られたか（`forgotten`/`already_forgotten` で `true`、`missing` で `false`）。`derived` は派生 entity 一覧（`{ kind, id, relation, redactable }`。`missing` では空）で **常に返る**（開示必須）。`cascaded` は派生 redaction が走ったか。`note` は enabled な connector がある場合のみ付き、tombstone が再取り込みを防いでいる旨を通知する。idempotent（再 forget は `already_forgotten`。ただし `cascade: true` なら purged 済み source でも派生 redaction は走る）。HITL（`readOnlyHint: false`、auto-apply なし）。
 
 ### `source.unforget`（確定・write / HITL・[ADR-0026](../adr/0026-source-forgetting.md) R1-1）
 

@@ -13,10 +13,17 @@
  * already-rejected candidate is a no-op (`already_rejected`). This makes a
  * rejected candidate un-appliable — `propose.list` no longer surfaces it as
  * pending, so the host won't re-offer it for approval.
+ *
+ * Reject also redacts the candidate's `ProposalGenerated.summary` (ADR-0026 R1-3):
+ * a reply_draft candidate's summary is its full body, so a human's rejection must
+ * purge that verbatim quote from the ledger + event log rather than retain a
+ * draft the user explicitly discarded. This is the source-of-leak fix and applies
+ * independently of `source.forget`.
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
 import { appendEvent } from "../events/store.ts";
+import { redactProposalSummary } from "../forget/cascade.ts";
 import { applyEvent } from "../projections/reducer.ts";
 
 /** Input to `propose.reject`. */
@@ -72,6 +79,12 @@ export function rejectCandidateStep(
     now,
   );
   applyEvent(store.connection.sqlite, persisted);
+  // Summary redaction (ADR-0026 R1-3): a rejected candidate's
+  // ProposalGenerated.summary can hold verbatim source content (a reply_draft's
+  // full body), so a human's rejection must also purge that quote from the ledger
+  // + event log — otherwise the rejected draft lingers. Independent of forget;
+  // runs inside the caller's transaction so it is atomic with the reject.
+  redactProposalSummary(store.connection.sqlite, candidateId, now);
   return { candidateId, status: "rejected" };
 }
 
