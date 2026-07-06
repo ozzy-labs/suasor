@@ -127,6 +127,14 @@ export const EmbeddingConfig = z
      * response (Issue #267). `1` disables retry. See src/util/retry.ts.
      */
     maxRetries: z.number().int().positive().default(3),
+    /**
+     * Opt in to a **non-loopback** `baseUrl` for the local **ollama** sidecar
+     * (Issue #436, ADR-0003). The ollama sidecar receives body text, so a remote
+     * `baseUrl` egresses content; without this the loader rejects a non-loopback
+     * host (localhost/127.0.0.0/8/::1 only). No effect for openai/voyage — those
+     * are remote-by-design external APIs, key-gated (see src/config/sidecar-egress.ts).
+     */
+    allowRemote: z.boolean().default(false),
   })
   .passthrough();
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfig>;
@@ -152,6 +160,13 @@ export const ExtractionConfig = z
     backend: ExtractionBackend.default("disabled"),
     /** Sidecar base URL (markitdown). `/extract` is appended by the client. */
     baseUrl: z.string().url().default(DEFAULT_MARKITDOWN_BASE_URL),
+    /**
+     * Opt in to a **non-loopback** `baseUrl` (Issue #436, ADR-0003). The markitdown
+     * sidecar receives the full document bytes, so a remote `baseUrl` egresses
+     * content; without this the loader rejects a non-loopback host
+     * (localhost/127.0.0.0/8/::1 only). Default off (local-only).
+     */
+    allowRemote: z.boolean().default(false),
     /** Max extracted-text bytes; larger inputs degrade to name-only. */
     maxBytes: z.number().int().positive().default(DEFAULT_EXTRACTION_MAX_BYTES),
     /**
@@ -187,9 +202,22 @@ export const ExportConfig = z
         backend: CompositionBackend.default("disabled"),
         /** Sidecar base URL (pandoc). `/compose` is appended by the client. */
         baseUrl: z.string().url().default(DEFAULT_PANDOC_BASE_URL),
+        /**
+         * Opt in to a **non-loopback** `baseUrl` (Issue #436, ADR-0003). The pandoc
+         * sidecar receives the full draft body, so a remote `baseUrl` egresses
+         * content — contradicting `draft.export`'s "no egress" contract unless
+         * disclosed. Without this the loader rejects a non-loopback host
+         * (localhost/127.0.0.0/8/::1 only); when opted in, `draft.export` returns
+         * `composedViaRemoteSidecar: true` and boot/doctor warn. Default off.
+         */
+        allowRemote: z.boolean().default(false),
       })
       .passthrough()
-      .default(() => ({ backend: "disabled" as const, baseUrl: DEFAULT_PANDOC_BASE_URL })),
+      .default(() => ({
+        backend: "disabled" as const,
+        baseUrl: DEFAULT_PANDOC_BASE_URL,
+        allowRemote: false,
+      })),
   })
   .passthrough();
 export type ExportConfig = z.infer<typeof ExportConfig>;

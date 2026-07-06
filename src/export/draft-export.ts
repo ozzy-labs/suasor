@@ -45,12 +45,26 @@ export interface DraftExportDeps {
    * md/txt are allowed; an Office format then raises `DraftExportError`.
    */
   composer?: Composer | null;
+  /**
+   * Whether `composer` targets a **remote** (non-loopback) composition sidecar
+   * (Issue #436). When an Office format is composed via such a sidecar, the draft
+   * body egresses to it — surfaced as `composedViaRemoteSidecar` in the output so
+   * the HITL approval is informed. Ignored for md/txt (no composer call).
+   */
+  composerRemote?: boolean;
 }
 
 export interface DraftExportOutput {
   /** Absolute path written. */
   path: string;
   status: "exported";
+  /**
+   * Present and `true` only when an Office format was composed via a **remote**
+   * (non-loopback) `[export].composition` sidecar — i.e. the draft body egressed
+   * to that sidecar (Issue #436, ADR-0003 disclosure). Absent for md/txt and for
+   * a loopback sidecar (no egress).
+   */
+  composedViaRemoteSidecar?: boolean;
 }
 
 /** Raised on an invalid filename or an export dir that overlaps a local root. */
@@ -109,6 +123,7 @@ export async function draftExport(
   // Office formats are composed by the sidecar (#138); md/txt are written as-is.
   // Compose before any filesystem work so a sidecar failure leaves nothing behind.
   let payload: string | Uint8Array = content;
+  let composedViaRemoteSidecar = false;
   if (format !== "md" && format !== "txt") {
     if (!deps.composer) {
       throw new DraftExportError(
@@ -116,6 +131,8 @@ export async function draftExport(
       );
     }
     payload = await deps.composer.compose(content, format);
+    // Disclose when the body egressed to a remote sidecar (Issue #436).
+    composedViaRemoteSidecar = deps.composerRemote === true;
   }
 
   mkdirSync(deps.exportDir, { recursive: true });
@@ -139,5 +156,9 @@ export async function draftExport(
     now,
   );
 
-  return { path: target, status: "exported" };
+  return {
+    path: target,
+    status: "exported",
+    ...(composedViaRemoteSidecar ? { composedViaRemoteSidecar: true } : {}),
+  };
 }

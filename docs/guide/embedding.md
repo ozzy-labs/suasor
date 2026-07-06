@@ -39,6 +39,7 @@ dim = 1024                           # model の出力次元と一致必須（bg
 # maxBatch = 64                       # 1 リクエスト最大件数。超過は順序保持で分割（Issue #267）
 # requestTimeoutMs = 60000            # per-request timeout（ms）。超過は abort→retry（0 で無効）
 # maxRetries = 3                      # 429/5xx の最大試行回数（初回含む）。1 で retry 無効
+# allowRemote = false                 # 非 loopback な ollama サイドカーのとき true 必須（Issue #436）
 ```
 
 env override も可能（headless / Docker 用、[config](../design/config.md)）:
@@ -47,8 +48,12 @@ env override も可能（headless / Docker 用、[config](../design/config.md)�
 export SUASOR_EMBEDDING__BACKEND=ollama
 export SUASOR_EMBEDDING__MODEL=bge-m3
 # export SUASOR_EMBEDDING__BASEURL=http://sidecar:11434
+# 非 loopback な ollama サイドカーは egress opt-in が必須:
+# export SUASOR_EMBEDDING__ALLOWREMOTE=true
 ```
 
+> **remote な ollama サイドカーは opt-in（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）**: `baseUrl` が loopback（`localhost` / `127.0.0.0/8` / `::1`）なら egress は無い。非 loopback host（共有 ollama 等）は本文をサイドカーへ送るため、`allowRemote = true` を明示しない限り config load で `ConfigError`（fail-fast）。opt-in 時は `doctor` / 起動が remote egress を WARN で開示する。`openai` / `voyage` は remote 前提の外部 API で loopback ゲートの対象外（API キーでゲート・下記）。
+>
 > **同一モデル必須**: 文書（ingest 時）とクエリ（query 時）の embedding は同じ `model` で生成する必要がある（ベクトル空間整合）。`model` を変えたら下記 4. で既存ベクトルを再生成する。
 >
 > **backend の実装状況と egress**: 3 backend が実装済み — **egress-free な `ollama`（ローカルサイドカー）が既定の推奨経路**、加えて外部 API の `openai` / `voyage`。後者は本文を外部に送信する **egress を伴う**点で `ollama`（ローカル完結・egress なし）と非対称（[ADR-0003](../adr/0003-local-first-and-content-minimization.md) の境界を跨ぐ。[ADR-0006](../adr/0006-ml-delegation.md) の thin-client 不変条件には抵触しない）。`openai` / `voyage` は **API キー（OS キーチェーン / 環境変数）でゲート**され、キー未設定なら embedder は構築されず `recall.search` は `embedding_disabled` に degrade（FTS にフォールバック）し、**起動時（`suasor mcp serve`）と `suasor doctor` が「キー未設定」WARN を出す**（[Issue #235](https://github.com/ozzy-labs/suasor/issues/235) / [Issue #259](https://github.com/ozzy-labs/suasor/issues/259)）。外部 backend のセットアップは後述。

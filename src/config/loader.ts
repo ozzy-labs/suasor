@@ -20,6 +20,7 @@ import { z } from "zod";
 import { loadConnectorConfigSchema } from "../connectors/registry.ts";
 import { ConfigError } from "./error.ts";
 import { Config } from "./schema.ts";
+import { collectSidecarEndpoints, SIDECAR_LOOPBACK_ALLOWLIST } from "./sidecar-egress.ts";
 
 /**
  * Control keys recognized on **every** `[connectors.<name>]` slice, independent
@@ -188,6 +189,32 @@ async function validateConnectorSlices(
 }
 
 /**
+ * Reject a content-egressing sidecar whose `baseUrl` is **non-loopback** and has
+ * not opted in via `<section>.allowRemote` (Issue #436, ADR-0003). The pandoc
+ * (export.composition), markitdown (extraction), and ollama (embedding) sidecars
+ * all receive full content, so a remote `baseUrl` silently turns a "local, no
+ * egress" path into remote egress — `draft.export` even advertises "never sends".
+ * Fail-fast here (like `validateConnectorSlices`) so the egress cannot happen
+ * without an explicit opt-in; an opted-in remote endpoint is instead *disclosed*
+ * by `collectConfigWarnings` (boot / doctor / validate-config). Loopback hosts and
+ * openai/voyage (remote-by-design, key-gated) are never gated here.
+ */
+function validateSidecarEgress(config: Config): void {
+  const issues: string[] = [];
+  for (const ep of collectSidecarEndpoints(config)) {
+    if (ep.loopback || ep.allowRemote) continue;
+    issues.push(
+      `${ep.section}.baseUrl "${ep.baseUrl}" is not a loopback address — a remote sidecar ` +
+        `receives ${ep.content} (egress, ADR-0003). Set ${ep.allowRemoteKey} = true to opt in, ` +
+        `or point it at a loopback host (${SIDECAR_LOOPBACK_ALLOWLIST.join(" / ")}).`,
+    );
+  }
+  if (issues.length > 0) {
+    throw new ConfigError("remote sidecar not opted in", issues);
+  }
+}
+
+/**
  * Load and validate the effective configuration.
  *
  * @throws {ConfigError} when any layer holds an invalid value (fail-fast).
@@ -222,6 +249,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Confi
   // / type errors in `[connectors.<name>]` fail fast (the root schema leaves
   // `connectors` an open record). Slices for schema-less connectors stay lenient.
   await validateConnectorSlices(config.connectors);
+  // Content-egressing sidecars (pandoc/markitdown/ollama) must be loopback unless
+  // the operator opts into a remote host via `<section>.allowRemote` (Issue #436).
+  validateSidecarEgress(config);
   if (config.storage.dbPath === null) {
     config.storage.dbPath = join(configDir, "suasor.db");
   }

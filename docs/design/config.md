@@ -32,6 +32,7 @@ dim = 1024                           # 埋め込み次元。model の出力次�
 maxBatch = 64                        # 1 リクエストあたり最大件数。超過は順序保持で分割（Issue #267）
 requestTimeoutMs = 60000             # per-request timeout（ms）。timeout は abort して retry（0 で無効）
 maxRetries = 3                       # 429/5xx の最大試行回数（初回含む）。1 で retry 無効
+# allowRemote = false                # ollama サイドカーが非 loopback baseUrl のとき true 必須（Issue #436・egress opt-in）
 ```
 
 - `backend` 既定 `disabled`（base install を軽く保つ）。`recall.search` は無効時に空 + `embedding_disabled` シグナルで FTS に degrade（[retrieval](retrieval.md) / [ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
@@ -39,8 +40,9 @@ maxRetries = 3                       # 429/5xx の最大試行回数（初回含
 - `baseUrl` / `model` は backend ごとに合わせる。ollama は `/api/embed`、openai/voyage は `/v1/embeddings` が client で付与される。既定 model は ollama `bge-m3`(1024-dim) / openai `text-embedding-3-small`(1536-dim) / voyage `voyage-3`(1024-dim)。`model` は **ingest（文書）と query（クエリ）で必ず同一**（混在すると recall が静かに劣化するため、単一値が両方を駆動）
 - `dim` は埋め込みベクトルの次元で、`model` の出力次元と一致必須（`bge-m3`=1024、例: `nomic-embed-text`=768）。DB 作成時に vec0 テーブルのサイズを決めるため、既存ストアで変えるには新規 DB（または delete + rebuild + 再 sync）が必要。不一致だと全ベクトル挿入が失敗し recall が静かに空へ degrade するため、非 1024 次元 model を使うときは必ず設定する。不一致は **初回 embed で fail-fast**（actionable な `EmbeddingError`）し、`suasor doctor` も「model 出力次元 vs `dim`」を probe して不一致を ERROR で surface する（Issue #267）。さらに `suasor validate-config` は **既存 DB の vec0 次元 vs `dim`** を純 local read（egress なし・backend 不要）で突合し、不一致を ERROR finding として出す（backend 無効や API キー未設定でも検知できる経路。Issue #294）。`validate-config` は併せて「形式は valid だが runtime で効かない」設定（外部 embedding backend のキー未設定・未使用の `[llm].backend`）を **readiness advisory** として表示する（exit code には影響しない）
 - `maxBatch` / `requestTimeoutMs` / `maxRetries` は外部 embedding egress の堅牢化（Issue #267）。`maxBatch` を超える入力は**順序を保って分割**し各 chunk の結果を結合する（大規模 sync で 413 / context 超過の全滅を防ぐ）。`requestTimeoutMs` は per-request timeout（超過は abort して transient 失敗として retry。`0` で無効）。`maxRetries` は 429/5xx に対する指数 backoff + jitter retry の最大試行回数（`Retry-After` を尊重・上限 60s、`1` で retry 無効）。**送信内容は変えず堅牢性のみ追加**（ADR-0003）。共有 backoff util は `src/util/retry.ts`（connector からも再利用）
+- **`ollama` サイドカーの `baseUrl` は loopback allowlist（`localhost` / `127.0.0.0/8` / `::1`）でゲート**される（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）。非 loopback（例: リモートの共有 ollama）は本文を egress するため、`allowRemote = true` を明示しない限り **load 時に `ConfigError` で fail-fast**（`suasor doctor` は config error として surface）。opt-in 時は起動 / doctor / validate-config が remote egress を **WARN で開示**する。`openai` / `voyage` は remote 前提の外部 API で、loopback ゲートの対象外（従来どおり API キーでゲート）
 - 未知キーは保持（`passthrough`）し、backend 固有項目を後続が確定する
-- env override 例: `SUASOR_EMBEDDING__BACKEND=ollama` / `SUASOR_EMBEDDING__MODEL=bge-large` / `SUASOR_EMBEDDING__BASEURL=http://sidecar:11434`
+- env override 例: `SUASOR_EMBEDDING__BACKEND=ollama` / `SUASOR_EMBEDDING__MODEL=bge-large` / `SUASOR_EMBEDDING__BASEURL=http://sidecar:11434`（非 loopback host は `SUASOR_EMBEDDING__ALLOWREMOTE=true` を併記）
 
 ### `[extraction]`（確定・ADR-0024）
 
@@ -48,6 +50,7 @@ maxRetries = 3                       # 429/5xx の最大試行回数（初回含
 [extraction]
 backend = "disabled"   # disabled（既定）| markitdown
 # baseUrl = "http://localhost:8929"   # markitdown sidecar（/extract を付加）
+# allowRemote = false                 # 非 loopback baseUrl のとき true 必須（Issue #436・egress opt-in）
 # maxBytes = 5000000                  # 抽出テキストの上限。超過は name-only に degrade
 # version = "1"                       # extractor version。bump で既存 source を次 sync で再抽出
 ```
@@ -55,6 +58,7 @@ backend = "disabled"   # disabled（既定）| markitdown
 - Office/PDF（docx/xlsx/pptx/pdf）本文を text/Markdown 化する任意のサイドカー（[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。既定 `disabled` で、無効時は従来どおり name-only（取り込みは成功）
 - ML 委譲（[ADR-0006](../adr/0006-ml-delegation.md)）: 変換はサイドカー、本体は thin client のみ（in-process パーサ無し）。失敗は best-effort で warning + name-only fallback
 - 初期スコープは **`local` connector 限定**（box/drive(API) は内容 fetch + 内容 fingerprint を要する後続 Issue で段階化）
+- **`baseUrl` は loopback allowlist（`localhost` / `127.0.0.0/8` / `::1`）でゲート**（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）。markitdown は文書バイト全体を送るため、非 loopback は `allowRemote = true` を明示しない限り load 時に `ConfigError`。opt-in 時は doctor / 起動 WARN で remote egress を開示
 - `baseUrl` / `maxBytes` / `version` は markitdown backend に適用。`version` を bump すると `extraction_meta` の記録と差分（drift）し、既存 source が次の `sync` で自動再抽出される（ADR-0024 §6・`suasor extraction status` で可視化）。未知キーは保持（`passthrough`）
 
 ### `[export]`（確定・ADR-0025）
@@ -66,11 +70,13 @@ backend = "disabled"   # disabled（既定）| markitdown
 [export.composition]
 backend = "disabled"   # disabled（既定）| pandoc — md→Office 変換サイドカー（#138）
 # baseUrl = "http://localhost:8930"   # pandoc サイドカー（/compose を付加）
+# allowRemote = false                 # 非 loopback baseUrl のとき true 必須（Issue #436・egress opt-in）
 ```
 
 - `draft.export`（[ADR-0025](../adr/0025-local-draft-export.md)）が下書きを書き出すローカル sandbox。**送信しない・source に書き戻さない**（local-first / no-egress）
 - `dir` 既定は `<configDir>/exports/`（loader が解決、`[storage].dbPath` と同様）。書き込みは `dir` 配下のみ（filename は basename・traversal 拒否）
 - **`[connectors.local].roots` の配下/一致は不可**（書き出した下書きが再取り込みされるループ防止）。`draft.export` が realpath 解決して拒否する
+- **Office 形式（docx/pptx/xlsx）の合成サイドカー `composition.baseUrl` は loopback allowlist（`localhost` / `127.0.0.0/8` / `::1`）でゲート**（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）。pandoc は下書き本文全体を送るため、非 loopback は `composition.allowRemote = true` を明示しない限り load 時に `ConfigError`。opt-in 時は起動 / doctor / validate-config が remote egress を WARN で開示し、`draft.export` は結果に `composedViaRemoteSidecar: true` を返して HITL 承認へ egress を可視化する（md/txt はサイドカー不要・egress なし）
 
 ### `[tasks]`（確定・ADR-0036・改訂 R1）
 
