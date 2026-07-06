@@ -21,6 +21,14 @@ export {
   StorageConfig,
 } from "./schema.ts";
 export {
+  collectSidecarEndpoints,
+  isLoopbackUrl,
+  SIDECAR_LOOPBACK_ALLOWLIST,
+  type SidecarEgressInput,
+  type SidecarEndpoint,
+  type SidecarSection,
+} from "./sidecar-egress.ts";
+export {
   type ConfigWarning,
   type ConfigWarningInput,
   collectConfigWarnings,

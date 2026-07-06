@@ -11,6 +11,7 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { isLoopbackUrl } from "../config/index.ts";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import { TaskDestination } from "../events/types.ts";
 import { createComposer } from "../export/compose.ts";
@@ -952,10 +953,14 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       title: "Export draft to file",
       description:
         "Write a draft (reply/handoff/announcement/plan text) to a local file " +
-        "under the export sandbox ([export].dir). Local-only: never sends and " +
-        "never writes back to a source (ADR-0025). Write tool: requires human " +
-        "approval — no auto-apply (ADR-0004). filename is a basename; collisions " +
-        "get a numeric suffix.",
+        "under the export sandbox ([export].dir). No egress and never writes back " +
+        "to a source by default (ADR-0025) — the one exception is an Office format " +
+        "(docx/pptx/xlsx), converted by the [export].composition sidecar: if that " +
+        "sidecar is a remote (non-loopback) endpoint (opt-in via " +
+        "[export].composition.allowRemote) the draft body is sent to it, disclosed " +
+        "as composedViaRemoteSidecar:true in the result (Issue #436). md/txt never " +
+        "egress. Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "filename is a basename; collisions get a numeric suffix.",
       inputSchema: {
         content: z.string().describe("Draft text to write."),
         filename: z.string().min(1).describe("Target filename (basename only)."),
@@ -986,13 +991,18 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         const localRoots = Array.isArray(write.config.connectors.local?.roots)
           ? (write.config.connectors.local.roots as string[])
           : [];
-        const composer = write.config.export?.composition
-          ? createComposer(write.config.export.composition)
-          : null;
+        const composition = write.config.export?.composition;
+        const composer = composition ? createComposer(composition) : null;
+        // Disclose egress when composing via a remote (non-loopback) sidecar. The
+        // loader guarantees a remote baseUrl implies allowRemote (Issue #436).
+        const composerRemote =
+          composition?.backend === "pandoc" &&
+          typeof composition.baseUrl === "string" &&
+          !isLoopbackUrl(composition.baseUrl);
         const result = await draftExport(
           write.store,
           { content, filename, format, ...(sourceExternalId ? { sourceExternalId } : {}) },
-          { exportDir: dir, localRoots, composer },
+          { exportDir: dir, localRoots, composer, composerRemote },
         );
         return jsonResult(result);
       } catch (error) {

@@ -184,7 +184,13 @@ describe("[embedding] backend-specific config", () => {
       env: {},
       configDir: "/cfg",
       fileLayer: {
-        embedding: { backend: "ollama", baseUrl: "http://sidecar:11434", model: "nomic-embed" },
+        // A remote ollama sidecar egresses body text → must opt in (Issue #436).
+        embedding: {
+          backend: "ollama",
+          baseUrl: "http://sidecar:11434",
+          model: "nomic-embed",
+          allowRemote: true,
+        },
       },
     });
     expect(cfg.embedding.backend).toBe("ollama");
@@ -211,5 +217,104 @@ describe("[embedding] backend-specific config", () => {
         fileLayer: { embedding: { baseUrl: "not a url" } },
       }),
     ).rejects.toBeInstanceOf(ConfigError);
+  });
+});
+
+describe("sidecar remote-egress gate (Issue #436, ADR-0003)", () => {
+  test("default (loopback) sidecars load without opt-in", async () => {
+    // All three default baseUrls are loopback → no gate triggered.
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: {
+        embedding: { backend: "ollama" },
+        extraction: { backend: "markitdown" },
+        export: { composition: { backend: "pandoc" } },
+      },
+    });
+    expect(cfg.embedding.backend).toBe("ollama");
+    expect(cfg.extraction.backend).toBe("markitdown");
+    expect(cfg.export.composition.backend).toBe("pandoc");
+  });
+
+  test("rejects a remote pandoc composition sidecar without allowRemote", async () => {
+    try {
+      await loadConfig({
+        env: {},
+        configDir: "/cfg",
+        fileLayer: {
+          export: { composition: { backend: "pandoc", baseUrl: "https://compose.example.com" } },
+        },
+      });
+      throw new Error("expected ConfigError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      const err = e as ConfigError;
+      expect(err.issues.some((i) => i.startsWith("export.composition.baseUrl"))).toBe(true);
+      expect(err.issues.some((i) => i.includes("export.composition.allowRemote"))).toBe(true);
+    }
+  });
+
+  test("permits a remote composition sidecar when allowRemote is opted in", async () => {
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: {
+        export: {
+          composition: {
+            backend: "pandoc",
+            baseUrl: "https://compose.example.com",
+            allowRemote: true,
+          },
+        },
+      },
+    });
+    expect(cfg.export.composition.baseUrl).toBe("https://compose.example.com");
+    expect(cfg.export.composition.allowRemote).toBe(true);
+  });
+
+  test("rejects a remote markitdown extraction sidecar without allowRemote", async () => {
+    await expect(
+      loadConfig({
+        env: {},
+        configDir: "/cfg",
+        fileLayer: { extraction: { backend: "markitdown", baseUrl: "http://sidecar:8929" } },
+      }),
+    ).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  test("rejects a remote ollama embedding sidecar without allowRemote", async () => {
+    await expect(
+      loadConfig({
+        env: {},
+        configDir: "/cfg",
+        fileLayer: { embedding: { backend: "ollama", baseUrl: "http://sidecar:11434" } },
+      }),
+    ).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  test("does NOT gate a remote openai backend baseUrl (remote-by-design, key-gated)", async () => {
+    // openai/voyage are external APIs; their remote host is expected and gated by
+    // an API key, not the loopback allowlist — no allowRemote needed.
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: {
+        embedding: { backend: "openai", baseUrl: "https://api.openai.com", dim: 1536 },
+      },
+    });
+    expect(cfg.embedding.backend).toBe("openai");
+    expect(cfg.embedding.baseUrl).toBe("https://api.openai.com");
+  });
+
+  test("a disabled sidecar with a stray remote baseUrl is not gated (no egress)", async () => {
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: {
+        export: { composition: { backend: "disabled", baseUrl: "https://compose.example.com" } },
+      },
+    });
+    expect(cfg.export.composition.backend).toBe("disabled");
   });
 });

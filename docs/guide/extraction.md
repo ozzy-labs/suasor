@@ -24,6 +24,7 @@ Word / Excel / PowerPoint / PDF は既定では**ファイル名のみ**取り�
 [extraction]
 backend = "markitdown"
 # baseUrl = "http://localhost:8929"   # /extract が付加される
+# allowRemote = false                 # 非 loopback baseUrl のとき true 必須（Issue #436）
 # maxBytes = 5000000                  # サイズ上限（下記 2 段で意味が異なる）
 # version = "1"                       # extractor version（bump で再抽出。下記）
 ```
@@ -33,7 +34,11 @@ backend = "markitdown"
 ```bash
 export SUASOR_EXTRACTION__BACKEND=markitdown
 # export SUASOR_EXTRACTION__BASEURL=http://sidecar:8929
+# 非 loopback sidecar は egress opt-in が必須:
+# export SUASOR_EXTRACTION__ALLOWREMOTE=true
 ```
+
+> **remote サイドカーは opt-in（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）**: `baseUrl` が loopback（`localhost` / `127.0.0.0/8` / `::1`）なら egress は無い。非 loopback host は文書バイト全体をサイドカーへ送るため、`allowRemote = true` を明示しない限り config load で `ConfigError`（fail-fast）。opt-in 時は `doctor` / 起動が remote egress を WARN で開示する。
 
 ## 取り込み（本文の抽出）
 

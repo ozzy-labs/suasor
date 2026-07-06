@@ -18,6 +18,7 @@
  * operator runs a health check or just starts the server.
  */
 import { docsUrl } from "../shared/doc-ref.ts";
+import { collectSidecarEndpoints } from "./sidecar-egress.ts";
 
 /** A single "accepted but not honored" config finding. */
 export interface ConfigWarning {
@@ -49,8 +50,12 @@ const EXTERNAL_EMBEDDING_BACKENDS = new Set(["openai", "voyage"]);
  * branch is skipped for those anyway).
  */
 export interface ConfigWarningInput {
-  embedding: { backend: string };
+  embedding: { backend: string; baseUrl?: string; allowRemote?: boolean };
   llm: { backend: string };
+  /** `[extraction]` — inspected for a remote (non-loopback) sidecar disclosure. */
+  extraction?: { backend: string; baseUrl?: string; allowRemote?: boolean };
+  /** `[export]` — its `.composition` sidecar is inspected for a remote disclosure. */
+  export?: { composition?: { backend?: string; baseUrl?: string; allowRemote?: boolean } };
   embeddingApiKeyPresent?: boolean;
 }
 
@@ -67,13 +72,20 @@ export interface ConfigWarningInput {
  * - `[llm].backend != disabled`: schema-accepted but never read by the runtime —
  *   inference is delegated to the host LLM (ADR-0006 ML delegation), so the
  *   setting has no effect today.
+ * - a **remote (non-loopback) content-egressing sidecar** (`[export].composition`
+ *   pandoc / `[extraction]` markitdown / `[embedding]` ollama) with a non-loopback
+ *   `baseUrl`: the loader only admits these when `<section>.allowRemote = true`
+ *   (Issue #436), so reaching runtime means the operator opted in — this **discloses**
+ *   the ongoing egress (mirroring the external-embedding key-gate: opt-in egress is
+ *   always surfaced, never silent — ADR-0003 / ADR-0007).
  *
  * Implemented / inert values produce no warning: `embedding.backend` of
  * `ollama` (built, local) or `disabled` (intended off), an external backend with
- * a key resolved, and `[llm].backend = disabled` (the default, nothing dropped).
+ * a key resolved, `[llm].backend = disabled` (the default, nothing dropped), and
+ * a loopback sidecar `baseUrl` (local, no egress).
  *
- * @returns warnings in a stable order (embedding before llm); empty when the
- *   effective config holds no silently-dropped keys.
+ * @returns warnings in a stable order (embedding, llm, then remote sidecars in
+ *   config order); empty when the effective config holds no silently-dropped keys.
  */
 export function collectConfigWarnings(config: ConfigWarningInput): ConfigWarning[] {
   const warnings: ConfigWarning[] = [];
@@ -104,6 +116,20 @@ export function collectConfigWarnings(config: ConfigWarningInput): ConfigWarning
       message:
         `[llm] backend "${config.llm.backend}" is set but unused at runtime ` +
         "(inference is delegated to the host LLM, ADR-0006); the setting has no effect. " +
+        "See docs/design/config.md.",
+    });
+  }
+
+  // Remote (non-loopback) content-egressing sidecars, opted into via
+  // `<section>.allowRemote` (the loader rejects them otherwise, Issue #436).
+  // Disclose the ongoing egress so a remote sidecar is never silent (ADR-0003).
+  for (const ep of collectSidecarEndpoints(config)) {
+    if (ep.loopback) continue;
+    warnings.push({
+      key: `${ep.section}.baseUrl`,
+      message:
+        `${ep.section} sidecar "${ep.baseUrl}" is a remote (non-loopback) endpoint ` +
+        `(${ep.allowRemoteKey} = true); ${ep.content} is sent there (egress, ADR-0003). ` +
         "See docs/design/config.md.",
     });
   }
