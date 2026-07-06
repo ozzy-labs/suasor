@@ -33,15 +33,17 @@ read で対象を特定して、purge は HITL。**auto-apply 経路は存在し
 
 1. 対象 source を特定する（`externalId` 不明なら `search`（FTS）/ `source.list` / `find-document` で確定）
 2. 消す対象（`externalId` / タイトル / 由来）と、**不可逆・本文は復元できない**旨を**ユーザーに明示して確認を取る**（native framing: ホスト側で人の承認を促す）。任意で `reason` を添える
-3. 承認後、`source.forget`（`externalId`, `reason?`）を呼ぶ。1 トランザクションで次を行う:
+3. 承認後、`source.forget`（`externalId`, `reason?`, `cascade?`）を呼ぶ。1 トランザクションで次を行う:
    - 当該 source の `SourceObserved` / `SourceBodyUpdated` の `body` を event redaction（append-only の明示的例外・[ADR-0026](../../adr/0026-source-forgetting.md)）
    - `SourceForgotten` を append（監査・本文を含まない）。その reducer が `sources` / `sources_fts` 行を DELETE
    - sidecar（`vec0` / `embeddings_meta` / `extraction_meta`）を imperative に DELETE
+4. **派生 content の開示 + cascade（[ADR-0026](../../adr/0026-source-forgetting.md) R1-2）**: 戻り値の `derived`（source 本文が流れ込んだ派生 entity = task/decision の title、decision rationale、reply draft 本文、commitment title、proposals ledger の summary、および射程外の `draft_export` パス）を**必ずユーザーに提示する**。引用が残ると「消えていない」ため、redact してよいか確認し、承認されたら `cascade: true` で再度呼ぶ（派生 event の自由文を同じ redaction 方式で消す）。`draft_export` パス・backup・host 会話履歴は**射程外**（開示のみ・DB 外）である旨も伝える
 
 ## 制約
 
 - HITL。人の承認なしに `source.forget` を呼ばない。auto-apply しない。`search` / `source.list` は read（特定）
 - **不可逆**。本文は projection・event ログの双方から消える（真の forget）。`projections rebuild` 後も purged 状態を再現（replay-stable）
-- **links は残る**: 派生 link（task→source 等）は「今は無い source 由来」という provenance として残す（`source.get` は null、dangling 表示は許容）
-- idempotent: 既 forget の再 forget は no-op。未知 id は `missing`（status で報告、throw しない）
+- **links は残る**: 派生 link（task→source 等）は「今は無い source 由来」という provenance として残す（`source.get` は null、dangling 表示は許容）。cascade でも link 自体は消さず、派生 entity の自由文だけを redact する
+- **派生 content の開示は必須**（R1-2）: `cascade` の有無に関わらず `derived` を提示する。cascade は HITL opt-in（`ProposalGenerated.summary` は reject 済み候補も対象）。`propose.reject` は却下時点で当該 summary を独立に redact する（R1-3）
+- idempotent: 既 forget の再 forget は no-op。未知 id は `missing`（status で報告、throw しない）。既 forget 済み source でも `cascade: true` なら派生 redaction は走る
 - 本 skill は手順書のみで実処理を持たない

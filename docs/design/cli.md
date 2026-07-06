@@ -35,7 +35,7 @@ suasor embeddings list-failed [--limit N] [--json]  # 現行 model ベクトル�
 suasor embeddings find-duplicates [--threshold T] [--json] [--no-progress]  # cosine 類似度が閾値超の near-dup ペア列挙
 suasor search [--limit N] [--source-type T] [--observed-after ISO] [--observed-before ISO] [--json] <query>  # FTS 検索
 suasor source list [--type T] [--limit N] [--since ISO] [--until ISO] [--json]  # 取り込み済み source の監査一覧（本文・secret 非表示・ADR-0026）
-suasor source forget <externalId> [--reason R] [--yes]  # source をローカル purge（本文 redaction + projection 削除・破壊的・--yes で適用・ADR-0026）
+suasor source forget <externalId> [--reason R] [--cascade] [--yes]  # source をローカル purge（本文 redaction + projection 削除・破壊的・--yes で適用・--cascade で派生 content も redact・ADR-0026）
 suasor source unforget <externalId>   # forget の tombstone を解除し再取り込みを許可（redact 済み本文は復元しない・冪等・ADR-0026 R1）
 suasor brief [--since D] [--until ISO] [--limit N] [--json]  # 期間ダイジェスト（brief バンドル）を stdout 出力
 suasor mcp serve                       # MCP server（stdio）起動（read + HITL write tools）
@@ -80,6 +80,7 @@ suasor --version                       # バージョン出力
 | `source list` | `--limit N` | 50 | 返す行の最大数（正の整数。非正値は error） |
 | `source list` | `--json` | false | 人間可読リストの代わりに `{externalId, sourceType, observedAt}[]` を JSON で出力（本文は出さない・NFR-PRV-4） |
 | `source forget` | `--reason R` | （任意） | 監査イベント（`SourceForgotten`）に記録する人間可読の理由 |
+| `source forget` | `--cascade` | false | 派生 entity（task/decision title・rationale・reply draft 本文・commitment title・proposal summary）の引用文も redact（ADR-0026 R1-2）。省略時は派生を開示するのみ |
 | `source forget` | `--yes` | false | 破壊的 purge を適用。省略時は対象を preview のみ（適用なし・ADR-0004 HITL） |
 | `brief` | `--since D` | `24h` | 期間下限。相対（`24h` / `7d` / `2w`）または ISO date。下限 inclusive |
 | `brief` | `--until ISO` | now | 期間上限（exclusive）、ISO date/datetime |

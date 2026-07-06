@@ -1010,6 +1010,37 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     expect(again.status).toBe("not_forgotten");
   });
 
+  test("source.forget discloses derived entities and cascade-redacts them (ADR-0026 R1-2)", async () => {
+    seedSource("gh:1", "secret plans");
+    // A task derived from the source carries a verbatim quote in its title.
+    store.record({
+      type: "TaskProposed",
+      taskId: "task_x",
+      title: "secret plans task",
+      sourceExternalIds: ["gh:1"],
+    });
+    const client = await connectWrite();
+
+    const out = parseResult(
+      (await client.callTool({
+        name: "source.forget",
+        arguments: { externalId: "gh:1", cascade: true },
+      })) as never,
+    ) as {
+      status: string;
+      cascaded: boolean;
+      derived: { kind: string; id: string; redactable: boolean }[];
+    };
+    expect(out.status).toBe("forgotten");
+    expect(out.cascaded).toBe(true);
+    // Disclosure returns the derived task; cascade blanks its title in-place.
+    expect(out.derived.some((d) => d.kind === "task" && d.id === "task_x")).toBe(true);
+    const title = store.connection.sqlite
+      .query<{ title: string }, [string]>("SELECT title FROM tasks WHERE id = ?")
+      .get("task_x")?.title;
+    expect(title).toBe("[redacted]");
+  });
+
   test("decision.record appends a decision visible via decision.list", async () => {
     const client = await connectWrite();
     const rec = parseResult(
