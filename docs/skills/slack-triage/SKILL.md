@@ -1,6 +1,6 @@
 ---
 name: slack-triage
-description: 「Slack の未処理を捌いて」「mention/DM まとめて」「Slack で呼ばれてるやつ」「Slack の未読対応」と頼まれたら、Suasor MCP の slack.demand.list（@mention / DM の未処理 signal）を集めて緊急度・種別で整理し、action が要るものは inbox.add で捕捉 / source.get → propose.generate(source_extract) で task・decision・返信下書き候補へ橋渡しする。demand の列挙は read で自律 OK、書き込み橋渡しは HITL。
+description: 「Slack の未処理を捌いて」「mention/DM まとめて」「Slack で呼ばれてるやつ」「Slack の未読対応」と頼まれたら、Suasor MCP の demand.list（source=slack の @mention / DM 未処理 signal）を集めて緊急度・種別で整理し、action が要るものは inbox.add で捕捉 / source.get → propose.generate(source_extract) で task・decision・返信下書き候補へ橋渡しし、対応済み / 不要は demand.ack / demand.dismiss で印を付ける。demand の列挙は read で自律 OK、書き込み橋渡しは HITL。
 readOnly: false
 category: triage
 triggers:
@@ -10,17 +10,19 @@ triggers:
   - Slack の未読対応
 pairs: []
 mcp_tools_read:
-  - slack.demand.list
+  - demand.list
   - source.get
 mcp_tools_write:
   - inbox.add
   - propose.generate
   - propose.apply
+  - demand.ack
+  - demand.dismiss
 ---
 
 # slack-triage
 
-Slack の @mention / DM を「読むべきが未処理」signal として集約し、捌く HITL write skill（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0013](../../adr/0013-slack-engagement-axis.md)）。demand の列挙は read で自律 OK だが、action 化（task / decision / 返信 / inbox 捕捉）で write tool（`inbox.add` / `propose.generate` / `propose.apply`）を HITL で呼ぶため boundary は write（auto-apply なし・[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `personal-brief` が状況 signal として取り込む demand を、Slack 起点で正面から扱う。
+Slack の @mention / DM を「読むべきが未処理」signal として集約し、捌く HITL write skill（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0013](../../adr/0013-slack-engagement-axis.md) / [ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。demand の列挙は read で自律 OK だが、action 化（task / decision / 返信 / inbox 捕捉）や seen 印付け（`demand.ack` / `demand.dismiss`）で write tool を HITL で呼ぶため boundary は write（auto-apply なし・[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `personal-brief` が `priority.list` 経由で取り込む demand を、Slack 起点で正面から扱う。
 
 ## いつ発火するか
 
@@ -31,16 +33,17 @@ Slack の @mention / DM を「読むべきが未処理」signal として集約�
 
 read で集めて、action 化（write）は HITL（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. `slack.demand.list` で未処理 signal を集める。`kinds`（`mention` / `dm`）/ `selfUserId`（mention 用、未指定時は config の `self_user_id`）/ `observedAfter` / `observedBefore` で絞る。取り込み済み `slack_message` source からの **query 導出**で、専用 projection は持たない（[ADR-0012](../../adr/0012-slack-demand-digest.md)）。各 demand は source の `externalId` / `body` / `observedAt` + `kind` + **`channelName` / `userName`**（ローカル projection から join した人間可読名。sync が名前解決していれば埋まり、未解決なら `null`＝`meta` の生 id に fallback。[ADR-0037](../../adr/0037-slack-name-enrichment.md) §3/§10。live fetch なし）
+1. `demand.list`（`source="slack"`）で未処理 signal を集める。`kinds`（`mention` / `dm`）/ `selfUserId`（mention 用、未指定時は config の `self_user_id`）/ `observedAfter` / `observedBefore` で絞る。取り込み済み `slack_message` source からの **query 導出**で、専用 projection は持たない（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。既定は **un-acked のみ**（`demand.ack` / `demand.dismiss` 済みは除外）。各 demand は source の `externalId` / `body` / `observedAt` + `source` + `kind` + **`channelName` / `userName`**（ローカル projection から join した人間可読名。sync が名前解決していれば埋まり、未解決なら `null`＝`meta` の生 id に fallback。[ADR-0037](../../adr/0037-slack-name-enrichment.md) §3/§10。live fetch なし）
 2. demand を kind（mention / dm）・新しさで整理し、**ユーザーに提示する**（ここまで read で自律 OK）。提示は **生 id（`C…` / `U…`）ではなく名前**を使う: 「`#<channelName>` で `<userName>` にメンションされています」のように `channelName` / `userName` を用い、`null`（未解決）のときだけ `meta.channel` / `meta.user` の id に fallback する。名前が全面 id-only のままなら `slack resolve-names` で既取り込み分を遡及解決できる（[ADR-0037](../../adr/0037-slack-name-enrichment.md) §11）
 3. action が要るものは HITL で橋渡しする（人の承認後のみ）:
    - **受信箱に捕捉** — `inbox.add`（`sourceExternalId`）で `open` 捕捉し、以後 `inbox-triage` で解決する
    - **task / decision / 返信下書き化** — `source.get` で本文を読み、`propose.generate`（mode=`source_extract`）で候補を生成 → `propose.list` で確認 → 承認分のみ `propose.apply`（`source-extract` と同じ flow）
    - **返信したいだけ** — `reply-draft` skill（`propose.generate` mode=`reply_draft`、`reply_to_source_id` 指定）へ
+4. 処理した demand は `demand.ack`（対応した）、対応不要なものは `demand.dismiss`（外す）で印を付ける（HITL）。以後 既定の `demand.list` / `priority.list` / `personal-brief` から外れる（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。task 化 / inbox 捕捉した mention はそのまま ack して二重計上を防ぐ
 
 ## 制約
 
-- demand 列挙は read（自律 OK）だが、write tool（`inbox.add` / `propose.generate` / `propose.apply`）を呼ぶため boundary は write。書き込みは HITL（人の承認なしに呼ばない・auto-apply なし）
+- demand 列挙は read（自律 OK）だが、write tool（`inbox.add` / `propose.generate` / `propose.apply` / `demand.ack` / `demand.dismiss`）を呼ぶため boundary は write。書き込みは HITL（人の承認なしに呼ばない・auto-apply なし）
 - `selfUserId` も config の `self_user_id` も無いと mention は無効化され DM のみ返る（`kinds: ["mention"]` 指定時は空）
-- demand は導出 view（新規 table なし）。`mention` = `body` に `<@uid>` を含む / `dm` = channel id が `D` 始まり（[ADR-0012](../../adr/0012-slack-demand-digest.md)）
+- demand は導出 view（seen-state 用の `demand_seen` を除き新規 entity table なし）。`mention` = `body` に `<@uid>` を含む / `dm` = channel id が `D` 始まり（[ADR-0012](../../adr/0012-slack-demand-digest.md)）
 - 本 skill は手順書のみで実処理を持たない

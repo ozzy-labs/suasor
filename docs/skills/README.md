@@ -35,7 +35,7 @@
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
 | [`reply-draft`](reply-draft/SKILL.md) | 「返信案考えて」「下書き作って」 | propose.generate(reply_draft) → propose.apply / draft.export |
-| [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | slack.demand.list → inbox.add / source.get → propose.generate(source_extract) → propose.apply |
+| [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | demand.list(source=slack) → inbox.add / source.get → propose.generate(source_extract) → propose.apply / demand.ack |
 | [`inbox-triage`](inbox-triage/SKILL.md) | 「受信箱整理して」「未処理捌いて」 | inbox.list → propose.generate(inbox_triage) → task.create / propose.apply |
 | [`source-extract`](source-extract/SKILL.md) | 「この資料からタスク抽出」 | source.get → propose.generate(source_extract) → propose.apply |
 | [`meeting-followup`](meeting-followup/SKILL.md) | 「会議後のaction items」「議事録からタスク」 | source.list(calendar) → propose.generate(meeting_followup) → propose.apply |

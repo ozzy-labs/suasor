@@ -29,6 +29,7 @@ import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import {
   buildActivityTimeline,
   buildBrief,
+  buildPriorities,
   DEFAULT_LIST_LIMIT,
   deriveBriefWarnings,
   expandGraph,
@@ -36,11 +37,11 @@ import {
   getSourceFull,
   listCommitments,
   listDecisions,
+  listDemand,
   listInbox,
   listLinks,
   listPersons,
   listProposals,
-  listSlackDemand,
   listSourceHistory,
   listSources,
   listTasks,
@@ -397,47 +398,104 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     },
   );
 
-  // --- slack.demand.list ---
+  // --- demand.list (ADR-0041, replaces slack.demand.list) ---
   server.registerTool(
-    "slack.demand.list",
+    "demand.list",
     {
-      title: "List Slack demand",
+      title: "List demand",
       description:
-        "List unread-worthy Slack signals — @mentions of you and DMs — newest first, " +
-        "derived (read-only, FTS-first) from ingested slack_message sources (ADR-0012). " +
-        "Each row carries `channelName` / `userName` / `teamName` joined locally from the " +
-        "slack_channels / person_identities / slack_teams projections (ADR-0037), or `null` when " +
-        "unresolved (fall back to the raw ids in `meta`); names are never live-fetched. " +
-        "Use as a priority signal in next-actions / personal-brief. Returns " +
-        "`truncated: true` when more rows match than `limit` returned (ADR-0007).",
+        "List connector-neutral, unread-worthy demand signals — newest first, derived " +
+        "(read-only, FTS-first, no extra fetch) from ingested sources (ADR-0041): Slack " +
+        "@mentions of you + DMs (source `slack`, kind `mention`/`dm`, ADR-0012) and " +
+        "demand-worthy github notifications (source `github`, kind = the notification " +
+        "reason: review_requested / mention / team_mention / assign / author). Slack rows " +
+        "carry `channelName` / `userName` / `teamName` joined locally from the " +
+        "slack_channels / person_identities / slack_teams projections (ADR-0037), or `null` " +
+        "when unresolved / for github (fall back to `meta`); never live-fetched. Returns " +
+        "only OUTSTANDING (un-acked) demand by default — rows marked seen via demand.ack / " +
+        "demand.dismiss, or a github notification already read (`meta.unread=false`), are " +
+        "hidden so 'unprocessed' is true (ADR-0041 supersedes ADR-0012 決定 4). Pass " +
+        "includeSeen=true to return all with `seenState` populated. Use as the priority " +
+        "signal in next-actions / personal-brief. Returns `truncated: true` when more rows " +
+        "match than `limit` returned (ADR-0007).",
       inputSchema: {
         selfUserId: z
           .string()
           .min(1)
           .optional()
           .describe("Your Slack user id (Uxxxx) for @mention detection; falls back to config."),
-        kinds: z
-          .array(z.enum(["mention", "dm"]))
+        source: z
+          .enum(["slack", "github"])
           .optional()
-          .describe("Restrict to these kinds (default: both)."),
+          .describe("Restrict to a single connector (default: both)."),
+        kinds: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            "Restrict to these kinds (Slack mention/dm, or a github reason; default: all).",
+          ),
+        includeSeen: z
+          .boolean()
+          .optional()
+          .describe("Include acked / dismissed / github-read rows (default: un-acked only)."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ selfUserId, kinds, observedAfter, observedBefore, limit }) => {
+    async ({ selfUserId, source, kinds, includeSeen, observedAfter, observedBefore, limit }) => {
       const selfUserIds = selfUserId ? [selfUserId] : (deps.slackSelfUserIds ?? []);
       const effLimit = limit ?? DEFAULT_LIST_LIMIT;
       const { rows: demand, truncated } = listWithTruncation(effLimit, (probeLimit) =>
-        listSlackDemand(sqlite, {
+        listDemand(sqlite, {
           selfUserIds,
+          ...(source ? { source } : {}),
           ...(kinds ? { kinds } : {}),
+          ...(includeSeen !== undefined ? { includeSeen } : {}),
           observed: { after: observedAfter, before: observedBefore },
           limit: probeLimit,
         }),
       );
       return jsonResult({ demand, truncated });
+    },
+  );
+
+  // --- priority.list (ADR-0041, deterministic cross-entity scorer) ---
+  server.registerTool(
+    "priority.list",
+    {
+      title: "Ranked next-actions",
+      description:
+        "Deterministic cross-entity next-actions ranking (ADR-0041): open/in-progress " +
+        "tasks + open commitments + outstanding (un-acked) demand, merged into one ranked " +
+        "list by a fixed comparator so identical input always yields identical order. The " +
+        "ranking basis lives in code, not skill prose: overdue > un-acked demand (freshness) " +
+        "> due-date proximity > priority (high>normal>low) > recency. Each row carries " +
+        "`reason` (the rule tier that placed it) + `explanation` (why it is here) and the " +
+        "underlying `record`. An acked mention drops out of the demand tier, so it can no " +
+        "longer sit permanently above dated work. next-actions / personal-brief consume this " +
+        "baseline; the host may still override with conversational context. Returns " +
+        "`truncated: true` when more candidates matched than `limit` returned (ADR-0007).",
+      inputSchema: {
+        selfUserId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Your Slack user id (Uxxxx) for demand @mention detection; falls back to config.",
+          ),
+        limit: limitShape.describe(`Max ranked rows (default ${DEFAULT_LIST_LIMIT}).`),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ selfUserId, limit }) => {
+      const selfUserIds = selfUserId ? [selfUserId] : (deps.slackSelfUserIds ?? []);
+      const priorities = buildPriorities(sqlite, {
+        selfUserIds,
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return jsonResult(priorities);
     },
   );
 

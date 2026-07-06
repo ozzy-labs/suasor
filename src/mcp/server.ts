@@ -8,14 +8,14 @@
  *
  * - `server-read.ts` — the side-effect-free read tools (`search`,
  *   `recall.search`, `search.hybrid`, `source.*`, `task.list`, `decision.list`,
- *   `slack.demand.list`, `brief`, `graph.*`, `inbox.list`, `propose.list`,
- *   `commitment.list`, `person.list`). All `readOnlyHint: true`.
+ *   `demand.list`, `priority.list`, `brief`, `graph.*`, `inbox.list`,
+ *   `propose.list`, `commitment.list`, `person.list`). All `readOnlyHint: true`.
  * - `server-write.ts` — the HITL write tools (`connector.sync`, `propose.*`,
  *   `task.create` / `task.update`, `decision.record`, `inbox.add` /
  *   `inbox.triage`, `link.add` / `link.remove`, `person.merge` / `person.split`,
- *   `commitment.resolve` / `.dismiss` / `.reopen`, `source.forget` /
- *   `source.unforget`, `draft.export`). All `readOnlyHint: false`; registered only when a writable
- *   `Store` + config are supplied.
+ *   `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `demand.dismiss`,
+ *   `source.forget` / `source.unforget`, `draft.export`). All `readOnlyHint: false`; registered only
+ *   when a writable `Store` + config are supplied.
  *
  * Shared deps/contract + small helpers live in `server-shared.ts`. The public
  * import path (`./server.ts` → `buildMcpServer`, `McpServerDeps`,
@@ -54,7 +54,7 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "propose.generate, propose.apply, propose.reject, proposal.feedback, propose.batch, " +
         "task.create, task.update, task.publish, task.act, decision.record, inbox.add, inbox.triage, link.add, " +
         "link.remove, person.merge, person.split, commitment.resolve, commitment.dismiss, " +
-        "commitment.reopen, draft.export, source.forget, source.unforget) are HITL: gate them " +
+        "commitment.reopen, demand.ack, demand.dismiss, draft.export, source.forget, source.unforget) are HITL: gate them " +
         "behind human approval, never auto-apply — including the destructive source.forget (local " +
         "purge, ADR-0026; source.unforget lifts its tombstone) and the local-file draft.export " +
         "(export sandbox, ADR-0025). propose.list " +

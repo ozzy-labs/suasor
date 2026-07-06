@@ -2,14 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import {
   buildBrief,
+  buildPriorities,
   deriveBriefWarnings,
   expandGraph,
   getSource,
   listCommitments,
   listDecisions,
+  listDemand,
   listInbox,
   listLinks,
-  listSlackDemand,
   listSourceHistory,
   listSources,
   listTasks,
@@ -352,7 +353,7 @@ describe("listCommitments (ADR-0021)", () => {
   });
 });
 
-describe("listSlackDemand (ADR-0012)", () => {
+describe("listDemand — Slack (ADR-0012 / ADR-0041)", () => {
   /** Seed a slack_message source with a channel + body (+ optional sender). */
   function slack(
     externalId: string,
@@ -401,7 +402,7 @@ describe("listSlackDemand (ADR-0012)", () => {
     slack("m1", "C1", "hey <@U_ME> can you review", "2026-06-10T00:00:00.000Z"); // mention
     slack("d1", "D9", "direct hello", "2026-06-11T00:00:00.000Z"); // DM
     slack("n1", "C1", "unrelated channel chatter", "2026-06-12T00:00:00.000Z"); // neither
-    const rows = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const rows = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(rows.map((r) => r.externalId).sort()).toEqual(["d1", "m1"]);
     expect(rows.find((r) => r.externalId === "d1")?.kind).toBe("dm");
     expect(rows.find((r) => r.externalId === "m1")?.kind).toBe("mention");
@@ -410,37 +411,35 @@ describe("listSlackDemand (ADR-0012)", () => {
   test("newest-first by observed_at", () => {
     slack("d1", "D9", "older", "2026-06-10T00:00:00.000Z");
     slack("d2", "D9", "newer", "2026-06-12T00:00:00.000Z");
-    expect(listSlackDemand(sqlite()).map((r) => r.externalId)).toEqual(["d2", "d1"]);
+    expect(listDemand(sqlite()).map((r) => r.externalId)).toEqual(["d2", "d1"]);
   });
 
   test("kinds=['dm'] excludes mentions; ['mention'] excludes DMs", () => {
     slack("m1", "C1", "ping <@U_ME>", "2026-06-10T00:00:00.000Z");
     slack("d1", "D9", "dm", "2026-06-11T00:00:00.000Z");
     expect(
-      listSlackDemand(sqlite(), { selfUserIds: ["U_ME"], kinds: ["dm"] }).map((r) => r.externalId),
+      listDemand(sqlite(), { selfUserIds: ["U_ME"], kinds: ["dm"] }).map((r) => r.externalId),
     ).toEqual(["d1"]);
     expect(
-      listSlackDemand(sqlite(), { selfUserIds: ["U_ME"], kinds: ["mention"] }).map(
-        (r) => r.externalId,
-      ),
+      listDemand(sqlite(), { selfUserIds: ["U_ME"], kinds: ["mention"] }).map((r) => r.externalId),
     ).toEqual(["m1"]);
   });
 
   test("without selfUserIds, default kinds returns DMs only", () => {
     slack("m1", "C1", "ping <@U_ME>", "2026-06-10T00:00:00.000Z");
     slack("d1", "D9", "dm", "2026-06-11T00:00:00.000Z");
-    expect(listSlackDemand(sqlite()).map((r) => r.externalId)).toEqual(["d1"]);
+    expect(listDemand(sqlite()).map((r) => r.externalId)).toEqual(["d1"]);
   });
 
   test("mention-only with no selfUserIds yields nothing (no predicate)", () => {
     slack("d1", "D9", "dm", "2026-06-11T00:00:00.000Z");
-    expect(listSlackDemand(sqlite(), { kinds: ["mention"] })).toEqual([]);
+    expect(listDemand(sqlite(), { kinds: ["mention"] })).toEqual([]);
   });
 
   test("matches any of several self user ids", () => {
     slack("m1", "C1", "hi <@U_ALT>", "2026-06-10T00:00:00.000Z");
     expect(
-      listSlackDemand(sqlite(), { selfUserIds: ["U_ME", "U_ALT"], kinds: ["mention"] }).map(
+      listDemand(sqlite(), { selfUserIds: ["U_ME", "U_ALT"], kinds: ["mention"] }).map(
         (r) => r.externalId,
       ),
     ).toEqual(["m1"]);
@@ -450,16 +449,16 @@ describe("listSlackDemand (ADR-0012)", () => {
     slack("d1", "D9", "a", "2026-06-10T00:00:00.000Z");
     slack("d2", "D9", "b", "2026-06-11T00:00:00.000Z");
     slack("d3", "D9", "c", "2026-06-12T00:00:00.000Z");
-    const windowed = listSlackDemand(sqlite(), { observed: { after: "2026-06-11T00:00:00.000Z" } });
+    const windowed = listDemand(sqlite(), { observed: { after: "2026-06-11T00:00:00.000Z" } });
     expect(windowed.map((r) => r.externalId)).toEqual(["d3", "d2"]);
-    expect(listSlackDemand(sqlite(), { limit: 1 }).map((r) => r.externalId)).toEqual(["d3"]);
+    expect(listDemand(sqlite(), { limit: 1 }).map((r) => r.externalId)).toEqual(["d3"]);
   });
 
   test("enriches channelName / userName from local projections (ADR-0037 §10)", () => {
     channel("C1", "general");
     identity("U_ALICE", "Alice");
     slack("m1", "C1", "hey <@U_ME> please look", "2026-06-10T00:00:00.000Z", "U_ALICE");
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.channelName).toBe("general");
     expect(row?.userName).toBe("Alice");
     // Existing fields stay intact (backward compatible, additive enrichment).
@@ -473,7 +472,7 @@ describe("listSlackDemand (ADR-0012)", () => {
     channel("C1", "general");
     team("T1", "Acme"); // slack() seeds meta.team = "T1"
     slack("m1", "C1", "hey <@U_ME> please look", "2026-06-10T00:00:00.000Z", "U_ALICE");
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.teamName).toBe("Acme");
     // Raw id remains in meta for the display-layer fallback.
     expect(row?.meta.team).toBe("T1");
@@ -481,7 +480,7 @@ describe("listSlackDemand (ADR-0012)", () => {
 
   test("unresolved team id falls back to null (id-only, §6)", () => {
     slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z");
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.teamName).toBeNull();
     expect(row?.meta.team).toBe("T1");
   });
@@ -489,7 +488,7 @@ describe("listSlackDemand (ADR-0012)", () => {
   test("an empty resolved team name degrades to null (not an empty string)", () => {
     team("T1", ""); // observed but unresolved name (degrade path)
     slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z");
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.teamName).toBeNull();
   });
 
@@ -497,14 +496,14 @@ describe("listSlackDemand (ADR-0012)", () => {
     // PR2 folds the DM counterpart's name onto the D… channel row.
     channel("D9", "Bob", "dm");
     slack("d1", "D9", "direct hello", "2026-06-11T00:00:00.000Z");
-    const [row] = listSlackDemand(sqlite());
+    const [row] = listDemand(sqlite());
     expect(row?.kind).toBe("dm");
     expect(row?.channelName).toBe("Bob");
   });
 
   test("unresolved channel / user ids fall back to null (id-only, §6)", () => {
     slack("m1", "C_UNKNOWN", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_NOBODY");
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.channelName).toBeNull();
     expect(row?.userName).toBeNull();
     // Raw ids remain available in meta for the display-layer fallback.
@@ -515,7 +514,7 @@ describe("listSlackDemand (ADR-0012)", () => {
   test("an empty resolved name degrades to null (not an empty string)", () => {
     channel("C1", ""); // observed but unresolved name (degrade path)
     slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_ALICE");
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.channelName).toBeNull();
     // No person identity seeded → userName also degrades to null.
     expect(row?.userName).toBeNull();
@@ -524,7 +523,7 @@ describe("listSlackDemand (ADR-0012)", () => {
   test("a source without meta.user yields a null userName", () => {
     channel("C1", "general");
     slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z"); // no user in meta
-    const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+    const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
     expect(row?.channelName).toBe("general");
     expect(row?.userName).toBeNull();
   });
@@ -534,7 +533,7 @@ describe("listSlackDemand (ADR-0012)", () => {
     identity("U_ALICE", "Alice");
     team("T1", "Acme");
     slack("m1", "C1", "hey <@U_ME>", "2026-06-10T00:00:00.000Z", "U_ALICE");
-    // listSlackDemand takes only a sqlite handle (no transport/client is injected),
+    // listDemand takes only a sqlite handle (no transport/client is injected),
     // so a join cannot reach Slack. Guard it by making any fetch throw.
     const originalFetch = globalThis.fetch;
     let fetched = false;
@@ -543,7 +542,7 @@ describe("listSlackDemand (ADR-0012)", () => {
       throw new Error("no network at query time");
     }) as unknown as typeof fetch;
     try {
-      const [row] = listSlackDemand(sqlite(), { selfUserIds: ["U_ME"] });
+      const [row] = listDemand(sqlite(), { selfUserIds: ["U_ME"] });
       expect(row?.channelName).toBe("general");
       expect(row?.userName).toBe("Alice");
       expect(row?.teamName).toBe("Acme");
@@ -551,6 +550,172 @@ describe("listSlackDemand (ADR-0012)", () => {
       globalThis.fetch = originalFetch;
     }
     expect(fetched).toBe(false);
+  });
+});
+
+describe("listDemand — GitHub notifications (ADR-0041)", () => {
+  /** Seed a github_notification source with a reason + unread state. */
+  function ghNotif(
+    externalId: string,
+    reason: string,
+    observedAt: string,
+    opts: { unread?: boolean } = {},
+  ) {
+    store.record({
+      type: "SourceObserved",
+      externalId,
+      sourceType: "github_notification",
+      body: `${reason} on ${externalId}`,
+      observedAt,
+      fingerprint: externalId,
+      meta: {
+        repo: "o/r",
+        reason,
+        subjectType: "PullRequest",
+        subjectUrl: null,
+        unread: opts.unread ?? true,
+      },
+    });
+  }
+
+  test("surfaces demand-worthy notifications (review_requested etc.), kind = reason", () => {
+    ghNotif("n-review", "review_requested", "2026-06-12T00:00:00.000Z");
+    ghNotif("n-mention", "mention", "2026-06-11T00:00:00.000Z");
+    ghNotif("n-assign", "assign", "2026-06-10T00:00:00.000Z");
+    const rows = listDemand(sqlite());
+    // Acceptance (Issue #419): a GitHub review request appears in demand.
+    expect(rows.map((r) => r.externalId)).toEqual(["n-review", "n-mention", "n-assign"]);
+    const review = rows.find((r) => r.externalId === "n-review");
+    expect(review?.source).toBe("github");
+    expect(review?.kind).toBe("review_requested");
+    // No slack enrichment for github rows.
+    expect(review?.channelName).toBeNull();
+    expect(review?.userName).toBeNull();
+  });
+
+  test("excludes non-demand reasons (subscribed / ci_activity / state_change)", () => {
+    ghNotif("n-review", "review_requested", "2026-06-12T00:00:00.000Z");
+    ghNotif("n-sub", "subscribed", "2026-06-13T00:00:00.000Z");
+    ghNotif("n-ci", "ci_activity", "2026-06-14T00:00:00.000Z");
+    ghNotif("n-state", "state_change", "2026-06-15T00:00:00.000Z");
+    expect(listDemand(sqlite()).map((r) => r.externalId)).toEqual(["n-review"]);
+  });
+
+  test("an already-read notification (unread=false) is hidden by default, shown with includeSeen", () => {
+    ghNotif("n-read", "review_requested", "2026-06-12T00:00:00.000Z", { unread: false });
+    ghNotif("n-unread", "review_requested", "2026-06-11T00:00:00.000Z", { unread: true });
+    // Default: only outstanding (unread) is returned.
+    expect(listDemand(sqlite()).map((r) => r.externalId)).toEqual(["n-unread"]);
+    // includeSeen surfaces the read one with seenState 'read'.
+    const all = listDemand(sqlite(), { includeSeen: true });
+    expect(all.map((r) => r.externalId)).toEqual(["n-read", "n-unread"]);
+    expect(all.find((r) => r.externalId === "n-read")?.seenState).toBe("read");
+    expect(all.find((r) => r.externalId === "n-unread")?.seenState).toBeNull();
+  });
+
+  test("kinds filter matches a github reason", () => {
+    ghNotif("n-review", "review_requested", "2026-06-12T00:00:00.000Z");
+    ghNotif("n-assign", "assign", "2026-06-11T00:00:00.000Z");
+    expect(listDemand(sqlite(), { kinds: ["review_requested"] }).map((r) => r.externalId)).toEqual([
+      "n-review",
+    ]);
+  });
+
+  test("a notification with unread absent/null stays outstanding (not wrongly hidden)", () => {
+    // The connector may emit `unread: null` (API omitted it) or no key at all.
+    // Only an explicit unread=false counts as read; null must remain outstanding
+    // (null-safe SQL — otherwise NULL collapses the predicate and hides the row).
+    store.record({
+      type: "SourceObserved",
+      externalId: "n-null",
+      sourceType: "github_notification",
+      body: "review",
+      observedAt: "2026-06-12T00:00:00.000Z",
+      fingerprint: "n-null",
+      meta: { repo: "o/r", reason: "review_requested", unread: null },
+    });
+    store.record({
+      type: "SourceObserved",
+      externalId: "n-absent",
+      sourceType: "github_notification",
+      body: "mention",
+      observedAt: "2026-06-11T00:00:00.000Z",
+      fingerprint: "n-absent",
+      meta: { repo: "o/r", reason: "mention" },
+    });
+    expect(
+      listDemand(sqlite())
+        .map((r) => r.externalId)
+        .sort(),
+    ).toEqual(["n-absent", "n-null"]);
+    for (const r of listDemand(sqlite())) expect(r.seenState).toBeNull();
+  });
+});
+
+describe("listDemand — neutral merge + seen-state (ADR-0041)", () => {
+  function slackDm(externalId: string, observedAt: string) {
+    store.record({
+      type: "SourceObserved",
+      externalId,
+      sourceType: "slack_message",
+      body: "dm",
+      observedAt,
+      fingerprint: externalId,
+      meta: { team: "T1", channel: "D9" },
+    });
+  }
+  function ghNotif(externalId: string, observedAt: string) {
+    store.record({
+      type: "SourceObserved",
+      externalId,
+      sourceType: "github_notification",
+      body: "review",
+      observedAt,
+      fingerprint: externalId,
+      meta: { repo: "o/r", reason: "review_requested", unread: true },
+    });
+  }
+
+  test("merges slack + github newest-first", () => {
+    slackDm("s-old", "2026-06-10T00:00:00.000Z");
+    ghNotif("g-mid", "2026-06-11T00:00:00.000Z");
+    slackDm("s-new", "2026-06-12T00:00:00.000Z");
+    expect(listDemand(sqlite()).map((r) => r.externalId)).toEqual(["s-new", "g-mid", "s-old"]);
+  });
+
+  test("source filter restricts to a single connector", () => {
+    slackDm("s1", "2026-06-10T00:00:00.000Z");
+    ghNotif("g1", "2026-06-11T00:00:00.000Z");
+    expect(listDemand(sqlite(), { source: "slack" }).map((r) => r.externalId)).toEqual(["s1"]);
+    expect(listDemand(sqlite(), { source: "github" }).map((r) => r.externalId)).toEqual(["g1"]);
+  });
+
+  test("an acked demand is hidden by default, shown with includeSeen (seenState 'acked')", () => {
+    slackDm("s1", "2026-06-10T00:00:00.000Z");
+    slackDm("s2", "2026-06-11T00:00:00.000Z");
+    store.record({ type: "DemandAcknowledged", externalId: "s2" });
+    expect(listDemand(sqlite()).map((r) => r.externalId)).toEqual(["s1"]);
+    const all = listDemand(sqlite(), { includeSeen: true });
+    expect(all.map((r) => r.externalId)).toEqual(["s2", "s1"]);
+    expect(all.find((r) => r.externalId === "s2")?.seenState).toBe("acked");
+  });
+
+  test("a dismissed demand is hidden; includeSeen shows seenState 'dismissed' (last-write-wins)", () => {
+    slackDm("s1", "2026-06-10T00:00:00.000Z");
+    store.record({ type: "DemandAcknowledged", externalId: "s1" });
+    store.record({ type: "DemandDismissed", externalId: "s1" }); // LWW → dismissed
+    expect(listDemand(sqlite())).toEqual([]);
+    const all = listDemand(sqlite(), { includeSeen: true });
+    expect(all.find((r) => r.externalId === "s1")?.seenState).toBe("dismissed");
+  });
+
+  test("limit counts un-acked rows (seen filtering happens in SQL, not post-filter)", () => {
+    slackDm("s1", "2026-06-10T00:00:00.000Z");
+    slackDm("s2", "2026-06-11T00:00:00.000Z");
+    slackDm("s3", "2026-06-12T00:00:00.000Z");
+    store.record({ type: "DemandAcknowledged", externalId: "s3" }); // newest acked
+    // limit 2 must return the 2 newest UN-ACKED (s2, s1), not just s2.
+    expect(listDemand(sqlite(), { limit: 2 }).map((r) => r.externalId)).toEqual(["s2", "s1"]);
   });
 });
 
@@ -811,5 +976,143 @@ describe("listSourceHistory", () => {
     const limited = listSourceHistory(sqlite(), "gh:2", { limit: 1 });
     expect(limited).toHaveLength(1);
     expect(limited[0]?.body).toBe("second");
+  });
+});
+
+describe("buildPriorities — deterministic cross-entity scorer (ADR-0041)", () => {
+  // A fixed 'now' pins overdue / freshness so the ranking is reproducible.
+  const NOW = "2026-06-20T00:00:00.000Z";
+
+  /** Seed an open task with an optional dueDate / priority. */
+  function task(
+    taskId: string,
+    title: string,
+    opts: { dueDate?: string; priority?: "low" | "normal" | "high" } = {},
+  ) {
+    store.record({
+      type: "TaskProposed",
+      taskId,
+      title,
+      ...(opts.dueDate ? { dueDate: opts.dueDate } : {}),
+      ...(opts.priority ? { priority: opts.priority } : {}),
+      sourceExternalIds: [],
+    });
+    store.record({ type: "TaskApplied", taskId, state: "open" });
+  }
+
+  /** Seed an open commitment with an optional dueDate. */
+  function commitment(commitmentId: string, title: string, dueDate?: string) {
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId,
+      title,
+      direction: "owed_by_me",
+      ...(dueDate ? { dueDate } : {}),
+      sourceExternalIds: [],
+    });
+  }
+
+  /** Seed a slack DM demand row observed at `observedAt`. */
+  function demand(externalId: string, observedAt: string) {
+    store.record({
+      type: "SourceObserved",
+      externalId,
+      sourceType: "slack_message",
+      body: `dm ${externalId}`,
+      observedAt,
+      fingerprint: externalId,
+      meta: { team: "T1", channel: "D9" },
+    });
+  }
+
+  test("fixes the order: overdue > un-acked demand > due_soon > priority > recency", () => {
+    commitment("c-overdue", "commitment overdue", "2026-06-05T00:00:00.000Z"); // tier 0, due 06-05
+    task("t-overdue", "task overdue", { dueDate: "2026-06-10T00:00:00.000Z" }); // tier 0, due 06-10
+    demand("dm1", "2026-06-19T00:00:00.000Z"); // tier 1, freshest
+    demand("dm2", "2026-06-18T00:00:00.000Z"); // tier 1, older
+    task("t-soon", "task soon", { dueDate: "2026-06-25T00:00:00.000Z" }); // tier 2, due_soon
+    task("t-prio", "task prioritised", { priority: "high" }); // tier 2, priority
+    task("t-recent", "task recent"); // tier 2, recency
+
+    const { items } = buildPriorities(sqlite(), { now: NOW });
+    expect(items.map((i) => i.id)).toEqual([
+      "c-overdue", // overdue, sooner due first
+      "t-overdue",
+      "dm1", // un-acked demand, freshest first
+      "dm2",
+      "t-soon", // has a due date
+      "t-prio", // priority beats recency
+      "t-recent",
+    ]);
+    // Rank + reason rationale reflect the tier that placed each row.
+    expect(items.map((i) => i.reason)).toEqual([
+      "overdue",
+      "overdue",
+      "unacked_demand",
+      "unacked_demand",
+      "due_soon",
+      "priority",
+      "recency",
+    ]);
+    expect(items[0]?.rank).toBe(1);
+    expect(items.map((i) => i.entity)).toEqual([
+      "commitment",
+      "task",
+      "demand",
+      "demand",
+      "task",
+      "task",
+      "task",
+    ]);
+  });
+
+  test("an acked mention drops out of the demand tier (no longer above dated work)", () => {
+    task("t-soon", "task soon", { dueDate: "2026-06-25T00:00:00.000Z" });
+    demand("m1", "2026-06-19T00:00:00.000Z");
+    // Before ack: the un-acked mention (tier 1) sits above the dated task (tier 2).
+    expect(buildPriorities(sqlite(), { now: NOW }).items.map((i) => i.id)).toEqual([
+      "m1",
+      "t-soon",
+    ]);
+    // Ack it → it leaves the demand tier entirely.
+    store.record({ type: "DemandAcknowledged", externalId: "m1" });
+    const after = buildPriorities(sqlite(), { now: NOW });
+    expect(after.items.map((i) => i.id)).toEqual(["t-soon"]);
+  });
+
+  test("identical input yields identical order (stable / reproducible)", () => {
+    task("t-a", "a", { dueDate: "2026-06-25T00:00:00.000Z" });
+    task("t-b", "b", { dueDate: "2026-06-25T00:00:00.000Z" }); // same due → deterministic tie-break
+    demand("d1", "2026-06-19T00:00:00.000Z");
+    const first = buildPriorities(sqlite(), { now: NOW }).items.map((i) => i.id);
+    const second = buildPriorities(sqlite(), { now: NOW }).items.map((i) => i.id);
+    expect(first).toEqual(second);
+  });
+
+  test("excludes completed / dropped tasks and resolved commitments", () => {
+    task("t-open", "open task");
+    store.record({ type: "TaskProposed", taskId: "t-done", title: "done", sourceExternalIds: [] });
+    store.record({ type: "TaskApplied", taskId: "t-done", state: "completed" });
+    commitment("c-open", "open commitment");
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: "c-res",
+      title: "res",
+      direction: "owed_by_me",
+      sourceExternalIds: [],
+    });
+    store.record({ type: "CommitmentResolved", commitmentId: "c-res" });
+    const { items } = buildPriorities(sqlite(), { now: NOW });
+    const ids = items.map((i) => i.id).sort();
+    expect(ids).toEqual(["c-open", "t-open"]);
+  });
+
+  test("truncated is true when candidates exceed limit", () => {
+    task("t1", "one");
+    task("t2", "two");
+    task("t3", "three");
+    const res = buildPriorities(sqlite(), { now: NOW, limit: 2 });
+    expect(res.items).toHaveLength(2);
+    expect(res.truncated).toBe(true);
   });
 });

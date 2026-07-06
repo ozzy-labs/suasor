@@ -727,40 +727,99 @@ export function listCommitments(
   }));
 }
 
-/** A Slack demand signal: an `@you` mention or a DM, classified by `kind`. */
-export interface SlackDemandRecord extends SourceRecord {
-  /** `dm` when the source is a direct message; otherwise `mention`. */
-  kind: "mention" | "dm";
+/** Connector-neutral demand source grouping (ADR-0041). */
+export type DemandSource = "slack" | "github";
+
+/**
+ * Seen-state of a demand row (ADR-0041). `acked` / `dismissed` come from the
+ * local `demand_seen` projection (a `demand.ack` / `demand.dismiss` event);
+ * `read` is derived for a `github_notification` whose ingested `meta.unread` is
+ * `false` (already read on GitHub). `null` = outstanding (un-acked) — the only
+ * rows `demand.list` returns by default.
+ */
+export type DemandSeenState = "acked" | "dismissed" | "read";
+
+/**
+ * `github_notification` `reason`s that count as demand — "requires your
+ * attention" (ADR-0041). GitHub emits many reasons; only these five carry a
+ * "you should act" signal (the rest — `subscribed` / `ci_activity` / `push` /
+ * `state_change` / … — are FYI noise that would drown the triage tier):
+ *   - `review_requested` — a review was requested from you
+ *   - `mention` / `team_mention` — you (or your team) were @mentioned
+ *   - `assign` — an issue/PR was assigned to you
+ *   - `author` — you authored the thread and there is new activity to answer
+ * Exported + tested so the demand-worthy set is discoverable and adjustable
+ * without spelunking the query. The neutral demand `kind` for a github row is its
+ * `reason` verbatim.
+ */
+export const GITHUB_DEMAND_REASONS = [
+  "assign",
+  "author",
+  "mention",
+  "review_requested",
+  "team_mention",
+] as const;
+
+/**
+ * A connector-neutral demand signal (ADR-0041): an attention-worthy row derived
+ * (FTS-first, no extra fetch) from ingested sources — a Slack `@you` mention / DM
+ * (ADR-0012) or a `github_notification` thread. Generalises the former
+ * Slack-only `SlackDemandRecord`.
+ */
+export interface DemandRecord extends SourceRecord {
+  /** Which connector the demand came from (`slack` / `github`). */
+  source: DemandSource;
+  /**
+   * Fine-grained classification: Slack `mention` / `dm`, or a github
+   * notification `reason` (e.g. `review_requested`).
+   */
+  kind: string;
   /**
    * Human-readable channel name joined from the local `slack_channels`
-   * projection (ADR-0037 §3/§10) via `meta.channel`. `null` when unresolved
-   * (no projection row / empty name), so display layers fall back to the raw
-   * id in `meta.channel`. Never live-fetched (no-fetch-at-query, ADR-0012).
+   * projection (ADR-0037 §3/§10) via `meta.channel`. `null` for github rows or
+   * when unresolved (fall back to the raw id in `meta.channel`). Never
+   * live-fetched (no-fetch-at-query, ADR-0012).
    */
   channelName: string | null;
   /**
    * Sender display name joined from the local `person_identities` projection
    * (ADR-0022 / ADR-0037 §2/§10) via `meta.user` (`identity_key = 'slack:'||user`).
-   * `null` when unresolved (no identity / empty name), so display layers fall
-   * back to the raw id in `meta.user`. Never live-fetched.
+   * `null` for github rows or when unresolved. Never live-fetched.
    */
   userName: string | null;
   /**
    * Workspace display name joined from the local `slack_teams` projection
-   * (ADR-0037 §3/§10, Issue #361) via `meta.team`. `null` when unresolved (no
-   * projection row / empty name), so display layers fall back to the raw id in
-   * `meta.team`. Never live-fetched (no-fetch-at-query, ADR-0012).
+   * (ADR-0037 §3/§10, Issue #361) via `meta.team`. `null` for github rows or
+   * when unresolved. Never live-fetched (no-fetch-at-query, ADR-0012).
    */
   teamName: string | null;
+  /**
+   * Seen-state (ADR-0041): `acked` / `dismissed` from `demand_seen`, or `read`
+   * for a github notification with `meta.unread === false`. `null` = outstanding.
+   * Only present when `includeSeen` is set (the default view returns un-acked
+   * rows, for which this is always `null`).
+   */
+  seenState: DemandSeenState | null;
 }
 
-export interface ListSlackDemandOptions {
-  /** Operator user ids (`Uxxxx`) for `<@you>` mention detection (ADR-0012). */
+export interface ListDemandOptions {
+  /** Operator user ids (`Uxxxx`) for Slack `<@you>` mention detection (ADR-0012). */
   selfUserIds?: string[];
-  /** Restrict to these kinds (default: both `mention` and `dm`). */
-  kinds?: ("mention" | "dm")[];
+  /** Restrict to a single connector (`slack` / `github`); default: both. */
+  source?: DemandSource;
+  /**
+   * Restrict to these kinds (matched against `kind`: Slack `mention` / `dm`, or a
+   * github `reason`). Default: every demand kind.
+   */
+  kinds?: string[];
   /** Window over `observed_at`. */
   observed?: TimeRange;
+  /**
+   * Include seen rows too (acked / dismissed / github-read). Default `false` —
+   * only outstanding (un-acked) demand is returned, so "unprocessed" is true
+   * (ADR-0041, superseding ADR-0012 決定 4's host-side seen-marker).
+   */
+  includeSeen?: boolean;
   /** Max rows (default {@link DEFAULT_LIST_LIMIT}). */
   limit?: number;
 }
@@ -769,10 +828,13 @@ export interface ListSlackDemandOptions {
 const DM_CHANNEL_CLAUSE = "json_extract(sources.meta, '$.channel') LIKE 'D%'";
 
 /** A demand source row plus its locally-joined channel / sender / team names. */
-interface SlackDemandRow extends SourceRow {
+interface DemandRow extends SourceRow {
+  source: DemandSource;
+  kind: string;
   channel_name: string | null;
   user_name: string | null;
   team_name: string | null;
+  seen_state: string | null;
 }
 
 /** Empty / absent joined name → `null` (id-only fallback, ADR-0037 §6). */
@@ -781,72 +843,143 @@ function nameOrNull(value: string | null): string | null {
 }
 
 /**
- * List Slack demand — unread-worthy signals derived (FTS-first, no extra fetch)
- * from ingested `slack_message` sources: `@you` mentions and DMs (ADR-0012).
- * Newest-first. A row is `dm` when its channel id starts with `D`, else
- * `mention`. Mentions need `selfUserIds`; without any, only DMs are returned
- * (and a `kinds: ["mention"]` filter then yields nothing).
+ * List connector-neutral demand (ADR-0041) — attention-worthy rows derived
+ * (FTS-first, no extra fetch) from ingested sources, newest-first:
+ *   - **Slack** (`source: "slack"`): `@you` mentions (need `selfUserIds`) and DMs
+ *     (channel id starts with `D`), classified `kind: "mention" | "dm"`
+ *     (ADR-0012). Enriched with `channelName` / `userName` / `teamName` via LEFT
+ *     JOINs to the local `slack_channels` / `person_identities` / `slack_teams`
+ *     projections (ADR-0037 §10) — a pure local join, no Slack API at query time.
+ *   - **GitHub** (`source: "github"`): `github_notification` threads whose
+ *     `meta.reason` is demand-worthy ({@link GITHUB_DEMAND_REASONS}); `kind` is
+ *     the reason (e.g. `review_requested`). No slack enrichment (those are null).
  *
- * Each row is enriched with `channelName` / `userName` / `teamName` by LEFT
- * JOINing the local `slack_channels` (via `meta.channel`), `person_identities`
- * (via `meta.user`, `identity_key = 'slack:'||user`), and `slack_teams` (via
- * `meta.team`) projections that sync populated (ADR-0037 §10, Issue #361). This
- * is a pure local join — no Slack API / network is touched at query time
- * (no-fetch-at-query, ADR-0012). Unresolved ids yield `null`, leaving the raw
- * ids in `meta` for an id-only fallback (ADR-0037 §6).
+ * By default only **outstanding** (un-acked) demand is returned: rows with a
+ * `demand_seen` marker (`demand.ack` / `demand.dismiss`, ADR-0041) — or a github
+ * notification already read on GitHub (`meta.unread === false`) — are hidden. Set
+ * `includeSeen` to return everything with `seenState` populated. This is what
+ * makes "unprocessed" true (ADR-0012 決定 4's host-side seen-marker is superseded;
+ * the state now lives in the event log, ADR-0002). Pure SELECT.
  */
-export function listSlackDemand(
-  sqlite: Database,
-  options: ListSlackDemandOptions = {},
-): SlackDemandRecord[] {
-  const kinds = options.kinds ?? ["mention", "dm"];
+export function listDemand(sqlite: Database, options: ListDemandOptions = {}): DemandRecord[] {
   const selfUserIds = options.selfUserIds ?? [];
+  const kinds = options.kinds;
+  const branches: string[] = [];
+  const branchParams: string[] = [];
 
-  const orClauses: string[] = [];
-  const params: (string | number)[] = [];
-  if (kinds.includes("dm")) orClauses.push(DM_CHANNEL_CLAUSE);
-  if (kinds.includes("mention")) {
-    for (const uid of selfUserIds) {
-      orClauses.push("sources.body LIKE ?");
-      params.push(`%<@${uid}>%`);
+  // Slack branch: DM and/or @mention predicates (gated by `kinds` + selfUserIds).
+  if (options.source !== "github") {
+    const wantsDm = kinds === undefined || kinds.includes("dm");
+    const wantsMention = kinds === undefined || kinds.includes("mention");
+    const orClauses: string[] = [];
+    if (wantsDm) orClauses.push(DM_CHANNEL_CLAUSE);
+    if (wantsMention) {
+      for (const uid of selfUserIds) {
+        orClauses.push("sources.body LIKE ?");
+        branchParams.push(`%<@${uid}>%`);
+      }
+    }
+    if (orClauses.length > 0) {
+      branches.push(
+        `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
+                sources.observed_at, sources.meta,
+                'slack' AS source,
+                CASE WHEN ${DM_CHANNEL_CLAUSE} THEN 'dm' ELSE 'mention' END AS kind,
+                slack_channels.name AS channel_name,
+                person_identities.display_name AS user_name,
+                slack_teams.name AS team_name
+           FROM sources
+           LEFT JOIN slack_channels
+             ON slack_channels.channel_id = json_extract(sources.meta, '$.channel')
+           LEFT JOIN person_identities
+             ON person_identities.identity_key = 'slack:' || json_extract(sources.meta, '$.user')
+           LEFT JOIN slack_teams
+             ON slack_teams.team_id = json_extract(sources.meta, '$.team')
+          WHERE sources.source_type = 'slack_message' AND (${orClauses.join(" OR ")})`,
+      );
     }
   }
-  // No applicable predicate (e.g. mention-only with no self ids) → no demand.
-  if (orClauses.length === 0) return [];
 
-  const clauses = ["sources.source_type = 'slack_message'", `(${orClauses.join(" OR ")})`];
-  pushTimeRange(clauses, params, "sources.observed_at", options.observed);
-  params.push(options.limit ?? DEFAULT_LIST_LIMIT);
+  // GitHub branch: notification threads whose reason is demand-worthy (and, when
+  // `kinds` is set, intersected with it). No slack name enrichment (NULLs align
+  // the UNION columns).
+  if (options.source !== "slack") {
+    const reasons =
+      kinds === undefined
+        ? [...GITHUB_DEMAND_REASONS]
+        : GITHUB_DEMAND_REASONS.filter((r) => kinds.includes(r));
+    if (reasons.length > 0) {
+      const placeholders = reasons.map(() => "?").join(", ");
+      branches.push(
+        `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
+                sources.observed_at, sources.meta,
+                'github' AS source,
+                json_extract(sources.meta, '$.reason') AS kind,
+                NULL AS channel_name, NULL AS user_name, NULL AS team_name
+           FROM sources
+          WHERE sources.source_type = 'github_notification'
+            AND json_extract(sources.meta, '$.reason') IN (${placeholders})`,
+      );
+      branchParams.push(...reasons);
+    }
+  }
+
+  // No applicable predicate (e.g. slack mention-only with no self ids, or a
+  // `kinds` filter that matches nothing) → no demand.
+  if (branches.length === 0) return [];
+
+  const outer: string[] = [];
+  const outerParams: (string | number)[] = [];
+  pushTimeRange(outer, outerParams, "d.observed_at", options.observed);
+  if (!options.includeSeen) {
+    // Outstanding = no local seen marker AND not a github-read notification. Done
+    // in SQL (not post-filter) so `limit` counts un-acked rows, not seen ones.
+    // A github notification is "read" only when `unread` is explicitly false
+    // (`= 0`); a null/absent `unread` stays outstanding. `IS NOT 0` is null-safe,
+    // so a NULL unread does NOT collapse the whole predicate to NULL (which would
+    // wrongly hide the row).
+    outer.push("ds.state IS NULL");
+    outer.push(
+      "(d.source_type <> 'github_notification' OR json_extract(d.meta, '$.unread') IS NOT 0)",
+    );
+  }
+  const where = outer.length > 0 ? `WHERE ${outer.join(" AND ")}` : "";
+  const params: (string | number)[] = [
+    ...branchParams,
+    ...outerParams,
+    options.limit ?? DEFAULT_LIST_LIMIT,
+  ];
 
   const rows = sqlite
-    .query<SlackDemandRow, (string | number)[]>(
-      `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
-              sources.observed_at, sources.meta,
-              slack_channels.name AS channel_name,
-              person_identities.display_name AS user_name,
-              slack_teams.name AS team_name
-         FROM sources
-         LEFT JOIN slack_channels
-           ON slack_channels.channel_id = json_extract(sources.meta, '$.channel')
-         LEFT JOIN person_identities
-           ON person_identities.identity_key = 'slack:' || json_extract(sources.meta, '$.user')
-         LEFT JOIN slack_teams
-           ON slack_teams.team_id = json_extract(sources.meta, '$.team')
-        WHERE ${clauses.join(" AND ")}
-        ORDER BY sources.observed_at DESC
+    .query<DemandRow, (string | number)[]>(
+      `SELECT d.external_id, d.source_type, d.body, d.fingerprint, d.observed_at, d.meta,
+              d.source, d.kind, d.channel_name, d.user_name, d.team_name,
+              ds.state AS seen_state
+         FROM (${branches.join(" UNION ALL ")}) AS d
+         LEFT JOIN demand_seen ds ON ds.external_id = d.external_id
+        ${where}
+        ORDER BY d.observed_at DESC, d.external_id DESC
         LIMIT ?`,
     )
     .all(...params);
 
   return rows.map((row) => {
     const record = toSourceRecord(row);
-    const channel = typeof record.meta.channel === "string" ? record.meta.channel : "";
+    const source = row.source;
+    let seenState: DemandSeenState | null = null;
+    if (row.seen_state === "acked" || row.seen_state === "dismissed") {
+      seenState = row.seen_state;
+    } else if (source === "github" && record.meta.unread === false) {
+      seenState = "read";
+    }
     return {
       ...record,
-      kind: channel.startsWith("D") ? "dm" : "mention",
+      source,
+      kind: row.kind,
       channelName: nameOrNull(row.channel_name),
       userName: nameOrNull(row.user_name),
       teamName: nameOrNull(row.team_name),
+      seenState,
     };
   });
 }
@@ -1010,8 +1143,12 @@ export interface Brief {
   decisions: DecisionRecord[];
   /** Currently-open inbox items (not time-filtered — "what is unprocessed now"). */
   inbox: InboxRecord[];
-  /** Slack demand (@mention / DM) observed in the window. */
-  demand: SlackDemandRecord[];
+  /**
+   * Outstanding (un-acked) demand observed in the window (ADR-0041): Slack
+   * @mentions / DMs + demand-worthy github notifications. Seen (acked / dismissed
+   * / github-read) rows are excluded.
+   */
+  demand: DemandRecord[];
   /**
    * Completeness signals (Issue #189): categories that are empty because their
    * source is *not configured*, not because the window is quiet. Empty array
@@ -1055,13 +1192,267 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
     decisions: listDecisions(sqlite, { recorded: window, ...cap }),
     // Inbox is "currently open", not period-scoped (what is unprocessed now).
     inbox: listInbox(sqlite, { state: "open", ...cap }),
-    demand: listSlackDemand(sqlite, {
+    // Outstanding (un-acked) demand only — a seen mention no longer clutters the
+    // brief (ADR-0041). Neutral: Slack @mention/DM + github notifications.
+    demand: listDemand(sqlite, {
       observed: window,
       ...(selfUserIds ? { selfUserIds } : {}),
       ...cap,
     }),
     warnings: warnings ?? [],
   };
+}
+
+// --- Deterministic cross-entity priority scorer (ADR-0041 決定 3) ---------------
+
+/**
+ * The rule tier that placed a priority row — its "why it ranked here" (ADR-0041):
+ *   - `overdue`        — an overdue task / commitment (the strongest signal, top)
+ *   - `unacked_demand` — an outstanding @mention / DM / notification (freshness)
+ *   - `due_soon`       — has an upcoming due date (nearest first)
+ *   - `priority`       — no due date, but a priority (high > normal > low)
+ *   - `recency`        — none of the above; most-recently-updated
+ */
+export type PriorityReason = "overdue" | "unacked_demand" | "due_soon" | "priority" | "recency";
+
+/** One ranked next-action row (ADR-0041): a task, commitment, or demand signal. */
+export interface PriorityItem {
+  /** 1-based position in the ranked list (stable for identical input). */
+  rank: number;
+  /** Which projection the row came from. */
+  entity: "task" | "commitment" | "demand";
+  /** task id / commitment id / demand `externalId`. */
+  id: string;
+  /** Short human-readable label (task/commitment title, or demand body summary). */
+  title: string;
+  /** The rule tier that determined placement (the score rationale). */
+  reason: PriorityReason;
+  /** One-line human explanation of the rationale. */
+  explanation: string;
+  /** Whether the row is overdue (task / commitment only). */
+  overdue: boolean;
+  /** Due date driving `due_soon` / `overdue` (null for demand / undated). */
+  dueDate: string | null;
+  /** Task priority (low / normal / high); null for commitment / demand. */
+  priority: string | null;
+  /** The underlying projection record. */
+  record: TaskRecord | CommitmentRecord | DemandRecord;
+}
+
+export interface BuildPrioritiesOptions {
+  /** Operator Slack user ids for demand `<@you>` mentions (ADR-0012). */
+  selfUserIds?: string[];
+  /**
+   * Reference "now" for overdue / freshness (ISO 8601). Injectable so the ranking
+   * is deterministic under test (ADR-0028); defaults to the current wall clock.
+   */
+  now?: string;
+  /** Max rows in the ranked list (default {@link DEFAULT_LIST_LIMIT}). */
+  limit?: number;
+}
+
+/** The ranked cross-entity next-actions list (ADR-0041). */
+export interface Priorities {
+  /** The `now` the overdue / freshness derivation used. */
+  now: string;
+  /** Ranked rows, most-important first. */
+  items: PriorityItem[];
+  /** `true` when more candidates matched than `limit` returned (ADR-0007). */
+  truncated: boolean;
+}
+
+/** Map a task priority to a sortable rank (higher = more urgent; null = 0). */
+const PRIORITY_RANK: Record<string, number> = { high: 3, normal: 2, low: 1 };
+function priorityRank(priority: string | null): number {
+  return priority !== null ? (PRIORITY_RANK[priority] ?? 0) : 0;
+}
+
+/** Per-source-list candidate cap = the `limit` ceiling (docs/design/mcp-surface). */
+const PRIORITY_CANDIDATE_CAP = 500;
+
+/** Internal ranked row carrying the computed sort keys (ADR-0041 comparator). */
+interface RankedCandidate {
+  tier: 0 | 1 | 2;
+  entity: "task" | "commitment" | "demand";
+  id: string;
+  title: string;
+  overdue: boolean;
+  dueDate: string | null;
+  priority: string | null;
+  prioRank: number;
+  /** Demand freshness key (`observed_at`); null for task / commitment. */
+  observedAt: string | null;
+  /** Recency key: `updated_at` (task / commitment) or `observed_at` (demand). */
+  recencyKey: string;
+  record: TaskRecord | CommitmentRecord | DemandRecord;
+}
+
+/**
+ * Total order over candidates (ADR-0041 決定 3). Lexicographic by tier, then the
+ * tier-appropriate sub-keys, with deterministic tie-breaks so identical input
+ * always yields identical order (pinned by tests):
+ *   overdue (tier 0) > un-acked demand (tier 1) > everything else (tier 2)
+ * Within a task/commitment tier: dated-before-undated → nearest due date →
+ * higher priority → most-recently-updated. Within demand: freshest first.
+ * Final tie-break: entity then id (ascending).
+ */
+function comparePriority(a: RankedCandidate, b: RankedCandidate): number {
+  if (a.tier !== b.tier) return a.tier - b.tier;
+  if (a.tier === 1) {
+    // Demand: freshness (newest observed_at first), then externalId desc.
+    if (a.observedAt !== b.observedAt) return (a.observedAt ?? "") < (b.observedAt ?? "") ? 1 : -1;
+    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  }
+  // Tasks / commitments (overdue tier 0 or plain tier 2).
+  const aDue = a.dueDate;
+  const bDue = b.dueDate;
+  if ((aDue === null) !== (bDue === null)) return aDue === null ? 1 : -1; // dated rows first
+  if (aDue !== null && bDue !== null && aDue !== bDue) return aDue < bDue ? -1 : 1; // sooner first
+  if (a.prioRank !== b.prioRank) return b.prioRank - a.prioRank; // higher priority first
+  if (a.recencyKey !== b.recencyKey) return a.recencyKey < b.recencyKey ? 1 : -1; // newer first
+  if (a.entity !== b.entity) return a.entity < b.entity ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** The tier a candidate falls into (ADR-0041). */
+function tierOf(overdue: boolean, entity: RankedCandidate["entity"]): 0 | 1 | 2 {
+  if (overdue) return 0;
+  if (entity === "demand") return 1;
+  return 2;
+}
+
+/** Score rationale for a candidate (the tier that placed it, ADR-0041). */
+function reasonOf(c: RankedCandidate): PriorityReason {
+  if (c.tier === 0) return "overdue";
+  if (c.tier === 1) return "unacked_demand";
+  if (c.dueDate !== null) return "due_soon";
+  if (c.prioRank > 0) return "priority";
+  return "recency";
+}
+
+/** One-line human explanation for a scored candidate. */
+function explanationOf(c: RankedCandidate): string {
+  switch (reasonOf(c)) {
+    case "overdue":
+      return `${c.entity} overdue (due ${c.dueDate})`;
+    case "unacked_demand":
+      return `unprocessed ${(c.record as DemandRecord).kind} demand`;
+    case "due_soon":
+      return `due ${c.dueDate}`;
+    case "priority":
+      return `priority ${c.priority}`;
+    default:
+      return "most recently updated";
+  }
+}
+
+/** First non-empty line of a demand body, trimmed to a short label. */
+function demandTitle(body: string): string {
+  const line =
+    body
+      .split("\n")
+      .find((l) => l.trim() !== "")
+      ?.trim() ?? "";
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+/**
+ * Compose the deterministic cross-entity next-actions ranking (ADR-0041 決定 3):
+ * open/in-progress tasks + open commitments + **outstanding (un-acked) demand**,
+ * merged into one ranked list by a fixed comparator (see {@link comparePriority}).
+ *
+ * The order basis lives in code (not skill prose): overdue > un-acked demand
+ * (freshness) > due-date proximity > priority > recency. Each row carries a
+ * `reason` (the tier that placed it) + `explanation` so the host can show *why*
+ * a row is on top. An **acked** mention drops out of the demand tier entirely
+ * (it is no longer un-acked), so it can no longer sit permanently above dated
+ * work — the bug ADR-0041 fixes. The host may still override with conversational
+ * context ("ignore Slack today"); this is the reproducible baseline it starts
+ * from. Pure SELECT + in-memory sort — no LLM (ADR-0006), no persist.
+ */
+export function buildPriorities(
+  sqlite: Database,
+  options: BuildPrioritiesOptions = {},
+): Priorities {
+  const now = options.now ?? new Date().toISOString();
+  const limit = options.limit ?? DEFAULT_LIST_LIMIT;
+  const selfUserIds = options.selfUserIds ?? [];
+
+  const candidates: RankedCandidate[] = [];
+
+  // Active tasks (open + in_progress) — completed / dropped / proposed excluded.
+  for (const state of ["open", "in_progress"] as const) {
+    for (const task of listTasks(sqlite, { state, now, limit: PRIORITY_CANDIDATE_CAP })) {
+      const tier = tierOf(task.overdue, "task");
+      candidates.push({
+        tier,
+        entity: "task",
+        id: task.id,
+        title: task.title,
+        overdue: task.overdue,
+        dueDate: task.dueDate,
+        priority: task.priority,
+        prioRank: priorityRank(task.priority),
+        observedAt: null,
+        recencyKey: task.updatedAt,
+        record: task,
+      });
+    }
+  }
+
+  // Open commitments — overdue derived like a task (past due AND still open).
+  for (const c of listCommitments(sqlite, { state: "open", limit: PRIORITY_CANDIDATE_CAP })) {
+    const overdue = c.dueDate !== null && c.dueDate < now;
+    candidates.push({
+      tier: tierOf(overdue, "commitment"),
+      entity: "commitment",
+      id: c.id,
+      title: c.title,
+      overdue,
+      dueDate: c.dueDate,
+      priority: null,
+      prioRank: 0,
+      observedAt: null,
+      recencyKey: c.updatedAt,
+      record: c,
+    });
+  }
+
+  // Outstanding (un-acked) demand — a seen mention is already filtered out.
+  for (const d of listDemand(sqlite, {
+    ...(selfUserIds.length > 0 ? { selfUserIds } : {}),
+    limit: PRIORITY_CANDIDATE_CAP,
+  })) {
+    candidates.push({
+      tier: 1,
+      entity: "demand",
+      id: d.externalId,
+      title: demandTitle(d.body),
+      overdue: false,
+      dueDate: null,
+      priority: null,
+      prioRank: 0,
+      observedAt: d.observedAt,
+      recencyKey: d.observedAt,
+      record: d,
+    });
+  }
+
+  candidates.sort(comparePriority);
+  const truncated = candidates.length > limit;
+  const items: PriorityItem[] = candidates.slice(0, limit).map((c, i) => ({
+    rank: i + 1,
+    entity: c.entity,
+    id: c.id,
+    title: c.title,
+    reason: reasonOf(c),
+    explanation: explanationOf(c),
+    overdue: c.overdue,
+    dueDate: c.dueDate,
+    priority: c.priority,
+    record: c.record,
+  }));
+  return { now, items, truncated };
 }
 
 /** One graph node: a projection entity addressed by kind + id (ADR-0018). */

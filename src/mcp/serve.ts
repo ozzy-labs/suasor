@@ -89,7 +89,7 @@ function defaultBuildServer({
     // is resolved (keychain/env) before boot, so `recall.search` runs real
     // semantic search; `undefined` lets buildMcpServer build from `embedding`.
     ...(embedder !== undefined ? { embedder } : {}),
-    // Operator user ids for slack.demand.list @mention detection (ADR-0012).
+    // Operator user ids for demand.list / priority.list @mention detection (ADR-0012/ADR-0041).
     slackSelfUserIds: resolveSelfUserIds(config.connectors.slack ?? {}),
     // Whether [connectors.slack] is configured at all — drives the brief
     // `slack_not_configured` completeness signal (Issue #189), independent of

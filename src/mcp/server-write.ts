@@ -27,6 +27,7 @@ import {
 } from "../propose/candidates.ts";
 import { commitmentDismiss, commitmentReopen, commitmentResolve } from "../propose/commitment.ts";
 import { decisionRecord } from "../propose/decision-record.ts";
+import { demandAck, demandDismiss } from "../propose/demand.ts";
 import { proposeFeedback } from "../propose/feedback.ts";
 import { persistProposals } from "../propose/generate.ts";
 import { inboxAdd } from "../propose/inbox-add.ts";
@@ -811,6 +812,62 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
     async ({ commitmentId }) => {
       const result = commitmentReopen(write.store, { commitmentId });
+      return jsonResult(result);
+    },
+  );
+
+  // --- demand.ack / demand.dismiss: mark a demand row seen (ADR-0041). ---
+  // The seen-state half of neutral demand: demand.list derives outstanding
+  // @mentions / DMs / notifications, and these two mark one "handled" (ack) or
+  // "not relevant" (dismiss) by appending DemandAcknowledged / DemandDismissed →
+  // demand_seen projection, so it drops out of the default demand.list (ADR-0041,
+  // superseding ADR-0012 決定 4's host-side seen-marker). HITL, status-reporting
+  // (no throw): a no-op (already in that state) is reported, an unknown source is
+  // reported `missing`. Keyed by the demand row's source externalId.
+  server.registerTool(
+    "demand.ack",
+    {
+      title: "Acknowledge demand",
+      description:
+        "Mark a demand row (from demand.list) as handled — appends DemandAcknowledged → " +
+        "demand_seen, so it drops out of the default (un-acked) demand.list (ADR-0041). " +
+        "Write tool: requires human approval — no auto-apply (ADR-0004). Idempotent: an " +
+        "already-acked row is a no-op; a dismissed row is re-marked acked (last-write-wins); " +
+        "an unknown source is reported missing.",
+      inputSchema: {
+        externalId: z
+          .string()
+          .min(1)
+          .describe("Source id of the demand row to acknowledge (from demand.list)."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: false },
+    },
+    async ({ externalId }) => {
+      const result = demandAck(write.store, { externalId });
+      return jsonResult(result);
+    },
+  );
+
+  server.registerTool(
+    "demand.dismiss",
+    {
+      title: "Dismiss demand",
+      description:
+        "Mark a demand row (from demand.list) as not relevant — appends DemandDismissed → " +
+        "demand_seen, so it drops out of the default (un-acked) demand.list (ADR-0041). " +
+        "Write tool: requires human approval — no auto-apply (ADR-0004). Idempotent: an " +
+        "already-dismissed row is a no-op; an acked row is re-marked dismissed " +
+        "(last-write-wins); an unknown source is reported missing.",
+      inputSchema: {
+        externalId: z
+          .string()
+          .min(1)
+          .describe("Source id of the demand row to dismiss (from demand.list)."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: false },
+    },
+    async ({ externalId }) => {
+      const result = demandDismiss(write.store, { externalId });
       return jsonResult(result);
     },
   );

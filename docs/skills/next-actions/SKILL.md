@@ -1,6 +1,6 @@
 ---
 name: next-actions
-description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」「今日やること」「優先度高いのは?」と聞かれたら、Suasor MCP の task.list と recall.search を使って優先度順の next-actions を組み立てる。新規 task 作成は write tool（task.create）のためホスト側で人確認を促す。
+description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」「今日やること」「優先度高いのは?」と聞かれたら、Suasor MCP の priority.list（決定論的 cross-entity scorer）を基線に、tasks + open commitments + un-acked demand を優先度順に並べた next-actions を返す。順位はコードが固定し、会話文脈での上書きだけを host が担う。新規 task 作成は write tool（task.create）のためホスト側で人確認を促す。
 readOnly: true
 category: task
 triggers:
@@ -11,16 +11,17 @@ triggers:
   - 優先度高いのは?
 pairs: []
 mcp_tools_read:
+  - priority.list
   - task.list
-  - recall.search
-  - slack.demand.list
+  - demand.list
   - commitment.list
+  - recall.search
 mcp_tools_write: []
 ---
 
 # next-actions
 
-未処理 task を優先度順に並べて「次にやること」を返す。
+未処理 task / 約束 / demand を優先度順に並べて「次にやること」を返す。順位の基線は **コードが持つ**（`priority.list` の決定論的 scorer、[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。skill 散文で順位を決めない。
 
 ## いつ発火するか
 
@@ -31,18 +32,22 @@ mcp_tools_write: []
 
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. `task.list`（`state=open` / `state=in_progress`）で未完 task を取る。期間指定があれば `updatedAfter` / `updatedBefore`（ISO 8601、`tasks.updated_at` ベース）でフィルタする。各 task は `dueDate` / `priority`（low / normal / high）と read 時派生の `overdue` を持つ（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）。`overdue=true` で期限超過 task のみ、`dueBefore` で期日が近い task に絞れる
-2. `slack.demand.list` で Slack の @mention / DM の未処理 signal を取り、「読むべきが未処理」を priority 上位の入力に含める（[ADR-0012](../../adr/0012-slack-demand-digest.md)）。`selfUserId` 未設定時は DM のみ。各 demand は `channelName` / `userName`（ローカル join した人間可読名。未解決は `null`＝生 id fallback、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）を持つので、提示は「`#<channelName>` の `<userName>` から」のように **id ではなく名前**で行い、`null` のときだけ `meta.channel` / `meta.user` の id に落とす。名前が id-only のままなら `slack resolve-names` で既取り込み分を遡及解決できる（§11）
-3. `commitment.list`（`state=open`）で未解決の commitment（約束/コミットメント）を取り、「能動的にやるべき約束」を priority 上位の入力に含める（[ADR-0021](../../adr/0021-commitment-ledger.md)）。`direction=owed_by_me` で自分が負う約束に絞れる
-4. `recall.search` で各 task に関連する context を補強する（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
-5. ホスト LLM が以下の優先度関数で並べて next-actions を組み立てて返す（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）:
+1. **`priority.list` を基線として取る**（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md) 決定 3）。これは open/in_progress な task + open commitment + **un-acked demand** を、**固定 comparator**で 1 本のランク付きリストに合成した決定論的 scorer で、同一入力に対し順序が一定になる（テストで固定）。順序基準はコードが持つ:
 
-   **`overdue`（期限超過）> `slack.demand`（未処理 mention / DM）> `dueDate` 近接（期日が近い順）> `priority` 高（high > normal > low）> 更新新しさ（`updated_at` 新しい順）**
+   **`overdue`（task/commitment 期限超過）> un-acked `demand`（@mention/DM/notification・鮮度順）> `dueDate` 近接（期日が近い順）> `priority` 高（high > normal > low）> 更新新しさ**
 
-   overdue は「最も強い」やるべき signal として最上位に置く。期日のない task は priority と更新新しさで並べる
+   各 item は `rank` / `entity`（task/commitment/demand）/ `id` / `title` / `reason`（どの規則で上に来たか: `overdue` / `unacked_demand` / `due_soon` / `priority` / `recency`）/ `explanation` / `record`（元レコード）を持つ。この `reason` を根拠として提示する。`selfUserId` 未設定時 demand は DM のみ。
+2. 必要に応じ各 entity の詳細を補う（基線の順位は変えない・表示補強のみ）:
+   - `task.list`（`state=open` / `in_progress`、期間指定は `updatedAfter` / `updatedBefore`）で task の `dueDate` / `priority` / `overdue` を詳しく見る（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）
+   - `demand.list` で demand 行の `channelName` / `userName`（ローカル join した人間可読名・未解決は `null`＝生 id fallback、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）や github notification の `source`/`kind`（reason）を見る。提示は **id ではなく名前**で行う
+   - `commitment.list`（`state=open`、`direction=owed_by_me` で自分が負う約束）で約束の相手/期日を見る（[ADR-0021](../../adr/0021-commitment-ledger.md)）
+   - `recall.search` で各項目に関連する context を補強（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
+3. 基線の順序に沿って next-actions を提示する。**会話文脈による上書きは host の裁量**（例:「今日は Slack を無視して」→ demand tier を落とす）。上書きしない限り、順位は `priority.list` の基線に従う
 
 ## 制約
 
-- read-only。task の状態を変えない
-- **新規 task の作成は `task.create`（write tool）のため、ここでは行わず、ホスト側で人の確認を促す**（HITL、auto-apply なし、[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）
+- read-only。task / demand の状態を変えない
+- **順位決定はコード（`priority.list`）に委ねる**。skill 散文だけで並べ替えない（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)。会話文脈での上書きのみ host 裁量）
+- **対応済み / 不要な demand は `demand.ack` / `demand.dismiss`（write tool）で印を付ける**と基線から外れる。ここでは印付けを行わず、ホスト側で人の確認を促す（HITL、auto-apply なし、[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）
+- **新規 task の作成は `task.create`（write tool）のため、ここでは行わず、ホスト側で人の確認を促す**（HITL、auto-apply なし）
 - 本 skill は手順書のみで実処理を持たない

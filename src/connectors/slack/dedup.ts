@@ -4,7 +4,7 @@
  * Enterprise Grid shares one channel — one globally-unique channel id (`C…`) —
  * across multiple workspaces. Under multi-workspace ingest (ADR-0014) each alias
  * would ingest the same message as a separate `slack:<team>:<channel>:<ts>`
- * source, double-counting it in `slack.demand.list` / `search` / `brief`. This
+ * source, double-counting it in `demand.list` / `search` / `brief`. This
  * module computes a deterministic single **owner** alias per channel id so sync
  * ingests each shared channel exactly once (owner-wins, non-destructive: the
  * externalId format is unchanged, so single-workspace / non-shared channels are
