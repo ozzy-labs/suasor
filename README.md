@@ -7,21 +7,21 @@
 
 **Gathers, remembers, advises - you decide.**
 
-Suasor is a local-first AI secretary. It gathers your scattered work context - chat, email, calendar, documents, code, the web - into private memory on your own machine, so you and your AI agents can search and summarize it over MCP. It advises you, and proposes replies, tasks, and decisions. Nothing is sent or saved without your approval.
+Suasor is a local-first AI secretary. It gathers your scattered work context - chat, email, calendar, documents, code, the web - into private memory on your own machine, so you and your AI agents can search and summarize it over MCP. It advises you, and proposes replies, tasks, and decisions - and, once you approve, can act on your behalf (publish a task, transition an issue). Ingest is read-only, and nothing egresses without your approval.
 
 [日本語 / Japanese →](README.ja.md)
 
 ## What it does
 
-- **Gathers** — pulls your scattered work context from across your tools into one local, private store. Read-only: it never writes back to your sources.
+- **Gathers** — pulls your scattered work context from across your tools into one local, private store. **Ingest is read-only** — gathering never writes back to your sources.
 - **Remembers** — keeps it as searchable, queryable memory on your own machine.
-- **Advises** — surfaces, summarizes, and proposes replies, tasks, and decisions over MCP. You and your AI agents query it; you approve everything. Nothing is sent or saved without your say.
+- **Advises** — surfaces, summarizes, and proposes replies, tasks, and decisions over MCP. You and your AI agents query it; you approve every action. Once approved, Suasor can also carry it out for you — publish a task to GitHub / Jira, transition an issue — but nothing egresses without your say ([ADR-0036](docs/adr/0036-task-external-home.md)).
 
 ## What it is not (Boundaries)
 
 These boundaries keep Suasor a local-first, human-in-the-loop advisor (see [docs/requirements/scope.md](docs/requirements/scope.md)):
 
-- **No auto write-back / auto-send** — it never writes to your sources or sends on your behalf; you apply proposals yourself ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)).
+- **No unapproved egress, no auto-send** — ingest is read-only, and nothing leaves your machine without your explicit approval. Approved actions (e.g. publishing a task or transitioning an issue via `task.publish` / `task.act`) are then carried out by Suasor on your behalf — only after you approve them, never automatically ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md) / [ADR-0036](docs/adr/0036-task-external-home.md)).
 - **No daemon, no unsolicited notifications** — nothing runs always-on. Proactive digests exist (`suasor digest`), but only as an OS-scheduled cron one-shot that sends a preconfigured, named job (standing consent) — with no configured job it sends nothing, and per-event write approval is unchanged ([ADR-0040](docs/adr/0040-proactive-push-lane.md) / [ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)).
 - **No heavy in-process ML** — model training/inference is delegated, not run in-process ([ADR-0006](docs/adr/0006-ml-delegation.md)).
 - **Single-user, local-only** — no multi-user, team sharing, or server-side aggregation.
@@ -133,7 +133,61 @@ The same cron model drives the **proactive push lane** ([ADR-0040](docs/adr/0040
 
 ## Connect an agent host (MCP)
 
-Suasor exposes its memory to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io) (stdio transport). The server is the agent boundary. **Read** tools — `search`, `recall.search`, `source.list` / `source.get`, and `task.list` / `decision.list` / `inbox.list` — are side-effect-free and annotated read-only so hosts may auto-approve them. **Write** tools — `connector.sync`, `propose.generate`, `propose.apply`, `task.create` — ship today but stay behind human-in-the-loop approval (ADR-0004); nothing is applied or sent without your say.
+Suasor exposes its memory to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io) (stdio transport). The server is the agent boundary. Read tools are side-effect-free and annotated read-only so hosts may auto-approve them; write tools stay behind human-in-the-loop approval ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)) — nothing is applied or egressed without your say. The full surface, generated from [`src/mcp/tool-catalog.ts`](src/mcp/tool-catalog.ts) so this list can't drift:
+
+<!-- BEGIN GENERATED mcp-tools — source: src/mcp/tool-catalog.ts; regenerate with `bun run gen:readme-tools`. DO NOT EDIT BY HAND. -->
+
+**Read tools** — side-effect-free (`readOnlyHint: true`), so hosts may auto-approve them:
+
+- `search` — FTS5 full-text search over ingested sources.
+- `recall.search` — Semantic (embedding) search; degrades to FTS when no backend is enabled.
+- `search.hybrid` — Hybrid search: RRF fusion of FTS + semantic hits; degrades to FTS-only.
+- `source.list` — List ingested sources newest-first.
+- `source.get` — Fetch one source (with body) by id.
+- `source.get.full` — Bundle a source's body + outgoing provenance links + extraction_meta in one call.
+- `source.history` — List a source's body versions from the event log (newest first).
+- `task.list` — List tasks, most-recently-updated first.
+- `decision.list` — List recorded decisions, newest-recorded first.
+- `demand.list` — List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).
+- `priority.list` — Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).
+- `brief` — Bundle the period's tasks/decisions/sources/inbox for the host to summarize.
+- `graph.related` — Provenance neighbours of an entity (1 hop) over the links projection.
+- `graph.expand` — Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.
+- `activity.timeline` — Entity-axis merged source/task/decision timeline (newest-first) for one entity.
+- `inbox.list` — List inbox items, most-recently-updated first.
+- `propose.list` — List proposal candidates by state (pending/applied/rejected).
+- `commitment.list` — List commitments by state (open/resolved/dismissed) and direction.
+- `person.list` — List resolved persons with their connector author identities (ADR-0022).
+
+**Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
+
+- `connector.sync` — Run a read-only connector ingest pass into the local store.
+- `propose.generate` — Frame reply/task/decision/triage candidates and record them as pending.
+- `propose.apply` — Persist approved candidates as domain events (idempotent).
+- `propose.reject` — Reject a pending candidate with a reason (idempotent).
+- `proposal.feedback` — Record a regeneration hint on a pending candidate without applying/rejecting it.
+- `propose.batch` — Apply and/or reject candidates in one atomic RPC (single transaction).
+- `task.create` — Create a task directly (TaskProposed).
+- `task.update` — Transition a task's lifecycle state (TaskApplied).
+- `task.publish` — Publish a task to its external home (TaskPublished, egress).
+- `task.act` — Act on a published task: complete/reopen/comment (TaskActionIssued).
+- `decision.record` — Record a decision directly (DecisionRecorded).
+- `inbox.add` — Capture an inbox item referencing a source (InboxItemTriaged, state open).
+- `inbox.triage` — Resolve an open inbox item (task / decision / discard).
+- `link.add` — Create a manual provenance link between two entities (LinkAdded, manual_link).
+- `link.remove` — Remove a manual link by id (LinkRemoved).
+- `person.merge` — Merge two persons into one (PersonsMerged); reversible via person.split.
+- `person.split` — Split one identity off a person into another (PersonSplit).
+- `commitment.resolve` — Mark an open commitment fulfilled (CommitmentResolved).
+- `commitment.dismiss` — Dismiss an open commitment as a false-positive (CommitmentDismissed).
+- `commitment.reopen` — Reopen a resolved/dismissed commitment back to open (CommitmentReopened).
+- `demand.ack` — Mark a demand row handled — drops it from the un-acked demand.list (DemandAcknowledged).
+- `demand.dismiss` — Mark a demand row not relevant — drops it from the un-acked demand.list (DemandDismissed).
+- `draft.export` — Write a draft to a local file in the export sandbox (DraftExported).
+- `source.forget` — Purge an ingested source locally — redact + delete + tombstone (SourceForgotten).
+- `source.unforget` — Lift a forget tombstone so the source can be re-ingested (SourceUnforgotten).
+
+<!-- END GENERATED mcp-tools -->
 
 ```bash
 suasor mcp serve                 # start the MCP server over stdio

@@ -7,21 +7,21 @@
 
 **集め、覚え、助言する - 決めるのはあなた。**
 
-Suasor はローカルファーストの AI 秘書です。チャット・メール・カレンダー・ドキュメント・コード・Web に散らばった業務情報をプライベートメモリに集め、あなたと AI エージェントが MCP 経由で検索・要約できるようにします。そして、助言し、返信・タスク・決定を提案します。送信も書き込みも、あなたの承認なく行いません。
+Suasor はローカルファーストの AI 秘書です。チャット・メール・カレンダー・ドキュメント・コード・Web に散らばった業務情報をプライベートメモリに集め、あなたと AI エージェントが MCP 経由で検索・要約できるようにします。そして、助言し、返信・タスク・決定を提案します。さらに、あなたが承認すれば代わりに操作を実行することもできます（タスクの公開、Issue の状態遷移など）。取り込みは read 専用で、あなたの承認なく egress することはありません。
 
 [English →](README.md)
 
 ## できること
 
-- **集める** — あちこちのツールに散らばった業務情報を、手元のプライベートなストアに 1 か所へ集めます。read 専用で、元のソースに書き戻すことはありません。
+- **集める** — あちこちのツールに散らばった業務情報を、手元のプライベートなストアに 1 か所へ集めます。**取り込みは read 専用**で、集める処理が元のソースに書き戻すことはありません。
 - **覚える** — それを検索・参照できる記憶として、あなたのマシン上に保持します。
-- **助言する** — MCP 経由で提示・要約し、返信・タスク・決定を提案します。あなたと AI エージェントが引き出し、適用するかはあなたが決めます。あなたの承認なく、送信も書き込みもしません。
+- **助言する** — MCP 経由で提示・要約し、返信・タスク・決定を提案します。あなたと AI エージェントが引き出し、実行するかはあなたが決めます。承認した操作（GitHub / Jira へのタスク公開、Issue の状態遷移など）は Suasor があなたの代わりに実行しますが、承認なく egress することはありません（[ADR-0036](docs/adr/0036-task-external-home.md)）。
 
 ## 対応しないこと（Boundaries）
 
 これらの線引きが、Suasor をローカルファースト・HITL（人が承認する）助言者として保ちます（[docs/requirements/scope.md](docs/requirements/scope.md) 参照）:
 
-- **自動書き戻し / 自動送信なし** — 元のソースへ書き込んだり、あなたの代わりに送信したりしません。提案はあなたが適用します（[ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
+- **承認なしの egress / 自動送信なし** — 取り込みは read 専用で、あなたの明示的な承認なしに外部へ何も出しません。承認済みの操作（`task.publish` / `task.act` によるタスク公開・Issue 状態遷移など）は Suasor があなたの代わりに実行します — ただし承認後のみで、自動実行はしません（[ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md) / [ADR-0036](docs/adr/0036-task-external-home.md)）。
 - **常駐の能動エージェントなし** — デーモンや非要求の通知は持たず、すべて人/エージェント起点です。
 - **重い in-process ML なし** — モデルの学習・推論は委譲し、in-process では実行しません（[ADR-0006](docs/adr/0006-ml-delegation.md)）。
 - **単一ユーザー・ローカル限定** — マルチユーザー / チーム共有 / サーバ集約はしません。
@@ -124,7 +124,61 @@ launchd / systemd timer の例と失敗監視は [docs/guide/scheduling.md](docs
 
 ## エージェントホストと接続する（MCP）
 
-Suasor は記憶を AI エージェントへ [Model Context Protocol](https://modelcontextprotocol.io)（stdio transport）で公開します。この server がエージェント境界です。**read** tool — `search` / `recall.search` / `source.list`・`source.get` / `task.list`・`decision.list`・`inbox.list` — はいずれも副作用なしで read-only annotation 付き（host が auto-approve 可）。**write** tool — `connector.sync` / `propose.generate` / `propose.apply` / `task.create` — も現在提供していますが、HITL（人の承認）の後ろに置かれます（ADR-0004）。承認なく適用・送信はしません。
+Suasor は記憶を AI エージェントへ [Model Context Protocol](https://modelcontextprotocol.io)（stdio transport）で公開します。この server がエージェント境界です。read tool は副作用なしで read-only annotation 付き（host が auto-approve 可）、write tool は HITL（人の承認）の後ろに置かれます（[ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)）— 承認なく適用・egress はしません。全体は [`src/mcp/tool-catalog.ts`](src/mcp/tool-catalog.ts) から生成しており、この一覧が drift しないようにしています（表記は英語）:
+
+<!-- BEGIN GENERATED mcp-tools — source: src/mcp/tool-catalog.ts; regenerate with `bun run gen:readme-tools`. DO NOT EDIT BY HAND. -->
+
+**Read tools** — side-effect-free (`readOnlyHint: true`), so hosts may auto-approve them:
+
+- `search` — FTS5 full-text search over ingested sources.
+- `recall.search` — Semantic (embedding) search; degrades to FTS when no backend is enabled.
+- `search.hybrid` — Hybrid search: RRF fusion of FTS + semantic hits; degrades to FTS-only.
+- `source.list` — List ingested sources newest-first.
+- `source.get` — Fetch one source (with body) by id.
+- `source.get.full` — Bundle a source's body + outgoing provenance links + extraction_meta in one call.
+- `source.history` — List a source's body versions from the event log (newest first).
+- `task.list` — List tasks, most-recently-updated first.
+- `decision.list` — List recorded decisions, newest-recorded first.
+- `demand.list` — List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).
+- `priority.list` — Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).
+- `brief` — Bundle the period's tasks/decisions/sources/inbox for the host to summarize.
+- `graph.related` — Provenance neighbours of an entity (1 hop) over the links projection.
+- `graph.expand` — Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.
+- `activity.timeline` — Entity-axis merged source/task/decision timeline (newest-first) for one entity.
+- `inbox.list` — List inbox items, most-recently-updated first.
+- `propose.list` — List proposal candidates by state (pending/applied/rejected).
+- `commitment.list` — List commitments by state (open/resolved/dismissed) and direction.
+- `person.list` — List resolved persons with their connector author identities (ADR-0022).
+
+**Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
+
+- `connector.sync` — Run a read-only connector ingest pass into the local store.
+- `propose.generate` — Frame reply/task/decision/triage candidates and record them as pending.
+- `propose.apply` — Persist approved candidates as domain events (idempotent).
+- `propose.reject` — Reject a pending candidate with a reason (idempotent).
+- `proposal.feedback` — Record a regeneration hint on a pending candidate without applying/rejecting it.
+- `propose.batch` — Apply and/or reject candidates in one atomic RPC (single transaction).
+- `task.create` — Create a task directly (TaskProposed).
+- `task.update` — Transition a task's lifecycle state (TaskApplied).
+- `task.publish` — Publish a task to its external home (TaskPublished, egress).
+- `task.act` — Act on a published task: complete/reopen/comment (TaskActionIssued).
+- `decision.record` — Record a decision directly (DecisionRecorded).
+- `inbox.add` — Capture an inbox item referencing a source (InboxItemTriaged, state open).
+- `inbox.triage` — Resolve an open inbox item (task / decision / discard).
+- `link.add` — Create a manual provenance link between two entities (LinkAdded, manual_link).
+- `link.remove` — Remove a manual link by id (LinkRemoved).
+- `person.merge` — Merge two persons into one (PersonsMerged); reversible via person.split.
+- `person.split` — Split one identity off a person into another (PersonSplit).
+- `commitment.resolve` — Mark an open commitment fulfilled (CommitmentResolved).
+- `commitment.dismiss` — Dismiss an open commitment as a false-positive (CommitmentDismissed).
+- `commitment.reopen` — Reopen a resolved/dismissed commitment back to open (CommitmentReopened).
+- `demand.ack` — Mark a demand row handled — drops it from the un-acked demand.list (DemandAcknowledged).
+- `demand.dismiss` — Mark a demand row not relevant — drops it from the un-acked demand.list (DemandDismissed).
+- `draft.export` — Write a draft to a local file in the export sandbox (DraftExported).
+- `source.forget` — Purge an ingested source locally — redact + delete + tombstone (SourceForgotten).
+- `source.unforget` — Lift a forget tombstone so the source can be re-ingested (SourceUnforgotten).
+
+<!-- END GENERATED mcp-tools -->
 
 ```bash
 suasor mcp serve                 # MCP server を stdio で起動

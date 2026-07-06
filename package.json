@@ -33,6 +33,7 @@
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "format": "biome format --write .",
     "db:generate": "drizzle-kit generate",
+    "gen:readme-tools": "bun run scripts/gen-readme-tools.ts",
     "postinstall": "node scripts/postinstall.mjs"
   },
   "repository": {
