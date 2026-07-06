@@ -175,6 +175,25 @@ describe("elicitation defense-in-depth ([boundary/hitl-1])", () => {
     expect(elicitCalls()).toBe(0);
   });
 
+  test("propose.apply publish:true is gated: declining aborts before any apply", async () => {
+    const { client, elicitCalls } = await connect({ elicit: () => ({ action: "decline" }) });
+    const generated = parseResult(
+      (await client.callTool({
+        name: "propose.generate",
+        arguments: { mode: "source_extract", candidates: [{ kind: "task", title: "publish me" }] },
+      })) as never,
+    ) as { candidates: unknown[] };
+    const res = (await client.callTool({
+      name: "propose.apply",
+      arguments: { candidates: generated.candidates, publish: true },
+    })) as { isError?: boolean; content: { type: string; text?: string }[] };
+    expect(res.isError).toBe(true);
+    expect((parseResult(res) as { code: string }).code).toBe("CONFIRMATION_DECLINED");
+    expect(elicitCalls()).toBe(1);
+    // The decline happens before applyAndPublish → nothing applied.
+    expect(store.connection.sqlite.query("SELECT 1 FROM tasks").all()).toHaveLength(0);
+  });
+
   test("a startup warning is emitted once when the client lacks the elicitation capability", async () => {
     const logs: string[] = [];
     const { client } = await connect({ log: (m) => logs.push(m) });
