@@ -14,7 +14,8 @@ afterEach(() => {
 
 const githubHome = {
   tasks: {
-    home: { destination: "github" as const, repo: "acme/widgets" },
+    homes: { github: { repo: "acme/widgets" } },
+    default: "github" as const,
     slackListExcludeFromIngest: true,
   },
 };

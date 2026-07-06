@@ -2,7 +2,7 @@
  * GitHub actuator (ADR-0036). The first task-home actuator: publishes a task as
  * a real GitHub **Issue** and issues complete / reopen / comment against it.
  *
- * Optionally, when `[tasks.home].project` (a Projects v2 board node id) is set,
+ * Optionally, when `[tasks.homes.github].project` (a Projects v2 board node id) is set,
  * the created Issue is **also added to that board** and complete / reopen move
  * its single-select **Status** field — so the task is a first-class Issue that
  * lives on the board (the mainstream GitHub workflow), not a weak draft issue.
@@ -30,7 +30,7 @@ import type {
   PublishResult,
 } from "./actuator.ts";
 
-/** `[tasks.home]` github config slice. */
+/** `[tasks.homes.github]` config slice. */
 export const GithubActuatorConfig = z.object({
   /** Target repository as `"owner/repo"` (the task home). */
   repo: z.string().regex(/^[^/]+\/[^/]+$/, "expected 'owner/repo'"),

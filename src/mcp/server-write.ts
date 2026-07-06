@@ -12,6 +12,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
+import { TaskDestination } from "../events/types.ts";
 import { createComposer } from "../export/compose.ts";
 import { DraftExportError, draftExport } from "../export/draft-export.ts";
 import { sourceForget } from "../forget/source-forget.ts";
@@ -146,7 +147,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         publish: z
           .boolean()
           .optional()
-          .describe("Also publish applied task candidates to [tasks].home (ADR-0036)."),
+          .describe(
+            "Also publish applied task candidates to the default external home " +
+              "([tasks].default → [tasks.homes.<dest>], ADR-0036).",
+          ),
       },
       // openWorldHint: `publish: true` egresses to the external home; apply alone is local.
       annotations: { readOnlyHint: false, openWorldHint: true },
@@ -368,27 +372,36 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
   );
 
-  // --- task.publish: 起票 a task to its single external home (ADR-0036). ---
-  // Egress write (single-pane). Publishes a confirmed task to the configured
-  // [tasks].home (GitHub Issues first) and appends a body-less TaskPublished.
-  // HITL, openWorldHint (external I/O), idempotent on the deterministic taskId.
+  // --- task.publish: 起票 a task to an external home (ADR-0036). ---
+  // Egress write (single-pane). Publishes a confirmed task to a per-destination
+  // home ([tasks.homes.<dest>]); the destination is the explicit argument or
+  // [tasks].default (R1-2). Appends a body-less TaskPublished. HITL, openWorldHint
+  // (external I/O), idempotent on the deterministic taskId.
   server.registerTool(
     "task.publish",
     {
       title: "Publish task to external home",
       description:
-        "Publish a confirmed task to its single external home ([tasks].home: " +
-        "GitHub Issues / Jira / Slack List) and record TaskPublished (ADR-0036). " +
-        "Egress write tool: requires human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: an already-published task is a no-op (returns existing).",
+        "Publish a confirmed task to an external home (GitHub Issues / Jira / " +
+        "Slack List) and record TaskPublished (ADR-0036). The destination is the " +
+        "explicit `destination` argument or [tasks].default; its config comes from " +
+        "[tasks.homes.<dest>]. Egress write tool: requires human approval — no " +
+        "auto-apply (ADR-0004). Idempotent: an already-published task is a no-op " +
+        "(returns existing, in its own recorded destination).",
       inputSchema: {
         taskId: z.string().min(1).describe("Id of the task to publish."),
+        destination: TaskDestination.optional().describe(
+          "External home to publish to (github | jira | slack). Omitted ⇒ [tasks].default.",
+        ),
       },
       annotations: { readOnlyHint: false, openWorldHint: true },
     },
-    async ({ taskId }) => {
+    async ({ taskId, destination }) => {
       try {
-        const result = await taskPublish(write.store, write.config, { taskId });
+        const result = await taskPublish(write.store, write.config, {
+          taskId,
+          ...(destination !== undefined ? { destination } : {}),
+        });
         return jsonResult(result);
       } catch (error) {
         return toToolError(error);

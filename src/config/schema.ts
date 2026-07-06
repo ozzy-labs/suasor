@@ -194,73 +194,109 @@ export const ExportConfig = z
   .passthrough();
 export type ExportConfig = z.infer<typeof ExportConfig>;
 
+/** The external tool destinations a task can be homed in (ADR-0036). */
+export const TaskDestination = z.enum(["github", "jira", "slack"]);
+export type TaskDestination = z.infer<typeof TaskDestination>;
+
 /**
- * `[tasks]` — task external-home management (ADR-0036). A confirmed task is
- * published to a **single** external home; suasor holds no authoritative state.
- * `home` is `null` until configured (then `task.publish` / `task.act` degrade
- * per-call with a structured `ACTUATOR_NOT_CONFIGURED` error, never at startup).
- * The default may be switched (乗り換え); there is no per-task override.
+ * `[tasks.homes.github]` — GitHub Issues home (ADR-0036 R1). A published task
+ * is a real Issue in `repo`; optionally also added to a Projects v2 board.
+ */
+export const GithubTaskHome = z
+  .object({
+    /** GitHub target as `"owner/repo"`. */
+    repo: z.string().min(1),
+    /** Optional GHES base URL; omitted for github.com. */
+    baseUrl: z.string().url().optional(),
+    /** Optional Projects v2 board node id (`PVT_...`) to also add the Issue to. */
+    project: z.string().min(1).optional(),
+    /**
+     * GitHub Projects v2 single-select Status field mapping, used when this home
+     * also has a `project` board (ADR-0036). These node ids are project-specific
+     * (like a Jira custom workflow), so they are config-driven; without them
+     * complete/reopen only changes the Issue state (board Status stays untouched).
+     */
+    statusFieldId: z.string().min(1).optional(),
+    doneOptionId: z.string().min(1).optional(),
+    todoOptionId: z.string().min(1).optional(),
+  })
+  .passthrough();
+export type GithubTaskHome = z.infer<typeof GithubTaskHome>;
+
+/**
+ * `[tasks.homes.jira]` — Jira home (ADR-0036 R1). `host` must match the read
+ * connector's `[connectors.jira].host` so the published issue's identity
+ * (`jira:<host>:<project>:<key>`) dedups against ingest. `email` is non-secret
+ * (Cloud basic auth = email + token). `doneTransitionId` / `reopenTransitionId`
+ * / `dropTransitionId` are workflow-specific.
+ */
+export const JiraTaskHome = z
+  .object({
+    host: z.string().min(1),
+    project: z.string().min(1),
+    email: z.string().min(1).optional(),
+    auth: z.enum(["basic", "bearer"]).optional(),
+    issueType: z.string().min(1).optional(),
+    doneTransitionId: z.string().min(1).optional(),
+    reopenTransitionId: z.string().min(1).optional(),
+    dropTransitionId: z.string().min(1).optional(),
+  })
+  .passthrough();
+export type JiraTaskHome = z.infer<typeof JiraTaskHome>;
+
+/**
+ * `[tasks.homes.slack]` — Slack List home (ADR-0036 R1). Column/option ids are
+ * list-specific (config-driven). Slack-prefixed names avoid collision with the
+ * GitHub Projects `doneOptionId`/`todoOptionId`. complete/reopen use the checkbox
+ * column when set, else the status select.
+ */
+export const SlackTaskHome = z
+  .object({
+    list: z.string().min(1),
+    slackTitleColumnId: z.string().min(1).optional(),
+    slackStatusColumnId: z.string().min(1).optional(),
+    slackDoneOptionId: z.string().min(1).optional(),
+    slackTodoOptionId: z.string().min(1).optional(),
+    slackCheckboxColumnId: z.string().min(1).optional(),
+    /** Slack status option mapped to "dropped" (won't-do; required for drop egress). */
+    slackDroppedOptionId: z.string().min(1).optional(),
+    /** Optional text column to stamp the idempotency marker into (for re-publish dedup). */
+    slackMarkerColumnId: z.string().min(1).optional(),
+  })
+  .passthrough();
+export type SlackTaskHome = z.infer<typeof SlackTaskHome>;
+
+/**
+ * `[tasks]` — task external-home management (ADR-0036, revised R1). A confirmed
+ * task is published to one of several **per-destination** external homes; suasor
+ * holds no authoritative state for published tasks. Each `[tasks.homes.<dest>]`
+ * is independently configured and typed; `[tasks].default` names the destination
+ * new publishes go to when `task.publish` is called without an explicit
+ * `destination` (R1-2). A task's *own* `published_destination` — not the current
+ * `default` — resolves the home used for `task.act` / read-back on that task
+ * (R1-3), so switching the default never breaks previously-published tasks.
+ * `default` is `null` and `homes` empty until configured; `task.publish` /
+ * `task.act` then degrade per-call with a structured `ACTUATOR_NOT_CONFIGURED`
+ * error, never at startup. Unpublished tasks are a first-class local/private tier
+ * (R1-4) — no home is required to create or locally update them.
  */
 export const TasksConfig = z
   .object({
-    /** The single task home, or `null` when unconfigured. */
-    home: z
+    /** Per-destination task homes, each independently configured (ADR-0036 R1-1). */
+    homes: z
       .object({
-        /** Which external tool hosts tasks. */
-        destination: z.enum(["github", "jira", "slack"]),
-        /** GitHub target as `"owner/repo"` (when destination = github). */
-        repo: z.string().min(1).optional(),
-        /**
-         * When destination = jira: Jira project key.
-         * When destination = github: optional Projects v2 board node id (`PVT_...`)
-         * to also add the created Issue to (ADR-0036).
-         */
-        project: z.string().min(1).optional(),
-        /** Slack list id (when destination = slack). */
-        list: z.string().min(1).optional(),
-        /**
-         * Slack Lists column/option mapping (when destination = slack, ADR-0036).
-         * Column/option ids are list-specific (config-driven). Slack-prefixed names
-         * avoid collision with the GitHub Projects `doneOptionId`/`todoOptionId`.
-         * complete/reopen use the checkbox column when set, else the status select.
-         */
-        slackTitleColumnId: z.string().min(1).optional(),
-        slackStatusColumnId: z.string().min(1).optional(),
-        slackDoneOptionId: z.string().min(1).optional(),
-        slackTodoOptionId: z.string().min(1).optional(),
-        slackCheckboxColumnId: z.string().min(1).optional(),
-        /** Slack status option mapped to "dropped" (won't-do; required for drop egress). */
-        slackDroppedOptionId: z.string().min(1).optional(),
-        /** Optional text column to stamp the idempotency marker into (for re-publish dedup). */
-        slackMarkerColumnId: z.string().min(1).optional(),
-        /**
-         * Jira fields (when destination = jira, ADR-0036). `host` must match the
-         * read connector's `[connectors.jira].host` so the published issue's
-         * identity (`jira:<host>:<project>:<key>`) dedups against ingest. `email`
-         * is non-secret (Cloud basic auth = email + token); `auth` = basic|bearer.
-         * `doneTransitionId` / `reopenTransitionId` are workflow-specific.
-         */
-        host: z.string().min(1).optional(),
-        email: z.string().min(1).optional(),
-        auth: z.enum(["basic", "bearer"]).optional(),
-        issueType: z.string().min(1).optional(),
-        doneTransitionId: z.string().min(1).optional(),
-        reopenTransitionId: z.string().min(1).optional(),
-        dropTransitionId: z.string().min(1).optional(),
-        /**
-         * GitHub Projects v2 single-select Status field mapping, used when a
-         * `github` home also has a `project` board (ADR-0036). These node ids are
-         * project-specific (like a Jira custom workflow), so they are config-driven;
-         * without them complete/reopen only changes the Issue state (board Status
-         * stays untouched).
-         */
-        statusFieldId: z.string().min(1).optional(),
-        doneOptionId: z.string().min(1).optional(),
-        todoOptionId: z.string().min(1).optional(),
+        github: GithubTaskHome.optional(),
+        jira: JiraTaskHome.optional(),
+        slack: SlackTaskHome.optional(),
       })
       .passthrough()
-      .nullable()
-      .default(null),
+      .default(() => ({})),
+    /**
+     * Destination new publishes go to by default (`task.publish` without an
+     * explicit `destination`, ADR-0036 R1-2). `null` until configured — a publish
+     * with neither an argument nor a default fails with `ACTUATOR_NOT_CONFIGURED`.
+     */
+    default: TaskDestination.nullable().default(null),
     /**
      * Slack-only loop-avoidance: exclude the dedicated task list from ingest
      * scope so published items are never re-consumed as new sources (ADR-0036 §8,

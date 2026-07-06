@@ -31,7 +31,7 @@ import type {
 } from "./actuator.ts";
 import { taskMarker } from "./github-actuator.ts";
 
-/** `[tasks.home]` slack config slice (slack-prefixed to avoid github field collision). */
+/** `[tasks.homes.slack]` config slice (slack-prefixed to avoid github field collision). */
 export const SlackListsActuatorConfig = z.object({
   list: z.string().min(1),
   slackTitleColumnId: z.string().min(1),
@@ -204,7 +204,7 @@ export function createSlackListsActuator(
           });
         } else {
           ctx.onWarn?.(
-            "slack: drop is a no-op (needs slackStatusColumnId + slackDroppedOptionId in [tasks.home])",
+            "slack: drop is a no-op (needs slackStatusColumnId + slackDroppedOptionId in [tasks.homes.slack])",
           );
         }
         return;
@@ -224,7 +224,7 @@ export function createSlackListsActuator(
         throw new Error(
           `slack lists: ${action.kind} requires slackCheckboxColumnId, or slackStatusColumnId + ${
             done ? "slackDoneOptionId" : "slackTodoOptionId"
-          } in [tasks.home]`,
+          } in [tasks.homes.slack]`,
         );
       }
       await slack.updateField({

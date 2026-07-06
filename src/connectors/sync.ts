@@ -113,9 +113,10 @@ export interface SyncOptions {
   /** Called when extraction fails (best-effort; ingest still succeeds name-only). */
   onExtractError?: (error: Error) => void;
   /**
-   * `[tasks.home]` slack column/option mapping, so post-sync read-back can
-   * interpret ingested `slack_list_item` raw cells (ADR-0036 §6). Omitted ⇒ Slack
-   * read-back is skipped (GitHub/Jira read-back is config-free and still runs).
+   * `[tasks.homes.slack]` column/option mapping, so post-sync read-back can
+   * interpret ingested `slack_list_item` raw cells (ADR-0036 §6 / R1-3: resolved
+   * from the slack home, not the current default). Omitted ⇒ Slack read-back is
+   * skipped (GitHub/Jira read-back is config-free and still runs).
    */
   slackHome?: SlackHomeColumns | null;
 }

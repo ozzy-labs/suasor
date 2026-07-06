@@ -133,7 +133,8 @@ describe("task.update (direct HITL task lifecycle transition)", () => {
   describe("published task routing through the actuator (ADR-0036 §3)", () => {
     const config = {
       tasks: {
-        home: { destination: "github" as const, repo: "acme/widgets" },
+        homes: { github: { repo: "acme/widgets" } },
+        default: "github" as const,
         slackListExcludeFromIngest: true,
       },
     };
@@ -233,6 +234,49 @@ describe("task.update (direct HITL task lifecycle transition)", () => {
       });
       expect(again.status).toBe("unchanged");
       expect(fake.acts).toHaveLength(0);
+    });
+
+    test("R1-3: routes through the task's OWN home even after the default switches (ADR-0036)", async () => {
+      // A task published to jira; the default is now github (a switched home).
+      const { taskId } = taskCreate(store, { title: "old jira task" });
+      store.record({
+        type: "TaskPublished",
+        taskId,
+        destination: "jira",
+        externalId: "jira:acme.atlassian.net:ENG:ENG-1",
+        publishedAt: "2026-06-23T00:00:00+00:00",
+      });
+      const switched = {
+        tasks: {
+          homes: {
+            github: { repo: "acme/widgets" },
+            jira: { host: "acme.atlassian.net", project: "ENG" },
+          },
+          default: "github" as const,
+          slackListExcludeFromIngest: true,
+        },
+      };
+      const builds: Array<{ destination: string; slice: Record<string, unknown> }> = [];
+      const loader = async (destination: string, slice: Record<string, unknown>) => {
+        builds.push({ destination, slice });
+        return {
+          destination: destination as "github" | "jira" | "slack",
+          async publish() {
+            return { externalId: "x" };
+          },
+          async act() {},
+        };
+      };
+
+      const out = await taskUpdate(store, { taskId, state: "completed" }, new Date(), {
+        config: switched,
+        loadActuatorImpl: loader,
+      });
+      expect(out.status).toBe("updated");
+      // Resolved jira (the task's own destination), not the github default.
+      expect(builds[0]?.destination).toBe("jira");
+      expect(builds[0]?.slice).toMatchObject({ host: "acme.atlassian.net", project: "ENG" });
+      expect(stateOf(taskId)).toBe("completed");
     });
   });
 });

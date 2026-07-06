@@ -11,7 +11,7 @@
  *
  * Scope: GitHub Issues (incl. `closed(not_planned)` → dropped via meta
  * `state_reason`) + Jira (status category + due/priority) + Slack Lists
- * (`slack_list_item` raw cells interpreted with the `[tasks.home]` column config,
+ * (`slack_list_item` raw cells interpreted with the `[tasks.homes.slack]` column config,
  * option C). Unknown external state → leave the task untouched.
  */
 import type { Store } from "../db/index.ts";
@@ -37,7 +37,7 @@ export function normalizeJiraDue(raw: unknown): string | null {
   return `${raw}T00:00:00+00:00`;
 }
 
-/** The `[tasks.home]` slack column/option mapping read-back needs to interpret cells. */
+/** The `[tasks.homes.slack]` column/option mapping read-back needs to interpret cells. */
 export interface SlackHomeColumns {
   slackCheckboxColumnId?: string;
   slackStatusColumnId?: string;
@@ -62,7 +62,7 @@ function cellFor(cells: SlackCell[], columnId: string): SlackCell | undefined {
 
 /**
  * Interpret a Slack List item's raw cells into a task state, using the
- * `[tasks.home]` column config (ADR-0036 §6, option C: cells are ingested raw,
+ * `[tasks.homes.slack]` column config (ADR-0036 §6, option C: cells are ingested raw,
  * interpreted here — the connector stays config-free). Checkbox column wins when
  * configured (done/not-done); else a status single-select maps via the option
  * ids. Returns `null` when it cannot be derived (unconfigured / no match).
@@ -174,7 +174,7 @@ export function reconcileReadback(
       row.sourceType === "slack_list_item"
         ? slackHome
           ? slackStateFromCells((meta.cells as SlackCell[]) ?? [], slackHome)
-          : null // no [tasks.home] slack config available → can't interpret cells
+          : null // no [tasks.homes.slack] config available → can't interpret cells
         : taskStateFromSource(row.sourceType, meta);
     if (derived === null) continue; // unknown external state → leave the task untouched
 

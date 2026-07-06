@@ -106,7 +106,7 @@ export const SlackConnectorConfig = z.object({
   /**
    * Slack List ids to mirror as `slack_list_item` sources for task read-back
    * (ADR-0036 §6). The items are ingested with **raw cells** (no interpretation);
-   * `reconcileReadback` maps them to a task state using `[tasks.home]` column ids.
+   * `reconcileReadback` maps them to a task state using `[tasks.homes.slack]` column ids.
    * Uses the flat/default token (`lists:read`). Multi-workspace lists are a
    * follow-up.
    */
@@ -503,7 +503,7 @@ export interface SlackListItem {
 /**
  * Build a `slack_list_item` SourceRecord from a raw List item (ADR-0036 §6). The
  * cells are stored verbatim in `meta.cells`; `reconcileReadback` interprets them
- * with the `[tasks.home]` column config. The fingerprint hashes the cells so a
+ * with the `[tasks.homes.slack]` column config. The fingerprint hashes the cells so a
  * checkbox/status change re-ingests (the title body alone wouldn't change).
  * externalId mirrors the actuator's published id exactly (the read-back join key).
  */
@@ -976,7 +976,7 @@ class SlackConnector implements Connector {
 
     // Mirror configured Slack Lists as `slack_list_item` sources (ADR-0036 §6
     // read-back), per workspace (each its own token). Raw cells only —
-    // `reconcileReadback` interprets them with the [tasks.home] column config.
+    // `reconcileReadback` interprets them with the [tasks.homes.slack] column config.
     // Best-effort: a per-list / token failure warns, not aborts.
     yield* this.syncLists(ctx, workspaces);
 

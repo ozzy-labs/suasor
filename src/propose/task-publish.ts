@@ -23,6 +23,52 @@ import { McpToolError } from "../mcp/errors.ts";
 /** The slice of config the publish/act services read (matches `write.config`). */
 export type TaskHomeConfig = { tasks?: TasksConfig | undefined };
 
+/**
+ * Resolve the `[tasks.homes.<destination>]` config slice for a specific
+ * destination (ADR-0036 R1-3). Throws `ACTUATOR_NOT_CONFIGURED` when that
+ * destination's home is not configured — never at startup, only per call.
+ */
+function resolveHome(
+  config: TaskHomeConfig,
+  destination: TaskDestination,
+): Record<string, unknown> {
+  const slice = config.tasks?.homes?.[destination];
+  if (!slice) {
+    throw new McpToolError(
+      "ACTUATOR_NOT_CONFIGURED",
+      `No task home configured for '${destination}': set [tasks.homes.${destination}] to use it.`,
+      `Configure [tasks.homes.${destination}] in suasor config (e.g. destination = github → repo = owner/repo).`,
+    );
+  }
+  return slice as Record<string, unknown>;
+}
+
+/**
+ * Resolve the destination a *new* publish targets (ADR-0036 R1-2): an explicit
+ * `task.publish` argument wins, else `[tasks].default`. Throws
+ * `ACTUATOR_NOT_CONFIGURED` when neither is set.
+ */
+function resolvePublishDestination(
+  config: TaskHomeConfig,
+  requested?: TaskDestination,
+): TaskDestination {
+  const destination = requested ?? config.tasks?.default ?? null;
+  if (!destination) {
+    throw new McpToolError(
+      "ACTUATOR_NOT_CONFIGURED",
+      "No task home configured: set [tasks].default (or pass a destination) to publish tasks.",
+      "Set [tasks].default = github|jira|slack and configure the matching [tasks.homes.<dest>].",
+    );
+  }
+  return destination;
+}
+
+/** Whether a default publish destination is fully configured (for batch publish pre-check). */
+export function hasDefaultHome(config: TaskHomeConfig): boolean {
+  const dest = config.tasks?.default ?? null;
+  return dest !== null && Boolean(config.tasks?.homes?.[dest]);
+}
+
 /** A task row as the publish/act services need it. */
 interface TaskRow {
   id: string;
@@ -44,22 +90,6 @@ function loadTask(store: Store, taskId: string): TaskRow | null {
   );
 }
 
-/** Resolve the configured task home, or throw a structured error when unset. */
-function requireHome(config: TaskHomeConfig): {
-  destination: TaskDestination;
-  slice: Record<string, unknown>;
-} {
-  const home = config.tasks?.home ?? null;
-  if (!home) {
-    throw new McpToolError(
-      "ACTUATOR_NOT_CONFIGURED",
-      "No task home configured: set [tasks].home (destination + target) to publish tasks.",
-      "Configure [tasks].home in suasor config (e.g. destination = github, repo = owner/repo).",
-    );
-  }
-  return { destination: home.destination as TaskDestination, slice: home };
-}
-
 /** Build the actuator context (write-scoped secret, separate from read token). */
 function actuatorContext(
   destination: TaskDestination,
@@ -75,6 +105,12 @@ function actuatorContext(
 
 export interface TaskPublishInput {
   taskId: string;
+  /**
+   * Destination to publish to (ADR-0036 R1-2). Omitted ⇒ `[tasks].default`. An
+   * explicit argument is not a per-task override in the friction sense — publish
+   * is already a per-task HITL call, so the choice adds no approval prompts.
+   */
+  destination?: TaskDestination;
 }
 export interface TaskPublishOutput {
   taskId: string;
@@ -84,9 +120,11 @@ export interface TaskPublishOutput {
 }
 
 /**
- * Publish a task to its configured external home. Idempotent: an already-published
- * task short-circuits to `existing`; otherwise the actuator publishes (itself
- * idempotent on `taskId`) and a `TaskPublished` event is appended on success.
+ * Publish a task to an external home. The destination is the explicit argument or
+ * `[tasks].default` (ADR-0036 R1-2), resolved against `[tasks.homes.<dest>]`.
+ * Idempotent: an already-published task short-circuits to `existing` (its own
+ * recorded destination); otherwise the actuator publishes (itself idempotent on
+ * `taskId`) and a `TaskPublished` event is appended on success.
  */
 export async function taskPublish(
   store: Store,
@@ -99,17 +137,21 @@ export async function taskPublish(
   if (!task) {
     throw new McpToolError("MISSING_ENTITY", `task not found: ${input.taskId}`);
   }
-  const { destination, slice } = requireHome(config);
 
   // Suasor-layer idempotency: already published → no-op (no second egress call).
-  if (task.published_external_id) {
+  // Report the task's own recorded destination (not the current default); a
+  // TaskPublished always folds both columns together, so it is present here.
+  if (task.published_external_id && task.published_destination) {
     return {
       taskId: task.id,
-      destination: (task.published_destination as TaskDestination) ?? destination,
+      destination: task.published_destination as TaskDestination,
       externalId: task.published_external_id,
       status: "existing",
     };
   }
+
+  const destination = resolvePublishDestination(config, input.destination);
+  const slice = resolveHome(config, destination);
 
   let actuator: Awaited<ReturnType<typeof loadActuator>>;
   try {
@@ -196,9 +238,14 @@ export async function taskAct(
   const destination = task.published_destination as TaskDestination;
   const externalId = task.published_external_id;
 
+  // R1-3 critical fix (ADR-0036): resolve the actuator config from the task's OWN
+  // published destination — NOT the current [tasks].default. Switching the default
+  // (e.g. jira → github) must not break act/read-back on already-published tasks.
+  const slice = resolveHome(config, destination);
+
   let actuator: Awaited<ReturnType<typeof loadActuator>>;
   try {
-    actuator = await loadActuatorImpl(destination, requireHome(config).slice);
+    actuator = await loadActuatorImpl(destination, slice);
   } catch (err) {
     throw new McpToolError(
       "PUBLISH_DESTINATION_INVALID",

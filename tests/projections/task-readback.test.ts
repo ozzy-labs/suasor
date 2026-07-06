@@ -200,7 +200,7 @@ describe("reconcileReadback (ADR-0036 §6 read-back)", () => {
     });
     // Without slack home config, the raw cell can't be interpreted → no-op.
     expect(reconcileReadback(store, new Date())).toBe(0);
-    // With the [tasks.home] column config, it reflects.
+    // With the [tasks.homes.slack] column config, it reflects.
     expect(reconcileReadback(store, new Date(), slackHome)).toBe(1);
     expect(stateOf(taskId)).toBe("completed");
   });

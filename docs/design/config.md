@@ -72,43 +72,56 @@ backend = "disabled"   # disabled（既定）| pandoc — md→Office 変換サ�
 - `dir` 既定は `<configDir>/exports/`（loader が解決、`[storage].dbPath` と同様）。書き込みは `dir` 配下のみ（filename は basename・traversal 拒否）
 - **`[connectors.local].roots` の配下/一致は不可**（書き出した下書きが再取り込みされるループ防止）。`draft.export` が realpath 解決して拒否する
 
-### `[tasks]`（確定・ADR-0036）
+### `[tasks]`（確定・ADR-0036・改訂 R1）
 
 ```toml
 [tasks]
-# 確定 task を起票する単一の外部ホーム（未設定＝null。task.publish 呼び出し時のみ per-call で degrade）
+default = "github"          # 新規 publish の既定行き先（github | jira | slack）。未設定＝null
 # slackListExcludeFromIngest = true   # Slack 専用 list を取り込みスコープから除外（ループ防止・既定 true）
 
-[tasks.home]
-destination = "github"     # github（先行）| jira | slack
-repo = "owner/repo"         # github のとき：起票先リポジトリ（本物の Issue）
-# --- jira のとき：本物の Jira issue を起票（host は read connector と同じ値＝identity 一致が前提）---
-# host = "example.atlassian.net"   # read [connectors.jira].host と同じ bare host
-# project = "ENG"                  # プロジェクトキー
-# email = "me@example.com"         # Cloud basic 認証用（非 secret。token は jira-actuator secret）
-# auth = "basic"                   # basic（Cloud・既定）| bearer（self-hosted PAT）
-# issueType = "Task"               # 起票する issue type（既定 Task）
-# doneTransitionId = "31"          # complete で適用する workflow transition（workflow 固有）
-# reopenTransitionId = "11"        # reopen で適用する workflow transition
-# dropTransitionId = "51"          # drop(Won't Do)で適用する transition（任意・未設定は no-op+warn）
-# list = "L0123"            # slack のとき：list id（slackTitleColumnId / slackStatusColumnId /
-#                           # slackDoneOptionId / slackTodoOptionId / slackDroppedOptionId（drop 用・任意）
-#                           # / slackCheckboxColumnId / slackMarkerColumnId を list 固有 id で指定）
-#                           # read-back（ADR-0036 §6）には同 list を `[connectors.slack].lists` にも
-#                           # 追加して取り込む（lists:read scope。専用 list の取り込み除外とは排他）。
-#                           # multi-workspace は `[connectors.slack.workspaces.<alias>].lists`
-# --- github で任意：作成した Issue を Projects v2 board にも載せる ---
-# project = "PVT_..."        # 追加先 Projects v2 board の node id
-# statusFieldId = "PVTSSF_..."  # complete/reopen で動かす単一選択 Status フィールド（project 固有）
-# doneOptionId  = "..."       # complete で設定する Status option
-# todoOptionId  = "..."       # reopen で設定する Status option
+# --- 起票先ごとの typed ホーム（destination ごとに独立設定・共存可）---
+
+[tasks.homes.github]
+repo = "owner/repo"          # 起票先リポジトリ（本物の Issue）
+# --- 任意：作成した Issue を Projects v2 board にも載せる ---
+# project = "PVT_..."          # 追加先 Projects v2 board の node id
+# statusFieldId = "PVTSSF_..." # complete/reopen で動かす単一選択 Status フィールド（project 固有）
+# doneOptionId  = "..."        # complete で設定する Status option
+# todoOptionId  = "..."        # reopen で設定する Status option
+
+# [tasks.homes.jira]          # 本物の Jira issue を起票（host は read connector と同じ値＝identity 一致が前提）
+# host = "example.atlassian.net"  # read [connectors.jira].host と同じ bare host
+# project = "ENG"                 # プロジェクトキー
+# email = "me@example.com"        # Cloud basic 認証用（非 secret。token は jira-actuator secret）
+# auth = "basic"                  # basic（Cloud・既定）| bearer（self-hosted PAT）
+# issueType = "Task"              # 起票する issue type（既定 Task）
+# doneTransitionId = "31"         # complete で適用する workflow transition（workflow 固有）
+# reopenTransitionId = "11"       # reopen で適用する workflow transition
+# dropTransitionId = "51"         # drop(Won't Do)で適用する transition（任意・未設定は no-op+warn）
+
+# [tasks.homes.slack]         # Slack List に起票（列/option id は list 固有＝config 駆動）
+# list = "L0123"                  # 起票先 list id
+# slackTitleColumnId = "..."      # title 列 / slackStatusColumnId / slackDoneOptionId / slackTodoOptionId
+# slackDroppedOptionId = "..."    # drop 用（任意）/ slackCheckboxColumnId / slackMarkerColumnId
+#                                 # read-back（ADR-0036 §6）には同 list を `[connectors.slack].lists` にも
+#                                 # 追加して取り込む（lists:read scope。専用 list の取り込み除外とは排他）。
+#                                 # multi-workspace は `[connectors.slack.workspaces.<alias>].lists`
 ```
 
-- 確定 task を起票する**ただ 1 つ**のホーム（[ADR-0036](../adr/0036-task-external-home.md)）。状態正本はツール側、suasor は read + 操作命令を出す single pane
-- **既定の変更（乗り換え）は可能・per-task の行き先上書きはなし**。プロジェクト単位ルールは必要時に後付け
-- `home` 未設定で `task.publish` / `task.act` を呼ぶと構造化エラー `ACTUATOR_NOT_CONFIGURED`（起動時致命にしない＝per-call degrade、`[export].dir` 未設定と同型）
+- 確定 task を起票する**外部ホームは destination ごとに独立**（[ADR-0036](../adr/0036-task-external-home.md) §改訂 R1）。`[tasks].default` が**新規 publish の既定行き先**、`[tasks.homes.<destination>]` が各ホームの typed 設定
+- **R1-2**: `task.publish` に任意 `destination` 引数（省略時 `default`）。publish は元々 per-task の HITL 呼び出しなので任意引数は摩擦にならない
+- **R1-3（重要）**: 公開済み task の `task.act` / `task.update`（公開済み分岐）/ read-back は、その task **自身の `published_destination`** に対応する `[tasks.homes.<destination>]` で config を解決する。`default` は新規 publish にのみ使う ⇒ **既定を乗り換えても既存の published task の操作/読み戻しは壊れない**（Slack は externalId 内 listId で列/option マップ解決）
+- **R1-4**: **未 publish タスクは private tier として正式**（外部 home 不要）。`propose.apply` の `publish` は既定 false、`task.update` のローカル分岐でローカルのみ遷移でき、`task.list` / brief 等の読み系は published task と同格に扱う。「private はホームの選び方で対応」は撤回
+- `default`（または引数の destination）に対応する `[tasks.homes.<dest>]` 未設定で `task.publish` / `task.act` を呼ぶと構造化エラー `ACTUATOR_NOT_CONFIGURED`（起動時致命にしない＝per-call degrade、`[export].dir` 未設定と同型）
 - egress には read connector と**別スコープ（write）のトークン**が要る（GitHub `issues:write` 等）。secret は `<destination>-actuator` 名で keychain/env 管理
-- private な task はホームの選び方（自分専用 Slack List / private repo 等）で対応。Slack ホームは専用 list を取り込み除外してループを防ぐ
+
+#### 移行（R1 破壊的変更）
+
+R1 は後方互換を要求しない破壊的 config 変更。旧 `[tasks.home]`（destination フィールド + flat な各種フィールド）を廃し、以下へ移行する:
+
+1. 旧 `[tasks.home].destination` の値を `[tasks].default` に移す（例 `default = "github"`）
+2. 旧 `[tasks.home]` の各フィールドを、その destination の `[tasks.homes.<destination>]` テーブルへ移す（`destination` フィールド自体は削除）。github の flat フィールド（`repo` / `project` / `statusFieldId` / `doneOptionId` / `todoOptionId`）は `[tasks.homes.github]` へ、jira の（`host` / `project` / `email` / `auth` / `issueType` / `doneTransitionId` / `reopenTransitionId` / `dropTransitionId`）は `[tasks.homes.jira]` へ、slack の（`list` / `slack*ColumnId` / `slack*OptionId`）は `[tasks.homes.slack]` へ
+3. 複数ホームを併用したい場合は `[tasks.homes.github]` と `[tasks.homes.jira]` を両方書き、`default` で既定を選ぶ。`task.publish destination=<dest>` で個別に振り分けられる
 
 ### 他セクション（後続 Issue が拡張）
 
