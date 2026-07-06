@@ -45,26 +45,9 @@ import {
   listSourceHistory,
   listSources,
   listTasks,
+  listWithTruncation,
 } from "./queries.ts";
 import { isoDateTime, jsonResult, limitShape, type McpServerDeps } from "./server-shared.ts";
-
-/**
- * Apply `search`'s truncation-transparency contract (ADR-0007 "no silent wrong
- * answer") to a `limit`-bounded list query. `fetch` runs the underlying query
- * with one extra row requested (`limit + 1`); if it comes back, the result was
- * cut off, so we drop the sentinel and report `truncated: true`. Returns the
- * trimmed rows plus a `truncated` boolean the caller folds into its response.
- *
- * `limit` is the *effective* cap (the tool's default when the arg is omitted).
- */
-function listWithTruncation<T>(
-  limit: number,
-  fetch: (probeLimit: number) => T[],
-): { rows: T[]; truncated: boolean } {
-  const rows = fetch(limit + 1);
-  if (rows.length > limit) return { rows: rows.slice(0, limit), truncated: true };
-  return { rows, truncated: false };
-}
 
 /** Context the read tools close over (built once by the factory). */
 export interface ReadToolContext {
@@ -548,7 +531,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "Bundle the period's material — tasks/decisions updated, sources/Slack demand " +
         "observed, and currently-open inbox — for the host LLM to summarize in one " +
         "round-trip. Read-only; the tool gathers, the host composes the summary " +
-        "(ADR-0017). Default window: the last 24h.",
+        "(ADR-0017). Default window: the last 24h. Carries a per-section " +
+        "`truncated: { sources, tasks, decisions, inbox, demand }` map — a section is " +
+        "`true` when it held more rows than `limit` returned (ADR-0007 'no silent wrong " +
+        "answer'); narrow the window or page via the matching list tool when set.",
       inputSchema: {
         since: isoDateTime.optional().describe("Window start (inclusive). Default: 24h ago."),
         until: isoDateTime.optional().describe("Window end (exclusive). Default: now."),

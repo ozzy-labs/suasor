@@ -779,6 +779,56 @@ describe("buildBrief (ADR-0017)", () => {
     expect(b.sources).toHaveLength(2);
   });
 
+  test("a section cut off at limit reports truncated:true and trims to limit (ADR-0007)", () => {
+    // 3 in-window sources, limit 2 → the section is silently short by one without
+    // a signal; the probe (limit+1) must surface it as truncated (Issue #444).
+    source("a", "2026-06-13T00:00:00.000Z");
+    source("b", "2026-06-13T01:00:00.000Z");
+    source("c", "2026-06-13T02:00:00.000Z");
+    const b = buildBrief(sqlite(), { since: W1, until: W2, limit: 2 });
+    expect(b.sources).toHaveLength(2);
+    expect(b.truncated.sources).toBe(true);
+  });
+
+  test("a section with exactly limit rows is NOT truncated (boundary)", () => {
+    source("a", "2026-06-13T00:00:00.000Z");
+    source("b", "2026-06-13T01:00:00.000Z");
+    const b = buildBrief(sqlite(), { since: W1, until: W2, limit: 2 });
+    expect(b.sources).toHaveLength(2);
+    expect(b.truncated.sources).toBe(false);
+  });
+
+  test("truncation is per-section: a cut sources section does not flag the others", () => {
+    source("a", "2026-06-13T00:00:00.000Z");
+    source("b", "2026-06-13T01:00:00.000Z");
+    source("c", "2026-06-13T02:00:00.000Z");
+    // One in-window decision — well under the cap.
+    store.record(
+      { type: "DecisionRecorded", decisionId: "dec1", title: "d", rationale: "" },
+      new Date("2026-06-13T00:00:00.000Z"),
+    );
+    const b = buildBrief(sqlite(), { since: W1, until: W2, limit: 2 });
+    expect(b.truncated).toEqual({
+      sources: true,
+      tasks: false,
+      decisions: false,
+      inbox: false,
+      demand: false,
+    });
+  });
+
+  test("nothing over the cap → every section reports truncated:false", () => {
+    seed();
+    const b = buildBrief(sqlite(), { since: W1, until: W2 });
+    expect(b.truncated).toEqual({
+      sources: false,
+      tasks: false,
+      decisions: false,
+      inbox: false,
+      demand: false,
+    });
+  });
+
   test("warnings default to an empty array when none are supplied (Issue #189)", () => {
     const b = buildBrief(sqlite(), { since: W1, until: W2 });
     expect(b.warnings).toEqual([]);

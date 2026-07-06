@@ -17,7 +17,7 @@ opshub は `brief` を **LLM が briefing を生成して `BriefingGenerated` ev
 1. **`brief` は read-only の「期間バンドル」tool。** 指定期間（`since` / `until`、既定は直近 24h）の主要 entity を 1 回の呼び出しで構造化して返す: 動いた `tasks`（updated 窓）/ 記録された `decisions`（recorded 窓）/ 未処理 `inbox`（open）/ 新規 `sources`（observed 窓）/ `slack.demand`（observed 窓、[ADR-0012](0012-slack-demand-digest.md)）。**要約文そのものは生成しない** — host LLM が返却バンドルから要約を組み立てる（ADR-0006/0004）。
 2. **既存 query の合成で実装する（新規 projection なし）。** `listSources` / `listTasks` / `listDecisions` / `listInbox` / `listSlackDemand` を期間フィルタ付きで束ねる薄い service（`buildBrief`）+ `brief` tool。`readOnlyHint: true`。
 3. **persist しない。** `BriefingGenerated` 相当の event は作らない（host が要約、保存はしない）。provenance が要るケースは別途 graph（[ADR-0018](0018-knowledge-graph-traversal.md)）で辿る。
-4. **戻り値**: `{ "window": {since, until}, "tasks": [...], "decisions": [...], "inbox": [...], "sources": [...], "demand": [...] }`。各セクションは既存 read tool と同じ row 形。`limit` で各セクション上限。
+4. **戻り値**: `{ "window": {since, until}, "tasks": [...], "decisions": [...], "inbox": [...], "sources": [...], "demand": [...], "truncated": {sources, tasks, decisions, inbox, demand}, "warnings": [...] }`（`warnings` は completeness warnings・Issue #189 で実装済みの field を本 shape に同期）。各セクションは既存 read tool と同じ row 形。`limit` で各セクション上限。各セクションは `limit + 1` で probe し、打ち切られた section を `truncated.<section>` = `true` で返す（[ADR-0007](0007-connector-contract.md)「no silent wrong answer」を list 系 tool と揃える）ので、host は多忙な日の過小申告を検知して窓を狭める / list tool でページングできる。
 
 ## Consequences
 

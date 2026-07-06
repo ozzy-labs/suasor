@@ -279,6 +279,37 @@ describe("MCP read surface", () => {
     expect(brief.decisions.map((d) => d.id)).toEqual(["dec1"]);
   });
 
+  test("brief carries per-section truncated flags (Issue #444 / ADR-0007)", async () => {
+    // 3 in-window sources, limit 2 → the sources section is cut off; the brief
+    // tool must surface it via truncated rather than silently under-reporting.
+    seedSource("s1", "one");
+    seedSource("s2", "two");
+    seedSource("s3", "three");
+    const client = await connect();
+    const res = await client.callTool({
+      name: "brief",
+      arguments: { since: "2026-06-13T00:00:00.000Z", until: "2026-06-15T00:00:00.000Z", limit: 2 },
+    });
+    const brief = parseResult(res as never) as {
+      sources: unknown[];
+      truncated: {
+        sources: boolean;
+        tasks: boolean;
+        decisions: boolean;
+        inbox: boolean;
+        demand: boolean;
+      };
+    };
+    expect(brief.sources).toHaveLength(2);
+    expect(brief.truncated).toEqual({
+      sources: true,
+      tasks: false,
+      decisions: false,
+      inbox: false,
+      demand: false,
+    });
+  });
+
   test("brief flags unconfigured categories via warnings (Issue #189)", async () => {
     // Default connect(): embedding disabled + Slack unconfigured → both signals.
     const client = await connect();

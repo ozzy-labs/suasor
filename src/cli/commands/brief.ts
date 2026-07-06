@@ -154,6 +154,17 @@ export class BriefCommand extends Command {
           `sources: ${brief.sources.length}  demand: ${brief.demand.length}  ` +
           `inbox(open): ${brief.inbox.length}\n`,
       );
+      // Flag any section the per-section --limit cut off, so a scheduled digest
+      // never silently understates a busy day (ADR-0007 "no silent wrong answer").
+      const cutSections = (Object.keys(brief.truncated) as (keyof typeof brief.truncated)[]).filter(
+        (section) => brief.truncated[section],
+      );
+      if (cutSections.length > 0) {
+        this.context.stdout.write(
+          `  [⚠ truncated: ${cutSections.join(", ")}] ` +
+            `— narrow --since/--until or raise --limit to see the rest\n`,
+        );
+      }
       for (const task of brief.tasks) {
         this.context.stdout.write(`  [task:${task.state}] ${task.title}\n`);
       }

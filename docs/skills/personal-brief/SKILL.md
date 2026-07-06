@@ -38,6 +38,7 @@ mcp_tools_write: []
 
 1. 期間を決める。明示がなければ直近 24h。ISO 8601（offset 付き）の `since` を作る
 2. `brief` で期間サマリを取る（LLM 要約。委譲先で生成、[ADR-0006](../../adr/0006-ml-delegation.md)）。`brief` の `demand` は **un-acked のみ**（対応済み / 不要と印された mention は除外・[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）＝「未処理」が真
+   - **打切りを確認する**（[ADR-0007](../../adr/0007-connector-contract.md)「no silent wrong answer」）: `brief` は各 section を `limit`（既定 50）で打ち切ると `truncated.<section>`（`sources` / `tasks` / `decisions` / `inbox` / `demand`）を `true` で返す。多忙な日ほどバンドルが黙って過小申告する合図なので、`true` の section があれば要約をそのまま鵜呑みにしない。**窓を狭める**（`since` を近づける / `until` を切る）で該当期間を分割して取り直すか、その section に対応する list tool（`source.list` / `task.list` / `decision.list` / `inbox.list` / `demand.list`）を `limit` を上げて / 時間窓でページングして完全な一覧を引く
 3. 補強が要れば次を叩く（時間フィルタは下限 inclusive `*After` / 上限 exclusive `*Before`）:
    - `priority.list` — 「いま何が優先か」の決定論的 cross-entity ランキング（tasks + open commitments + un-acked demand を固定 comparator で合成、[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md) 決定 3）。状況要約の「やるべきこと」節はこの基線を消費する（順位を散文で作り直さない）
    - `task.list`（`updatedAfter=since`）— 動いた task

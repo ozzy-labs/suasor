@@ -88,7 +88,7 @@ suasor --version                       # バージョン出力
 | `source forget` | `--yes` | false | 破壊的 purge を適用。省略時は対象を preview のみ（適用なし・ADR-0004 HITL） |
 | `brief` | `--since D` | `24h` | 期間下限。相対（`24h` / `7d` / `2w`）または ISO date。下限 inclusive |
 | `brief` | `--until ISO` | now | 期間上限（exclusive）、ISO date/datetime |
-| `brief` | `--limit N` | 50 | セクションごとの最大行数（正の整数。非正値は error） |
+| `brief` | `--limit N` | 50 | セクションごとの最大行数（正の整数。非正値は error）。打切りが起きた section は人間可読出力に `[⚠ truncated: ...]` を付記し、`--json` はバンドルの `truncated` フラグで示す（ADR-0007「no silent wrong answer」） |
 | `brief` | `--json` | false | 人間可読サマリの代わりに `Brief` バンドル全体を JSON で出力 |
 | `digest` | `--job N` | 全 job | 実行する `[digest.jobs]` を名前で 1 件に絞る（未知名は error） |
 | `digest` | `--dry-run` | false | 各 job の digest を stdout に render するだけで配信しない |
