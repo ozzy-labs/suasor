@@ -22,6 +22,13 @@
       "when": 1782893003793,
       "tag": "0002_icy_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1783301988918,
+      "tag": "0003_chemical_the_hand",
+      "breakpoints": true
     }
   ]
 }

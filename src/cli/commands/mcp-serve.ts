@@ -4,7 +4,7 @@
  * Exposes Suasor's read tools (search / recall.search / source.* / task.list /
  * decision.list / inbox.list) and HITL write tools (connector.sync / propose.* /
  * task.* / decision.record / inbox.* / link.* / person.* / commitment.* /
- * draft.export / source.forget) over the MCP stdio transport, the agent boundary
+ * draft.export / source.forget / source.unforget) over the MCP stdio transport, the agent boundary
  * (docs/design/mcp-surface.md). Read tools have no side effects; write tools are
  * gated behind human approval (ADR-0004, no auto-apply).
  *
@@ -27,7 +27,7 @@ export class McpServeCommand extends Command {
       enabled), source.list / source.get, and task.list / decision.list /
       inbox.list. Read tools are side-effect-free. HITL write tools (connector.sync,
       propose.*, task.create / task.update, decision.record, inbox.*, link.*,
-      person.*, commitment.*, draft.export, source.forget) are also exposed; each
+      person.*, commitment.*, draft.export, source.forget, source.unforget) are also exposed; each
       is gated behind human approval (ADR-0004 — no auto-apply,
       docs/design/mcp-surface.md).
 

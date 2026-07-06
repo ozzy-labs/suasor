@@ -308,6 +308,18 @@ async function runSyncPass(
   const sqlite = store.connection.sqlite;
   const cursor = options.cursor !== undefined ? options.cursor : lastCursor(sqlite, connector.name);
 
+  // Forget tombstones (ADR-0026 R1-1): sources the user forgot must not silently
+  // resurrect on the next sync. Preload the tombstoned externalIds once so each
+  // record can be skipped before any fingerprint/delta work below (loaded up
+  // front — forget is low-frequency, so the set is small). Cleared per-source by
+  // `source.unforget`.
+  const forgotten = new Set(
+    sqlite
+      .query<{ external_id: string }, []>("SELECT external_id FROM forgotten_sources")
+      .all()
+      .map((r) => r.external_id),
+  );
+
   // The service is the single owner of per-record progress: it sees every
   // record, so it calls `options.onProgress` once per record below. We do NOT
   // also forward it via `ctx.onProgress`, which would double-fire the sink.
@@ -334,6 +346,15 @@ async function runSyncPass(
   const seenTeams = new Set<string>();
 
   for await (const record of connector.sync(ctx)) {
+    // Tombstone check (ADR-0026 R1-1): a forgotten source is skipped entirely —
+    // before the fingerprint delta, so no SourceObserved/SourceBodyUpdated is
+    // emitted and the purged body is never re-ingested. It stays absent until an
+    // explicit `source.unforget` lifts the tombstone.
+    if (forgotten.has(record.externalId)) {
+      options.onProgress?.(record);
+      continue;
+    }
+
     const fingerprint = record.fingerprint ?? (await sha256Hex(record.body));
     const prior = existingFingerprint(sqlite, record.externalId);
 

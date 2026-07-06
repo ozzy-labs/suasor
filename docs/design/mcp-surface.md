@@ -245,7 +245,8 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `person.merge` | 2 person を 1 つに統合（identity を target へ付け替え・可逆） | 実装済み（#92。下記参照） |
 | `person.split` | 1 identity を別 person へ分離（merge の逆操作） | 実装済み（#92。下記参照） |
 | `draft.export` | 下書きをローカルファイルに書き出す（sandbox・送信しない・[ADR-0025](../adr/0025-local-draft-export.md)） | 実装済み（#133。下記参照） |
-| `source.forget` | 取り込み source をローカル purge（redaction + projection 削除・[ADR-0026](../adr/0026-source-forgetting.md)） | 実装済み（#141。下記参照） |
+| `source.forget` | 取り込み source をローカル purge（redaction + projection 削除 + tombstone・[ADR-0026](../adr/0026-source-forgetting.md)） | 実装済み（#141 / #415。下記参照） |
+| `source.unforget` | forget tombstone を解除し再取り込みを再許可（[ADR-0026](../adr/0026-source-forgetting.md) R1-1） | 実装済み（#415。下記参照） |
 
 ### `connector.sync`（確定・write / HITL）
 
@@ -599,13 +600,24 @@ commitment id は content 由来（`title` + `direction` + provenance）なの�
 取り込み source を**ローカルから消す** write tool（「忘れられる権利」/ 誤取り込み / 機密）。実体は `src/forget/source-forget.ts`。content-minimization（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）のため **projection だけでなく event ログ本文も消す**:
 
 - **redaction**: 当該 `externalId` の `SourceObserved`/`SourceBodyUpdated` の `body` を `json_set(payload,'$.body','')` で空白化（append-only の明示的例外・[ADR-0026](../adr/0026-source-forgetting.md)）
-- **`SourceForgotten` event**（body なし監査）を append → **reducer が `sources`/`sources_fts` を DELETE**（replay-stable: rebuild=truncate+replay でも redact 済み SourceObserved の空行を再 DELETE して absent に収束）
+- **`SourceForgotten` event**（body なし監査）を append → **reducer が `sources`/`sources_fts` を DELETE + `forgotten_sources` tombstone を INSERT**（replay-stable: rebuild=truncate+replay でも redact 済み SourceObserved の空行を再 DELETE して absent に収束し、tombstone も再現）
+- **tombstone（R1-1）**: `forgotten_sources` projection に externalId を記録し、`runSyncPass`（[ADR-0007](../adr/0007-connector-contract.md)）が fingerprint 判定より前に該当 externalId の**再観測をスキップ**する。これが無いと上流に残る source は次回 sync で全文復活する。解除は `source.unforget` のみ
 - **sidecar substrate**（`vec0`/`embeddings_meta`/`extraction_meta`）は tool が imperative に DELETE（replay 管理外）
+- **原子性（R1-4）**: redaction + sidecar 削除 + `SourceForgotten` append を**単一 sqlite transaction** で包む（`store.record` は SAVEPOINT で入れ子）。mid-forget クラッシュで中間状態が残らない
+- **物理消去（R1-5）**: 削除前後で `secure_delete` を有効化（free page をゼロ埋め）し、commit 後に `PRAGMA wal_checkpoint(TRUNCATE)` で WAL を畳み込む。redact 済み平文が free page / WAL に残らない。Suasor の外に出た copy（draft export 済み・`VACUUM INTO` backup・OS backup・host 会話履歴）は射程外
 - links は残す（provenance・`source.get` は null）
 
 引数（Zod）: `externalId: string`（min 1）/ `reason?: string`（監査用）。
 
-戻り値: `{ "externalId": "...", "status": "forgotten" | "already_forgotten" | "missing" }`。idempotent（再 forget は `already_forgotten`、未取り込みは `missing`）。HITL（`readOnlyHint: false`、auto-apply なし）。
+戻り値: `{ "externalId": "...", "status": "forgotten" | "already_forgotten" | "missing", "tombstoned": boolean, "note"?: string }`。`tombstoned` は tombstone が張られたか（`forgotten`/`already_forgotten` で `true`、`missing` で `false`）。`note` は enabled な connector がある場合のみ付き、tombstone が再取り込みを防いでいる旨を通知する。idempotent（再 forget は `already_forgotten`、未取り込みは `missing`）。HITL（`readOnlyHint: false`、auto-apply なし）。
+
+### `source.unforget`（確定・write / HITL・[ADR-0026](../adr/0026-source-forgetting.md) R1-1）
+
+forget tombstone を**解除**し、owning connector が次回 sync で当該 source を**再取り込みできる**ようにする write tool。実体は `src/forget/source-forget.ts` の `sourceUnforget`。body なしの `SourceUnforgotten` event を append し、その reducer が `forgotten_sources` 行を DELETE する。**redaction 済みの本文は復元しない**（source が上流に残っていれば再観測で戻る）。
+
+引数（Zod）: `externalId: string`（min 1）。
+
+戻り値: `{ "externalId": "...", "status": "unforgotten" | "not_forgotten" }`。idempotent（未 forget の id は `not_forgotten` の no-op）。HITL（`readOnlyHint: false`、auto-apply なし）。
 
 ## Tool introspection（`suasor mcp tools`）
 

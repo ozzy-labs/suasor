@@ -20,6 +20,7 @@ import { countEventRows } from "./events-table.ts";
 /** Projection tables surfaced in the store-info row-count table (schema.ts). */
 const PROJECTION_TABLES = [
   "sources",
+  "forgotten_sources",
   "tasks",
   "decisions",
   "inbox",
@@ -112,8 +113,8 @@ function fileSize(dbPath: string): number {
  *
  * `dbPath` is the on-disk path (pass `null` / `":memory:"` for an in-memory
  * store, which omits the file-size measurement). Projection row counts cover the
- * core nine tables; the vec0 / `embeddings_meta` / FTS counts are `null` when
- * the corresponding substrate is absent (e.g. a store opened without vec).
+ * core projection tables; the vec0 / `embeddings_meta` / FTS counts are `null`
+ * when the corresponding substrate is absent (e.g. a store opened without vec).
  */
 export function storeInfo(sqlite: Database, dbPath: string | null): StoreInfo {
   const onDisk = dbPath !== null && dbPath !== ":memory:";

@@ -15,6 +15,7 @@ export {
   SourceBodyUpdated,
   SourceForgotten,
   SourceObserved,
+  SourceUnforgotten,
   TaskApplied,
   TaskProposed,
 } from "./types.ts";

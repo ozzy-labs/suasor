@@ -14,7 +14,7 @@ import { z } from "zod";
 import { runConnectorSyncTool } from "../connectors/mcp-tool.ts";
 import { createComposer } from "../export/compose.ts";
 import { DraftExportError, draftExport } from "../export/draft-export.ts";
-import { sourceForget } from "../forget/source-forget.ts";
+import { sourceForget, sourceUnforget } from "../forget/source-forget.ts";
 import { applyAndPublish } from "../propose/apply.ts";
 import { proposeBatch } from "../propose/batch.ts";
 import {
@@ -43,6 +43,16 @@ import { isoDateTime, jsonResult, type McpServerDeps } from "./server-shared.ts"
 
 /** The non-null `write` half of {@link McpServerDeps}. */
 type WriteDeps = NonNullable<McpServerDeps["write"]>;
+
+/**
+ * True when at least one configured connector is not disabled (`enabled` unset or
+ * `true`). Drives the `source.forget` tombstone notice (ADR-0026 R1-1): while a
+ * connector stays enabled, the tombstone is what prevents a still-upstream source
+ * from being re-ingested on the next sync.
+ */
+function anyConnectorEnabled(connectors: Record<string, Record<string, unknown>>): boolean {
+  return Object.values(connectors).some((slice) => slice?.enabled !== false);
+}
 
 /** Register every write/HITL tool onto `server` in the original order. */
 export function registerWriteTools(server: McpServer, write: WriteDeps): void {
@@ -793,17 +803,19 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
   );
 
   // --- source.forget: purge an ingested source locally (ADR-0026). ---
-  // Redacts the body from the event log + purges projection/sidecar. HITL.
+  // Redacts the body from the event log + purges projection/sidecar, lays a
+  // tombstone so the next sync can't resurrect it (R1-1). HITL.
   server.registerTool(
     "source.forget",
     {
       title: "Forget source",
       description:
         "Purge an ingested source locally (ADR-0026): redact its body from the " +
-        "event log and delete it from the projection / FTS / vectors. Keeps a " +
-        "body-less audit record. Write tool: requires human approval — no " +
-        "auto-apply (ADR-0004). Idempotent: re-forgetting is a no-op; an " +
-        "unknown source is reported missing.",
+        "event log and delete it from the projection / FTS / vectors, then lay a " +
+        "tombstone so the next sync does not re-ingest it. Keeps a body-less " +
+        "audit record. Write tool: requires human approval — no auto-apply " +
+        "(ADR-0004). Idempotent: re-forgetting is a no-op; an unknown source is " +
+        "reported missing. Use source.unforget to re-allow ingestion.",
       inputSchema: {
         externalId: z.string().min(1).describe("Source id to forget."),
         reason: z.string().min(1).optional().describe("Optional audit reason."),
@@ -815,6 +827,38 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         externalId,
         ...(reason !== undefined ? { reason } : {}),
       });
+      // Tombstone notice (ADR-0026 R1-1): when a connector is still enabled, tell
+      // the caller the tombstone is what keeps a still-upstream source from being
+      // re-ingested — and that source.unforget lifts it.
+      const note =
+        result.tombstoned && anyConnectorEnabled(write.config.connectors)
+          ? "A tombstone now prevents this source from being re-ingested while its " +
+            "connector remains enabled; if it still exists upstream it will not " +
+            "resurrect on the next sync. Use source.unforget to re-allow ingestion."
+          : undefined;
+      return jsonResult({ ...result, ...(note !== undefined ? { note } : {}) });
+    },
+  );
+
+  // --- source.unforget: lift a forget tombstone (ADR-0026 R1-1). ---
+  // Appends SourceUnforgotten; the connector may re-ingest on the next sync. HITL.
+  server.registerTool(
+    "source.unforget",
+    {
+      title: "Unforget source",
+      description:
+        "Lift a forget tombstone (ADR-0026): append SourceUnforgotten so the " +
+        "connector may re-ingest the source on the next sync. Does not restore " +
+        "any content (the source is re-observed from upstream if it still " +
+        "exists). Write tool: requires human approval — no auto-apply (ADR-0004). " +
+        "Idempotent: unforgetting a source that was never forgotten is a no-op.",
+      inputSchema: {
+        externalId: z.string().min(1).describe("Source id to unforget (re-allow ingest)."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: false },
+    },
+    async ({ externalId }) => {
+      const result = sourceUnforget(write.store, { externalId });
       return jsonResult(result);
     },
   );

@@ -175,6 +175,24 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
       if (!options.deferFts) {
         sqlite.query("DELETE FROM sources_fts WHERE external_id = ?").run(event.externalId);
       }
+      // Tombstone (ADR-0026 R1-1): record the forgotten externalId so the next
+      // sync skips re-observing it (src/connectors/sync.ts) — otherwise a source
+      // still present upstream silently resurrects. Upsert keeps replay stable
+      // (a re-forget just refreshes forgotten_at).
+      sqlite
+        .query(
+          `INSERT INTO forgotten_sources (external_id, forgotten_at)
+           VALUES ($id, $at)
+           ON CONFLICT(external_id) DO UPDATE SET forgotten_at = excluded.forgotten_at`,
+        )
+        .run({ $id: event.externalId, $at: event.recordedAt });
+      return;
+    }
+    case "SourceUnforgotten": {
+      // Lift the tombstone (ADR-0026 R1-1): remove the forgotten_sources row so
+      // the connector may re-ingest the source on the next sync. No content is
+      // restored here — the source is re-observed from upstream if still present.
+      sqlite.query("DELETE FROM forgotten_sources WHERE external_id = ?").run(event.externalId);
       return;
     }
     case "ConnectorSyncCompleted": {

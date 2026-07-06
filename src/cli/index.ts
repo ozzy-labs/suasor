@@ -57,7 +57,11 @@ import {
   SlackResolveNamesCommand,
   SlackStatusCommand,
 } from "./commands/slack.ts";
-import { SourceForgetCommand, SourceListCommand } from "./commands/source.ts";
+import {
+  SourceForgetCommand,
+  SourceListCommand,
+  SourceUnforgetCommand,
+} from "./commands/source.ts";
 import { StoreInfoCommand } from "./commands/store-info.ts";
 import { SyncAllCommand, SyncStatusCommand } from "./commands/sync-all.ts";
 import { ValidateConfigCommand } from "./commands/validate-config.ts";
@@ -79,6 +83,7 @@ export function registeredCommandClasses(): CommandClass[] {
     SearchCommand,
     SourceListCommand,
     SourceForgetCommand,
+    SourceUnforgetCommand,
     BriefCommand,
     ...(connectorSyncCommands() as CommandClass[]),
     SyncAllCommand,

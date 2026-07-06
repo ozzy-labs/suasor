@@ -22,6 +22,19 @@ export const sources = sqliteTable("sources", {
   meta: text("meta").notNull().default("{}"),
 });
 
+/**
+ * Forget tombstones (ADR-0026 R1-1). One row per forgotten `externalId`, folded
+ * from `SourceForgotten` (insert) / `SourceUnforgotten` (delete). Ingest checks
+ * this set before re-observing a record so a forgotten source is not resurrected
+ * by the next sync; `source.unforget` clears the tombstone to re-allow ingest.
+ * Rebuildable (ADR-0002): replaying the forget/unforget events reproduces it.
+ */
+export const forgottenSources = sqliteTable("forgotten_sources", {
+  externalId: text("external_id").primaryKey(),
+  /** When the source was forgotten (the SourceForgotten event's recordedAt). */
+  forgottenAt: text("forgotten_at").notNull(),
+});
+
 /** Task projection (proposed → applied lifecycle, HITL per ADR-0004). */
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),

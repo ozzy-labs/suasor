@@ -880,6 +880,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "person.split",
         "draft.export",
         "source.forget",
+        "source.unforget",
       ].sort(),
     );
   });
@@ -910,6 +911,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "person.split",
       "draft.export",
       "source.forget",
+      "source.unforget",
     ];
     for (const name of writeTools) {
       const tool = tools.find((t) => t.name === name);
@@ -954,6 +956,58 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     })) as { isError?: boolean; content: { type: string; text?: string }[] };
     expect(res.isError).toBe(true);
     expect(res.content[0]?.text).toContain("unknown connector");
+  });
+
+  test("source.forget returns tombstoned + a note when a connector is enabled (ADR-0026 R1-1)", async () => {
+    seedSource("gh:1", "secret plans");
+    // A configured, non-disabled connector → the tombstone notice is surfaced.
+    const client = await connectWrite({ github: { repos: ["o/r"] } });
+    const out = parseResult(
+      (await client.callTool({
+        name: "source.forget",
+        arguments: { externalId: "gh:1" },
+      })) as never,
+    ) as { status: string; tombstoned: boolean; note?: string };
+    expect(out.status).toBe("forgotten");
+    expect(out.tombstoned).toBe(true);
+    expect(out.note).toContain("source.unforget");
+  });
+
+  test("source.forget omits the note when no connector is enabled", async () => {
+    seedSource("gh:1", "secret plans");
+    const client = await connectWrite({ github: { repos: ["o/r"], enabled: false } });
+    const out = parseResult(
+      (await client.callTool({
+        name: "source.forget",
+        arguments: { externalId: "gh:1" },
+      })) as never,
+    ) as { status: string; tombstoned: boolean; note?: string };
+    expect(out.status).toBe("forgotten");
+    expect(out.tombstoned).toBe(true);
+    expect(out.note).toBeUndefined();
+  });
+
+  test("source.unforget lifts the tombstone (unforgotten / not_forgotten)", async () => {
+    seedSource("gh:1", "secret plans");
+    const client = await connectWrite();
+    await client.callTool({ name: "source.forget", arguments: { externalId: "gh:1" } });
+
+    const lifted = parseResult(
+      (await client.callTool({
+        name: "source.unforget",
+        arguments: { externalId: "gh:1" },
+      })) as never,
+    ) as { status: string };
+    expect(lifted.status).toBe("unforgotten");
+
+    // A second unforget is a no-op.
+    const again = parseResult(
+      (await client.callTool({
+        name: "source.unforget",
+        arguments: { externalId: "gh:1" },
+      })) as never,
+    ) as { status: string };
+    expect(again.status).toBe("not_forgotten");
   });
 
   test("decision.record appends a decision visible via decision.list", async () => {
