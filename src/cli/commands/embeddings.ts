@@ -24,12 +24,16 @@ const DISABLED_MESSAGE =
 /**
  * Open the store + build the embedder from `[embedding]` config. Returns `null`
  * for a fatal config error (already reported to stderr) so the caller can exit 1,
- * or `{ store, embedder, backend }` where `embedder` is `null` when disabled.
+ * or `{ store, embedder, backend, maxInputChars, truncations }` where `embedder`
+ * is `null` when disabled. `truncations()` reports how many bodies the embedder
+ * capped to `maxInputChars` (retrieval-m1) so rebuild/drain can surface it.
  */
 async function openEmbeddingContext(context: { stderr: { write: (s: string) => void } }): Promise<{
   store: import("../../db/index.ts").Store;
   embedder: import("../../retrieval/embedding/index.ts").Embedder | null;
   backend: string;
+  maxInputChars: number;
+  truncations: () => number;
 } | null> {
   const [{ loadConfig }, { Store }, { createEmbedderResolved }] = await Promise.all([
     import("../../config/index.ts"),
@@ -42,9 +46,34 @@ async function openEmbeddingContext(context: { stderr: { write: (s: string) => v
     context.stderr.write("error: storage.dbPath is not configured\n");
     return null;
   }
-  const embedder = await createEmbedderResolved(config.embedding);
+  let truncatedCount = 0;
+  const embedder = await createEmbedderResolved(config.embedding, {
+    onTruncate: () => {
+      truncatedCount += 1;
+    },
+  });
   const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
-  return { store, embedder, backend: config.embedding.backend };
+  return {
+    store,
+    embedder,
+    backend: config.embedding.backend,
+    maxInputChars: config.embedding.maxInputChars,
+    truncations: () => truncatedCount,
+  };
+}
+
+/** Warn when the embedder capped long bodies to `maxInputChars` (retrieval-m1). */
+function warnTruncations(
+  context: { stderr: { write: (s: string) => void } },
+  ctx: { maxInputChars: number; truncations: () => number },
+): void {
+  const n = ctx.truncations();
+  if (n > 0) {
+    context.stderr.write(
+      `warning: ${n} long document(s) truncated to ${ctx.maxInputChars} chars before ` +
+        `embedding (recall covers the head only; see ${docsUrl("guide/embedding.md")}).\n`,
+    );
+  }
 }
 
 export class EmbeddingsStatusCommand extends Command {
@@ -159,6 +188,7 @@ export class EmbeddingsRebuildCommand extends Command {
         onProgress: () => progress.tick(),
       });
       progress.finish();
+      warnTruncations(this.context, ctx);
       if (this.json) {
         this.context.stdout.write(
           `${JSON.stringify({ candidates: result.candidates, embedded: result.embedded }, null, 2)}\n`,
@@ -220,6 +250,7 @@ export class EmbeddingsDrainCommand extends Command {
         onProgress: () => progress.tick(),
       });
       progress.finish();
+      warnTruncations(this.context, ctx);
       if (this.json) {
         this.context.stdout.write(
           `${JSON.stringify({ candidates: result.candidates, embedded: result.embedded }, null, 2)}\n`,

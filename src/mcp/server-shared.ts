@@ -43,7 +43,12 @@ export interface McpServerDeps {
    */
   embedding:
     | (Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> &
-        Partial<Pick<EmbeddingConfig, "dim" | "maxBatch" | "requestTimeoutMs" | "maxRetries">>)
+        Partial<
+          Pick<
+            EmbeddingConfig,
+            "dim" | "maxBatch" | "maxInputChars" | "requestTimeoutMs" | "maxRetries"
+          >
+        >)
     | EmbeddingConfig["backend"];
   /**
    * Pre-built embedder override (tests inject a fake to avoid a live sidecar).

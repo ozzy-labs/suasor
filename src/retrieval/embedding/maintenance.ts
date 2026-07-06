@@ -226,9 +226,12 @@ const MAINTENANCE_EMBED_BATCH = 128;
 
 /**
  * Embed the given source ids in bounded chunks and upsert each vector with
- * provenance. Best-effort: on the first sidecar error the run stops and returns
- * the partial `embedded` count gathered from earlier chunks (ADR-0006).
- * `onProgress` (when given) fires once per source processed.
+ * provenance. Best-effort: on a *systemic* sidecar error (a whole batch fails even
+ * one-by-one) the run stops and returns the partial `embedded` count gathered from
+ * earlier chunks (ADR-0006). A single oversized/poison body no longer stops the
+ * run — per-text failure isolation (retrieval-m1) leaves it as a hole so the ids
+ * sorted after it still get embedded, and it stays pending for the next drain
+ * rather than blocking it forever. `onProgress` fires once per source processed.
  */
 async function embedAndStore(
   sqlite: Database,
@@ -245,7 +248,7 @@ async function embedAndStore(
   for (let start = 0; start < ids.length; start += MAINTENANCE_EMBED_BATCH) {
     const chunk = ids.slice(start, start + MAINTENANCE_EMBED_BATCH);
     const rows = fetchBodies(sqlite, chunk);
-    let vectors: number[][];
+    let vectors: (number[] | undefined)[];
     try {
       vectors = await embedder.embed(rows.map((r) => r.body));
     } catch (cause) {
