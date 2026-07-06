@@ -64,6 +64,7 @@ describe("suasor --version / --help", () => {
       "search",
       "source list",
       "source forget",
+      "source unforget",
       "brief",
       "doctor",
       "config edit",

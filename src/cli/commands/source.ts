@@ -1,18 +1,22 @@
 /**
- * `suasor source list` / `suasor source forget` — local data audit + manual
- * purge from the CLI (Issue #200, Epic #185 / Phase 5).
+ * `suasor source list` / `suasor source forget` / `suasor source unforget` —
+ * local data audit + manual purge from the CLI (Issue #200, Epic #185 / Phase 5;
+ * unforget added in ADR-0026 R1 / #415).
  *
- * These surface two existing capabilities that were previously MCP-only:
- *   - `source list`   — the read query `listSources` (src/mcp/queries.ts), so an
+ * These surface capabilities that were previously MCP-only:
+ *   - `source list`     — the read query `listSources` (src/mcp/queries.ts), so an
  *     operator can audit what has been ingested without an MCP client.
- *   - `source forget` — the "right to be forgotten" purge `sourceForget`
+ *   - `source forget`   — the "right to be forgotten" purge `sourceForget`
  *     (src/forget/source-forget.ts, ADR-0026): redact the body from the event
- *     log + delete the projection / FTS / vectors, keeping a body-less audit
- *     event.
+ *     log + delete the projection / FTS / vectors, lay a re-ingestion tombstone,
+ *     keeping a body-less audit event.
+ *   - `source unforget` — lift that tombstone (`sourceUnforget`, ADR-0026 R1-1)
+ *     so the owning connector may re-ingest the source on its next sync.
  *
  * `list` is read-only (autonomous OK). `forget` is destructive, so it follows
  * the established HITL preview pattern (cf. `slack cursor reset`): without
  * `--yes` it previews the target and does nothing; `--yes` applies (ADR-0004).
+ * `unforget` is a write (HITL) but non-destructive (it only re-allows ingest).
  *
  * Privacy (NFR-PRV-4 / Issue #200): neither verb prints source bodies or
  * secrets — `list` shows id / type / observed-at / a short meta hint only.
@@ -223,16 +227,85 @@ export class SourceForgetCommand extends Command {
         ...(this.reason !== undefined ? { reason: this.reason } : {}),
       });
 
+      // Tombstone notice (ADR-0026 R1-1): while a connector stays enabled, the
+      // tombstone is what stops a still-upstream source from being re-ingested on
+      // the next sync — surface it so the purge does not look silently undone.
+      const connectorEnabled = Object.values(config.connectors).some(
+        (slice) => (slice as { enabled?: boolean } | undefined)?.enabled !== false,
+      );
+      const tombstoneNote =
+        "  (a tombstone now prevents re-ingestion on the next sync; " +
+        `run 'suasor source unforget ${this.externalId}' to re-allow it)\n`;
+
       switch (result.status) {
         case "forgotten":
           this.context.stdout.write(`forgotten: ${this.externalId}\n`);
+          if (connectorEnabled) this.context.stdout.write(tombstoneNote);
           return 0;
         case "already_forgotten":
           this.context.stdout.write(`already forgotten: ${this.externalId}\n`);
+          if (connectorEnabled) this.context.stdout.write(tombstoneNote);
           return 0;
         case "missing":
           this.context.stderr.write(`error: no source with external id '${this.externalId}'\n`);
           return 1;
+      }
+    } finally {
+      store.close();
+    }
+  }
+}
+
+export class SourceUnforgetCommand extends Command {
+  static override paths = [["source", "unforget"]];
+
+  static override usage = Command.Usage({
+    category: "Sources",
+    description: "Lift a forget tombstone so a source can be re-ingested.",
+    details: `
+      Reverses the re-ingestion block left by 'source forget' (ADR-0026): appends
+      a SourceUnforgotten event that clears the tombstone, so the owning connector
+      may re-observe the source on its next sync. It does NOT restore any content
+      that forget redacted — the body only comes back if the source still exists
+      upstream and is re-ingested.
+
+      Idempotent: unforgetting a source that was never forgotten reports
+      'not forgotten' and exits 0 (there is nothing to undo).
+    `,
+    examples: [
+      ["Re-allow ingestion of a forgotten source", "suasor source unforget gh:owner/repo#1"],
+    ],
+  });
+
+  externalId = Option.String();
+
+  override async execute(): Promise<number> {
+    const [{ loadConfig }, { Store }, { sourceUnforget }] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../forget/source-forget.ts"),
+    ]);
+
+    const config = await loadConfig();
+    const dbPath = config.storage.dbPath;
+    if (dbPath === null) {
+      this.context.stderr.write("error: storage.dbPath is not configured\n");
+      return 1;
+    }
+
+    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+    try {
+      const result = sourceUnforget(store, { externalId: this.externalId });
+      switch (result.status) {
+        case "unforgotten":
+          this.context.stdout.write(`unforgotten: ${this.externalId}\n`);
+          this.context.stdout.write(
+            "  (the next sync of its connector may re-ingest this source)\n",
+          );
+          return 0;
+        case "not_forgotten":
+          this.context.stdout.write(`not forgotten: ${this.externalId} (nothing to undo)\n`);
+          return 0;
       }
     } finally {
       store.close();

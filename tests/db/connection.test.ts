@@ -33,6 +33,7 @@ describe("schema init", () => {
   test("creates all projection tables", () => {
     for (const t of [
       "sources",
+      "forgotten_sources",
       "tasks",
       "sync_runs",
       "decisions",

@@ -30,6 +30,7 @@ import { applyEvents, rebuildSourcesFts } from "./reducer.ts";
 /** Projection tables cleared before replay (the event store is untouched). */
 const PROJECTION_TABLES = [
   "sources",
+  "forgotten_sources",
   "tasks",
   "sync_runs",
   "decisions",

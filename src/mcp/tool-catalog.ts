@@ -214,7 +214,12 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
   {
     name: "source.forget",
     readOnlyHint: false,
-    summary: "Purge an ingested source locally — redact + delete (SourceForgotten).",
+    summary: "Purge an ingested source locally — redact + delete + tombstone (SourceForgotten).",
+  },
+  {
+    name: "source.unforget",
+    readOnlyHint: false,
+    summary: "Lift a forget tombstone so the source can be re-ingested (SourceUnforgotten).",
   },
 ];
 

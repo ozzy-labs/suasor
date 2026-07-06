@@ -66,6 +66,15 @@ export function initSchema(sqlite: Database): void {
       observed_at TEXT NOT NULL,
       meta        TEXT NOT NULL DEFAULT '{}'
     );
+    -- Forget tombstones (ADR-0026 R1-1): one row per forgotten externalId. Folded
+    -- from SourceForgotten (insert) / SourceUnforgotten (delete). Ingest consults
+    -- this set before re-observing a record (src/connectors/sync.ts) so a forgotten
+    -- source is not silently resurrected by the next sync. Rebuildable (ADR-0002):
+    -- replaying the forget/unforget events reproduces the tombstone set.
+    CREATE TABLE IF NOT EXISTS forgotten_sources (
+      external_id  TEXT PRIMARY KEY,
+      forgotten_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS tasks (
       id         TEXT PRIMARY KEY,
       title      TEXT NOT NULL,

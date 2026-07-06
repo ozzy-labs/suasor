@@ -5,7 +5,7 @@
  * redacts the event-log body + purges the projection (ADR-0026).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -226,5 +226,42 @@ describe("suasor source forget", () => {
     const { code, out } = await run(["source", "forget", "gh:1", "--yes"]);
     expect(code).toBe(0);
     expect(out).toContain("already forgotten: gh:1");
+  });
+
+  test("no tombstone note when no connector is configured (ADR-0026 R1-1)", async () => {
+    await seed("gh:1", "x");
+    const { code, out } = await run(["source", "forget", "gh:1", "--yes"]);
+    expect(code).toBe(0);
+    expect(out).toContain("forgotten: gh:1");
+    expect(out).not.toContain("tombstone");
+  });
+
+  test("surfaces the tombstone note when a connector is enabled", async () => {
+    // A configured, non-disabled connector → the purge could be silently undone by
+    // the next sync were it not for the tombstone; the CLI must say so.
+    writeFileSync(join(dir, "config.toml"), '[connectors.github]\nrepos = ["owner/repo"]\n');
+    await seed("gh:1", "x");
+    const { code, out } = await run(["source", "forget", "gh:1", "--yes"]);
+    expect(code).toBe(0);
+    expect(out).toContain("forgotten: gh:1");
+    expect(out).toContain("tombstone now prevents re-ingestion");
+    expect(out).toContain("suasor source unforget gh:1");
+  });
+});
+
+describe("suasor source unforget", () => {
+  test("lifts the tombstone of a forgotten source", async () => {
+    await seed("gh:1", "x");
+    await run(["source", "forget", "gh:1", "--yes"]);
+    const { code, out } = await run(["source", "unforget", "gh:1"]);
+    expect(code).toBe(0);
+    expect(out).toContain("unforgotten: gh:1");
+  });
+
+  test("is a no-op for a source that was never forgotten", async () => {
+    await seed("gh:1", "x");
+    const { code, out } = await run(["source", "unforget", "gh:1"]);
+    expect(code).toBe(0);
+    expect(out).toContain("not forgotten: gh:1 (nothing to undo)");
   });
 });

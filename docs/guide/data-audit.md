@@ -32,8 +32,11 @@ Suasor の「忘れられる権利」のローカル実装（[ADR-0026](../adr/0
 1. **event log の本文を redaction**（`SourceObserved` / `SourceBodyUpdated` の `body` を空にする・content-minimization・append-only log への監査付き例外）
 2. **projection / FTS / ベクトルから削除**（`SourceForgotten` event の reducer が `sources` / `sources_fts` 行を削除。サイドカーの vec0 / `embeddings_meta` / `extraction_meta` は明示削除）
 3. **本文を持たない `SourceForgotten` 監査 event を記録**（誰が・いつ forget したかは残し、本文は残さない）
+4. **再取り込み防止の tombstone を張る**（`forgotten_sources` に externalId を記録。次回 sync は該当 source を再観測せずスキップするので、上流に残っていても全文復活しない・[ADR-0026](../adr/0026-source-forgetting.md) R1-1）
 
-`projections rebuild`（truncate + replay）後も source は復活しない（redaction 済みの `SourceObserved` が空行を再挿入し、replay された `SourceForgotten` がそれを削除する・replay-stable）。
+上記 1〜3 は**単一トランザクション**で実行され（mid-forget クラッシュで中間状態が残らない）、削除後に `secure_delete` + `wal_checkpoint(TRUNCATE)` で free page / WAL の redact 済み平文まで物理消去する（R1-4 / R1-5）。ただし forget より前に Suasor の外へ出た copy（`draft export` 済みファイル・`export backup`・OS バックアップ・エージェント側の会話履歴）は forget の射程外。
+
+`projections rebuild`（truncate + replay）後も source は復活しない（redaction 済みの `SourceObserved` が空行を再挿入し、replay された `SourceForgotten` がそれを削除する・replay-stable。tombstone も replay で再現される）。
 
 ### 確認フロー（HITL）
 
@@ -60,6 +63,22 @@ suasor source forget gh:owner/repo#1 --reason "GDPR request" --yes
 
 - 既に forget 済みの id を再度 forget すると no-op（`already forgotten: <id>`・exit 0）
 - 一度も取り込まれていない id は `missing` として exit 1（タイプミスを暗黙に成功扱いしない）
+- connector が enabled のままなら、forget 出力に「tombstone が再取り込みを防いでいる」旨の注記が付く
+
+## tombstone を解除する（`source unforget`）
+
+forget は tombstone で**再取り込みを止める**（[ADR-0026](../adr/0026-source-forgetting.md) R1-1）。意図的に消したものを再び取り込みたくなった場合は `source unforget` で tombstone を解除する。
+
+```bash
+suasor source unforget gh:owner/repo#1
+# → unforgotten: gh:owner/repo#1
+#   (the next sync of its connector may re-ingest this source)
+```
+
+- `SourceUnforgotten` event を append し、reducer が `forgotten_sources` 行を削除する。以降その connector の sync は当該 source を通常どおり観測する
+- **redaction 済みの本文は復元しない**（source が上流に残っていれば sync で戻る。既に上流から消えていれば戻らない）
+- 一度も forget されていない id は `not forgotten: <id> (nothing to undo)`（no-op・exit 0）
+- 破壊的でない write 操作（HITL）。preview（`--yes`）フローは持たない
 
 ## バックアップと復元（`export backup`）
 

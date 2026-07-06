@@ -77,6 +77,18 @@ export const SourceForgotten = z.object({
   reason: z.string().optional(),
 });
 
+/**
+ * A forget tombstone was lifted (ADR-0026 R1-1). Appended by `source.unforget`
+ * (HITL); its reducer DELETEs the `forgotten_sources` row so the connector may
+ * re-ingest the source on the next sync. Body-less (no content is restored — the
+ * source is simply re-observed from upstream if it still exists).
+ */
+export const SourceUnforgotten = z.object({
+  type: z.literal("SourceUnforgotten"),
+  ...Envelope,
+  externalId: z.string().min(1),
+});
+
 /** A connector sync run finished; carries the cursor to resume next time. */
 export const ConnectorSyncCompleted = z.object({
   type: z.literal("ConnectorSyncCompleted"),
@@ -539,6 +551,7 @@ export const DomainEvent = z.discriminatedUnion("type", [
   SourceObserved,
   SourceBodyUpdated,
   SourceForgotten,
+  SourceUnforgotten,
   ConnectorSyncCompleted,
   SyncRunStarted,
   SyncRunEnded,
@@ -572,6 +585,7 @@ export const EVENT_TYPES = [
   "SourceObserved",
   "SourceBodyUpdated",
   "SourceForgotten",
+  "SourceUnforgotten",
   "ConnectorSyncCompleted",
   "SyncRunStarted",
   "SyncRunEnded",
@@ -608,6 +622,7 @@ export type NewEvent =
   | Omit<z.input<typeof SourceObserved>, "id" | "recordedAt">
   | Omit<z.input<typeof SourceBodyUpdated>, "id" | "recordedAt">
   | Omit<z.input<typeof SourceForgotten>, "id" | "recordedAt">
+  | Omit<z.input<typeof SourceUnforgotten>, "id" | "recordedAt">
   | Omit<z.input<typeof ConnectorSyncCompleted>, "id" | "recordedAt">
   | Omit<z.input<typeof SyncRunStarted>, "id" | "recordedAt">
   | Omit<z.input<typeof SyncRunEnded>, "id" | "recordedAt">
