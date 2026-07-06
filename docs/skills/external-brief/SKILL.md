@@ -35,7 +35,8 @@ read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）�
 2. `task.list`（`state=completed`、`updatedAfter=対象期間開始`）で完了 task を引く
 3. `decision.list`（`recordedAfter=対象期間開始`）で記録された意思決定を引く
 4. `brief` で外向き tone のまとめを生成する（LLM 要約。委譲先で生成、[ADR-0006](../../adr/0006-ml-delegation.md)）。内部のみの未確定事項・生本文は外向きから落とす
-5. 外向きレポート text を返す
+5. `brief` の `truncated.<section>` が `true` の section は過小申告の合図（[ADR-0007](../../adr/0007-connector-contract.md)「no silent wrong answer」）。[personal-brief](../personal-brief/SKILL.md) と同様に、窓を狭めて分割するか対応する list tool（`task.list` / `decision.list` 等）でページングして完全な一覧を引いてからまとめる
+6. 外向きレポート text を返す
 
 ## 制約
 
