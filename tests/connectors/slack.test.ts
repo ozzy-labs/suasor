@@ -5,6 +5,7 @@ import {
   createSlackConnector,
   cursorToAliasMap,
   isSinceParseable,
+  isThreadActive,
   looksLikeSlackChannelId,
   parseSinceToTs,
   resolveSelfUserIds,
@@ -1082,6 +1083,141 @@ describe("Slack connector — thread replies (ADR-0015)", () => {
       connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: "499.000000" } }) })),
     );
     expect(replyCalls[0]?.oldest).toBe("499.000000");
+  });
+});
+
+describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", () => {
+  // A fake whose history/replies honour Slack's exclusive `oldest` (only ts
+  // strictly greater are returned), and whose `replies` returns the parent as the
+  // first element (as Slack does), so the parent-echo skip is exercised.
+  function oldestAwareSlack(
+    historyMsgs: Msg[],
+    repliesByTs: Record<string, Msg[]> = {},
+  ): { client: SlackClientLike; replyCalls: ReplyCall[]; historyCalls: HistoryArgs[] } {
+    const replyCalls: ReplyCall[] = [];
+    const historyCalls: HistoryArgs[] = [];
+    const after = (msgs: Msg[], oldest?: string): Msg[] =>
+      oldest === undefined
+        ? msgs
+        : msgs.filter((m) => Number.parseFloat(m.ts) > Number.parseFloat(oldest));
+    const client: SlackClientLike = {
+      conversations: {
+        async history(args) {
+          historyCalls.push(args);
+          return { messages: after(historyMsgs, args.oldest) };
+        },
+        async replies(args) {
+          replyCalls.push({ channel: args.channel, ts: args.ts, oldest: args.oldest });
+          return { messages: after(repliesByTs[args.ts] ?? [], args.oldest) };
+        },
+      },
+    };
+    return { client, replyCalls, historyCalls };
+  }
+
+  // A fixed "now" (2027) so relative-recency (30d active window) is deterministic.
+  const NOW_MS = 1_800_000_000_000;
+  const P = "1799990000.000000"; // thread parent, ~2.7h before now (active)
+  const R1 = "1799990100.000000"; // first reply
+  const M = "1799995000.000000"; // a later top-level message
+  const R2 = "1799996000.000000"; // a new reply, newer than M
+
+  test("captures a new reply after the channel cursor has passed the parent", async () => {
+    // Run 1 (cold start): parent + its first reply are ingested; the channel
+    // cursor and a per-thread high-water mark are persisted.
+    const run1 = oldestAwareSlack([{ ts: P, text: "parent", reply_count: 1, thread_ts: P }], {
+      [P]: [
+        { ts: P, text: "parent", thread_ts: P }, // parent echo → skipped
+        { ts: R1, text: "reply A", thread_ts: P },
+      ],
+    });
+    const c1 = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => run1.client, now: () => NOW_MS },
+    );
+    const rec1 = await collect(c1.sync(ctx()));
+    expect(rec1.map((r) => r.externalId)).toEqual([
+      "slack:T1:C1:1799990000.000000",
+      "slack:T1:C1:1799990100.000000",
+    ]);
+    const cursor1 = JSON.parse((await c1.finalize?.())?.cursor ?? "{}");
+    // Both the channel cursor and the per-thread `<channel>#<thread_ts>` mark.
+    expect(cursor1).toEqual({ default: { C1: R1, [`C1#${P}`]: R1 } });
+
+    // Run 2 (steady state): a later top-level message has moved the channel
+    // cursor past the parent, so the parent no longer appears in `history`. A new
+    // reply (R2) must still be captured by re-polling the saved thread mark.
+    const run2 = oldestAwareSlack([{ ts: M, text: "later top-level" }], {
+      [P]: [
+        { ts: P, text: "parent", thread_ts: P },
+        { ts: R1, text: "reply A", thread_ts: P },
+        { ts: R2, text: "hey <@U0SELF> please look", thread_ts: P }, // new reply w/ mention
+      ],
+    });
+    const c2 = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => run2.client, now: () => NOW_MS },
+    );
+    const rec2 = await collect(c2.sync(ctx({ cursor: JSON.stringify(cursor1) })));
+    // The later top-level message AND the re-polled reply are both ingested.
+    expect(rec2.map((r) => r.externalId)).toEqual([
+      "slack:T1:C1:1799995000.000000",
+      "slack:T1:C1:1799996000.000000",
+    ]);
+    // The re-poll targets the thread with the saved mark as the exclusive floor.
+    expect(run2.replyCalls).toEqual([{ channel: "C1", ts: P, oldest: R1 }]);
+    // The captured reply carries its mention body + thread meta, so a `<@you>`
+    // mention in a thread reply now reaches `slack.demand.list` (ADR-0012).
+    const reply = rec2.find((r) => r.externalId === "slack:T1:C1:1799996000.000000");
+    expect(reply?.body).toContain("<@U0SELF>");
+    expect(reply?.meta).toMatchObject({ threadTs: P });
+    // The thread mark advances to the newest reply for the next run.
+    const cursor2 = JSON.parse((await c2.finalize?.())?.cursor ?? "{}");
+    expect(cursor2).toEqual({ default: { C1: R2, [`C1#${P}`]: R2 } });
+  });
+
+  test("prunes an inactive thread: no re-poll, its cursor is dropped", async () => {
+    const stale = "1000000000.000000"; // year 2001 — far outside the 30d window
+    const { client, replyCalls } = oldestAwareSlack([]); // no new history
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client, now: () => NOW_MS },
+    );
+    await collect(
+      connector.sync(
+        ctx({ cursor: JSON.stringify({ default: { C1: P, [`C1#${stale}`]: stale } }) }),
+      ),
+    );
+    // The stale thread is never re-polled (bounded-cost guard).
+    expect(replyCalls).toEqual([]);
+    // Its per-thread cursor is pruned; the channel cursor is preserved.
+    const cursor = JSON.parse((await connector.finalize?.())?.cursor ?? "{}");
+    expect(cursor).toEqual({ default: { C1: P } });
+  });
+
+  test("re-polls an active thread with no new replies and keeps its mark", async () => {
+    const { client, replyCalls } = oldestAwareSlack([], { [P]: [{ ts: P, thread_ts: P }] });
+    const connector = createSlackConnector(
+      { team: "T1", channels: ["C1"] },
+      { clientFactory: () => client, now: () => NOW_MS },
+    );
+    await collect(
+      connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: M, [`C1#${P}`]: R1 } }) })),
+    );
+    // The active thread is re-polled from its mark (returns only the parent echo,
+    // which is skipped → nothing new ingested).
+    expect(replyCalls).toEqual([{ channel: "C1", ts: P, oldest: R1 }]);
+    // The mark is retained unchanged for the next run.
+    const cursor = JSON.parse((await connector.finalize?.())?.cursor ?? "{}");
+    expect(cursor).toEqual({ default: { C1: M, [`C1#${P}`]: R1 } });
+  });
+
+  test("isThreadActive: recent ts is active, older-than-window ts is not", () => {
+    expect(isThreadActive(P, NOW_MS)).toBe(true);
+    expect(isThreadActive("1000000000.000000", NOW_MS)).toBe(false);
+    // Boundary: exactly 30 days old counts as active (inclusive floor).
+    const floor = `${Math.floor(NOW_MS / 1000) - 30 * 86400}.000000`;
+    expect(isThreadActive(floor, NOW_MS)).toBe(true);
   });
 });
 

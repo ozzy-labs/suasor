@@ -147,7 +147,7 @@ suasor --version                       # バージョン出力
 | `slack conversations` | `--sort last_self_post` | — | engagement 順（自分の最終投稿 ts）。User Token 専用、Bot は N/A degrade（[ADR-0013](../adr/0013-slack-engagement-axis.md)） |
 | `slack conversations` | `--json` | false | 会話一覧 + teamId + missingScopes を JSON で出力（ts は raw 値維持） |
 | `slack conversations` | `--no-progress` | false | 進捗インジケータを無効化（stderr が非 TTY のときは自動 off、#84） |
-| `slack status` | `--json` | false | resume cursor map（alias→channel→ts）を JSON で出力（ts は raw 値維持） |
+| `slack status` | `--json` | false | resume cursor map（alias→channel→ts、per-thread の `<channel>#<thread_ts>` エントリ含む・[ADR-0015](../adr/0015-slack-thread-replies.md) R1）を JSON で出力（ts は raw 値維持。人間可読出力では thread は channel 毎の active 件数に集約） |
 | `slack cursor reset` | `--channel C1,C2` | — | reset 対象 channel id（カンマ列）。`--all` と排他 |
 | `slack cursor reset` | `--all` | false | 全 channel（`--workspace` 指定時はその alias）を reset |
 | `slack cursor reset` | `--yes` | false | 実適用（無指定は preview のみ） |

@@ -641,6 +641,58 @@ export function serializeCursor(map: Record<string, Record<string, string>>): st
   return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
 }
 
+/**
+ * Separator between a channel id and a thread's `thread_ts` in a per-thread
+ * cursor key (`<channel>#<thread_ts>`, ADR-0015 R1). Channel ids (C/D/G…) never
+ * contain `#` and a `thread_ts` is `<seconds>.<micros>`, so splitting on the
+ * first `#` unambiguously recovers both halves — letting a thread's high-water
+ * mark sit alongside the plain `<channel>` key in the same per-alias map.
+ */
+const THREAD_CURSOR_SEP = "#";
+
+/** Build the `<channel>#<thread_ts>` per-thread cursor key (ADR-0015 R1). */
+export function threadCursorKey(channel: string, threadTs: string): string {
+  return `${channel}${THREAD_CURSOR_SEP}${threadTs}`;
+}
+
+/**
+ * Parse a per-alias cursor entry key. A plain channel key (`C123`) returns
+ * `null`; a per-thread key (`C123#170…`) returns its `{ channel, threadTs }`
+ * halves. Lets the sync loop and the operational verbs (`slack status` /
+ * `cursor reset` / `cursor backfill`) tell the two kinds apart within one alias
+ * map (ADR-0015 R1).
+ */
+export function parseThreadCursorKey(key: string): { channel: string; threadTs: string } | null {
+  const idx = key.indexOf(THREAD_CURSOR_SEP);
+  if (idx < 0) return null;
+  return { channel: key.slice(0, idx), threadTs: key.slice(idx + THREAD_CURSOR_SEP.length) };
+}
+
+/**
+ * How recently a thread must have had activity to keep being re-polled
+ * (ADR-0015 R1). A thread whose last captured reply is older than this is pruned
+ * — its per-thread cursor is dropped and it is no longer re-polled — so the
+ * added `conversations.replies` calls stay bounded to truly-active threads.
+ * Default 30 days.
+ */
+const ACTIVE_THREAD_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a thread's high-water-mark `ts` is recent enough (within
+ * {@link ACTIVE_THREAD_WINDOW_MS} of `nowMs`) to keep re-polling it (ADR-0015
+ * R1). A Slack `ts` is wall-clock `<unix-seconds>.<micros>`, so this doubles as
+ * the inactivity prune test. Exported for direct unit testing.
+ */
+export function isThreadActive(hwmTs: string, nowMs: number): boolean {
+  const floorSeconds = Math.floor(nowMs / 1000) - Math.floor(ACTIVE_THREAD_WINDOW_MS / 1000);
+  return Number.parseFloat(hwmTs) >= floorSeconds;
+}
+
+/** The more recent (numerically larger) of two defined ts values. */
+function maxTs(a: string, b: string): string {
+  return Number.parseFloat(a) >= Number.parseFloat(b) ? a : b;
+}
+
 /** One workspace's persisted discovery-drift marker (ADR-0039 Layer 2). */
 export interface DiscoveryMarker {
   /** Workspace alias the marker belongs to. */
@@ -779,6 +831,9 @@ class SlackConnector implements Connector {
     // for workspaces/channels removed from config don't accumulate forever.
     this.cursors = {};
     this.workspaceStatus = [];
+    // Single clock read for this run, shared by the cold-start `since` floor and
+    // the per-thread active-window prune (ADR-0015 R1) so both agree.
+    const nowMs = this.now();
     let resolvedCount = 0; // workspaces that had a token
     let failedCount = 0; // workspaces that errored mid-fetch
     let lastError: unknown;
@@ -869,15 +924,32 @@ class SlackConnector implements Connector {
           // Applied only to channels with no saved cursor (a resumed channel
           // keeps its own high-water mark).
           const sinceStr = ws.channelSince?.[channel] ?? ws.since;
-          const sinceFloor = sinceStr
-            ? (parseSinceToTs(sinceStr, this.now()) ?? undefined)
-            : undefined;
+          const sinceFloor = sinceStr ? (parseSinceToTs(sinceStr, nowMs) ?? undefined) : undefined;
           const floor = higherTs(sinceFloor, legacy);
           // Each channel resumes from its OWN high-water mark; a never-synced
           // channel starts at the floor so cold-start stays bounded.
           const oldest = prevChannels[channel] ?? floor;
+          // Per-thread high-water marks for this channel carried over from the
+          // previous cursor (ADR-0015 R1): `<channel>#<thread_ts>` keys live
+          // beside the plain `<channel>` key in the alias map. Active threads are
+          // re-polled every sync so a reply to a thread whose parent has already
+          // fallen behind the channel cursor (the steady-state cron case) is
+          // still captured. `threadOut` receives the surviving marks to persist.
+          const savedThreadCursors = new Map<string, string>();
+          for (const [key, ts] of Object.entries(prevChannels)) {
+            const parsed = parseThreadCursorKey(key);
+            if (parsed && parsed.channel === channel) savedThreadCursors.set(parsed.threadTs, ts);
+          }
+          const threadOut = new Map<string, string>();
           try {
-            for await (const item of fetchChannelItems(client, channel, oldest)) {
+            for await (const item of fetchChannelItems(
+              client,
+              channel,
+              oldest,
+              savedThreadCursors,
+              nowMs,
+              threadOut,
+            )) {
               // History messages and thread replies advance the same per-channel
               // cursor — the highest ts seen (a reply may be newest) resumes next run.
               const seen = aliasCursors[channel];
@@ -906,6 +978,12 @@ class SlackConnector implements Connector {
               );
               yield toRecord(ws.team, channel, item, userName, channelInfo, teamName);
             }
+            // Persist the surviving (active, non-pruned) per-thread high-water
+            // marks under their `<channel>#<thread_ts>` keys so the next sync
+            // re-polls them (ADR-0015 R1).
+            for (const [threadTs, hwm] of threadOut) {
+              aliasCursors[threadCursorKey(channel, threadTs)] = hwm;
+            }
           } catch (error) {
             // A channel-scoped unreachable error (not_in_channel etc.) must not
             // abort the workspace's other channels: record it for the aggregated
@@ -915,7 +993,13 @@ class SlackConnector implements Connector {
             const code = unreachableChannelCode(error);
             if (code === null) throw error;
             unreachable.push({ channel, code });
+            // Preserve the channel's prior cursor AND its per-thread high-water
+            // marks so a transient membership gap is not a reset (ADR-0015 R1).
             if (prevChannels[channel]) aliasCursors[channel] = prevChannels[channel];
+            for (const [key, ts] of Object.entries(prevChannels)) {
+              const parsed = parseThreadCursorKey(key);
+              if (parsed && parsed.channel === channel) aliasCursors[key] = ts;
+            }
             continue;
           }
 
@@ -950,12 +1034,18 @@ class SlackConnector implements Connector {
         lastError = error;
         const message = error instanceof Error ? error.message : String(error);
         ctx.onWarn?.(`workspace '${ws.alias}' failed mid-sync: ${message}`);
+        // Only the owner alias holds a shared channel's cursor (ADR-0038 Layer
+        // 1): don't re-preserve a channel this alias doesn't own.
+        const ownedChannels = new Set(
+          ws.channels.filter((channel) => ownership.owner.get(channel) === ws.alias),
+        );
         const preserved: Record<string, string> = {};
-        for (const channel of ws.channels) {
-          // Only the owner alias holds a shared channel's cursor (ADR-0038 Layer
-          // 1): don't re-preserve a channel this alias doesn't own.
-          if (ownership.owner.get(channel) !== ws.alias) continue;
-          if (prevChannels[channel]) preserved[channel] = prevChannels[channel];
+        for (const [key, ts] of Object.entries(prevChannels)) {
+          // Preserve both the plain `<channel>` cursor and its per-thread
+          // `<channel>#<thread_ts>` high-water marks for owned channels (ADR-0015 R1).
+          const parsed = parseThreadCursorKey(key);
+          const channel = parsed ? parsed.channel : key;
+          if (ownedChannels.has(channel)) preserved[key] = ts;
         }
         if (Object.keys(preserved).length > 0) this.cursors[ws.alias] = preserved;
         this.workspaceStatus.push({
@@ -1169,17 +1259,36 @@ class SlackConnector implements Connector {
 }
 
 /**
- * Stream a channel's messages: `conversations.history` pages, and for every
- * thread parent (`reply_count > 0`) the thread's replies via
- * `conversations.replies` (ADR-0015). Replies are interleaved right after their
- * parent. Only parents with replies are expanded, so quiet messages cost no
- * extra API call (N+1 guard).
+ * Stream a channel's messages and its threads' replies (ADR-0015, R1).
+ *
+ * Two passes over `conversations.replies` (both on the SDK `WebClient`, so they
+ * inherit its Retry-After-honoured rate-limit retry — ADR-0019 §3 keeps the sync
+ * hot path on the SDK rather than the fetch-layer `slackFetch`):
+ *
+ * 1. **In-window parents.** `conversations.history` pages; for every thread
+ *    parent (`reply_count > 0`) in the window, its replies are interleaved right
+ *    after the parent. Only parents with replies are expanded (N+1 guard).
+ * 2. **Steady-state re-poll.** Every *active* thread carried in
+ *    `savedThreadCursors` whose parent did NOT surface in this history window —
+ *    the channel cursor has moved past it, the normal cron case — is re-polled
+ *    from its own high-water mark, so a new reply to an older thread is still
+ *    captured. Inactive threads (no reply within {@link ACTIVE_THREAD_WINDOW_MS})
+ *    are pruned: not re-polled and dropped from `out`, bounding the added calls
+ *    to live threads.
+ *
+ * The surviving per-thread high-water marks (last captured reply ts) are written
+ * into `out`, keyed by `thread_ts`; the caller persists them as
+ * `<channel>#<thread_ts>` cursor entries.
  */
 async function* fetchChannelItems(
   client: SlackClientLike,
   channel: string,
   oldest: string | undefined,
+  savedThreadCursors: ReadonlyMap<string, string>,
+  nowMs: number,
+  out: Map<string, string>,
 ): AsyncIterable<SlackMessageItem> {
+  const handled = new Set<string>();
   let cursor: string | undefined;
   do {
     const page = await client.conversations.history({
@@ -1191,11 +1300,36 @@ async function* fetchChannelItems(
     for (const item of page.messages ?? []) {
       yield item;
       if (item.reply_count && item.reply_count > 0) {
-        yield* fetchThreadReplies(client, channel, item.ts, oldest);
+        const threadTs = item.ts;
+        handled.add(threadTs);
+        const savedHwm = savedThreadCursors.get(threadTs);
+        // Fetch replies newer than the higher of the channel oldest and any
+        // saved thread mark, so already-captured replies are never re-fetched.
+        const replyOldest = higherTs(oldest, savedHwm);
+        let hwm = higherTs(savedHwm, threadTs) ?? threadTs;
+        for await (const reply of fetchThreadReplies(client, channel, threadTs, replyOldest)) {
+          yield reply;
+          hwm = maxTs(hwm, reply.ts);
+        }
+        // Only track a thread that is still active, so cold-start-old threads
+        // don't linger in the cursor to be pruned one run later.
+        if (isThreadActive(hwm, nowMs)) out.set(threadTs, hwm);
       }
     }
     cursor = page.response_metadata?.next_cursor || undefined;
   } while (cursor);
+
+  // Pass 2: re-poll active threads whose parent did not appear above.
+  for (const [threadTs, savedHwm] of savedThreadCursors) {
+    if (handled.has(threadTs)) continue; // already re-fetched inline this run
+    if (!isThreadActive(savedHwm, nowMs)) continue; // prune: drop the cursor, no call
+    let hwm = savedHwm;
+    for await (const reply of fetchThreadReplies(client, channel, threadTs, savedHwm)) {
+      yield reply;
+      hwm = maxTs(hwm, reply.ts);
+    }
+    out.set(threadTs, hwm);
+  }
 }
 
 /**
