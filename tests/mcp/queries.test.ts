@@ -620,6 +620,36 @@ describe("listDemand — GitHub notifications (ADR-0041)", () => {
       "n-review",
     ]);
   });
+
+  test("a notification with unread absent/null stays outstanding (not wrongly hidden)", () => {
+    // The connector may emit `unread: null` (API omitted it) or no key at all.
+    // Only an explicit unread=false counts as read; null must remain outstanding
+    // (null-safe SQL — otherwise NULL collapses the predicate and hides the row).
+    store.record({
+      type: "SourceObserved",
+      externalId: "n-null",
+      sourceType: "github_notification",
+      body: "review",
+      observedAt: "2026-06-12T00:00:00.000Z",
+      fingerprint: "n-null",
+      meta: { repo: "o/r", reason: "review_requested", unread: null },
+    });
+    store.record({
+      type: "SourceObserved",
+      externalId: "n-absent",
+      sourceType: "github_notification",
+      body: "mention",
+      observedAt: "2026-06-11T00:00:00.000Z",
+      fingerprint: "n-absent",
+      meta: { repo: "o/r", reason: "mention" },
+    });
+    expect(
+      listDemand(sqlite())
+        .map((r) => r.externalId)
+        .sort(),
+    ).toEqual(["n-absent", "n-null"]);
+    for (const r of listDemand(sqlite())) expect(r.seenState).toBeNull();
+  });
 });
 
 describe("listDemand — neutral merge + seen-state (ADR-0041)", () => {

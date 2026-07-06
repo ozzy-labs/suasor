@@ -934,9 +934,13 @@ export function listDemand(sqlite: Database, options: ListDemandOptions = {}): D
   if (!options.includeSeen) {
     // Outstanding = no local seen marker AND not a github-read notification. Done
     // in SQL (not post-filter) so `limit` counts un-acked rows, not seen ones.
+    // A github notification is "read" only when `unread` is explicitly false
+    // (`= 0`); a null/absent `unread` stays outstanding. `IS NOT 0` is null-safe,
+    // so a NULL unread does NOT collapse the whole predicate to NULL (which would
+    // wrongly hide the row).
     outer.push("ds.state IS NULL");
     outer.push(
-      "NOT (d.source_type = 'github_notification' AND json_extract(d.meta, '$.unread') = 0)",
+      "(d.source_type <> 'github_notification' OR json_extract(d.meta, '$.unread') IS NOT 0)",
     );
   }
   const where = outer.length > 0 ? `WHERE ${outer.join(" AND ")}` : "";
