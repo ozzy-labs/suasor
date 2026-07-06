@@ -248,7 +248,10 @@ export class DoctorCommand extends Command {
           ? {
               name: "extraction",
               status: "info",
-              detail: `backend disabled (Office/PDF stay name-only; see ${docsUrl("guide/extraction.md")})`,
+              detail:
+                "backend disabled (Office/PDF stay name-only). Start the bundled sidecar with " +
+                '`suasor extraction serve` and set [extraction].backend = "markitdown"; see ' +
+                docsUrl("guide/extraction.md"),
             }
           : {
               name: "extraction",

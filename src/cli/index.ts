@@ -36,7 +36,11 @@ import { DigestCommand } from "./commands/digest.ts";
 import { DoctorCommand } from "./commands/doctor.ts";
 import { embeddingsCommands } from "./commands/embeddings.ts";
 import { ExportBackupCommand } from "./commands/export-backup.ts";
-import { ExtractionListPendingCommand, ExtractionStatusCommand } from "./commands/extraction.ts";
+import {
+  ExtractionListPendingCommand,
+  ExtractionServeCommand,
+  ExtractionStatusCommand,
+} from "./commands/extraction.ts";
 import { InitCommand } from "./commands/init.ts";
 import { McpServeCommand } from "./commands/mcp-serve.ts";
 import { McpToolsCommand } from "./commands/mcp-tools.ts";
@@ -101,6 +105,7 @@ export function registeredCommandClasses(): CommandClass[] {
     ExportBackupCommand,
     ExtractionStatusCommand,
     ExtractionListPendingCommand,
+    ExtractionServeCommand,
     ...(embeddingsCommands as CommandClass[]),
     McpServeCommand,
     McpToolsCommand,

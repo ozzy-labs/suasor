@@ -7,15 +7,34 @@ Word / Excel / PowerPoint / PDF は既定では**ファイル名のみ**取り�
 - **対応 connector**: `local`（OS 同期フォルダ含む任意ディレクトリ）に加え、**`box` / `ms-graph`（OneDrive）/ `google`(Drive) が API 経由で本文 fetch → 抽出**に対応済み（[ADR-0034](../adr/0034-api-connector-extraction.md)）。同じサイドカー / `extraction_meta` を再利用し、connector 側で内容ベース fingerprint + lazy download を実装する
 - **best-effort**: サイドカー停止・unsupported・oversized・**本文 fetch 失敗**・失敗時は name-only に degrade し、取り込み自体は成功する
 
-## サイドカーのセットアップ
+## サイドカーのセットアップ（同梱シム `suasor extraction serve`）
 
-抽出サイドカーは **`POST {baseUrl}/extract`** を実装する HTTP サーバ（markitdown 系）であればよい。契約は薄い:
+Suasor は抽出契約（`POST {baseUrl}/extract`）を実装する**参照サイドカーを同梱**する。[markitdown](https://github.com/microsoft/markitdown)（docx/xlsx/pptx/pdf → Markdown）CLI を**リクエストごとに subprocess で spawn** する薄い HTTP shim で、ML は markitdown 側に閉じる（本体は spawn するだけの thin client・[ADR-0006](../adr/0006-ml-delegation.md) 整合）。自作の microservice は不要。
+
+1. **markitdown CLI を PATH に置く**（ローカル実行・egress なし・secret 不要）:
+
+   ```bash
+   uv tool install 'markitdown[all]'   # or: pipx install 'markitdown[all]' / pip install 'markitdown[all]'
+   ```
+
+2. **サイドカーを起動**（既定で `[extraction].baseUrl` の host/port = `localhost:8929` に bind）:
+
+   ```bash
+   suasor extraction serve
+   # suasor extraction serve: listening on http://localhost:8929 (POST /extract) — markitdown='markitdown'
+   suasor extraction serve --port 9000                     # 別 port に bind
+   suasor extraction serve --command /opt/bin/markitdown   # markitdown バイナリを指定
+   ```
+
+   markitdown が PATH に無ければ**起動時に構造化エラーでインストール手順を表示して終了**する（無稼働のサイドカーを立てない）。常駐させる場合は cron ではなく systemd/launchd 等のプロセス管理下に置く。
+
+### 契約（自作サイドカーでも可）
+
+同梱シムの代わりに、以下の薄い契約を満たす任意の HTTP サーバを使ってもよい:
 
 - **リクエスト**: `content-type: application/octet-stream`、ヘッダ `x-filename: <URLエンコードしたファイル名>`、ボディは生バイト
 - **レスポンス**: `200` + JSON `{ "text": "<抽出した text/Markdown>" }`。抽出不可（unsupported）なら `{ "text": null }`
 - 非 2xx / 非 JSON はクライアントが失敗扱いにして name-only に degrade する
-
-[markitdown](https://github.com/microsoft/markitdown)（docx/xlsx/pptx/pdf → Markdown）を薄い HTTP ラッパで包むのが標準的。ローカル実行（egress なし・secret 不要）。
 
 ## 有効化
 
@@ -23,7 +42,7 @@ Word / Excel / PowerPoint / PDF は既定では**ファイル名のみ**取り�
 # config.toml
 [extraction]
 backend = "markitdown"
-# baseUrl = "http://localhost:8929"   # /extract が付加される
+# baseUrl = "http://localhost:8929"   # /extract が付加される（serve の bind 先と一致させる）
 # maxBytes = 5000000                  # サイズ上限（下記 2 段で意味が異なる）
 # version = "1"                       # extractor version（bump で再抽出。下記）
 ```

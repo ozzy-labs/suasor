@@ -35,6 +35,7 @@
 
 ### Positive
 
+- **参照サイドカーを同梱**（`suasor extraction serve`、[Issue #439](https://github.com/ozzy-labs/suasor/issues/439)）: markitdown CLI を per-request で subprocess spawn する薄い HTTP shim を CLI に同梱し、`uv tool install 'markitdown[all]'` + `suasor extraction serve` の 2 コマンドで抽出が有効化できる（ML は subprocess = ADR-0006 の binary-sidecar 許容。自作 microservice を書かせない）。guide / `doctor` / `extraction status` の hint も one-command 起動を指す。契約（`POST /extract`）は不変なので自作サイドカーも引き続き可
 - read 系（search/recall/research/find-document/brief）と `doc-review` が **`local` 配下の Office/PDF の中身**に効く（最大レバレッジ。API connector は段階化で順次）
 - import-clean / cold start を保ったまま（変換はサイドカー）。DB スキーマ変更も不要（既存 body + FTS 再利用）
 - 既定 disabled なので導入はオプトイン、未設定環境は従来挙動（name-only）を維持

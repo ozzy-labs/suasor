@@ -115,8 +115,16 @@ suasor extraction list-pending        # list which files are actually waiting fo
 suasor doctor                         # extraction backend / version and maintenance hints (drift/pending) in one line
 ```
 
-1. **`[extraction]` unset (disabled by default)** — without it, ingestion stays name-only as before. `extraction status` shows `backend=disabled`. Follow the [extraction guide](extraction.md) to stand up the sidecar (markitdown family) and set `[extraction].backend`. Once enabled, already-ingested files are **auto-backfilled on the next sync** (drift detection).
-2. **sidecar down / unreachable** — the backend is set but the extraction sidecar is down or `baseUrl` is not reachable. Extraction during sync is **best-effort**: on failure the ingest itself still succeeds (the filename lands in FTS), it degrades to name-only, and only a warning (stderr) is emitted. Start the sidecar and re-sync the owning connector to clear the pending items:
+1. **`[extraction]` unset (disabled by default)** — without it, ingestion stays name-only as before. `extraction status` shows `backend=disabled`. Start the bundled sidecar and enable the backend, then re-sync (one command each — no self-authored HTTP wrapper needed, [extraction guide](extraction.md)):
+
+   ```bash
+   uv tool install 'markitdown[all]'     # markitdown CLI on PATH (once)
+   suasor extraction serve               # the bundled markitdown shim (POST /extract)
+   # then set [extraction].backend = "markitdown" and re-sync the owning connector
+   ```
+
+   Once enabled, already-ingested files are **auto-backfilled on the next sync** (drift detection).
+2. **sidecar down / unreachable** — the backend is set but the extraction sidecar is down or `baseUrl` is not reachable. Extraction during sync is **best-effort**: on failure the ingest itself still succeeds (the filename lands in FTS), it degrades to name-only, and only a warning (stderr) is emitted. Start the sidecar (`suasor extraction serve`) and re-sync the owning connector to clear the pending items:
 
    ```bash
    suasor local sync     # / suasor box sync / suasor google sync, i.e. the owning connector
