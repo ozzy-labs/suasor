@@ -17,7 +17,8 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
 | `commitment.list` | commitment 台帳一覧（state: `open` / `resolved` / `dismissed`、direction: `owed_by_me` / `owed_to_me` フィルタ可、[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
-| `slack.demand.list` | Slack の @mention / DM 未処理 signal（`sources` への query 導出、[ADR-0012](../adr/0012-slack-demand-digest.md)） | 実装済（#48） |
+| `demand.list` | connector 中立 demand（Slack @mention/DM + github notification）の未処理 signal。既定は un-acked のみ（`sources` からの query 導出・追加 fetch なし、[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)。旧 `slack.demand.list` を置換） | 実装済（#419） |
+| `priority.list` | 決定論的 cross-entity scorer: tasks + open commitments + un-acked demand を固定 comparator で 1 本のランク付きリストに合成（overdue > demand 鮮度 > dueDate 近接 > priority > 更新順、[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)） | 実装済（#419） |
 | `person.list` | 解決済み person 一覧 + 各 person の connector identity（`includeEmpty?`、[ADR-0022](../adr/0022-person-identity-resolution.md)） | 実装済み（#92。下記参照） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
 | `activity.timeline` | entity 軸の時系列ビュー（person/project/source 等を起点に provenance 接続された source/task/decision をマージし新しい順に返す。`brief` の期間軸と対をなす entity 軸、#279） | 実装済み（#279。下記参照） |
@@ -25,7 +26,7 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 
 戻り値はすべて 1 個の `text` content（JSON 文字列）。時間フィルタは各 projection の自然な timestamp 列を対象にし、**下限 inclusive (`>=`) / 上限 exclusive (`<`)**（隣接レンジの二重計上を避ける）。`iso` は ISO 8601（offset 付き）datetime。`limit` は正整数で上限 500。
 
-list 系 tool（`source.list` / `task.list` / `decision.list` / `inbox.list` / `propose.list` / `commitment.list` / `person.list` / `slack.demand.list`）は本体配列に加えて `truncated`（boolean）を返す。ちょうど `limit` 件取得したとき「全件か打切りか」を agent が判別できるようにするためで（[ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer"、`search` の `totalHits`/`truncated` と一貫）、実装は `limit + 1` 件取得して超過していれば切り詰める。`truncated: true` のときは時間フィルタを狭めて再取得する（full page = 完全と決めつけない）。後方互換の additive field。
+list 系 tool（`source.list` / `task.list` / `decision.list` / `inbox.list` / `propose.list` / `commitment.list` / `person.list` / `demand.list` / `priority.list`）は本体配列に加えて `truncated`（boolean）を返す。ちょうど `limit` 件取得したとき「全件か打切りか」を agent が判別できるようにするためで（[ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer"、`search` の `totalHits`/`truncated` と一貫）、実装は `limit + 1` 件取得して超過していれば切り詰める。`truncated: true` のときは時間フィルタを狭めて再取得する（full page = 完全と決めつけない）。後方互換の additive field。
 
 ### `search`（確定・FTS-first）
 
@@ -141,15 +142,30 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 `inbox.list` の `sourceType` は inbox projection に `source_type` 列が無いため `sources` を JOIN して解決する（`sources.external_id = inbox.source_external_id`）。「inbox の中で slack_message だけ」のように元 source 種別で絞れる。
 
-### `slack.demand.list`（[ADR-0012](../adr/0012-slack-demand-digest.md)）
+### `demand.list`（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)、旧 `slack.demand.list` を置換）
 
-取り込み済み `slack_message` source から **query 導出**する Slack demand（@mention / DM）。`source_type='slack_message'` かつ（DM = channel id が `D` 始まり）または（mention = `body LIKE '%<@uid>%'`）。新規 projection table は持たない。
+取り込み済み source から **query 導出**する connector 中立 demand（追加 fetch なし、新規 projection なし）:
+
+- **Slack**（`source: "slack"`）: `source_type='slack_message'` かつ（DM = channel id が `D` 始まり）または（mention = `body LIKE '%<@uid>%'`）。`kind: "mention"|"dm"`。`channelName` / `userName` / `teamName` をローカル projection から join（[ADR-0037](../adr/0037-slack-name-enrichment.md)、live fetch なし）。
+- **GitHub**（`source: "github"`）: `source_type='github_notification'` かつ `meta.reason` が demand 相当（`review_requested` / `mention` / `team_mention` / `assign` / `author`）。`kind` = その reason。slack enrichment は `null`。
+
+**seen-state**（ADR-0041、ADR-0012 決定 4 を supersede）: 既定は **未処理（un-acked）のみ**返す。`demand.ack` / `demand.dismiss`（write）で `demand_seen` に印を付けた行、および GitHub 側で既読の notification（`meta.unread=false`）は既定で除外され「未処理」が真になる。`includeSeen: true` で全件を `seenState`（`acked` / `dismissed` / `read` / null）付きで返す。
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
-| `selfUserId?: string`（mention 用、未指定時は config の `self_user_id` にフォールバック）/ `kinds?: ("mention"\|"dm")[]` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "kind": "mention"\|"dm" }] }` |
+| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"` / `kinds?: string[]`（slack `mention`/`dm` または github reason）/ `includeSeen?: boolean` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
 
-`selfUserId` も config も無いと mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は空）。
+`selfUserId` も config も無いと slack mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は github mention notification のみ）。
+
+### `priority.list`（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md) 決定 3）
+
+決定論的 cross-entity scorer。open/in_progress な tasks + open commitments + un-acked demand を**固定 comparator**で 1 本のランク付きリストに合成する（実体は `src/mcp/queries.ts` の `buildPriorities`、`readOnlyHint: true`）。順位の基線はコードが持ち（skill 散文ではない）、同一入力に対し順序が一定になる（テストで固定）。
+
+順序基準（辞書式）: **overdue（task / commitment）> un-acked demand（鮮度＝`observed_at` 新しい順）> dueDate 近接（期日が近い順・期日あり優先）> priority（high>normal>low）> 更新新しさ**。各行は `reason`（どの tier で上に来たか）+ `explanation`（理由の一文）+ `record`（元 projection レコード）を持つ。ack 済み mention は demand tier から外れるため、期日付き作業の上に居座り続けることはない。`next-actions` / `personal-brief` はこの基線を消費する（会話文脈での上書きは host の裁量）。
+
+| 追加引数 | 戻り値キー |
+|---|---|
+| `selfUserId?: string`（demand mention 用、未指定時は config）/ `limit?: int`（既定 50） | `{ "now", "items": [{ "rank", "entity": "task"\|"commitment"\|"demand", "id", "title", "reason", "explanation", "overdue", "dueDate", "priority", "record" }], "truncated" }` |
 
 ### `graph.related` / `graph.expand`（[ADR-0018](../adr/0018-knowledge-graph-traversal.md) / [ADR-0020](../adr/0020-multi-actor-coordination-scope.md)）
 
@@ -185,7 +201,7 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
   "tasks": [/* TaskRecord */],
   "decisions": [/* DecisionRecord */],
   "inbox": [/* InboxRecord（state=open） */],
-  "demand": [/* SlackDemandRecord */],
+  "demand": [/* DemandRecord（un-acked のみ・ADR-0041） */],
   "warnings": [                       // 完全性シグナル（Issue #189）
     { "key": "slack_not_configured", "message": "Slack connector not configured — ..." },
     { "key": "embedding_disabled",  "message": "embedding backend off — ..." }
@@ -242,6 +258,8 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `commitment.resolve` | open の commitment を fulfilled に遷移（[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
 | `commitment.dismiss` | open の commitment を誤検出/不要として却下 | 実装済み（#91。下記参照） |
 | `commitment.reopen` | resolved/dismissed の commitment を open に戻す | 実装済み（#91。下記参照） |
+| `demand.ack` | demand 行を「対応済み」に印（`DemandAcknowledged` → `demand_seen`。既定 demand.list から外れる・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)） | 実装済み（#419。下記参照） |
+| `demand.dismiss` | demand 行を「対応不要」に印（`DemandDismissed` → `demand_seen`） | 実装済み（#419。下記参照） |
 | `person.merge` | 2 person を 1 つに統合（identity を target へ付け替え・可逆） | 実装済み（#92。下記参照） |
 | `person.split` | 1 identity を別 person へ分離（merge の逆操作） | 実装済み（#92。下記参照） |
 | `draft.export` | 下書きをローカルファイルに書き出す（sandbox・送信しない・[ADR-0025](../adr/0025-local-draft-export.md)） | 実装済み（#133。下記参照） |
@@ -559,6 +577,15 @@ commitment_scan (propose.generate → propose.apply)
 - **`commitment.reopen`（write / HITL）**: `resolved` / `dismissed` → `open`（`CommitmentReopened` append）。既 `open` は no-op、該当なしは `missing`。
 
 commitment id は content 由来（`title` + `direction` + provenance）なので、同一 commitment の再抽出は台帳上 no-op（idempotent）で `resolved` / `dismissed` を `open` に蘇生させない。`dueDate` / `person` は可変 context として id に含めない。
+
+### `demand.ack` / `demand.dismiss`（確定・write / HITL・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)）
+
+demand の seen-state 側の write tool 群。`demand.list` は取り込み済み source から未処理 demand（@mention / DM / notification）を導出するが、demand は**導出 view であって stored entity ではない**ため、seen 状態は source `externalId` をキーにした専用 `demand_seen` projection に持つ。実体は `src/propose/demand.ts`。ADR-0012 決定 4 の host 委譲 seen-marker を supersede（状態の置き場は host の記憶ではなく event ログ、[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+
+- **`demand.ack`（write / HITL）**: demand 行を「対応済み」に印（`DemandAcknowledged` append → `demand_seen` state `acked`）。以後 既定の `demand.list` から外れ、`next-actions` / `priority.list` の demand tier にも出なくなる。idempotent（既 `acked` は no-op `already_acked`）。`dismissed` 行は `acked` に上書き（LWW）。該当 source なしは `missing`。
+- **`demand.dismiss`（write / HITL）**: demand 行を「対応不要」に印（`DemandDismissed` append → `demand_seen` state `dismissed`）。idempotent（既 `dismissed` は `already_dismissed`）。`acked` 行は `dismissed` に上書き。該当なしは `missing`。
+
+引数（Zod）: `{ "externalId": string }`（min 1・demand 行の source id）。`demand_seen` は last-write-wins なので replay 安定。
 
 ### `person.merge`（確定・write / HITL・[Issue #92](https://github.com/ozzy-labs/suasor/issues/92)）
 

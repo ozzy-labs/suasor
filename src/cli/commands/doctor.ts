@@ -39,6 +39,7 @@ const PROJECTION_TABLES = [
   "inbox",
   "proposals",
   "commitments",
+  "demand_seen",
   "links",
   "persons",
   "person_identities",
@@ -62,7 +63,7 @@ export class DoctorCommand extends Command {
       ([connectors.slack.workspaces.<alias>]), each named workspace's token
       (connector:slack:<alias>:token) is probed — a missing per-workspace token
       is a warning (sync skips that workspace, ADR-0014) and a missing
-      self_user_id is info (slack.demand.list degrades to DM-only, ADR-0012).
+      self_user_id is info (demand.list degrades to DM-only, ADR-0012/ADR-0041).
       Read-only (never creates a database; secret values are never printed,
       NFR-PRV-4). Exits 1 when any check is an error, so cron / CI can gate on it.
       Use --json for machine-readable output.
@@ -379,8 +380,8 @@ export class DoctorCommand extends Command {
       //    then silently drops that workspace at sync time
       //    (`workspace '<alias>' skipped: no token`, Issue #371). Surface each
       //    named workspace's token presence (warn — sync skips it) and its
-      //    `self_user_id` presence (info — `slack.demand.list` degrades to DM-only
-      //    without it, ADR-0012). Only named workspaces are probed: the flat/default
+      //    `self_user_id` presence (info — `demand.list` degrades to DM-only
+      //    without it, ADR-0012/ADR-0041). Only named workspaces are probed: the flat/default
       //    workspace's `token` is already covered by the connector-credential check,
       //    so the flat/single-workspace path is unchanged. Warn/info only — never
       //    error (exit code unchanged, matching the shared-channel check above).
@@ -404,8 +405,8 @@ export class DoctorCommand extends Command {
               name: "slack.demand",
               status: "info",
               detail:
-                `workspace '${ws.alias}' has no self_user_id; \`slack.demand.list\` degrades to ` +
-                `DM-only (no \`<@you>\` mentions, ADR-0012). Run ` +
+                `workspace '${ws.alias}' has no self_user_id; \`demand.list\` degrades to ` +
+                `DM-only (no \`<@you>\` mentions, ADR-0012/ADR-0041). Run ` +
                 `\`suasor slack auth test --workspace ${ws.alias} --json\` and copy the ` +
                 `\`userId\` into [connectors.slack.workspaces.${ws.alias}].self_user_id.`,
             });

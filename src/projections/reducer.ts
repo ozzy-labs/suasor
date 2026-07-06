@@ -707,6 +707,35 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
         .run({ $id: event.commitmentId, $ts: event.recordedAt });
       return;
     }
+    case "DemandAcknowledged": {
+      // Mark a derived demand row seen=`acked` (ADR-0041). Keyed by the source
+      // external_id; last-write-wins so a later ack/dismiss overwrites the state
+      // (and its seen_at). demand.list then hides it by default (un-acked only).
+      sqlite
+        .query(
+          `INSERT INTO demand_seen (external_id, state, seen_at)
+           VALUES ($id, 'acked', $ts)
+           ON CONFLICT(external_id) DO UPDATE SET
+             state   = 'acked',
+             seen_at = excluded.seen_at`,
+        )
+        .run({ $id: event.externalId, $ts: event.recordedAt });
+      return;
+    }
+    case "DemandDismissed": {
+      // Sibling of DemandAcknowledged: mark the demand row seen=`dismissed`
+      // (not relevant) rather than handled. Same last-write-wins upsert (ADR-0041).
+      sqlite
+        .query(
+          `INSERT INTO demand_seen (external_id, state, seen_at)
+           VALUES ($id, 'dismissed', $ts)
+           ON CONFLICT(external_id) DO UPDATE SET
+             state   = 'dismissed',
+             seen_at = excluded.seen_at`,
+        )
+        .run({ $id: event.externalId, $ts: event.recordedAt });
+      return;
+    }
     default: {
       // Exhaustiveness guard: a new event type must be handled above.
       const _exhaustive: never = event;

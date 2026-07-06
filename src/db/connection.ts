@@ -143,6 +143,18 @@ export function initSchema(sqlite: Database): void {
     );
     -- commitment.list filters by state (open/resolved/dismissed); index it.
     CREATE INDEX IF NOT EXISTS idx_commitments_state ON commitments(state);
+    -- Demand seen-state (ADR-0041): durable "I've dealt with this" marker for a
+    -- derived demand row, keyed by the source external_id (demand rows are derived
+    -- from slack_message mentions/DMs + github_notification, not stored entities).
+    -- state is 'acked' (handled) / 'dismissed' (not relevant); demand.list hides a
+    -- seen row by default so "unprocessed" is true. Folded from DemandAcknowledged
+    -- / DemandDismissed (last-write-wins). Supersedes ADR-0012 決定 4's host-side
+    -- seen-marker (state now lives in the event log, ADR-0002).
+    CREATE TABLE IF NOT EXISTS demand_seen (
+      external_id TEXT PRIMARY KEY,
+      state       TEXT NOT NULL,
+      seen_at     TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS links (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       from_kind TEXT NOT NULL,

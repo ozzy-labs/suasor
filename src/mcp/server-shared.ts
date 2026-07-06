@@ -51,9 +51,10 @@ export interface McpServerDeps {
    */
   embedder?: Embedder | null;
   /**
-   * Operator Slack user ids for `slack.demand.list` `<@you>` mention detection
-   * (ADR-0012), resolved from `[connectors.slack]` config. Empty/omitted →
-   * demand falls back to DM-only unless the caller passes `selfUserId`.
+   * Operator Slack user ids for `demand.list` / `priority.list` `<@you>` mention
+   * detection (ADR-0012 / ADR-0041), resolved from `[connectors.slack]` config.
+   * Empty/omitted → Slack demand falls back to DM-only unless the caller passes
+   * `selfUserId`.
    */
   slackSelfUserIds?: string[];
   /**

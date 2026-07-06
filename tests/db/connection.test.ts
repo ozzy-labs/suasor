@@ -40,6 +40,7 @@ describe("schema init", () => {
       "inbox",
       "proposals",
       "commitments",
+      "demand_seen",
       "links",
       "persons",
       "person_identities",

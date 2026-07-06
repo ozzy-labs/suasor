@@ -58,9 +58,16 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     summary: "List recorded decisions, newest-recorded first.",
   },
   {
-    name: "slack.demand.list",
+    name: "demand.list",
     readOnlyHint: true,
-    summary: "List Slack @mentions of you and DMs (derived, read-only).",
+    summary:
+      "List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).",
+  },
+  {
+    name: "priority.list",
+    readOnlyHint: true,
+    summary:
+      "Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).",
   },
   {
     name: "brief",
@@ -205,6 +212,18 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     name: "commitment.reopen",
     readOnlyHint: false,
     summary: "Reopen a resolved/dismissed commitment back to open (CommitmentReopened).",
+  },
+  {
+    name: "demand.ack",
+    readOnlyHint: false,
+    summary:
+      "Mark a demand row handled — drops it from the un-acked demand.list (DemandAcknowledged).",
+  },
+  {
+    name: "demand.dismiss",
+    readOnlyHint: false,
+    summary:
+      "Mark a demand row not relevant — drops it from the un-acked demand.list (DemandDismissed).",
   },
   {
     name: "draft.export",

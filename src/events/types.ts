@@ -494,6 +494,40 @@ export const SlackTeamObserved = z.object({
   displayName: z.string().optional(),
 });
 
+/**
+ * A demand signal was acknowledged — "I have dealt with this" (ADR-0041, HITL —
+ * ADR-0004). Demand rows are *derived* (from ingested `slack_message` mentions /
+ * DMs and `github_notification` threads), not stored entities, so the durable
+ * "seen" state lives in its own `demand_seen` projection keyed by the source
+ * `externalId`. This event marks that key `acked`; `demand.list` then hides it by
+ * default (un-acked only) so "unprocessed" is finally true rather than every
+ * ingested mention living forever at the top of next-actions (ADR-0012 決定 4 の
+ * host-side seen-marker を supersede). Last-write-wins on `externalId`: a later
+ * dismiss/ack overwrites. Additive new type — `schemaVersion` unchanged (ADR-0002
+ * needs no upcast).
+ */
+export const DemandAcknowledged = z.object({
+  type: z.literal("DemandAcknowledged"),
+  ...Envelope,
+  /** Source `externalId` of the demand row being acknowledged (the seen key). */
+  externalId: z.string().min(1),
+});
+
+/**
+ * A demand signal was dismissed — "this needs no action from me" (ADR-0041, HITL
+ * — ADR-0004). The sibling of {@link DemandAcknowledged}: both mark the demand's
+ * `externalId` seen in the `demand_seen` projection (so it drops out of the
+ * default `demand.list`), but `dismissed` records "not relevant" rather than
+ * "handled". Last-write-wins on `externalId`. Additive new type — `schemaVersion`
+ * unchanged.
+ */
+export const DemandDismissed = z.object({
+  type: z.literal("DemandDismissed"),
+  ...Envelope,
+  /** Source `externalId` of the demand row being dismissed (the seen key). */
+  externalId: z.string().min(1),
+});
+
 /** Direction of a commitment relative to the operator (ADR-0021). */
 export const COMMITMENT_DIRECTIONS = ["owed_by_me", "owed_to_me"] as const;
 export const CommitmentDirection = z.enum(COMMITMENT_DIRECTIONS);
@@ -577,6 +611,8 @@ export const DomainEvent = z.discriminatedUnion("type", [
   CommitmentResolved,
   CommitmentDismissed,
   CommitmentReopened,
+  DemandAcknowledged,
+  DemandDismissed,
 ]);
 export type DomainEvent = z.infer<typeof DomainEvent>;
 
@@ -611,6 +647,8 @@ export const EVENT_TYPES = [
   "CommitmentResolved",
   "CommitmentDismissed",
   "CommitmentReopened",
+  "DemandAcknowledged",
+  "DemandDismissed",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -647,4 +685,6 @@ export type NewEvent =
   | Omit<z.input<typeof CommitmentOpened>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentResolved>, "id" | "recordedAt">
   | Omit<z.input<typeof CommitmentDismissed>, "id" | "recordedAt">
-  | Omit<z.input<typeof CommitmentReopened>, "id" | "recordedAt">;
+  | Omit<z.input<typeof CommitmentReopened>, "id" | "recordedAt">
+  | Omit<z.input<typeof DemandAcknowledged>, "id" | "recordedAt">
+  | Omit<z.input<typeof DemandDismissed>, "id" | "recordedAt">;
