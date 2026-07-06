@@ -8,8 +8,12 @@ export {
 } from "./loader.ts";
 export {
   Config,
+  DEFAULT_DIGEST_LIMIT,
   DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_OLLAMA_MODEL,
+  DigestChannelName,
+  DigestConfig,
+  DigestJob,
   EmbeddingBackend,
   EmbeddingConfig,
   LlmBackend,

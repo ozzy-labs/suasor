@@ -272,6 +272,63 @@ export const TasksConfig = z
 export type TasksConfig = z.infer<typeof TasksConfig>;
 
 /**
+ * Digest delivery channels (ADR-0040 §3). Additive; each carries its own egress /
+ * sandbox discipline:
+ *  - `os-notification` — local OS notifier (no egress).
+ *  - `file`            — write under the `[export].dir` sandbox (ADR-0025; no egress).
+ *  - `slack-dm`        — DM-to-self via the Slack actuator path (ADR-0036 secret /
+ *                        structured-error discipline; egress).
+ */
+export const DigestChannelName = z.enum(["os-notification", "file", "slack-dm"]);
+export type DigestChannelName = z.infer<typeof DigestChannelName>;
+
+/** Default top-N priority rows a digest job surfaces (ADR-0041 scorer). */
+export const DEFAULT_DIGEST_LIMIT = 10;
+
+/**
+ * One named recurring digest job (ADR-0040 §2 standing consent): content ×
+ * channel × frequency. Configuring a job *is* the consent — the cron one-shot
+ * (`suasor digest`) only emits jobs the operator has named here; with no jobs it
+ * sends nothing (the unsolicited-notification prohibition is preserved).
+ */
+export const DigestJob = z
+  .object({
+    /**
+     * Stable job name — selects the job (`suasor digest --job <name>`) and, by
+     * default, names the file-channel output (`<name>.md`).
+     */
+    name: z.string().min(1),
+    /** Where the digest is delivered. */
+    channel: DigestChannelName,
+    /** Top-N ranked rows to include from the priority scorer (ADR-0041). */
+    limit: z.number().int().positive().default(DEFAULT_DIGEST_LIMIT),
+    /**
+     * Cron-style frequency (informational). The OS scheduler owns the actual
+     * cadence (ADR-0027 — no daemon); this is consumed by the scheduling guide /
+     * onboarding to emit a crontab line, never evaluated at runtime.
+     */
+    schedule: z.string().min(1).optional(),
+    /** `file` channel: output basename in the export sandbox (default `<name>.md`). */
+    filename: z.string().min(1).optional(),
+    /** `slack-dm` channel: workspace alias whose token / self id to use (ADR-0014). */
+    workspace: z.string().min(1).optional(),
+  })
+  .passthrough();
+export type DigestJob = z.infer<typeof DigestJob>;
+
+/**
+ * `[digest]` — proactive push lane (ADR-0040). A list of named recurring jobs
+ * (standing consent). Empty by default: with no configured job, the digest
+ * one-shot produces no output (the "事前同意のない通知なし" boundary).
+ */
+export const DigestConfig = z
+  .object({
+    jobs: z.array(DigestJob).default([]),
+  })
+  .passthrough();
+export type DigestConfig = z.infer<typeof DigestConfig>;
+
+/**
  * Root config. `connectors` is an open record extended per-connector by
  * #7–#12; values are left lenient at the foundation layer.
  *
@@ -287,6 +344,7 @@ export const Config = z.object({
   extraction: ExtractionConfig.default(() => ExtractionConfig.parse({})),
   export: ExportConfig.default(() => ExportConfig.parse({})),
   tasks: TasksConfig.default(() => TasksConfig.parse({})),
+  digest: DigestConfig.default(() => DigestConfig.parse({})),
   connectors: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 export type Config = z.infer<typeof Config>;

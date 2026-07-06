@@ -110,6 +110,25 @@ repo = "owner/repo"         # github のとき：起票先リポジトリ（本�
 - egress には read connector と**別スコープ（write）のトークン**が要る（GitHub `issues:write` 等）。secret は `<destination>-actuator` 名で keychain/env 管理
 - private な task はホームの選び方（自分専用 Slack List / private repo 等）で対応。Slack ホームは専用 list を取り込み除外してループを防ぐ
 
+### `[digest]`（確定・ADR-0040）
+
+```toml
+# proactive push lane（cron one-shot・no daemon）。名前付き recurring job を並べる。
+# job が 1 件も無ければ digest は何も送らない（事前同意のない通知なし）。
+[[digest.jobs]]
+name = "morning"           # job 名。--job <name> で選択、file チャネル既定出力名（<name>.md）
+channel = "file"           # os-notification | file | slack-dm
+limit = 10                 # priority scorer 上位 N（既定 10・ADR-0041）
+# schedule = "0 8 * * *"   # cron 式（案内用）。実際の起動は OS scheduler が担う（runtime は評価しない）
+# filename = "morning.md"  # file チャネル：export sandbox 内の basename（既定 <name>.md）
+# workspace = "default"    # slack-dm チャネル：token / self id を引く workspace alias（ADR-0014）
+```
+
+- **proactive push lane**（[ADR-0040](../adr/0040-proactive-push-lane.md)）。`suasor digest` を cron から 1 回起動し、構成済み job ごとに priority scorer 上位 N（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)）+ brief warnings を bundle・render してチャネルへ送る。要約生成はしない（ML 委譲 [ADR-0006](../adr/0006-ml-delegation.md)）
+- **standing consent（定常同意）**: job を構成する行為が承認。job が空なら一切出力しない（unsolicited 通知の禁止は維持・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の per-event HITL は write tool に対して不変）
+- **チャネル**: `file` は `[export].dir` sandbox 配下へ書く（[ADR-0025](../adr/0025-local-draft-export.md)・basename・local root 直下不可）/ `os-notification` は OS 通知（osascript / notify-send / PowerShell）/ `slack-dm` は actuator 経路で自分宛て DM（[ADR-0036](../adr/0036-task-external-home.md)・token は keychain・失敗は構造化エラー）
+- **cadence** は OS scheduler（cron / launchd / systemd）が持つ（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)・no daemon）。導線は [scheduling guide](../guide/scheduling.md)
+
 ### 他セクション（後続 Issue が拡張）
 
 ```toml
