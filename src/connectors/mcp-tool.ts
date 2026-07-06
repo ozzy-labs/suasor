@@ -132,7 +132,7 @@ export const connectorSyncTool = {
   name: CONNECTOR_SYNC_TOOL_NAME,
   description:
     "Run a read-only connector ingest pass into the local store (write tool; " +
-    "requires human approval — no auto-apply).",
+    "hosts must gate behind human approval — no auto-apply).",
   destructive: true as const,
   inputSchema: ConnectorSyncInput,
   outputSchema: ConnectorSyncOutput,

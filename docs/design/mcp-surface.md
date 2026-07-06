@@ -236,7 +236,7 @@ assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）の
 
 ## Write tools（HITL・人の承認なしに適用/送信しない）
 
-write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false` を付け、ホストは人の承認なしに呼ばない。いずれも writable store 供給時のみ登録される（`src/mcp/server-write.ts`）。
+write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false` を付け、ホストは人の承認なしに呼ばない。いずれも writable store 供給時のみ登録される（`src/mcp/server-write.ts`）。**HITL は host 強制**である —— `readOnlyHint: false` は advisory な annotation で、server 自身は承認の有無を検査せず handler を実行する（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の Negative）。defense-in-depth として、不可逆 / egress の部分集合（`source.forget` / `propose.apply` の `publish:true` / `task.publish` / `task.act` / `person.merge`）は **client が elicitation capability を advertise する場合にのみ** `elicitInput` 確認往復を挟み、却下時は `CONFIRMATION_DECLINED` を返す（capability 非対応なら現行動作にフォールバック + 接続時警告。実体は `src/mcp/elicit.ts`）。これは server 強制の保証ではない（elicitation 応答も client 側で生成される）。
 
 | tool | 役割 | 状態 |
 |---|---|---|
@@ -350,7 +350,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | `triage` | `inboxId` / `sourceExternalId` / `state`（`snoozed` / `done` / `dismissed`） | `InboxItemTriaged` |
 | `commitment` | `title` / `direction`（`owed_by_me` / `owed_to_me`） / `dueDate?` / `person?` / `sourceExternalIds[]` | `CommitmentOpened` |
 
-戻り値: `{ "mode": "...", "candidates": [{ "candidateId": "cand_...", "kind": "...", ... }] }`（候補は inert・未適用）。許可されない kind は tool error。
+戻り値: `{ "mode": "...", "candidates": [{ "candidateId": "cand_...", "kind": "...", ... }], "decided"?: [{ "candidateId": "cand_...", "kind": "...", "state": "applied" | "rejected", "reason"?: "..." }] }`（候補は inert・未適用）。許可されない kind は tool error。`candidates` は **actionable（pending）候補のみ**で、ledger 上すでに `applied` / `rejected` になった候補は `candidates` から除外し、state（+reason）を注記した `decided` に回す（[boundary/missed-reject]）—— ホストが人の決定済み候補を再提示しないため（`decided` が空なら省略）。
 
 ### `propose.apply`（確定・write / HITL・idempotent）
 
@@ -359,6 +359,8 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 引数（Zod）: `{ "candidates": Candidate[] }`（`propose.generate` の戻り値の候補。承認分のみ渡す）。
 
 **idempotent**: 各候補の対象 entity id は content 由来（`src/propose/id.ts`）。適用前に projection に同 id が存在すれば **event を append せず** `skipped` を返すため、同じ承認済み集合の再適用は no-op（重複 event / projection drift なし）。`triage` のみ `(inboxId, state)` で判定し、別 state への遷移は適用する。
+
+**却下の強制（[boundary/missed-reject]）**: apply / batch は適用前に proposals ledger を参照し、candidateId の ledger 行が `rejected` の候補は `REJECTED_CANDIDATE` tool error で拒否する（人の「却下」が下流で無視され、ledger が `rejected` のまま entity が生まれる監査自己矛盾の防止・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。apply は集合全体を事前検査してから 1 件も append しない（部分適用の回避）。batch は単一トランザクション内で throw して全ロールバック（atomic）。ledger 行を持たない候補（純 `proposeGenerate` 産・`task.create` 直挿入）は影響を受けない。
 
 戻り値:
 
@@ -666,6 +668,8 @@ tool 実行の失敗は MCP 規約どおり **正常に `isError: true` を返�
 |---|---|---|
 | `INVALID_INPUT` | Zod schema を超えた入力不正 | self-loop link / self-merge / 不正 filename |
 | `INVALID_STATE` | エンティティは在るが遷移不可 | `open` でない inbox item の triage |
+| `REJECTED_CANDIDATE` | 人が却下済みの候補を apply/batch しようとした（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)） | ledger 行 `rejected` の candidateId を `propose.apply` |
+| `CONFIRMATION_DECLINED` | 不可逆/egress tool の `elicitInput` 確認が却下された（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)） | `source.forget` の確認往復を人が decline |
 | `MISSING_ENTITY` | 参照先が存在しない | 未知の link id / inbox item / person identity |
 | `EXPORT_DIR_NOT_CONFIGURED` | `draft.export` で `[export].dir` 未設定 | — |
 | `CONFIG_INVALID` | critical config 欠落/不正（boot or call） | `storage.dbPath` 未設定 |

@@ -31,6 +31,22 @@ export const ProposeGenerateInput = z.object({
 /** Accepted at the call site (candidate defaults applied by `parse`). */
 export type ProposeGenerateInput = z.input<typeof ProposeGenerateInput>;
 
+/**
+ * A candidate the ledger already has a *decided* row for (applied or rejected).
+ * `persistProposals` surfaces these separately from the actionable `candidates`
+ * so the host stops re-offering what a human already decided ([boundary/
+ * missed-reject]): a `rejected` one must not be presented for approval again,
+ * and an `applied` one would only be skipped on re-apply anyway.
+ */
+export interface DecidedCandidate {
+  candidateId: string;
+  kind: Candidate["kind"];
+  /** Current proposals-ledger state (`applied` | `rejected`). */
+  state: "applied" | "rejected";
+  /** Recorded reason (rejection reason / feedback note); empty when none. */
+  reason?: string;
+}
+
 /** Output of `propose.generate`: the mode echoed back plus id-stamped candidates. */
 export interface ProposeGenerateOutput {
   mode: ProposeMode;
@@ -41,6 +57,12 @@ export interface ProposeGenerateOutput {
    * `persistProposals` (the pure `proposeGenerate` never skips). Omitted ⇒ 0.
    */
   skipped?: number;
+  /**
+   * Candidates whose ledger row is already `applied` / `rejected`, annotated with
+   * their state (+reason). Excluded from `candidates` so the host never re-offers
+   * a decided candidate. Only set by `persistProposals`; omitted when empty.
+   */
+  decided?: DecidedCandidate[];
 }
 
 /**
@@ -124,15 +146,34 @@ export function persistProposals(
     (c) => !candidateSources(c).some((src) => published.has(src)),
   );
   const skipped = result.candidates.length - kept.length;
+  // Actionable (pending) candidates the host may present for approval, vs. ones
+  // the ledger has already decided. Splitting them ([boundary/missed-reject])
+  // stops the host from re-offering a candidate a human already rejected/applied.
+  const pending: Candidate[] = [];
+  const decided: DecidedCandidate[] = [];
   for (const candidate of kept) {
-    // Idempotent at the event layer: the candidate id is content-derived, so a
-    // ledger row already existing means this exact candidate was generated
-    // before — don't append a redundant ProposalGenerated (and never resurrect a
-    // decided one). New candidates fall through and are recorded as `pending`.
-    const exists = sqlite
-      .query("SELECT 1 FROM proposals WHERE candidate_id = ?")
+    // Content-derived candidate id ⇒ an existing ledger row means this exact
+    // candidate was generated before. Branch on its state:
+    //   - no row       → new candidate; record `pending` + present it.
+    //   - `pending`    → still actionable; present it (no redundant re-append).
+    //   - `applied` /
+    //     `rejected`   → decided; annotate + withhold from the actionable set.
+    const existing = sqlite
+      .query<{ state: string; reason: string }, [string]>(
+        "SELECT state, reason FROM proposals WHERE candidate_id = ?",
+      )
       .get(candidate.candidateId);
-    if (exists !== null) continue;
+    if (existing !== null && existing.state !== "pending") {
+      decided.push({
+        candidateId: candidate.candidateId,
+        kind: candidate.kind,
+        state: existing.state as "applied" | "rejected",
+        ...(existing.reason ? { reason: existing.reason } : {}),
+      });
+      continue;
+    }
+    pending.push(candidate);
+    if (existing !== null) continue; // already `pending`: don't re-append.
     store.record(
       {
         type: "ProposalGenerated",
@@ -146,5 +187,10 @@ export function persistProposals(
       now,
     );
   }
-  return { mode: result.mode, candidates: kept, skipped };
+  return {
+    mode: result.mode,
+    candidates: pending,
+    skipped,
+    ...(decided.length > 0 ? { decided } : {}),
+  };
 }

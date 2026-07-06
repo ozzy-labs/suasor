@@ -32,6 +32,8 @@ MCP の write tool エラーは **bare string** で返っており（`src/mcp/se
 |---|---|---|
 | `INVALID_INPUT` | Zod schema を超えた入力不正 | self-loop link / self-merge / 不正 filename |
 | `INVALID_STATE` | エンティティは在るが遷移不可 | `open` でない inbox item の triage |
+| `REJECTED_CANDIDATE` | 人が却下済みの候補を apply/batch しようとした（[ADR-0004](0004-mcp-agent-boundary-and-hitl.md)） | ledger 行 `rejected` の candidateId を `propose.apply` |
+| `CONFIRMATION_DECLINED` | 不可逆/egress tool の `elicitInput` 確認が却下された（[ADR-0004](0004-mcp-agent-boundary-and-hitl.md)） | `source.forget` の確認往復を人が decline |
 | `MISSING_ENTITY` | 参照先が存在しない | 未知の link id / inbox item / person identity |
 | `EXPORT_DIR_NOT_CONFIGURED` | `draft.export` で `[export].dir` 未設定 | — |
 | `CONFIG_INVALID` | critical config 欠落/不正（boot or call） | `storage.dbPath` 未設定 |

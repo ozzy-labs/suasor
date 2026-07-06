@@ -33,6 +33,13 @@ export interface McpServerDeps {
   /** Open projection/FTS database handle (read tools use this directly). */
   sqlite: Database;
   /**
+   * Diagnostics sink (stderr in `serveMcp`; never the JSON-RPC stream). Used to
+   * emit the startup warning when the connected client does not advertise the
+   * elicitation capability, so the irreversible/egress defense-in-depth
+   * (ADR-0004) is known to be running in fallback mode. Omitted ⇒ no warning.
+   */
+  log?: (message: string) => void;
+  /**
    * Effective `[embedding]` config. When `backend !== "disabled"` (and the
    * backend is implemented), `recall.search` runs real vec0 semantic search
    * with the configured model; otherwise it returns the `embedding_disabled`

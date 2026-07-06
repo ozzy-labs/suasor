@@ -28,6 +28,13 @@
  * State-machine violations:
  *  - `INVALID_STATE`            — the entity exists but is not in a state that
  *    permits this transition (e.g. triaging a non-`open` inbox item).
+ *  - `REJECTED_CANDIDATE`       — `propose.apply` / `propose.batch` was asked to
+ *    apply a candidate whose proposals-ledger row is `rejected` (a human said
+ *    no). Applying it would contradict the recorded decision, so it is refused
+ *    (ADR-0004) instead of silently overriding the "no".
+ *  - `CONFIRMATION_DECLINED`    — an irreversible/egress write tool asked the
+ *    client for an `elicitInput` confirmation (defense-in-depth, ADR-0004) and
+ *    the human declined/cancelled, so the action was not performed.
  *
  * Missing entities:
  *  - `MISSING_ENTITY`           — the referenced entity does not exist (e.g.
@@ -49,6 +56,10 @@
 export type McpErrorCode =
   | "INVALID_INPUT"
   | "INVALID_STATE"
+  // A human's recorded rejection blocks re-apply / a declined elicitInput
+  // confirmation aborts an irreversible/egress action (ADR-0004).
+  | "REJECTED_CANDIDATE"
+  | "CONFIRMATION_DECLINED"
   | "MISSING_ENTITY"
   | "EXPORT_DIR_NOT_CONFIGURED"
   | "CONFIG_INVALID"
