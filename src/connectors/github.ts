@@ -33,10 +33,12 @@ import { z } from "zod";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** `[connectors.github]` config (docs/design/config.md). */
@@ -63,6 +65,18 @@ export const GithubConnectorConfig = z.object({
 export type GithubConnectorConfig = z.infer<typeof GithubConnectorConfig>;
 
 export const GITHUB_CONNECTOR_NAME = "github";
+
+/**
+ * Credential precondition enforced centrally by the sync service (ADR-0007,
+ * Issue #440). The single message is the SSOT for both the central throw and the
+ * connector's own type-narrowing guard, so they can never disagree.
+ */
+const GITHUB_CREDENTIALS: CredentialRequirement = {
+  secretNames: ["token"],
+  missingMessage:
+    "github connector: no token configured " +
+    "(set SUASOR_CONNECTOR_GITHUB_TOKEN or store it in the OS keychain)",
+};
 
 /** Shape of the issue list items we read (subset of the REST response). */
 interface GithubIssueItem {
@@ -203,6 +217,7 @@ export interface GithubConnectorOptions {
 class GithubConnector implements Connector {
   readonly name = GITHUB_CONNECTOR_NAME;
   readonly sourceType = "github";
+  readonly credentials = GITHUB_CREDENTIALS;
 
   /** Highest issue/PR `updated_at` observed this run → next-run repo cursor. */
   private maxIssueUpdatedAt: string | null = null;
@@ -226,23 +241,17 @@ class GithubConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
-    // missing token must fail loudly (throw → exit 1) even when nothing is
-    // configured to scan, rather than hiding behind the empty-scope early return
-    // below — which would report a silent 0-ingest + exit 0 and mask the missing
-    // credential (ADR-0007 "no silent wrong answer"). A configured token + empty
-    // scope keeps the old behaviour: the no-op return below (0 records, no client).
-    const token = await ctx.secret("token");
-    if (!token) {
-      throw new Error(
-        "github connector: no token configured " +
-          "(set SUASOR_CONNECTOR_GITHUB_TOKEN or store it in the OS keychain)",
-      );
-    }
-
     const wantsNotifications = this.config.notifications !== "off";
     // Nothing to do when there are no repos to scan and notifications are off.
+    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+    // above) is enforced centrally by the sync service before `sync()` runs, so
+    // this early return can never mask a missing token (ADR-0007 "credential 解決
+    // は scope-emptiness 判定に先行する", Issue #440).
     if (this.config.repos.length === 0 && !wantsNotifications) return;
+
+    const token = await ctx.secret("token");
+    // Guaranteed present by the central credential check; narrow for the client.
+    if (token === null) throw new Error(GITHUB_CREDENTIALS.missingMessage);
 
     const octokit = await this.octokitFactory({
       auth: token,
@@ -404,3 +413,31 @@ export function createGithubConnector(
   const parsed = GithubConnectorConfig.parse(config ?? {});
   return new GithubConnector(parsed, options.octokitFactory ?? defaultOctokitFactory);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: GITHUB_CONNECTOR_NAME,
+  sourceType: "github",
+  configSchema: GithubConnectorConfig,
+  secretNames: GITHUB_CREDENTIALS.secretNames,
+  needsAuth: true,
+  bundledInBinary: true,
+  sliceTemplate: {
+    body: [
+      "enabled = true",
+      '# repos = ["owner/repo"]   # ingest targets (issues / pull requests)',
+      '# state = "all"            # open | closed | all',
+    ],
+  },
+  noopWarning(slice) {
+    const cfg = GithubConnectorConfig.parse(slice ?? {});
+    if (cfg.repos.length === 0 && cfg.notifications === "off") {
+      return "repos unset and notifications=off — nothing to ingest (set repos in config, or set notifications to all/repos)";
+    }
+    return null;
+  },
+  genericAuth: true,
+  genericDiscovery: true,
+  surfacesChannels: false,
+  surfacesTeams: false,
+};

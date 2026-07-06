@@ -33,10 +33,12 @@ import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** `[connectors.box]` config (docs/design/config.md). */
@@ -47,6 +49,14 @@ export const BoxConnectorConfig = z.object({
 export type BoxConnectorConfig = z.infer<typeof BoxConnectorConfig>;
 
 export const BOX_CONNECTOR_NAME = "box";
+
+/** Credential precondition enforced centrally by the sync service (Issue #440). */
+const BOX_CREDENTIALS: CredentialRequirement = {
+  secretNames: ["token"],
+  missingMessage:
+    "box connector: no token configured " +
+    "(set SUASOR_CONNECTOR_BOX_TOKEN or store it in the OS keychain)",
+};
 
 /** A normalized Box file item the connector maps into a record. */
 export interface BoxFileItem {
@@ -203,6 +213,7 @@ export interface BoxConnectorOptions {
 class BoxConnector implements Connector {
   readonly name = BOX_CONNECTOR_NAME;
   readonly sourceType = "box";
+  readonly credentials = BOX_CREDENTIALS;
 
   /** Per-folder isolation outcome (set when `sync` ran) → finalize summary. */
   private isolation: IsolationResult | null = null;
@@ -213,21 +224,15 @@ class BoxConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
-    // missing token must fail loudly (throw → exit 1) even when no folders are
-    // configured, rather than hiding behind the empty-scope early return below —
-    // which would report a silent 0-ingest + exit 0 and mask the missing
-    // credential (ADR-0007 "no silent wrong answer"). A configured token + empty
-    // scope keeps the old behaviour: the no-op return below (0 records, no client).
-    const token = await ctx.secret("token");
-    if (!token) {
-      throw new Error(
-        "box connector: no token configured " +
-          "(set SUASOR_CONNECTOR_BOX_TOKEN or store it in the OS keychain)",
-      );
-    }
-
+    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+    // above) is enforced centrally by the sync service before `sync()` runs, so
+    // this early return can never mask a missing token (ADR-0007 "credential 解決
+    // は scope-emptiness 判定に先行する", Issue #440).
     if (this.config.folders.length === 0) return;
+
+    const token = await ctx.secret("token");
+    // Guaranteed present by the central credential check; narrow for the client.
+    if (token === null) throw new Error(BOX_CREDENTIALS.missingMessage);
 
     const client = await this.clientFactory(token);
     this.isolation = null;
@@ -286,3 +291,27 @@ export function createBoxConnector(
   const parsed = BoxConnectorConfig.parse(config ?? {});
   return new BoxConnector(parsed, options.clientFactory ?? defaultBoxClientFactory);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: BOX_CONNECTOR_NAME,
+  sourceType: "box",
+  configSchema: BoxConnectorConfig,
+  secretNames: BOX_CREDENTIALS.secretNames,
+  needsAuth: true,
+  bundledInBinary: false,
+  sliceTemplate: {
+    body: ["enabled = true", '# folders = ["0"]          # Box folder ids to ingest (root は "0")'],
+  },
+  noopWarning(slice) {
+    const cfg = BoxConnectorConfig.parse(slice ?? {});
+    if (cfg.folders.length === 0) {
+      return "folders unset — nothing to ingest (set folders in config)";
+    }
+    return null;
+  },
+  genericAuth: true,
+  genericDiscovery: true,
+  surfacesChannels: false,
+  surfacesTeams: false,
+};

@@ -32,6 +32,15 @@ const TEAM_META_KEYS: Record<string, TeamMetaKeys> = {
   slack: { id: "team", name: "teamName" },
 };
 
+/**
+ * Connector names that emit `SlackTeamObserved` (i.e. have team meta keys).
+ * Cross-checked against each manifest's `surfacesTeams` flag by the connector
+ * completeness test (Issue #440) so the two can never drift.
+ */
+export function teamMetaConnectors(): string[] {
+  return Object.keys(TEAM_META_KEYS).sort();
+}
+
 /** One observed team derived from a record's meta (the `SlackTeamObserved` payload). */
 export interface ObservedTeam {
   teamId: string;

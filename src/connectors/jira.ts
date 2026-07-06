@@ -39,6 +39,7 @@ import { z } from "zod";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
@@ -57,6 +58,7 @@ import {
   type JiraComment,
   type JiraIssue,
 } from "./jira/client.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 
 /** `[connectors.jira]` config (docs/design/config.md). */
 export const JiraConnectorConfig = z
@@ -98,6 +100,14 @@ export const JiraConnectorConfig = z
 export type JiraConnectorConfig = z.infer<typeof JiraConnectorConfig>;
 
 export const JIRA_CONNECTOR_NAME = "jira";
+
+/** Credential precondition enforced centrally by the sync service (Issue #440). */
+const JIRA_CREDENTIALS: CredentialRequirement = {
+  secretNames: ["token"],
+  missingMessage:
+    "jira connector: no token configured " +
+    "(set SUASOR_CONNECTOR_JIRA_TOKEN or run `suasor jira auth set`)",
+};
 
 /** The cursor key used for the single-sweep `jql` mode (no per-project key). */
 const JQL_CURSOR_KEY = "__jql__";
@@ -234,6 +244,7 @@ export interface JiraConnectorOptions {
 class JiraConnector implements Connector {
   readonly name = JIRA_CONNECTOR_NAME;
   readonly sourceType = "jira";
+  readonly credentials = JIRA_CREDENTIALS;
 
   /** Per-resource (project key / `__jql__`) highest `updated` seen → next cursor. */
   private cursors: Record<string, string> = {};
@@ -253,22 +264,16 @@ class JiraConnector implements Connector {
   }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
-    // missing token must fail loudly (throw → exit 1) even when no projects / jql
-    // are configured, rather than hiding behind the empty-scope early return
-    // below — which would report a silent 0-ingest + exit 0 and mask the missing
-    // credential (ADR-0007 "no silent wrong answer"). A configured token + empty
-    // scope keeps the old behaviour: the no-op return below (0 records, no client).
-    const token = await ctx.secret("token");
-    if (!token) {
-      throw new Error(
-        "jira connector: no token configured " +
-          "(set SUASOR_CONNECTOR_JIRA_TOKEN or run `suasor jira auth set`)",
-      );
-    }
-
+    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+    // above) is enforced centrally by the sync service before `sync()` runs, so
+    // this early return can never mask a missing token (ADR-0007 "credential 解決
+    // は scope-emptiness 判定に先行する", Issue #440).
     const resources = this.resources();
     if (resources.length === 0) return;
+
+    const token = await ctx.secret("token");
+    // Guaranteed present by the central credential check; narrow for the client.
+    if (token === null) throw new Error(JIRA_CREDENTIALS.missingMessage);
 
     // Resolve auth once (host + Authorization header + REST base). A config error
     // (e.g. missing host / email for basic) throws before any fetch.
@@ -373,3 +378,34 @@ export function createJiraConnector(
   const parsed = JiraConnectorConfig.parse(config ?? {});
   return new JiraConnector(parsed, options.clientFactory ?? DEFAULT_JIRA_CLIENT);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: JIRA_CONNECTOR_NAME,
+  sourceType: "jira",
+  configSchema: JiraConnectorConfig,
+  secretNames: JIRA_CREDENTIALS.secretNames,
+  needsAuth: true,
+  bundledInBinary: true,
+  sliceTemplate: {
+    body: [
+      "enabled = true",
+      '# host = "example.atlassian.net"  # Jira site host (no scheme)',
+      '# email = "you@example.com"       # Cloud HTTP Basic account email (omit for self-hosted PAT)',
+      '# projects = ["PROJ"]             # project keys to ingest (`suasor jira projects`)',
+    ],
+  },
+  noopWarning(slice) {
+    const cfg = JiraConnectorConfig.parse(slice ?? {});
+    // An explicit `jql` is its own target (it overrides per-project queries);
+    // otherwise a target exists only when `projects` is non-empty.
+    if (cfg.projects.length === 0 && (cfg.jql ?? "") === "") {
+      return "projects unset and jql unset — nothing to ingest (set projects in config, or specify jql)";
+    }
+    return null;
+  },
+  genericAuth: true,
+  genericDiscovery: true,
+  surfacesChannels: false,
+  surfacesTeams: false,
+};

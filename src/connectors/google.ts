@@ -36,10 +36,12 @@ import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
 
 /** Google resource families this connector can ingest. */
@@ -58,6 +60,14 @@ export const GoogleConnectorConfig = z.object({
 export type GoogleConnectorConfig = z.infer<typeof GoogleConnectorConfig>;
 
 export const GOOGLE_CONNECTOR_NAME = "google";
+
+/** Credential precondition enforced centrally by the sync service (Issue #440). */
+const GOOGLE_CREDENTIALS: CredentialRequirement = {
+  secretNames: ["refreshToken"],
+  missingMessage:
+    "google connector: no refreshToken configured " +
+    "(set SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN or store it in the OS keychain)",
+};
 
 /** A normalized Google item the connector maps into a record. */
 export interface GoogleItem {
@@ -320,6 +330,7 @@ export interface GoogleConnectorOptions {
 class GoogleConnector implements Connector {
   readonly name = GOOGLE_CONNECTOR_NAME;
   readonly sourceType = "google";
+  readonly credentials = GOOGLE_CREDENTIALS;
 
   /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
   private isolation: IsolationResult | null = null;
@@ -330,21 +341,15 @@ class GoogleConnector implements Connector {
   ) {}
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    // Credential resolution precedes the scope-emptiness no-op (#385 / #404): a
-    // missing refreshToken must fail loudly (throw → exit 1) even when no
-    // resources are configured, rather than hiding behind the empty-scope early
-    // return below — which would report a silent 0-ingest + exit 0 and mask the
-    // missing credential (ADR-0007 "no silent wrong answer"). A configured token +
-    // empty scope keeps the old behaviour: the no-op return below (0 records, no client).
-    const refreshToken = await ctx.secret("refreshToken");
-    if (!refreshToken) {
-      throw new Error(
-        "google connector: no refreshToken configured " +
-          "(set SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN or store it in the OS keychain)",
-      );
-    }
-
+    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+    // above) is enforced centrally by the sync service before `sync()` runs, so
+    // this early return can never mask a missing refreshToken (ADR-0007
+    // "credential 解決は scope-emptiness 判定に先行する", Issue #440).
     if (this.config.resources.length === 0) return;
+
+    const refreshToken = await ctx.secret("refreshToken");
+    // Guaranteed present by the central credential check; narrow for the client.
+    if (refreshToken === null) throw new Error(GOOGLE_CREDENTIALS.missingMessage);
 
     const client = await this.clientFactory({
       clientId: this.config.clientId,
@@ -407,3 +412,27 @@ export function createGoogleConnector(
   const parsed = GoogleConnectorConfig.parse(config ?? {});
   return new GoogleConnector(parsed, options.clientFactory ?? defaultGoogleClientFactory);
 }
+
+/** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
+export const manifest: ConnectorManifest = {
+  name: GOOGLE_CONNECTOR_NAME,
+  sourceType: "google",
+  configSchema: GoogleConnectorConfig,
+  secretNames: GOOGLE_CREDENTIALS.secretNames,
+  needsAuth: true,
+  bundledInBinary: false,
+  sliceTemplate: {
+    body: ["enabled = true", '# clientId = "<oauth-client-id>"  # required for auth'],
+  },
+  noopWarning(slice) {
+    const cfg = GoogleConnectorConfig.parse(slice ?? {});
+    if (cfg.resources.length === 0) {
+      return "resources unset — nothing to ingest (set resources in config)";
+    }
+    return null;
+  },
+  genericAuth: true,
+  genericDiscovery: true,
+  surfacesChannels: false,
+  surfacesTeams: false,
+};

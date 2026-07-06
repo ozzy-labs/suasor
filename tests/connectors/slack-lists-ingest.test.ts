@@ -138,15 +138,9 @@ describe("slack List ingestion (ADR-0036 §6 read-back)", () => {
     expect(warnings.some((w) => /lists skipped: no token/.test(w))).toBe(true);
   });
 
-  test("a lists-only config with no token anywhere throws instead of warning (#385)", async () => {
-    // Token resolution precedes the scope check: with no token for ANY
-    // workspace the sync fails loudly even when only lists are configured.
-    const connector = createSlackConnector(
-      { workspaces: { acme: { team: "T", channels: [], lists: ["LA"] } } },
-      { clientFactory: () => fakeClient([{ items: [{ id: "R1" }] }]) },
-    );
-    await expect(
-      collect(connector.sync({ cursor: null, secret: async () => null, onWarn: () => {} })),
-    ).rejects.toThrow(/no token configured for any workspace/);
-  });
+  // "no token for ANY workspace → throw" (including a lists-only config) is now
+  // enforced centrally by the sync service (Issue #440), driven by the Slack
+  // connector's any-of `credentials` over every configured workspace's secret
+  // name (lists-only or not), and is covered by the completeness test in
+  // `tests/connectors/manifest.test.ts`.
 });

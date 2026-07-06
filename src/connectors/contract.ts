@@ -125,6 +125,29 @@ export interface SyncResult {
 }
 
 /**
+ * A connector's credential precondition (ADR-0007 "credential 解決は
+ * scope-emptiness 判定に先行する"). Declared on the connector so the sync service
+ * enforces it **centrally** — in the sync pass, before iterating `sync()` —
+ * rather than via a guard copy-pasted into every connector. This is the manifest
+ * form of the invariant that #385 / #404 / #406 previously hand-rolled per
+ * connector (Issue #440).
+ */
+export interface CredentialRequirement {
+  /**
+   * Secret names the connector resolves via {@link SyncContext.secret}. The
+   * requirement is satisfied when **at least one** resolves (any-of), which
+   * unifies the single-token connectors (one name) with multi-account Slack (one
+   * name per configured workspace, ADR-0014): a *total* credential absence throws
+   * loudly, while a *partial* absence is left to the connector's own per-account
+   * isolation (a tokenless workspace is skipped with a warning). An empty list
+   * means the connector needs no credential (`web` / `local`) — never enforced.
+   */
+  readonly secretNames: readonly string[];
+  /** Error thrown by the sync service when **none** of {@link secretNames} resolves. */
+  readonly missingMessage: string;
+}
+
+/**
  * A read-only ingest source. `sync` streams observed source records; the sync
  * service (`./sync.ts`) diffs them against the `sources` projection and appends
  * events. Connectors never write back to the source (ADR-0003).
@@ -134,6 +157,14 @@ export interface Connector {
   readonly name: string;
   /** Projection `source_type` family this connector produces (e.g. "github"). */
   readonly sourceType: string;
+  /**
+   * Optional credential precondition enforced **centrally** by the sync service
+   * before `sync()` streams (ADR-0007 "credential 解決は scope-emptiness 判定に
+   * 先行する"). Credential-free connectors (`web` / `local`) omit it. Declaring it
+   * here — instead of throwing inside `sync()` — moves the "credential-before-
+   * empty-scope" invariant out of every connector and into one place (Issue #440).
+   */
+  readonly credentials?: CredentialRequirement;
   /**
    * Stream observed source records (read-only). Heavy SDKs must be lazy-imported
    * inside this method to keep registration import-clean (ADR-0007).

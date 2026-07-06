@@ -14,72 +14,24 @@
  * including a user's `enabled = false` — are never rewritten.
  */
 
-/** A minimal connector-slice template: the section body appended after the header. */
-export interface ConnectorSliceTemplate {
-  /**
-   * Body lines for the slice (without the `[connectors.<name>]` header). Always
-   * includes `enabled = true`; connector-specific required keys are emitted as
-   * commented placeholders the user fills in (values are connector-specific, so
-   * a wrong default would silently mis-sync — ADR-0029 trade-offs).
-   */
-  readonly body: readonly string[];
-}
+import { type ConnectorSliceTemplate, connectorManifest } from "../../connectors/manifest.ts";
 
 /**
- * Minimal slice templates per connector. `enabled = true` is the load-bearing
- * line (without it `suasor sync` silently skips the connector). Required keys
- * that have no safe default are commented placeholders.
+ * A minimal connector-slice template. Re-exported from the connector manifest
+ * module (Issue #440), which is now the SSOT for the per-connector templates —
+ * they live on `ConnectorManifest.sliceTemplate` alongside the rest of each
+ * connector's platform knowledge, and connectors never depend on the `cli` layer.
  */
-export const CONNECTOR_SLICE_TEMPLATES: Record<string, ConnectorSliceTemplate> = {
-  github: {
-    body: [
-      "enabled = true",
-      '# repos = ["owner/repo"]   # ingest targets (issues / pull requests)',
-      '# state = "all"            # open | closed | all',
-    ],
-  },
-  slack: {
-    body: ["enabled = true", "# channels = []            # channel IDs to ingest (empty = none)"],
-  },
-  "ms-graph": {
-    body: [
-      "enabled = true",
-      '# tenantId = "<tenant-guid>"   # required for auth',
-      '# clientId = "<app-client-id>" # required for auth',
-    ],
-  },
-  google: {
-    body: ["enabled = true", '# clientId = "<oauth-client-id>"  # required for auth'],
-  },
-  box: {
-    body: ["enabled = true", '# folders = ["0"]          # Box folder ids to ingest (root は "0")'],
-  },
-  notion: {
-    body: [
-      "enabled = true",
-      '# databases = ["<database-id>"]  # db rows to ingest (`suasor notion databases`)',
-      "# pages = true               # also ingest standalone pages the integration can see",
-    ],
-  },
-  jira: {
-    body: [
-      "enabled = true",
-      '# host = "example.atlassian.net"  # Jira site host (no scheme)',
-      '# email = "you@example.com"       # Cloud HTTP Basic account email (omit for self-hosted PAT)',
-      '# projects = ["PROJ"]             # project keys to ingest (`suasor jira projects`)',
-    ],
-  },
-  web: {
-    body: ["enabled = true", '# urls = ["https://example.com"]  # public pages to ingest'],
-  },
-  local: {
-    body: ["enabled = true", '# roots = ["/absolute/path"]      # local directories to ingest'],
-  },
-};
+export type { ConnectorSliceTemplate } from "../../connectors/manifest.ts";
 
-/** Build the default slice template for a connector (falls back to enabled-only). */
+/**
+ * Build the default slice template for a connector from its manifest (falls back
+ * to `enabled = true` only for an unknown / template-less connector). `enabled =
+ * true` is the load-bearing line — without it `suasor sync` silently skips the
+ * connector.
+ */
 export function connectorSliceTemplate(connector: string): ConnectorSliceTemplate {
-  return CONNECTOR_SLICE_TEMPLATES[connector] ?? { body: ["enabled = true"] };
+  return connectorManifest(connector)?.sliceTemplate ?? { body: ["enabled = true"] };
 }
 
 /**

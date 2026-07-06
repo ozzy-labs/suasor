@@ -278,35 +278,12 @@ describe("Slack connector — guards", () => {
     expect(built).toBe(false);
   });
 
-  test("throws when no token is configured even with no channels (#385)", async () => {
-    // Token resolution precedes the channels-empty no-op: the fresh-onboard
-    // state (enabled, no channels, no token) must fail loudly instead of
-    // reporting a silent 0-observed success that masks the missing credential.
-    let built = false;
-    const connector = createSlackConnector(
-      { channels: [] },
-      {
-        clientFactory: () => {
-          built = true;
-          return fakeSlack([]).client;
-        },
-      },
-    );
-    await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
-      /no token configured for any workspace/,
-    );
-    expect(built).toBe(false);
-  });
-
-  test("multi-workspace with no channels and no tokens throws too (#385)", async () => {
-    const connector = createSlackConnector(
-      { workspaces: { acme: { team: "TA", channels: [] } } },
-      { clientFactory: () => fakeSlack([]).client },
-    );
-    await expect(
-      collect(connector.sync(ctx({ secret: async () => null, onWarn: () => {} }))),
-    ).rejects.toThrow(/no token configured for any workspace/);
-  });
+  // The "no channels + no token → throw" fresh-onboard case (#385) is now
+  // enforced centrally by the sync service (Issue #440), driven by the Slack
+  // connector's any-of `credentials`, and is covered for every connector by the
+  // completeness test in `tests/connectors/manifest.test.ts`. The
+  // channels-configured direct-sync throw path (above) stays as connector-level
+  // defense-in-depth.
 
   test("one workspace with a token keeps the channel-less config a quiet no-op (#385 regression)", async () => {
     // acme resolves a token (but has no channels), beta has neither: at least

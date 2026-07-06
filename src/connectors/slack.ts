@@ -25,10 +25,12 @@ import { ConfigError } from "../config/error.ts";
 import type {
   Connector,
   ConnectorConfig,
+  CredentialRequirement,
   SourceRecord,
   SyncContext,
   SyncResult,
 } from "./contract.ts";
+import type { ConnectorManifest } from "./manifest.ts";
 import { type ResolvedChannel, resolveChannel } from "./slack/channel.ts";
 import {
   type ConversationType,
@@ -206,6 +208,24 @@ export function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspa
       ...(config.self_user_id ? { selfUserId: config.self_user_id } : {}),
     },
   ];
+}
+
+/**
+ * Credential precondition (ADR-0007 "credential 解決は scope-emptiness 判定に先行
+ * する", Issue #440). Slack is multi-account (ADR-0014): the requirement lists
+ * every configured workspace's secret name and is satisfied when **at least one**
+ * resolves (any-of). A total absence throws centrally (in the sync service); a
+ * per-workspace absence is handled by the connector's own isolation (a tokenless
+ * alias is skipped with a warning inside `sync`). This is the manifest form of
+ * the token hoist that #385 hand-rolled inside `sync`.
+ */
+export function slackCredentials(config: SlackConnectorConfig): CredentialRequirement {
+  return {
+    secretNames: resolveWorkspaces(config).map((ws) => ws.secretName),
+    missingMessage:
+      "slack connector: no token configured for any workspace " +
+      "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
+  };
 }
 
 /** `<n><unit>` relative-duration syntax for {@link parseSinceToTs} (d/w/h). */
@@ -751,6 +771,8 @@ type WorkspaceStatus = "ok" | "failed" | "skipped";
 class SlackConnector implements Connector {
   readonly name = SLACK_CONNECTOR_NAME;
   readonly sourceType = "slack";
+  /** Any-of over the configured workspaces' tokens; enforced centrally (#440). */
+  readonly credentials: CredentialRequirement;
 
   /** Per-alias → per-channel highest `ts` observed this run → next-run cursor. */
   private cursors: Record<string, Record<string, string>> = {};
@@ -780,29 +802,25 @@ class SlackConnector implements Connector {
     private readonly usersTransport: SlackUsersTransport = defaultUsersTransport,
     /** Sweep transport for the discovery drift check (ADR-0039); default `slackFetch`. */
     private readonly conversationsTransport?: SlackConversationsTransport,
-  ) {}
+  ) {
+    this.credentials = slackCredentials(config);
+  }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
     const allWorkspaces = resolveWorkspaces(this.config);
 
-    // Token resolution precedes the scope-emptiness no-op (#385): resolve every
-    // workspace's token (env override / keychain via ctx.secret) up front and
-    // fail loudly when NONE resolves, regardless of whether any channels are
-    // configured. Before this hoist, an enabled-but-unconfigured slice (no
-    // channels, no token — the fresh-onboard state, #384) returned silently
-    // below and the missing credential hid behind the channels-empty advisory
-    // (`0 observed`, exit 0, `sync status: ok`). If at least one workspace has a
-    // token, behaviour is unchanged: a tokenless alias is still skipped with a
-    // warning (per-workspace isolation, ADR-0014) inside the loop below.
+    // Resolve every workspace's token (env override / keychain via ctx.secret)
+    // up front for per-workspace use below. The "at least one token resolves"
+    // precondition (ADR-0007 "credential 解決は scope-emptiness 判定に先行する") is
+    // now enforced centrally by the sync service before `sync()` runs, driven by
+    // this connector's `credentials` (the any-of over these same workspace secret
+    // names) — so an enabled-but-unconfigured slice (no channels, no token: the
+    // fresh-onboard state) fails loudly there rather than hiding behind the
+    // channels-empty advisory. A tokenless *individual* alias is still skipped
+    // with a warning (per-workspace isolation, ADR-0014) inside the loop below.
     const tokens = new Map<string, string | null>();
     for (const ws of allWorkspaces) {
       tokens.set(ws.alias, (await ctx.secret(ws.secretName)) ?? null);
-    }
-    if ([...tokens.values()].every((token) => token === null)) {
-      throw new Error(
-        "slack connector: no token configured for any workspace " +
-          "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
-      );
     }
 
     // Keep any workspace that has channels (messages) OR lists (read-back, §6).
@@ -1379,3 +1397,57 @@ export function createSlackConnector(
     options.conversationsTransport,
   );
 }
+
+/**
+ * Platform manifest (SSOT for the scattered per-connector tables, Issue #440).
+ * Slack is folded into the same manifest shape via capability flags: it maintains
+ * its own richer auth (`slack auth set/test`, ADR-0011) and discovery
+ * (`slack conversations`, ADR-0011/0013/0014) flows, so it opts out of the
+ * generic `AUTH_SPECS` / `DISCOVERY_SPECS` surfaces (documented in
+ * `capabilityNotes`) instead of being an invisible special case. It is the only
+ * connector that surfaces channels / teams (ADR-0037).
+ */
+export const manifest: ConnectorManifest = {
+  name: SLACK_CONNECTOR_NAME,
+  sourceType: "slack",
+  configSchema: SlackConnectorConfig,
+  // Introspection view only (`connectors list`): the default-workspace `token`.
+  // Named-workspace secrets are dynamic (`<alias>:token`, ADR-0014) and resolved
+  // per config at sync time via `slackCredentials`, not enumerated here.
+  secretNames: ["token"],
+  needsAuth: true,
+  bundledInBinary: false,
+  sliceTemplate: {
+    body: ["enabled = true", "# channels = []            # channel IDs to ingest (empty = none)"],
+  },
+  noopWarning(slice) {
+    const cfg = SlackConnectorConfig.parse(slice ?? {});
+    // Multi-workspace shape (ADR-0014) wins when present and non-empty: it has a
+    // target if any workspace declares channels.
+    const workspaces = cfg.workspaces ?? {};
+    const aliases = Object.keys(workspaces);
+    if (aliases.length > 0) {
+      const anyChannels = aliases.some((alias) => (workspaces[alias]?.channels?.length ?? 0) > 0);
+      return anyChannels
+        ? null
+        : "none of the workspaces have channels set — nothing to ingest (set channels for each workspace — get ids with `suasor slack conversations`)";
+    }
+    // Flat/default workspace: a target exists when `channels` is non-empty.
+    if (cfg.channels.length === 0) {
+      return "channels unset — nothing to ingest (set channels in config — get ids with `suasor slack conversations`)";
+    }
+    return null;
+  },
+  // Slack keeps its own multi-workspace + scope-readiness flows (ADR-0011/0014),
+  // so it is deliberately absent from the generic AUTH_SPECS / DISCOVERY_SPECS.
+  genericAuth: false,
+  genericDiscovery: false,
+  surfacesChannels: true,
+  surfacesTeams: true,
+  capabilityNotes: {
+    genericAuth:
+      "own multi-workspace auth + scope readiness (`slack auth set/test`, ADR-0011/0014)",
+    genericDiscovery:
+      "own richer discovery with join marks / engagement sort (`slack conversations`, ADR-0011/0013/0014)",
+  },
+};
