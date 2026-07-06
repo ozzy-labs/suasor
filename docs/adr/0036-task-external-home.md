@@ -6,6 +6,8 @@
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（event-sourced / replay-stable）, [ADR-0003](0003-local-first-and-content-minimization.md)（local-first / egress 最小化・送信は HITL）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP+HITL write）, [ADR-0007](0007-connector-contract.md)（connector 契約＝read 専用）, [ADR-0008](0008-assistant-skills.md)（assistant skills）, [ADR-0009](0009-multi-agent-neutrality.md)（write tool は全 host 共通 MCP surface）, [ADR-0021](0021-commitment-ledger.md)（commitment `dueDate`）, [ADR-0025](0025-local-draft-export.md)（local export＝egress を local file に限定。SaaS 直接 write は「別途慎重な ADR が要る」と明記）, [ADR-0028](0028-task-scheduling-fields.md)（task `dueDate` / `priority`）, [ADR-0031](0031-mcp-structured-errors.md)（MCP 構造化エラー）
 - Tracks: #311（GitHub Issues actuator + 基盤先行。Jira / Slack actuator・読み戻し D4・task.update 統一・generate skip は後続）
 
+> **改訂 R1（2026-07-06・#412）**: adversarial review で (a) actuator / read-back が task 自身の `published_destination` ではなく「**現在の** `[tasks].home`」の config で動作し、本 ADR が公認する home 乗り換えが過去の published task の write-back を全滅・read-back を無音劣化させること、(b) 単一 home では私用/仕事タスク混在の通常ケースで決定 7 の private 対応が成立しないこと、が確定した。決定 1 / 7 / 9 を §改訂 R1 のとおり改訂する（D2 / D3 の部分改訂を含む）。
+
 ## Context
 
 Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projection に入る）は、**Suasor の中にしか住めない**。一方ユーザーが実際に作業する場所は GitHub / Jira / Slack 等であり、そこに取り込んだ Issue/ticket は **source として観測できる（検索可能）が、管理可能なタスクにはなっていない**（観測 ≠ 管理。`tasks` に入るのは `TaskProposed` / `TaskApplied` 経由のみ、`src/projections/reducer.ts`）。
@@ -55,7 +57,7 @@ Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projecti
    - Slack List: チェック→completed / status option→state（**実装済み**・案C）。slack connector が `[connectors.slack].lists` の List を `slack_list_item` source として**生セルのまま**取り込み、`reconcileReadback` が `[tasks.home]` の列/option id で解釈（connector は config 非依存）。`lists:read` scope。flat / named workspace 両対応（`[connectors.slack(.workspaces.<alias>)].lists`、各 workspace の token で取り込み）
    - **due/priority の読み戻しは Jira で実装済み**（jira connector が duedate/priority を meta に取り込み、read-back で正規化〔YYYY-MM-DD→ISO UTC〕+ priority マッピング〔Highest/High→high 等〕して TaskApplied に反映）。reducer の COALESCE のため**設定/変更は反映するがクリアは非反映**（Jira 側で due 削除しても残る＝既知制約）。GitHub は due 概念が無く対象外
 
-7. **全タスクを外部化、Suasor 自身はホームにしない（D3）** — 確定タスクは必ず外部ホームに住む。Suasor の自前面は **triage inbox（コミット前の提案承認）だけ**に保ち、タスク管理用の独自 UI（案A）は作らない（サイロ化・忘却リスクの回避）。**private なタスクはホームの選び方**（自分専用 Slack List / private repo / Google Tasks 等）で対応する。
+7. **全タスクを外部化、Suasor 自身はホームにしない（D3）** — 確定タスクは必ず外部ホームに住む。Suasor の自前面は **triage inbox（コミット前の提案承認）だけ**に保ち、タスク管理用の独自 UI（案A）は作らない（サイロ化・忘却リスクの回避）。**private なタスクはホームの選び方**（自分専用 Slack List / private repo / Google Tasks 等）で対応する。→ **R1-4 で改訂**（未 publish タスク＝private tier を公式化。D3 は「published task の遷移は actuator 経由」に縮小）
 
 8. **無限ループ回避** — 「書き出したタスクを source として再取り込みし、再提案・二重計上する」ループを次で防ぐ（[ADR-0025](0025-local-draft-export.md) のディレクトリ包含隔離を一般化した原則:**出力先と読み取りスコープを必ず突き合わせ、出力を新規入力として再消費しない**）:
    - **同一性リンク** — 起票時に外部 id を provenance 記録（決定4）。「この外部項目＝自分のタスク」を Suasor が知っている状態にする。
@@ -64,7 +66,14 @@ Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projecti
    - **読み側 dedup/skip** — connector は項目を source として mirror してよい（検索用）が、提案・抽出パイプラインは**公開済みタスクに紐づく source をスキップ**（自分のタスクを再提案しない）。**実装済み**: `persistProposals`（`src/propose/generate.ts`）が `publishedTaskExternalIds()`（`tasks.published_external_id` ∪ `links(published_to)`）と candidate の provenance source を突き合わせ、一致候補を ledger 追記前に除外（skip 件数を戻り値に露出）。統合ビューの「native task と外部 mirror を1行に畳む」dedup は別途（read query 層）。
    - **スコープ隔離（可能な所）** — Slack List は**専用 list/channel に書き出し、それを取り込みスコープから除外**できる（最もクリーン）。GitHub/Jira は上記リンク+マーカーで担保。
 
-9. **config** — `[tasks]` に**単一ホーム設定**（destination 種別 + 対象 repo/project/list、Slack 専用 list の取り込み除外フラグ）を持つ。既定の変更は可能。`[tasks].home` と connector 設定の整合を loader で検証する。
+9. **config** — `[tasks]` に**単一ホーム設定**（destination 種別 + 対象 repo/project/list、Slack 専用 list の取り込み除外フラグ）を持つ。既定の変更は可能。`[tasks].home` と connector 設定の整合を loader で検証する。→ **R1 で per-destination 構成に改訂（下記）**
+
+### 改訂 R1（2026-07-06・#412）— per-destination homes・destination 固定解決・ローカル tier 公式化
+
+- **R1-1（config・決定 9 改訂）**: 単一 `[tasks].home` オブジェクトを廃し、**`[tasks.homes.<destination>]`**（`github` / `jira` / `slack`、各 destination 固有の typed schema）+ **`[tasks].default = <destination>`**（新規 publish の既定行き先）に再構成する。後方互換は要求しない（破壊的 config 変更として移行手順を guide に記す）。
+- **R1-2（per-task destination・決定 1 / D2 改訂）**: `task.publish` に任意の `destination` 引数を追加する（省略時は `[tasks].default`）。当初「per-task の行き先上書きは初期スコープに含めない」としたが、`task.publish` は**元々 per-task の HITL 呼び出し**であり、任意引数の追加は「承認のたびに行き先選択を出す摩擦」（Alternatives の却下理由）に当たらない。
+- **R1-3（解決規則・critical fix）**: `task.act` / `task.update`（公開済み分岐）/ read-back（`reconcileReadback`）は、**task 自身の `published_destination` に対応する `[tasks.homes.<destination>]` で config を解決**する。現在の `default` は新規 publish にのみ使う。Slack List は externalId に埋まる listId で列/option マップを解決する。**switched-home regression test**（jira で publish → default を github に切替 → 旧 task の act / read-back が動作し続ける）を必須とする。
+- **R1-4（ローカル tier 公式化・決定 7 / D3 改訂）**: **未 publish タスクを private tier として正式に認める**。「確定タスクは必ず外部ホームに住む」は撤回し、D3 は **「published task の状態遷移は必ず actuator 経由（決定 3 の整合規律）」** に縮小する。private なタスク（私用の雑務等）に外部 home を要求しない — 実装が既に持つローカル経路（`task.update` のローカル分岐・`propose.apply` の `publish` 既定 false）を公式の設計とする。next-actions / brief 等の読み系ではローカルタスクを published task と同格に扱う。単一 privacy ドメインを前提にした「private はホームの選び方で対応」は、仕事＋私用が 1 つの secretary に混在する通常ケースで成立しないため撤回。
 
 ## Consequences
 
@@ -90,6 +99,6 @@ Suasor の自前タスク（`task.create` / `propose.apply` で `tasks` projecti
 - **独自タスク管理 GUI（案A）** — 非推奨。Suasor が「もう一個の見に行く場所」になり、サイロ化・忘却リスクと自前 UI の維持コストを抱える。差別化（横断・AI 提案）に集中できない。
 - **外部へ一方向 render のみ（案3:優先リストを Slack/GitHub に出力するだけ）** — 却下。横断マージしたリストを単一ホストツールにきれいに収められず、操作も各ツール任せで single pane にならない。補助的な ambient 出力としてなら将来併用可。
 - **双方向同期** — 却下。状態ストアが2つになり衝突解決・last-write-wins の曖昧さ・同期複雑性という、本件で最も避けたいコストを抱える。状態の正本を1つに保つ（D1）方が単純で堅い。
-- **per-task / smart routing（タスクごとに行き先自動振り分け）** — **初期スコープ外**。承認のたびに行き先選択を常時出すと摩擦になるため**既定では出さない**。ただし概念としては閉じず、「既定ホーム + 任意 override」「プロジェクト単位ルール」を将来 additive に足す余地は残す。
-- **「Suasor に留める」を許容** — 却下。状態の正本を持たない（D1）と矛盾し、最小の管理 UI（案A）が必要になりサイロ/忘却リスクが戻る。private はホームの選び方で対応する。
+- **per-task / smart routing（タスクごとに行き先自動振り分け）** — **初期スコープ外** → **R1-2（2026-07-06）で「既定ホーム + 任意 override」を採用**。`task.publish` が元々 per-task HITL 呼び出しである以上、任意引数は摩擦を増やさない（自動振り分け・常時選択 UI は引き続き導入しない）。
+- **「Suasor に留める」を許容** — 却下 → **R1-4（2026-07-06）で private tier に限り部分撤回**。D1（状態正本＝外部 1 つ）は published task にのみ適用し、未 publish タスクはローカルが正本。管理 UI は引き続き作らない（既存の task.update / 読み系 tool で足りる）。
 - **read 専用のまま据え置き（現状）** — 非推奨。タスクが Suasor 内に隔離され忘れられやすく、中核価値「取りこぼさない」を損ねる。

@@ -7,6 +7,8 @@
 - Related: [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP read 境界 / HITL）, [ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md)（FTS-first）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（Slack 運用 verb・本 ADR の前段）
 - Prior art: opshub ADR-0033（slack-mention-demand-digest）
 
+> **改訂注記（2026-07-06・#412）**: 決定 3 / 4 は [ADR-0041](0041-neutral-demand-priority-substrate.md) が supersede — `slack.demand.list` は connector 中立の `demand.list` へ fold し、「未処理」判定の seen-marker は host 委譲から store 側 seen-state（`demand.ack` / `demand.dismiss` event）へ移行する。
+
 ## Context
 
 Slack の @mention / DM は「読むべきだが未処理」という強い signal を持つ。opshub では `slack.demand.list` でこれを集約し、`next-actions` / `personal-brief` が priority 上位に組み込む（Phase 18-C）。
@@ -20,7 +22,7 @@ suasor の同梱 skill（`next-actions` / `personal-brief`）は opshub 版と�
    **実装上の補足（landed）**: 専用の `slack_demand` projection table は立てず、`sources`（`source_type='slack_message'`）への **query（`listSlackDemand`）** で等価に導出した（mention は `body LIKE '%<@uid>%'`、DM は `json_extract(meta,'$.channel') LIKE 'D%'`）。`sources` は FTS5 対象なので FTS-first は保たれ、projection table を増やさない分だけ軽量。本 ADR 当初案（projection を folding）からの実装簡素化で、判断は等価（追加 fetch なし）。
 2. **operator identity は config で与える。** mention 判定に operator の Slack user id が要る。`[connectors.slack] self_user_id`（multi-workspace 時は per-alias、[ADR-0014](0014-slack-multi-workspace.md)）で設定し、`slack auth test` の出力（`userId`）から取得できるよう案内する。未設定なら mention demand は無効（DM demand のみ）に degrade。
 3. **`slack.demand.list` は MCP read tool（ADR-0004）。** mention/DM の未処理 demand を時系列・priority 順で返す read-only tool。write は持たない。demand から task 化は既存 propose 経路（HITL、auto-apply なし）を使う。
-4. **「未処理」は seen-marker ベースで host 側が解釈する。** demand projection は raw な mention/DM 行を返し、何を「処理済み」とみなすかは host（skill）側の seen-marker / 期間フィルタで決める。connector は状態を持たない。
+4. **「未処理」は seen-marker ベースで host 側が解釈する。** demand projection は raw な mention/DM 行を返し、何を「処理済み」とみなすかは host（skill）側の seen-marker / 期間フィルタで決める。connector は状態を持たない。→ **superseded（2026-07-06・#412）**: host 委譲の結果、seen-marker はどの host / skill にも実装されず、全 mention/DM が永遠に「未処理」として dueDate / priority より上位に居座った（「未処理」の前提が定常運用で偽り）。[ADR-0041](0041-neutral-demand-priority-substrate.md) で store 側の seen-state（`demand.ack` / `demand.dismiss` event・HITL write）へ移す。connector が状態を持たない点は不変（状態は event ログ、[ADR-0002](0002-event-sourced-architecture.md)）。
 5. **skill スコープ拡大を本 ADR で承認する。** `next-actions` / `personal-brief` の SKILL.md に「`slack.demand.list` を signal として組み込む」一文を追加する（opshub Phase 18-C と同型）。read tool のみ・task 化は HITL のままなので、ADR-0004 の境界は崩れない。
 
 ## Consequences

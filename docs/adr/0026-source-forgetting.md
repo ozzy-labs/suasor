@@ -7,6 +7,8 @@
 - Tracks: #141
 
 > Status: **Accepted**（2026-06-20 レビュー反映後 承認）。実装: `SourceForgotten` event + reducer 駆動 delete + redaction + sidecar purge + `source.forget` tool。
+>
+> **改訂 R1（2026-07-06・#412）**: adversarial review で「forget の約束と実装の乖離」4 件（派生 content 残存 / 次回 sync での復活 / 非トランザクション実行 / 物理層の平文残存）が確定したため、Decision を **完全 forget** へ拡張（§改訂 R1）。
 
 ## Context
 
@@ -31,6 +33,16 @@ content-minimization / local-first（[ADR-0003](0003-local-first-and-content-min
 5. **links は残す** — 派生 link（task→source 等）は「今は無い source 由来」という provenance として有用なので残す（`source.get` は null）。dangling 表示は許容。
 6. **idempotent** — 既 forget の再 forget は no-op（body は既に空・行は既に無い）。未知 id は `missing` 報告。
 
+### 改訂 R1（2026-07-06・#412）— 完全 forget への契約拡張
+
+検証で確定した乖離: (a) ingest は `sources` projection 行の不在だけで新規判定し `SourceForgotten` を見ないため、上流に残る source は**次回 sync で全文復活**する（`src/connectors/sync.ts` の fingerprint 判定）。(b) source 本文は `propose.generate` 時点で `ProposalGenerated.summary`（reply_draft は**全文**）へ、apply 時に `DecisionRecorded.rationale` / `ReplyDraftProposed.body` / task・commitment title へ verbatim で流れ、**reject した候補の本文まで**永続する。(c) 「1 トランザクション」（決定冒頭）に対し実装は 4 独立文で実行される。(d) redaction は論理層のみで、WAL / free page に平文が残存する（`secure_delete`/checkpoint なし）。これらを閉じるため以下を Decision に追加する:
+
+1. **再取り込み防止（tombstone）** — `SourceForgotten` を折り込む `forgotten_sources` projection（externalId キー）を新設し、ingest（`runSyncPass`）は該当 externalId の再観測を**スキップ**する。明示的な再取り込みは新設の `source.unforget`（HITL write・tombstone 解除 event を append）でのみ行う。`source.forget` の応答は、当該 connector が enabled のままの場合「上流に残存していれば tombstone が再取り込みを防いでいる」旨を通知する。
+2. **派生 content の cascade redaction（HITL）** — forget 時に links provenance（`derived_from` / `replies_to`、`idx_links_to`）と proposals ledger を辿り、派生 entity（task / decision / reply_draft / commitment / proposal summary / `DraftExported` パス）を**列挙して tool 出力で必ず開示**する。ユーザー確認を経た cascade 指定で、派生 event の自由文 field（title / rationale / body / summary）を元の決定 1（event redaction・`json_set` による空白化）と同じ方式で redaction する（append-only 例外の範囲拡張。対象 field は本項の列挙に限定）。開示は必須・cascade は HITL。
+3. **reject 時の summary redaction（発生源対策）** — `propose.reject` は当該候補の `ProposalGenerated.summary` を redaction する（reply_draft では全文が入るため）。人が却下した本文を ledger に保持し続けない。forget と独立に適用する。
+4. **原子性の遵守** — 決定冒頭の「1 トランザクション」は実装拘束である。`sourceForget` 全体を単一 sqlite transaction で包む（`store.record` は savepoint として入れ子可）。「steps are individually idempotent / retry で収束」を原子性の代替とする実装は本 ADR 違反とする。
+5. **物理消去** — forget の最後に `PRAGMA wal_checkpoint(TRUNCATE)` を実行し、redaction / DELETE は `secure_delete` 有効化（または直後の incremental VACUUM）で行う。free page / WAL に redact 済み本文の平文が残らないことを契約に含める（forget は低頻度でコスト許容）。既存の `VACUUM INTO` backup・OS バックアップ・host 会話履歴など **Suasor の外に出た copy は forget の射程外**（Negative に明記）。
+
 ## Consequences
 
 ### Positive
@@ -41,9 +53,11 @@ content-minimization / local-first（[ADR-0003](0003-local-first-and-content-min
 
 ### Negative / Trade-offs
 
-- **append-only の例外**を 1 つ作る（redaction）。本 ADR で範囲を「forget 対象 source の body 上書きのみ」に限定し、それ以外の event は不変を保つ
+- **append-only の例外**を 1 つ作る（redaction）。当初範囲は「forget 対象 source の body 上書きのみ」。**R1 で「その派生 event の自由文 field（cascade・HITL）+ reject 候補の summary」へ拡張**（対象 field は §改訂 R1 の 2・3 項の列挙に限定し、それ以外の event は不変を保つ）
 - links が dangling（`source.get` null）になりうる（provenance 優先で許容）
 - redaction は監査可能だが「過去の log を書き換える」操作なので、CLI/MCP の HITL ゲートと event（`SourceForgotten`）で必ず痕跡を残す
+- **（R1）forget の射程外が残る** — `draft.export` 済みファイル・`VACUUM INTO` backup・OS バックアップ・host 会話履歴。tool 出力と本 ADR で明示的に開示する
+- **（R1）物理消去は SQLite 実装依存**（`secure_delete` / checkpoint / VACUUM の挙動）。tombstone projection・`source.unforget` の追加面も増える
 
 ## Alternatives Considered
 
@@ -51,3 +65,5 @@ content-minimization / local-first（[ADR-0003](0003-local-first-and-content-min
 - **event 行を物理削除** — 却下。replay の連続性・他 event の seq/cursor との整合を壊す。redaction（body 空白化）の方が surgical で replay-safe
 - **crypto-shredding（本文を暗号化し鍵破棄で forget）** — 却下（現状 over-engineering）。本文は平文ローカル保持（ADR-0003）で、redaction の方が単純
 - **forget を持たない** — 却下。privacy-first を掲げる以上、必須
+- **（R1）派生 content は「消えていない一覧」の開示に留める（誠実化のみ）** — 却下。ユーザーがこの機能に求める結果は一覧ではなく**消えていること**（「機密だから purge して」が flagship トリガー）。列挙は必須とした上で cascade redaction まで提供する
+- **（R1）tombstone を持たず「connector スコープから外してから forget」を運用で要求** — 却下。どの surface もその前提条件を検査・通知しておらず、cron 定常運用では forget が無人で巻き戻る。構造で防ぐ
