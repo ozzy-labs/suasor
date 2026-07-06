@@ -121,4 +121,10 @@ describe("renderDigestSchedulerLines — digest push jobs (ADR-0040)", () => {
     expect(out).toContain("suasor-digest-morning: ExecStart=suasor digest --job morning");
     expect(out).toContain("OnCalendar");
   });
+  test("cron single-quotes a job name that is not shell-safe", () => {
+    const out = renderDigestSchedulerLines("cron", "suasor", [{ name: "my job" }]);
+    expect(out).toContain("digest --job 'my job' ");
+    const quoted = renderDigestSchedulerLines("cron", "suasor", [{ name: "it's" }]);
+    expect(quoted).toContain("digest --job 'it'\\''s' ");
+  });
 });

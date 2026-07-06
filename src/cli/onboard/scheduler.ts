@@ -133,6 +133,16 @@ export interface DigestJobRef {
 const DEFAULT_DIGEST_SCHEDULE = "0 8 * * *";
 
 /**
+ * Quote a job name for the rendered cron line when it is not shell-safe.
+ * `DigestJob.name` is any non-empty string, so a name with whitespace or shell
+ * metacharacters would otherwise split into extra argv words in crontab.
+ */
+function shellSafeJobName(name: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(name)) return name;
+  return `'${name.replaceAll("'", "'\\''")}'`;
+}
+
+/**
  * Render ready-to-paste scheduler lines for configured digest jobs (ADR-0040
  * standing consent). cron gets one paste-ready crontab line per job; launchd /
  * systemd get the guide's substitution guidance (duplicate the sync unit with
@@ -149,7 +159,7 @@ export function renderDigestSchedulerLines(
   if (kind === "cron") {
     const lines = jobs.map(
       (j) =>
-        `${j.schedule ?? DEFAULT_DIGEST_SCHEDULE} ${command} digest --job ${j.name} ` +
+        `${j.schedule ?? DEFAULT_DIGEST_SCHEDULE} ${command} digest --job ${shellSafeJobName(j.name)} ` +
         `>> "$HOME/.local/state/suasor/digest.log" 2>&1`,
     );
     return ["# Digest push — one crontab line per standing-consent job (ADR-0040).", ...lines].join(
