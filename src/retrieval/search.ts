@@ -12,11 +12,21 @@
  *  2. Short-query fallback — the trigram tokenizer indexes 3-grams, so a query
  *     token shorter than 3 chars can never MATCH (returns nothing). For those we
  *     fall back to a `LIKE` substring scan over `sources.body`, so single/double
- *     character queries (common in Japanese, e.g. 区, 東京) still return hits
- *     (docs/design/retrieval.md "短クエリ fallback").
+ *     character queries (common in Japanese, e.g. 区, 東京) still return hits.
+ *     Each token becomes its own ANDed `LIKE '%token%'` predicate — a multi-token
+ *     short query like "予算 承認" then matches documents containing *both*
+ *     tokens, rather than the whole query as one contiguous substring (which
+ *     included the space and near-guaranteed zero hits in spaceless Japanese —
+ *     retrieval-2). Ranking is a crude token-occurrence count (docs/design/
+ *     retrieval.md "短クエリ fallback").
  *
  * Both paths handle JA and EN uniformly: trigram captures CJK substrings without
  * a word segmenter, and LIKE is byte/codepoint substring matching.
+ *
+ * Payload: every hit carries a bounded `excerpt` (not the full body) by default,
+ * so a multi-hit response can't overflow a host's context window; the full body
+ * is fetched via `source.get` (ADR-0018 payload suppression / retrieval-m2).
+ * Pass `fullBody` to opt back into the full body per hit.
  */
 import type { Database } from "bun:sqlite";
 
@@ -25,6 +35,14 @@ export const TRIGRAM_LENGTH = 3;
 
 /** Default maximum number of hits returned. */
 export const DEFAULT_SEARCH_LIMIT = 20;
+
+/**
+ * Default excerpt length (in code points) for a bounded hit body. A search
+ * response carries an excerpt of at most this many characters per hit unless
+ * `fullBody` is set, so a multi-hit response stays small enough not to overflow
+ * the host context (retrieval-m2 / ADR-0018 payload suppression).
+ */
+export const DEFAULT_EXCERPT_CHARS = 240;
 
 /** How a hit was retrieved (which path produced it). */
 export type SearchStrategy = "fts" | "like-fallback";
@@ -39,13 +57,25 @@ export interface SearchHit {
   observedAt: string;
   /**
    * Relevance score. For FTS hits this is the SQLite `bm25` rank where a more
-   * negative value is more relevant; results are returned best-first. The
-   * LIKE fallback has no statistical ranking, so all fallback hits share a
-   * single sentinel score (`0`) and are ordered by recency instead.
+   * negative value is more relevant. For the LIKE fallback it is the total
+   * occurrence count of the query tokens in the body (higher = more relevant).
+   * Either way hits are returned best-first, but the direction differs by path,
+   * so read {@link SearchResult.strategy} before comparing scores.
    */
   score: number;
-  /** Full source body held locally (ADR-0003). */
-  body: string;
+  /**
+   * Bounded excerpt of the source body — the default payload (retrieval-m2 /
+   * ADR-0018 payload suppression). Present unless `fullBody` was requested. For
+   * a lexical hit the window is centred on the first matching token; otherwise
+   * it is the leading {@link SearchOptions.maxBodyChars} characters. Fetch the
+   * full text via `source.get`.
+   */
+  excerpt?: string;
+  /**
+   * Full source body held locally (ADR-0003). Present only when `fullBody` was
+   * requested; omitted by default so search responses stay bounded.
+   */
+  body?: string;
 }
 
 export interface SearchResult {
@@ -63,9 +93,9 @@ export interface SearchResult {
   /** `true` when matches were cut off by `limit` (`totalHits > hits.length`). */
   truncated: boolean;
   /**
-   * The tokens the query was actually analyzed into for retrieval. For the FTS
-   * path these are the whitespace-split tokens that drive the trigram MATCH; for
-   * the LIKE fallback it is the single trimmed query string used as a substring.
+   * The tokens the query was actually analyzed into for retrieval — the
+   * whitespace-split tokens on both paths. For FTS they drive the trigram MATCH;
+   * for the LIKE fallback each token is an ANDed `LIKE '%token%'` predicate.
    * Surfaces *what was searched* so a thin/empty result has a visible cause.
    */
   analyzedQuery: string[];
@@ -93,6 +123,14 @@ export interface SearchFilters {
 export interface SearchOptions extends SearchFilters {
   /** Maximum hits to return (default {@link DEFAULT_SEARCH_LIMIT}). */
   limit?: number;
+  /**
+   * Return each hit's full `body` instead of a bounded `excerpt` (opt-in,
+   * retrieval-m2). Default `false` — responses carry only the excerpt and the
+   * full text is fetched via `source.get` (ADR-0018 payload suppression).
+   */
+  fullBody?: boolean;
+  /** Max characters per bounded excerpt (default {@link DEFAULT_EXCERPT_CHARS}). */
+  maxBodyChars?: number;
 }
 
 /**
@@ -150,6 +188,73 @@ function escapeLike(s: string): string {
   return s.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
+/**
+ * Build a bounded excerpt from a source body (retrieval-m2 / ADR-0018).
+ *
+ * A body already within `maxChars` is returned unchanged. Otherwise, when one of
+ * `tokens` occurs in the body the window is centred on the first match
+ * (`…match…`); with no token match (semantic recall, or a trigram/case mismatch)
+ * the leading `maxChars` characters are returned. Length is counted in code
+ * points so a CJK character counts as one, and a leading/trailing `…` marks each
+ * side that was cut.
+ */
+export function buildExcerpt(body: string, maxChars: number, tokens: string[] = []): string {
+  const cps = [...body];
+  if (cps.length <= maxChars) return body;
+
+  // Locate the first matching token (case-insensitive) to centre the window on.
+  const lowerBody = body.toLowerCase();
+  let matchUnit = -1;
+  for (const t of tokens) {
+    if (t.length === 0) continue;
+    const idx = lowerBody.indexOf(t.toLowerCase());
+    if (idx >= 0 && (matchUnit === -1 || idx < matchUnit)) matchUnit = idx;
+  }
+  if (matchUnit === -1) {
+    return `${cps.slice(0, maxChars).join("")}…`;
+  }
+
+  // `indexOf` yields a UTF-16 code-unit offset; convert it to a code-point index
+  // so slicing stays aligned even across astral-plane characters.
+  const matchCp = [...body.slice(0, matchUnit)].length;
+  const half = Math.floor(maxChars / 2);
+  const end = Math.min(cps.length, Math.max(0, matchCp - half) + maxChars);
+  const start = Math.max(0, end - maxChars);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < cps.length ? "…" : "";
+  return `${prefix}${cps.slice(start, end).join("")}${suffix}`;
+}
+
+/** How each hit's body is projected into the response (excerpt vs full body). */
+interface HitProjection {
+  /** Return the full body (`true`) or a bounded excerpt (`false`, default). */
+  fullBody: boolean;
+  /** Max excerpt length in code points. */
+  maxChars: number;
+  /** Query tokens used to centre a lexical excerpt on the first match. */
+  tokens: string[];
+}
+
+interface BodyRow {
+  external_id: string;
+  source_type: string;
+  observed_at: string;
+  body: string;
+}
+
+/** Map a joined row + score into a {@link SearchHit}, projecting the body. */
+function toSearchHit(row: BodyRow, score: number, proj: HitProjection): SearchHit {
+  const hit: SearchHit = {
+    externalId: row.external_id,
+    sourceType: row.source_type,
+    observedAt: row.observed_at,
+    score,
+  };
+  if (proj.fullBody) hit.body = row.body;
+  else hit.excerpt = buildExcerpt(row.body, proj.maxChars, proj.tokens);
+  return hit;
+}
+
 interface FtsRow {
   external_id: string;
   source_type: string;
@@ -168,6 +273,7 @@ function searchFts(
   query: string,
   limit: number,
   filters: SearchFilters,
+  proj: HitProjection,
 ): { hits: SearchHit[]; totalHits: number } {
   const match = buildFtsMatch(query);
   // Metadata filters apply to the joined `sources` row (alias `s`), so they
@@ -201,50 +307,61 @@ function searchFts(
               WHERE ${where}`,
           )
           .get(match, ...params)?.total ?? rows.length);
-  const hits = rows.map((r) => ({
-    externalId: r.external_id,
-    sourceType: r.source_type,
-    observedAt: r.observed_at,
-    score: r.rank,
-    body: r.body,
-  }));
+  const hits = rows.map((r) => toSearchHit(r, r.rank, proj));
   return { hits, totalHits };
 }
 
-interface LikeRow {
-  external_id: string;
-  source_type: string;
-  observed_at: string;
-  body: string;
+interface LikeRow extends BodyRow {
+  /** Total occurrence count of the query tokens in the body (crude relevance). */
+  occ: number;
 }
 
 /**
- * Short-query fallback: `LIKE` substring scan over `sources.body`.
+ * Short-query fallback: per-token `LIKE` substring scan over `sources.body`.
  *
- * Used when the query is too short for the trigram index. There is no relevance
- * signal, so hits are ordered by recency (most recently observed first) and
- * carry a sentinel score of 0.
+ * Used when the query is too short for the trigram index. Each token becomes its
+ * own ANDed `LIKE '%token%'` predicate, so a multi-token query like "予算 承認"
+ * matches documents containing *both* tokens anywhere — rather than the whole
+ * query as one contiguous substring (space included), which near-guaranteed zero
+ * hits in spaceless Japanese (retrieval-2). There is no statistical rank, so
+ * hits are ordered by a crude total token-occurrence count (desc), with the most
+ * recently observed first as a tiebreaker; the score is that occurrence count.
  */
 function searchLikeFallback(
   sqlite: Database,
-  query: string,
+  tokens: string[],
   limit: number,
   filters: SearchFilters,
+  proj: HitProjection,
 ): { hits: SearchHit[]; totalHits: number } {
-  const pattern = `%${escapeLike(query.trim())}%`;
+  // One ANDed LIKE predicate per token (retrieval-2). `%`/`_`/`\` are escaped so
+  // the token is matched literally, with `ESCAPE '\'`.
+  const tokenClauses = tokens.map(() => "body LIKE ? ESCAPE '\\'");
+  const tokenParams = tokens.map((t) => `%${escapeLike(t)}%`);
   // No alias here (single-table scan), so qualify the filter columns with the
   // table name to keep the generated SQL unambiguous and consistent.
   const { clauses, params } = buildFilterClauses(filters, "sources");
-  const where = ["body LIKE ? ESCAPE '\\'", ...clauses].join(" AND ");
+  const where = [...tokenClauses, ...clauses].join(" AND ");
+  // Crude relevance: the total (non-overlapping) occurrence count of the tokens
+  // across the body, via length(body) - length(replace(body, token, '')) over
+  // length(token). lower() on both sides keeps the count case-insensitive for
+  // ASCII (consistent with LIKE) and is a no-op for CJK; SQLite `length()`
+  // counts code points so the division is exact.
+  const occExpr = tokens
+    .map(() => "(length(lower(body)) - length(replace(lower(body), lower(?), ''))) / length(?)")
+    .join(" + ");
+  const occParams: string[] = [];
+  for (const t of tokens) occParams.push(t, t);
   const rows = sqlite
     .query<LikeRow, (string | number)[]>(
-      `SELECT external_id, source_type, observed_at, body
+      `SELECT external_id, source_type, observed_at, body,
+              ${occExpr} AS occ
          FROM sources
         WHERE ${where}
-        ORDER BY observed_at DESC
+        ORDER BY occ DESC, observed_at DESC
         LIMIT ?`,
     )
-    .all(pattern, ...params, limit);
+    .all(...occParams, ...tokenParams, ...params, limit);
   const totalHits =
     rows.length < limit
       ? rows.length
@@ -252,14 +369,8 @@ function searchLikeFallback(
           .query<CountRow, (string | number)[]>(
             `SELECT COUNT(*) AS total FROM sources WHERE ${where}`,
           )
-          .get(pattern, ...params)?.total ?? rows.length);
-  const hits = rows.map((r) => ({
-    externalId: r.external_id,
-    sourceType: r.source_type,
-    observedAt: r.observed_at,
-    score: 0,
-    body: r.body,
-  }));
+          .get(...tokenParams, ...params)?.total ?? rows.length);
+  const hits = rows.map((r) => toSearchHit(r, r.occ, proj));
   return { hits, totalHits };
 }
 
@@ -272,8 +383,11 @@ function searchLikeFallback(
  * or whitespace-only query yields no hits (and reports the `fts` strategy). The
  * retrieval path is chosen by the
  * *longest* token length: if even the longest token is too short for the
- * trigram index (< {@link TRIGRAM_LENGTH}) the LIKE fallback runs over the
- * whole query, otherwise FTS5 MATCH runs.
+ * trigram index (< {@link TRIGRAM_LENGTH}) the per-token LIKE fallback runs
+ * (each token ANDed as its own substring predicate), otherwise FTS5 MATCH runs.
+ *
+ * Every hit carries a bounded `excerpt` by default; pass `fullBody` for the full
+ * body or `maxBodyChars` to size the excerpt (retrieval-m2 / ADR-0018).
  *
  * Note: within an FTS query, tokens shorter than the trigram length are dropped
  * by the tokenizer rather than required (e.g. `go home` effectively matches on
@@ -291,6 +405,10 @@ export function searchSources(
     ...(options.observedAfter !== undefined ? { observedAfter: options.observedAfter } : {}),
     ...(options.observedBefore !== undefined ? { observedBefore: options.observedBefore } : {}),
   };
+  const projBase = {
+    fullBody: options.fullBody ?? false,
+    maxChars: options.maxBodyChars ?? DEFAULT_EXCERPT_CHARS,
+  };
   const trimmed = query.trim();
   if (trimmed.length === 0) {
     return { hits: [], strategy: "fts", totalHits: 0, truncated: false, analyzedQuery: [] };
@@ -300,22 +418,23 @@ export function searchSources(
 
   // The trigram index can only match a token once it is >= 3 code points. If
   // the *longest* token is still too short, MATCH would return nothing, so we
-  // use the LIKE substring fallback for the whole query instead.
+  // use the per-token LIKE substring fallback for the whole query instead.
   const longestToken = tokens.reduce((max, t) => Math.max(max, codePointLength(t)), 0);
   if (longestToken < TRIGRAM_LENGTH) {
-    const { hits, totalHits } = searchLikeFallback(sqlite, trimmed, limit, filters);
-    // The fallback searches the whole trimmed query as one substring, so the
-    // "analyzed query" is that single string rather than the per-token split.
+    const { hits, totalHits } = searchLikeFallback(sqlite, tokens, limit, filters, {
+      ...projBase,
+      tokens,
+    });
     return {
       hits,
       strategy: "like-fallback",
       totalHits,
       truncated: totalHits > hits.length,
-      analyzedQuery: [trimmed],
+      analyzedQuery: tokens,
     };
   }
 
-  const { hits, totalHits } = searchFts(sqlite, trimmed, limit, filters);
+  const { hits, totalHits } = searchFts(sqlite, trimmed, limit, filters, { ...projBase, tokens });
   return {
     hits,
     strategy: "fts",

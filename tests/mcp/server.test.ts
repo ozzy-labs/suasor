@@ -376,6 +376,31 @@ describe("MCP read surface", () => {
     expect(parsed.analyzedQuery).toEqual(["rocket"]);
   });
 
+  test("search returns a bounded excerpt (not the full body) by default (retrieval-m2)", async () => {
+    seedSource();
+    const client = await connect();
+    const res = await client.callTool({ name: "search", arguments: { query: "rocket" } });
+    const parsed = parseResult(res as never) as {
+      hits: { externalId: string; excerpt?: string; body?: string }[];
+    };
+    expect(parsed.hits[0]?.body).toBeUndefined();
+    expect(parsed.hits[0]?.excerpt).toBeDefined();
+  });
+
+  test("search fullBody=true returns the full body through the surface (retrieval-m2)", async () => {
+    seedSource("gh:1", "deploy the rocket to mars");
+    const client = await connect();
+    const res = await client.callTool({
+      name: "search",
+      arguments: { query: "rocket", fullBody: true },
+    });
+    const parsed = parseResult(res as never) as {
+      hits: { externalId: string; excerpt?: string; body?: string }[];
+    };
+    expect(parsed.hits[0]?.excerpt).toBeUndefined();
+    expect(parsed.hits[0]?.body).toBe("deploy the rocket to mars");
+  });
+
   test("recall.search returns empty + embedding_disabled signal when off", async () => {
     seedSource();
     const client = await connect("disabled");

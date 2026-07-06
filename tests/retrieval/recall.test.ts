@@ -199,6 +199,33 @@ describe("recallSearch", () => {
   });
 });
 
+describe("recallSearch — bounded excerpt payload (retrieval-m2 / ADR-0018)", () => {
+  const longBody = "x".repeat(1000);
+
+  test("hits carry a leading-N-chars excerpt (not the full body) by default", async () => {
+    seed("gh:1", longBody);
+    const embedder = fakeEmbedder({ [longBody]: [1, 0, 0], q: [1, 0, 0] });
+    await embedSources(store.connection.sqlite, embedder, [{ externalId: "gh:1", body: longBody }]);
+
+    const result = await recallSearch(store.connection.sqlite, embedder, "q");
+    const hit = result.hits[0];
+    expect(hit?.body).toBeUndefined();
+    expect(hit?.excerpt).toBeDefined();
+    expect([...(hit?.excerpt ?? "")].length).toBeLessThanOrEqual(242); // 240 + ellipsis
+  });
+
+  test("fullBody: true returns the full body and omits the excerpt", async () => {
+    seed("gh:1", longBody);
+    const embedder = fakeEmbedder({ [longBody]: [1, 0, 0], q: [1, 0, 0] });
+    await embedSources(store.connection.sqlite, embedder, [{ externalId: "gh:1", body: longBody }]);
+
+    const result = await recallSearch(store.connection.sqlite, embedder, "q", { fullBody: true });
+    const hit = result.hits[0];
+    expect(hit?.excerpt).toBeUndefined();
+    expect(hit?.body).toBe(longBody);
+  });
+});
+
 describe("recallSearch — metadata filters (post-filter on the join)", () => {
   test("sourceType narrows the KNN result set", async () => {
     seed("gh:1", "kubernetes deployment", { sourceType: "github_issue" });

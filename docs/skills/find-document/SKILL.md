@@ -28,9 +28,9 @@ mcp_tools_write: []
 
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。外部 SaaS は直接叩かず、local projection の保持本文（[ADR-0003](../../adr/0003-local-first-and-content-minimization.md)）だけを検索する。
 
-1. `search`（FTS5、[retrieval.md](../../design/retrieval.md)）で query を本文全文検索する。返り値 `hits[]` は `externalId` / `sourceType` / `observedAt` / `score`（bm25 昇順=より関連）/ `body`、および `strategy`（`fts` | `like-fallback`）
+1. `search`（FTS5、[retrieval.md](../../design/retrieval.md)）で query を本文全文検索する。返り値 `hits[]` は `externalId` / `sourceType` / `observedAt` / `score`（bm25 昇順=より関連）/ `excerpt`（既定は上限付き抜粋・全文ではない）、および `strategy`（`fts` | `like-fallback`）
 2. 必要なら `source.list`（`sourceType` 絞り / `observedAfter` / `observedBefore`）で source 種別・期間を絞り込む
-3. 本文全体が要れば `source.get`（`externalId`）で取得する
+3. 本文全体が要れば `source.get`（`externalId`）で取得する（`search` に `fullBody: true` を渡しても全文 `body` を得られるが、既定は抜粋で payload を抑える・retrieval-m2）
 4. 意味検索ハイブリッドが要る場合のみ `recall.search` を補助的に併用する（embedding 無効時は `signal: embedding_disabled` を見て `search` に寄せる）
 5. 該当 source を提示して返す
 

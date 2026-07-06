@@ -25,7 +25,7 @@ import {
   recallSearch,
 } from "../retrieval/embedding/index.ts";
 import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
-import { DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
+import { DEFAULT_EXCERPT_CHARS, DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
 import {
   buildActivityTimeline,
   buildBrief,
@@ -78,6 +78,23 @@ export interface ReadToolContext {
 export function registerReadTools(server: McpServer, ctx: ReadToolContext): void {
   const { sqlite, embedder, embeddingConfig, deps } = ctx;
 
+  // Shared body-projection args for the retrieval tools (search / recall.search /
+  // search.hybrid). By default each hit returns a bounded excerpt, not the full
+  // body, so a multi-hit response can't overflow the host context; the full text
+  // is fetched via source.get (retrieval-m2 / ADR-0018 payload suppression).
+  const fullBodyShape = z
+    .boolean()
+    .optional()
+    .describe(
+      "Return each hit's full body instead of a bounded excerpt (default: excerpt only — fetch full text via source.get).",
+    );
+  const maxBodyCharsShape = z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(`Max characters per hit excerpt (default ${DEFAULT_EXCERPT_CHARS}).`);
+
   // --- search: FTS-first full-text search (ADR-0005, the default path). ---
   server.registerTool(
     "search",
@@ -86,24 +103,30 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       description:
         "Full-text search over ingested source bodies (SQLite FTS5, FTS-first). " +
         "Handles Japanese and English uniformly; short queries fall back to a " +
-        "substring scan. Optionally filter by source_type and an " +
+        "per-token substring scan. Optionally filter by source_type and an " +
         "observed_after/observed_before window (lower bound inclusive, upper " +
-        "exclusive). Returns ranked hits best-first.",
+        "exclusive). Returns ranked hits best-first. Each hit carries a bounded " +
+        "`excerpt` (not the full body) by default — fetch full text via " +
+        "source.get, or pass fullBody=true (ADR-0018).",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max hits (default ${DEFAULT_SEARCH_LIMIT}).`),
+        fullBody: fullBodyShape,
+        maxBodyChars: maxBodyCharsShape,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ query, sourceType, observedAfter, observedBefore, limit }) => {
+    async ({ query, sourceType, observedAfter, observedBefore, limit, fullBody, maxBodyChars }) => {
       const result = searchSources(sqlite, query, {
         limit: limit ?? DEFAULT_SEARCH_LIMIT,
         ...(sourceType !== undefined ? { sourceType } : {}),
         ...(observedAfter !== undefined ? { observedAfter } : {}),
         ...(observedBefore !== undefined ? { observedBefore } : {}),
+        ...(fullBody !== undefined ? { fullBody } : {}),
+        ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
       });
       return jsonResult(result);
     },
@@ -120,17 +143,21 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "enabled — or the sidecar is unreachable — it returns empty results with an " +
         "`embedding_disabled` signal so the host can fall back to `search` (ADR-0005). " +
         "Optionally filter by source_type and an observed_after/observed_before " +
-        "window (lower bound inclusive, upper exclusive; applied as a post-filter).",
+        "window (lower bound inclusive, upper exclusive; applied as a post-filter). " +
+        "Each hit carries a bounded `excerpt` (not the full body) by default — " +
+        "fetch full text via source.get, or pass fullBody=true (ADR-0018).",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max hits (default ${DEFAULT_RECALL_LIMIT}).`),
+        fullBody: fullBodyShape,
+        maxBodyChars: maxBodyCharsShape,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ query, sourceType, observedAfter, observedBefore, limit }) => {
+    async ({ query, sourceType, observedAfter, observedBefore, limit, fullBody, maxBodyChars }) => {
       // No embedder (backend disabled or unimplemented) → embedding_disabled.
       if (embedder === null) {
         return jsonResult({
@@ -145,6 +172,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           ...(sourceType !== undefined ? { sourceType } : {}),
           ...(observedAfter !== undefined ? { observedAfter } : {}),
           ...(observedBefore !== undefined ? { observedBefore } : {}),
+          ...(fullBody !== undefined ? { fullBody } : {}),
+          ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
         });
         return jsonResult(result);
       } catch (error) {
@@ -178,24 +207,34 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "other (best of both). Filters (source_type + observed window) and limit apply " +
         "to both paths. When no embedding backend is enabled — or the sidecar is " +
         "unreachable — it degrades to FTS-only and returns the `embedding_disabled` " +
-        "signal (ADR-0005). Hits carry an `rrfScore` (higher = better, best-first).",
+        "signal (ADR-0005). Hits carry an `rrfScore` (higher = better, best-first). " +
+        "Each hit carries a bounded `excerpt` (not the full body) by default — " +
+        "fetch full text via source.get, or pass fullBody=true (ADR-0018).",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max fused hits (default ${DEFAULT_SEARCH_LIMIT}).`),
+        fullBody: fullBodyShape,
+        maxBodyChars: maxBodyCharsShape,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ query, sourceType, observedAfter, observedBefore, limit }) => {
+    async ({ query, sourceType, observedAfter, observedBefore, limit, fullBody, maxBodyChars }) => {
       const effLimit = limit ?? DEFAULT_SEARCH_LIMIT;
       const filters = {
         ...(sourceType !== undefined ? { sourceType } : {}),
         ...(observedAfter !== undefined ? { observedAfter } : {}),
         ...(observedBefore !== undefined ? { observedBefore } : {}),
       };
-      const fts = searchSources(sqlite, query, { limit: effLimit, ...filters });
+      // Same body-projection applied to both fused paths so representatives are
+      // consistent (retrieval-m2).
+      const bodyOpts = {
+        ...(fullBody !== undefined ? { fullBody } : {}),
+        ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
+      };
+      const fts = searchSources(sqlite, query, { limit: effLimit, ...filters, ...bodyOpts });
 
       // Resolve the vec side, degrading to FTS-only on no/failed backend so the
       // tool always returns fused (here: FTS) results rather than erroring.
@@ -208,6 +247,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           const recall = await recallSearch(sqlite, embedder, query, {
             limit: effLimit,
             ...filters,
+            ...bodyOpts,
           });
           vecHits = recall.hits;
           signal = recall.signal;
