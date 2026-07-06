@@ -80,3 +80,5 @@ NNNN-kebab-case-title.md
 | 0037 | Slack name enrichment (sync-time resolution + `slack_channels` projection) |
 | 0038 | Multi-workspace shared-channel de-duplication (owner-wins, global channel ID key) |
 | 0039 | Conversation discovery drift model (explicit enumeration = data minimization; drift surfacing, no default silent auto-follow) |
+| 0040 | Proactive push lane (cron one-shot digest + standing consent; no daemon) |
+| 0041 | Connector-neutral demand / priority substrate (`demand.list` + seen-state + deterministic scorer) |
