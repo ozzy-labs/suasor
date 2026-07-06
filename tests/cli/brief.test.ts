@@ -115,6 +115,52 @@ describe("suasor brief", () => {
     expect(parsed.decisions[0].title).toBe("use bun");
   });
 
+  /** Seed `n` in-window sources so a small `--limit` truncates the section. */
+  async function seedSources(n: number): Promise<void> {
+    const { Store } = await import("../../src/db/index.ts");
+    const store = Store.open({ path: join(dir, "suasor.db") });
+    for (let i = 0; i < n; i++) {
+      store.record({
+        type: "SourceObserved",
+        externalId: `s:${i}`,
+        sourceType: "github_issue",
+        body: `body ${i}`,
+        observedAt: `2026-06-14T00:00:0${i}.000Z`,
+        fingerprint: `s:${i}`,
+        meta: {},
+      });
+    }
+    store.close();
+  }
+
+  test("flags a section the --limit cut off in the human output (Issue #444)", async () => {
+    await seedSources(3);
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--limit", "2"]);
+    expect(code).toBe(0);
+    expect(out).toContain("[⚠ truncated: sources]");
+  });
+
+  test("no truncation note when every section fits under --limit (Issue #444)", async () => {
+    await seedSources(2);
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--limit", "2"]);
+    expect(code).toBe(0);
+    expect(out).not.toContain("truncated");
+  });
+
+  test("--json carries the per-section truncated flags (Issue #444)", async () => {
+    await seedSources(3);
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--limit", "2", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out);
+    expect(parsed.truncated).toEqual({
+      sources: true,
+      tasks: false,
+      decisions: false,
+      inbox: false,
+      demand: false,
+    });
+  });
+
   test("rejects an invalid --since", async () => {
     const { code, err } = await run(["brief", "--since", "lastweek"]);
     expect(code).toBe(1);

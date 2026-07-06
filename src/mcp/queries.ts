@@ -26,6 +26,27 @@ import { docsUrl } from "../shared/doc-ref.ts";
 /** Default page size for the list queries (matches retrieval's default). */
 export const DEFAULT_LIST_LIMIT = 50;
 
+/**
+ * Apply `search`'s truncation-transparency contract (ADR-0007 "no silent wrong
+ * answer") to a `limit`-bounded list query. `fetch` runs the underlying query
+ * with one extra row requested (`limit + 1`); if it comes back, the result was
+ * cut off, so we drop the sentinel and report `truncated: true`. Returns the
+ * trimmed rows plus a `truncated` boolean the caller folds into its response.
+ *
+ * `limit` is the *effective* cap (the tool's default when the arg is omitted).
+ * Shared by the MCP read tools (`source.list` / `task.list` / … via
+ * `server-read.ts`) and `buildBrief`'s per-section probe so both honour the
+ * same contract.
+ */
+export function listWithTruncation<T>(
+  limit: number,
+  fetch: (probeLimit: number) => T[],
+): { rows: T[]; truncated: boolean } {
+  const rows = fetch(limit + 1);
+  if (rows.length > limit) return { rows: rows.slice(0, limit), truncated: true };
+  return { rows, truncated: false };
+}
+
 /** Inclusive-lower / exclusive-upper time window over an ISO 8601 column. */
 export interface TimeRange {
   /** Inclusive lower bound (ISO 8601). */
@@ -1131,6 +1152,22 @@ export function deriveBriefWarnings(completeness: BriefCompleteness): BriefWarni
   return warnings;
 }
 
+/**
+ * Per-section truncation flags (ADR-0007 "no silent wrong answer"). Each key is
+ * `true` when its section held more rows than the per-section `limit` returned,
+ * so the host can tell "a busy day whose bundle was cut" from "genuinely this
+ * much happened" and narrow the window / page via the list tools. Mirrors the
+ * `truncated` boolean every sibling list tool returns, but per section since the
+ * brief bundles several at once.
+ */
+export interface BriefTruncation {
+  sources: boolean;
+  tasks: boolean;
+  decisions: boolean;
+  inbox: boolean;
+  demand: boolean;
+}
+
 /** A period bundle for host summarization (ADR-0017). */
 export interface Brief {
   /** The window the bundle covers (null when unbounded). */
@@ -1149,6 +1186,12 @@ export interface Brief {
    * / github-read) rows are excluded.
    */
   demand: DemandRecord[];
+  /**
+   * Per-section truncation flags (ADR-0007): `true` where that section was cut
+   * off at `limit`. The bundle otherwise looks identical whether a section is
+   * complete or silently trimmed on a busy day — this is the signal to page.
+   */
+  truncated: BriefTruncation;
   /**
    * Completeness signals (Issue #189): categories that are empty because their
    * source is *not configured*, not because the window is quiet. Empty array
@@ -1184,21 +1227,47 @@ export interface BuildBriefOptions {
 export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): Brief {
   const { since, until, limit, selfUserIds, warnings } = options;
   const window: TimeRange = { after: since, before: until };
-  const cap = limit !== undefined ? { limit } : {};
-  return {
-    window: { since: since ?? null, until: until ?? null },
-    sources: listSources(sqlite, { observed: window, ...cap }),
-    tasks: listTasks(sqlite, { updated: window, ...cap }),
-    decisions: listDecisions(sqlite, { recorded: window, ...cap }),
-    // Inbox is "currently open", not period-scoped (what is unprocessed now).
-    inbox: listInbox(sqlite, { state: "open", ...cap }),
-    // Outstanding (un-acked) demand only — a seen mention no longer clutters the
-    // brief (ADR-0041). Neutral: Slack @mention/DM + github notifications.
-    demand: listDemand(sqlite, {
+  // Effective per-section cap (each list query defaults to DEFAULT_LIST_LIMIT).
+  // Probe every section with limit+1 so a section cut off at the cap is reported
+  // via `truncated`, not silently trimmed (ADR-0007 "no silent wrong answer") —
+  // the same contract the sibling list tools honour via listWithTruncation.
+  const effLimit = limit ?? DEFAULT_LIST_LIMIT;
+  const sources = listWithTruncation(effLimit, (probeLimit) =>
+    listSources(sqlite, { observed: window, limit: probeLimit }),
+  );
+  const tasks = listWithTruncation(effLimit, (probeLimit) =>
+    listTasks(sqlite, { updated: window, limit: probeLimit }),
+  );
+  const decisions = listWithTruncation(effLimit, (probeLimit) =>
+    listDecisions(sqlite, { recorded: window, limit: probeLimit }),
+  );
+  // Inbox is "currently open", not period-scoped (what is unprocessed now).
+  const inbox = listWithTruncation(effLimit, (probeLimit) =>
+    listInbox(sqlite, { state: "open", limit: probeLimit }),
+  );
+  // Outstanding (un-acked) demand only — a seen mention no longer clutters the
+  // brief (ADR-0041). Neutral: Slack @mention/DM + github notifications.
+  const demand = listWithTruncation(effLimit, (probeLimit) =>
+    listDemand(sqlite, {
       observed: window,
       ...(selfUserIds ? { selfUserIds } : {}),
-      ...cap,
+      limit: probeLimit,
     }),
+  );
+  return {
+    window: { since: since ?? null, until: until ?? null },
+    sources: sources.rows,
+    tasks: tasks.rows,
+    decisions: decisions.rows,
+    inbox: inbox.rows,
+    demand: demand.rows,
+    truncated: {
+      sources: sources.truncated,
+      tasks: tasks.truncated,
+      decisions: decisions.truncated,
+      inbox: inbox.truncated,
+      demand: demand.truncated,
+    },
     warnings: warnings ?? [],
   };
 }
