@@ -222,6 +222,53 @@ describe("embeddingDrain", () => {
   });
 });
 
+// retrieval-m1: per-text failure isolation means the embedder can return a hole
+// (undefined) for a single poison body without throwing. embedSources / drain must
+// skip the hole, embed its siblings, and leave the poison source pending — never
+// discard sibling vectors or block the run (the pre-fix bug threw on the whole
+// batch, zeroing a sync or wedging drain forever on the first oversized doc).
+describe("per-text failure isolation (retrieval-m1)", () => {
+  /** Embedder that returns a hole for a "poison" body, a real vector otherwise. */
+  const holed: Embedder = {
+    model: "fake-3d",
+    embed: (texts) => Promise.resolve(texts.map((t) => (t === "poison" ? undefined : [1, 0, 0]))),
+  };
+
+  test("embedSources skips a hole and leaves that source pending (no error)", async () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "poison");
+    seed("gh:3", "beta");
+    const result = await embedSources(store.connection.sqlite, holed, [
+      { externalId: "gh:1", body: "alpha" },
+      { externalId: "gh:2", body: "poison" },
+      { externalId: "gh:3", body: "beta" },
+    ]);
+    expect(result.embedded).toBe(2); // gh:1 + gh:3; the poison is skipped
+    expect(result.error).toBeUndefined();
+    const status = embeddingStatus(store.connection.sqlite, holed, "ollama");
+    expect(status.totals.embedded).toBe(2);
+    expect(status.totals.pending).toBe(1); // gh:2 still pending, not lost
+  });
+
+  test("embeddingDrain embeds siblings past a poison body and does not block", async () => {
+    seed("gh:1", "alpha");
+    seed("gh:2", "poison");
+    seed("gh:3", "beta");
+    const result = await embeddingDrain(store.connection.sqlite, holed);
+    expect(result.candidates).toBe(3);
+    expect(result.embedded).toBe(2); // gh:1 + gh:3 embedded despite gh:2's hole
+    expect(result.error).toBeUndefined();
+    const status = embeddingStatus(store.connection.sqlite, holed, "ollama");
+    expect(status.totals.pending).toBe(1); // gh:2 stays pending — never blocks the rest
+
+    // A re-drain still makes no false progress on the poison but never wedges the
+    // siblings (they now carry a vector, so only gh:2 remains a candidate).
+    const again = await embeddingDrain(store.connection.sqlite, holed);
+    expect(again.candidates).toBe(1);
+    expect(again.embedded).toBe(0);
+  });
+});
+
 // The acceptance criterion of Issue #414 / ADR-0005 §5: a `projections rebuild`
 // must leave the embedding layer in an HONEST state (status reports the true
 // pending count) so a single `embeddings drain` restores semantic recall. The

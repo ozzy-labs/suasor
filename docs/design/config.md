@@ -30,6 +30,7 @@ baseUrl = "http://localhost:11434"  # ollama サイドカー。/api/embed は cl
 model = "bge-m3"                     # 埋め込みモデル。ingest と query で同一（ベクトル空間整合）
 dim = 1024                           # 埋め込み次元。model の出力次元と一致必須（bge-m3=1024）
 maxBatch = 64                        # 1 リクエストあたり最大件数。超過は順序保持で分割（Issue #267）
+maxInputChars = 8000                 # 1 text あたり最大文字数。超過は embed 前に明示 truncate（retrieval-m1・0 で無効）
 requestTimeoutMs = 60000             # per-request timeout（ms）。timeout は abort して retry（0 で無効）
 maxRetries = 3                       # 429/5xx の最大試行回数（初回含む）。1 で retry 無効
 # allowRemote = false                # ollama サイドカーが非 loopback baseUrl のとき true 必須（Issue #436・egress opt-in）
@@ -41,6 +42,7 @@ maxRetries = 3                       # 429/5xx の最大試行回数（初回含
 - `dim` は埋め込みベクトルの次元で、`model` の出力次元と一致必須（`bge-m3`=1024、例: `nomic-embed-text`=768）。DB 作成時に vec0 テーブルのサイズを決めるため、既存ストアで変えるには新規 DB（または delete + rebuild + 再 sync）が必要。不一致だと全ベクトル挿入が失敗し recall が静かに空へ degrade するため、非 1024 次元 model を使うときは必ず設定する。不一致は **初回 embed で fail-fast**（actionable な `EmbeddingError`）し、`suasor doctor` も「model 出力次元 vs `dim`」を probe して不一致を ERROR で surface する（Issue #267）。さらに `suasor validate-config` は **既存 DB の vec0 次元 vs `dim`** を純 local read（egress なし・backend 不要）で突合し、不一致を ERROR finding として出す（backend 無効や API キー未設定でも検知できる経路。Issue #294）。`validate-config` は併せて「形式は valid だが runtime で効かない」設定（外部 embedding backend のキー未設定・未使用の `[llm].backend`）を **readiness advisory** として表示する（exit code には影響しない）
 - `maxBatch` / `requestTimeoutMs` / `maxRetries` は外部 embedding egress の堅牢化（Issue #267）。`maxBatch` を超える入力は**順序を保って分割**し各 chunk の結果を結合する（大規模 sync で 413 / context 超過の全滅を防ぐ）。`requestTimeoutMs` は per-request timeout（超過は abort して transient 失敗として retry。`0` で無効）。`maxRetries` は 429/5xx に対する指数 backoff + jitter retry の最大試行回数（`Retry-After` を尊重・上限 60s、`1` で retry 無効）。**送信内容は変えず堅牢性のみ追加**（ADR-0003）。共有 backoff util は `src/util/retry.ts`（connector からも再利用）
 - **`ollama` サイドカーの `baseUrl` は loopback allowlist（`localhost` / `127.0.0.0/8` / `::1`）でゲート**される（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）。非 loopback（例: リモートの共有 ollama）は本文を egress するため、`allowRemote = true` を明示しない限り **load 時に `ConfigError` で fail-fast**（`suasor doctor` は config error として surface）。opt-in 時は起動 / doctor / validate-config が remote egress を **WARN で開示**する。`openai` / `voyage` は remote 前提の外部 API で、loopback ゲートの対象外（従来どおり API キーでゲート）
+- `maxInputChars`（既定 8000・`0` で無効）は 1 text の最大文字数（retrieval-m1）。長文本文は embed 前に**決定的に truncate** し、model 依存の無音挙動（Ollama 先頭切詰め / OpenAI・Voyage の 400 全滅）を backend 非依存で観測可能にする。さらに embed は **per-text 失敗隔離**で 1 長文の失敗を穴に留め、兄弟ベクトルを巻き込まず drain も塞がない（全 text が単独でも落ちた systemic 障害のみ throw）。恒久解の chunked multi-vector は follow-up（[embedding guide](../guide/embedding.md#長文ドキュメントの扱いretrieval-m1)）
 - 未知キーは保持（`passthrough`）し、backend 固有項目を後続が確定する
 - env override 例: `SUASOR_EMBEDDING__BACKEND=ollama` / `SUASOR_EMBEDDING__MODEL=bge-large` / `SUASOR_EMBEDDING__BASEURL=http://sidecar:11434`（非 loopback host は `SUASOR_EMBEDDING__ALLOWREMOTE=true` を併記）
 

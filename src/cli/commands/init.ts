@@ -42,6 +42,7 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 #                                       #   changing it needs a fresh DB / re-sync (run \`suasor
 #                                       #   validate-config\` / \`suasor doctor\` to detect drift).
 # maxBatch = 64                         # max texts per request; larger inputs split in order
+# maxInputChars = 8000                  # max chars per text; longer bodies truncated before embed; 0 disables
 # requestTimeoutMs = 60000              # per-request timeout (ms); 0 disables
 # maxRetries = 3                        # 429/5xx retry attempts incl. first; 1 disables
 # allowRemote = false                   # opt in to a non-loopback ollama sidecar (egress; Issue #436)

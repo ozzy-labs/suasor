@@ -139,8 +139,15 @@ class ConnectorSyncCommand extends Command {
     // Embedder from the [embedding] config (null when disabled). When enabled,
     // ingest (re)populates vec0 with the same model recall queries with
     // (ADR-0005/0006); embedding failures are surfaced as a warning (stderr) and
-    // never fail the ingest — FTS still reflects the data.
-    const embedder = await createEmbedderResolved(config.embedding);
+    // never fail the ingest — FTS still reflects the data. `onTruncate` counts
+    // long bodies capped to `[embedding].maxInputChars` before embedding
+    // (retrieval-m1) so the deterministic truncation is surfaced, not silent.
+    let truncatedCount = 0;
+    const embedder = await createEmbedderResolved(config.embedding, {
+      onTruncate: () => {
+        truncatedCount += 1;
+      },
+    });
 
     // Extractor from [extraction] (null when disabled). When enabled, Office/PDF
     // bodies are converted to text at ingest (best-effort, ADR-0024); failures
@@ -177,6 +184,14 @@ class ConnectorSyncCommand extends Command {
           this.context.stderr.write(`warning: ${name} extraction skipped: ${error.message}\n`),
       });
       progress.finish();
+
+      if (truncatedCount > 0) {
+        this.context.stderr.write(
+          `warning: ${name}: ${truncatedCount} long document(s) truncated to ` +
+            `${config.embedding.maxInputChars} chars before embedding ` +
+            "(recall covers the head only; see docs/guide/embedding.md)\n",
+        );
+      }
 
       if (this.json) {
         this.context.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);

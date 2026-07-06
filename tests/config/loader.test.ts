@@ -144,6 +144,16 @@ describe("Config schema", () => {
     expect(cfg.embedding.model).toBe(DEFAULT_OLLAMA_MODEL);
     // dim defaults to the bge-m3 dimension that sizes the vec0 table.
     expect(cfg.embedding.dim).toBe(1024);
+    // maxInputChars defaults to the per-text cap (retrieval-m1); 0 disables it.
+    expect(cfg.embedding.maxInputChars).toBe(8000);
+  });
+
+  test("[embedding] maxInputChars accepts 0 (cap disabled) and rejects negatives", () => {
+    expect(Config.parse({ embedding: { maxInputChars: 0 } }).embedding.maxInputChars).toBe(0);
+    expect(Config.parse({ embedding: { maxInputChars: 20000 } }).embedding.maxInputChars).toBe(
+      20000,
+    );
+    expect(() => Config.parse({ embedding: { maxInputChars: -1 } })).toThrow();
   });
 });
 

@@ -34,26 +34,58 @@ export interface Embedder {
    */
   readonly modelVersion?: string;
   /**
-   * Embed one or more texts, returning a vector per input (same order). An
-   * empty input array returns an empty array without any network call.
+   * Embed one or more texts, returning one slot per input in the same order.
+   *
+   * The result is **best-effort with per-text failure isolation** (retrieval-m1):
+   * a slot is the input's vector, or `undefined` (a hole) when that single text
+   * could not be embedded even on its own — so one poison text (e.g. a body that
+   * still overflows the model window after the length cap) can never discard its
+   * siblings' vectors. Callers skip holes. An `EmbeddingError` is thrown only when
+   * the whole call could produce *no* vector at all (a systemic failure, e.g. the
+   * sidecar is down), so a total outage still surfaces rather than returning all
+   * holes. An empty input array returns `[]` without any network call.
    */
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[]): Promise<(number[] | undefined)[]>;
 }
 
 /** Raised when a sidecar/API call fails or returns a malformed response. */
 export class EmbeddingError extends Error {
+  /**
+   * Whether per-text failure isolation (retrieval-m1) may retry the offending
+   * text on its own. `true` (default) for request-level failures — an HTTP error,
+   * timeout, or network throw could be caused by a single text (e.g. an oversized
+   * body a backend rejects with a 400), so retrying it alone isolates the poison
+   * without discarding its siblings. `false` for a **malformed/protocol response**
+   * (a vector-count mismatch, a duplicate index, a missing embedding array): that
+   * is not a single bad text, so failing loud beats masking the API bug by silently
+   * re-requesting each input one-by-one.
+   */
+  readonly isolatable: boolean;
+
   constructor(
     message: string,
     /** Underlying cause (network error, non-2xx body, etc.), if any. */
     cause?: unknown,
+    options: { isolatable?: boolean } = {},
   ) {
     super(message, cause !== undefined ? { cause } : undefined);
     this.name = "EmbeddingError";
+    this.isolatable = options.isolatable ?? true;
   }
 }
 
 /** Minimal `fetch` shape used by the clients (injectable for tests). */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** A single text truncated by the per-text length cap (reported to `onTruncate`). */
+export interface EmbedTruncation {
+  /** Position of the truncated text within the `embed()` input array. */
+  index: number;
+  /** Original character length before the cap. */
+  originalLength: number;
+  /** Character length after the cap (equals the configured `maxInputChars`). */
+  cappedLength: number;
+}
 
 /**
  * Shared robustness knobs for every embedder (Issue #267). Defaults keep prior
@@ -64,6 +96,15 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 export interface EmbedderRobustnessOptions {
   /** Max texts per request; larger inputs are split into ordered chunks. */
   maxBatch?: number;
+  /**
+   * Max characters per input text; a longer text is deterministically truncated
+   * to this length *before* the request (retrieval-m1). This replaces the
+   * model-dependent silent behaviour a long body otherwise triggers — Ollama
+   * head-truncates to its context invisibly, and OpenAI/Voyage reject the whole
+   * request (400), zeroing every vector in the batch. `0` disables the cap. Each
+   * truncation is reported to {@link onTruncate}.
+   */
+  maxInputChars?: number;
   /** Per-request timeout in ms (`0` disables). On timeout the attempt retries. */
   requestTimeoutMs?: number;
   /** Max attempts incl. the first for a transient 429/5xx (`1` disables retry). */
@@ -72,29 +113,133 @@ export interface EmbedderRobustnessOptions {
   sleep?: SleepLike;
   /** Randomness override for backoff jitter (tests inject a fixed value). */
   random?: () => number;
+  /** Called once per text truncated by `maxInputChars` (callers log it). */
+  onTruncate?: (info: EmbedTruncation) => void;
 }
 
 /** Default batch size when an embedder is constructed without one. */
 const DEFAULT_MAX_BATCH = 64;
 
 /**
+ * Default per-text character cap when an embedder is constructed without one
+ * (retrieval-m1). Sized as a coarse, backend-independent safeguard that keeps the
+ * common 8k-token models (bge-m3, text-embedding-3) within their window even for
+ * CJK text (~1 token/char worst case). It is intentionally conservative: latin
+ * scripts pack ~4 chars/token, so a long latin body is truncated earlier than the
+ * model's own limit — trading tail coverage on very long single-vector documents
+ * for deterministic behaviour. The real fix is chunked multi-vector embedding (a
+ * follow-up; see docs/guide/embedding.md). Raise `maxInputChars` (or set `0` to
+ * disable) on large-context models; lower it for stricter guarantees.
+ */
+const DEFAULT_MAX_INPUT_CHARS = 8000;
+
+/**
+ * Truncate any text over `maxInputChars` (from `robustness`) to that length,
+ * reporting each truncation via `onTruncate`. Preserves order and count so the
+ * returned array still aligns 1:1 with `texts`. Returns the input unchanged (same
+ * reference) when nothing needs capping or the cap is disabled (`<= 0`).
+ */
+function capTexts(texts: string[], robustness: EmbedderRobustnessOptions): string[] {
+  const maxChars = robustness.maxInputChars ?? DEFAULT_MAX_INPUT_CHARS;
+  if (maxChars <= 0) return texts;
+  let capped: string[] | null = null;
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i];
+    if (text === undefined || text.length <= maxChars) continue;
+    if (capped === null) capped = texts.slice();
+    capped[i] = text.slice(0, maxChars);
+    robustness.onTruncate?.({ index: i, originalLength: text.length, cappedLength: maxChars });
+  }
+  return capped ?? texts;
+}
+
+/** Coerce an unknown thrown value to an `EmbeddingError` (preserving the cause). */
+function asEmbeddingError(cause: unknown): EmbeddingError {
+  return cause instanceof EmbeddingError ? cause : new EmbeddingError(String(cause), cause);
+}
+
+/**
+ * Re-embed each text of a failed batch on its own so a single offending text does
+ * not sink the whole batch. Returns one slot per input (its vector, or `undefined`
+ * when that lone text also failed). Never throws — the caller decides what an
+ * all-`undefined` result means (isolated poison vs. systemic outage).
+ */
+async function isolateChunk(
+  chunk: string[],
+  embedChunk: (chunk: string[]) => Promise<number[][]>,
+): Promise<(number[] | undefined)[]> {
+  const out: (number[] | undefined)[] = [];
+  for (const text of chunk) {
+    try {
+      const [vector] = await embedChunk([text]);
+      out.push(vector);
+    } catch {
+      out.push(undefined);
+    }
+  }
+  return out;
+}
+
+/**
  * Split `texts` into chunks of at most `maxBatch`, await `embedChunk` per chunk
- * (sequentially, to keep request rate sane), and concatenate the per-chunk
- * vectors back in input order. An empty input or a non-positive `maxBatch`
- * (defensive) collapses to a single chunk.
+ * (sequentially, to keep request rate sane), and concatenate the per-chunk slots
+ * back in input order. An empty input or a non-positive `maxBatch` (defensive)
+ * collapses to a single chunk.
+ *
+ * Per-text failure isolation (retrieval-m1): a batch is no longer all-or-nothing.
+ * When a whole-batch request fails, each of its texts is re-embedded on its own so
+ * a single poison text yields only its own hole (`undefined`) while its siblings
+ * keep their vectors. The call throws only when it produced *no* vector at all
+ * (systemic failure) so a total outage still surfaces; once a batch has failed
+ * even one-by-one but earlier batches already succeeded, it stops (the backend
+ * likely went down mid-run) and pads the remaining inputs as holes so those
+ * sources are simply retried on the next sync/drain rather than hammering a dead
+ * backend text-by-text.
  */
 async function embedInBatches(
   texts: string[],
   maxBatch: number,
   embedChunk: (chunk: string[]) => Promise<number[][]>,
-): Promise<number[][]> {
+): Promise<(number[] | undefined)[]> {
   if (texts.length === 0) return [];
   const size = maxBatch > 0 ? maxBatch : texts.length;
-  if (texts.length <= size) return embedChunk(texts);
-  const out: number[][] = [];
+  const out: (number[] | undefined)[] = [];
+  let producedAny = false;
   for (let i = 0; i < texts.length; i += size) {
-    const vectors = await embedChunk(texts.slice(i, i + size));
+    const chunk = texts.slice(i, i + size);
+    let vectors: number[][];
+    try {
+      vectors = await embedChunk(chunk);
+    } catch (cause) {
+      // A malformed/protocol response (wrong vector count, duplicate index, …) is
+      // not a single poison text — fail loud rather than mask it by re-requesting
+      // each input one-by-one.
+      if (cause instanceof EmbeddingError && !cause.isolatable) throw cause;
+      // The whole-batch request failed. Retry each text alone to find the
+      // offender(s) instead of discarding the batch's siblings. A single-text
+      // batch is already the finest unit — its failure *is* the per-text failure,
+      // so don't re-issue the request (that would just double the call count).
+      const isolated = chunk.length === 1 ? [undefined] : await isolateChunk(chunk, embedChunk);
+      if (isolated.some((v) => v !== undefined)) {
+        for (const v of isolated) out.push(v);
+        producedAny = true;
+        continue;
+      }
+      // The entire batch failed even one-by-one → not a single bad doc.
+      for (const v of isolated) out.push(v);
+      if (!producedAny) {
+        // Nothing has embedded at all: surface the failure so the caller can
+        // degrade / log it rather than silently returning only holes.
+        throw asEmbeddingError(cause);
+      }
+      // Earlier batches succeeded (the backend was up), so this is most likely a
+      // mid-run outage. Keep the good vectors, stop hammering, and leave the rest
+      // as holes to be picked up next run.
+      for (let j = out.length; j < texts.length; j++) out.push(undefined);
+      return out;
+    }
     for (const v of vectors) out.push(v);
+    producedAny = true;
   }
   return out;
 }
@@ -135,11 +280,15 @@ export class OllamaEmbedder implements Embedder {
     this.robustness = options;
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
-    // Split into ordered chunks so a large local batch cannot overflow the
-    // sidecar in one shot; the sidecar is local (no egress) but still bounded.
-    return embedInBatches(texts, this.robustness.maxBatch ?? DEFAULT_MAX_BATCH, (chunk) =>
-      this.embedChunk(chunk),
+  async embed(texts: string[]): Promise<(number[] | undefined)[]> {
+    // Cap each text (retrieval-m1) so a long body is truncated explicitly rather
+    // than head-truncated silently by the sidecar, then split into ordered chunks
+    // so a large local batch cannot overflow the sidecar in one shot; the sidecar
+    // is local (no egress) but still bounded.
+    return embedInBatches(
+      capTexts(texts, this.robustness),
+      this.robustness.maxBatch ?? DEFAULT_MAX_BATCH,
+      (chunk) => this.embedChunk(chunk),
     );
   }
 
@@ -176,6 +325,8 @@ export class OllamaEmbedder implements Embedder {
     if (!Array.isArray(vectors) || vectors.length !== texts.length) {
       throw new EmbeddingError(
         `ollama embed returned ${vectors?.length ?? 0} vectors for ${texts.length} inputs`,
+        undefined,
+        { isolatable: false },
       );
     }
     return vectors;
@@ -269,12 +420,16 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
-    // Split into ordered chunks so a large sync cannot 413 / overflow the model
+  async embed(texts: string[]): Promise<(number[] | undefined)[]> {
+    // Cap each text (retrieval-m1) so a long body is truncated explicitly instead
+    // of triggering a non-retryable 400 that would zero the whole request, then
+    // split into ordered chunks so a large sync cannot 413 / overflow the model
     // context in one request and lose every vector; results are concatenated in
     // input order. Content is unchanged (ADR-0003) — only request shape.
-    return embedInBatches(texts, this.robustness.maxBatch ?? DEFAULT_MAX_BATCH, (chunk) =>
-      this.embedChunk(chunk),
+    return embedInBatches(
+      capTexts(texts, this.robustness),
+      this.robustness.maxBatch ?? DEFAULT_MAX_BATCH,
+      (chunk) => this.embedChunk(chunk),
     );
   }
 
@@ -310,6 +465,8 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
     if (!Array.isArray(data) || data.length !== texts.length) {
       throw new EmbeddingError(
         `${this.provider} embed returned ${data?.length ?? 0} vectors for ${texts.length} inputs`,
+        undefined,
+        { isolatable: false },
       );
     }
 
@@ -323,7 +480,13 @@ abstract class OpenAICompatibleEmbedder implements Embedder {
       const at = typeof item?.index === "number" ? item.index : i;
       const embedding = item?.embedding;
       if (at < 0 || at >= texts.length || !Array.isArray(embedding) || vectors[at] !== undefined) {
-        throw new EmbeddingError(`${this.provider} embed returned a malformed data entry`);
+        throw new EmbeddingError(
+          `${this.provider} embed returned a malformed data entry`,
+          undefined,
+          {
+            isolatable: false,
+          },
+        );
       }
       vectors[at] = embedding;
     }
@@ -377,19 +540,24 @@ export class DimensionCheckedEmbedder implements Embedder {
     if (inner.modelVersion !== undefined) this.modelVersion = inner.modelVersion;
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
+  async embed(texts: string[]): Promise<(number[] | undefined)[]> {
     const vectors = await this.inner.embed(texts);
-    if (!this.verified && vectors.length > 0) {
-      const actual = vectors[0]?.length ?? 0;
-      if (actual !== this.expectedDim) {
-        throw new EmbeddingError(
-          `embedding dimension mismatch: model "${this.model}" returned ${actual}-dim vectors ` +
-            `but [embedding].dim is ${this.expectedDim}. Set [embedding].dim = ${actual} to match ` +
-            "the model (a fresh DB or delete + rebuild + re-sync is needed since dim sizes vec0). " +
-            `See ${docsUrl("guide/embedding.md")}.`,
-        );
+    if (!this.verified) {
+      // Probe the first *present* vector: per-text isolation (retrieval-m1) can
+      // leave holes, and a hole at index 0 must not be read as a 0-dim mismatch.
+      const first = vectors.find((v) => v !== undefined);
+      if (first !== undefined) {
+        const actual = first.length;
+        if (actual !== this.expectedDim) {
+          throw new EmbeddingError(
+            `embedding dimension mismatch: model "${this.model}" returned ${actual}-dim vectors ` +
+              `but [embedding].dim is ${this.expectedDim}. Set [embedding].dim = ${actual} to match ` +
+              "the model (a fresh DB or delete + rebuild + re-sync is needed since dim sizes vec0). " +
+              `See ${docsUrl("guide/embedding.md")}.`,
+          );
+        }
+        this.verified = true;
       }
-      this.verified = true;
     }
     return vectors;
   }
@@ -420,21 +588,29 @@ export const EXTERNAL_EMBEDDING_BACKENDS = new Set<EmbeddingBackend>(["openai", 
  */
 export function createEmbedder(
   config: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> &
-    Partial<Pick<EmbeddingConfig, "dim" | "maxBatch" | "requestTimeoutMs" | "maxRetries">> & {
+    Partial<
+      Pick<
+        EmbeddingConfig,
+        "dim" | "maxBatch" | "maxInputChars" | "requestTimeoutMs" | "maxRetries"
+      >
+    > & {
       apiKey?: string | null;
     },
   fetchImpl?: FetchLike,
-  robustnessOverrides: Pick<EmbedderRobustnessOptions, "sleep" | "random"> = {},
+  robustnessOverrides: Pick<EmbedderRobustnessOptions, "sleep" | "random" | "onTruncate"> = {},
 ): Embedder | null {
-  // Robustness knobs shared by every backend (Issue #267): batch/timeout/retry,
-  // plus injectable sleep/random for tests. Undefined values fall back to the
+  // Robustness knobs shared by every backend (Issue #267 / retrieval-m1):
+  // batch/length-cap/timeout/retry, plus injectable sleep/random and the
+  // truncation callback for tests/logging. Undefined values fall back to the
   // embedder constructor defaults.
   const robustness: EmbedderRobustnessOptions = {
     ...(config.maxBatch !== undefined ? { maxBatch: config.maxBatch } : {}),
+    ...(config.maxInputChars !== undefined ? { maxInputChars: config.maxInputChars } : {}),
     ...(config.requestTimeoutMs !== undefined ? { requestTimeoutMs: config.requestTimeoutMs } : {}),
     ...(config.maxRetries !== undefined ? { maxRetries: config.maxRetries } : {}),
     ...(robustnessOverrides.sleep ? { sleep: robustnessOverrides.sleep } : {}),
     ...(robustnessOverrides.random ? { random: robustnessOverrides.random } : {}),
+    ...(robustnessOverrides.onTruncate ? { onTruncate: robustnessOverrides.onTruncate } : {}),
   };
 
   // Wrap with the dimension-mismatch guard when a `dim` is configured so a model
@@ -498,18 +674,26 @@ export async function resolveEmbeddingApiKeyPresent(
  */
 export async function createEmbedderResolved(
   config: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model"> &
-    Partial<Pick<EmbeddingConfig, "dim" | "maxBatch" | "requestTimeoutMs" | "maxRetries">>,
+    Partial<
+      Pick<
+        EmbeddingConfig,
+        "dim" | "maxBatch" | "maxInputChars" | "requestTimeoutMs" | "maxRetries"
+      >
+    >,
   options: {
     fetchImpl?: FetchLike;
     secrets?: SecretStoreOptions;
     /** Test seams threaded to the embedder's retry/backoff (no real waits). */
     sleep?: SleepLike;
     random?: () => number;
+    /** Notified once per text truncated by `maxInputChars` (callers log it). */
+    onTruncate?: (info: EmbedTruncation) => void;
   } = {},
 ): Promise<Embedder | null> {
-  const overrides: Pick<EmbedderRobustnessOptions, "sleep" | "random"> = {
+  const overrides: Pick<EmbedderRobustnessOptions, "sleep" | "random" | "onTruncate"> = {
     ...(options.sleep ? { sleep: options.sleep } : {}),
     ...(options.random ? { random: options.random } : {}),
+    ...(options.onTruncate ? { onTruncate: options.onTruncate } : {}),
   };
   if (EXTERNAL_EMBEDDING_BACKENDS.has(config.backend)) {
     const apiKey = await resolveEmbeddingApiKey(config.backend, options.secrets ?? {});

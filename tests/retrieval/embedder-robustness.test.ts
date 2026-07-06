@@ -6,6 +6,7 @@ import {
   DimensionCheckedEmbedder,
   type Embedder,
   EmbeddingError,
+  type EmbedTruncation,
   type FetchLike,
   OllamaEmbedder,
   OpenAIEmbedder,
@@ -210,6 +211,185 @@ describe("embedder batch splitting (Issue #267)", () => {
     });
     await embedder.embed(["a", "b"]);
     expect(calls).toBe(1);
+  });
+});
+
+/** Record the OpenAI-compatible request bodies' `input` arrays and echo lengths. */
+function recordingFetch(sent: string[][]): FetchLike {
+  return (_url, init) => {
+    const { input } = JSON.parse(String(init?.body)) as { input: string[] };
+    sent.push(input);
+    const data = input.map((t, idx) => ({ index: idx, embedding: [t.length] }));
+    return Promise.resolve(
+      new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  };
+}
+
+describe("embedder per-text length cap (retrieval-m1)", () => {
+  test("truncates a text over maxInputChars before the request and reports it", async () => {
+    const sent: string[][] = [];
+    const truncations: EmbedTruncation[] = [];
+    const embedder = new OpenAIEmbedder({
+      baseUrl: "https://api.openai.com",
+      model: "m",
+      apiKey: "k",
+      fetchImpl: recordingFetch(sent),
+      maxInputChars: 5,
+      onTruncate: (info) => truncations.push(info),
+      ...noWait,
+    });
+    const out = await embedder.embed(["short", "waytoolong"]);
+    // "short" (5) is untouched; "waytoolong" (10) is capped to the first 5 chars.
+    expect(sent).toEqual([["short", "wayto"]]);
+    expect(out).toEqual([[5], [5]]);
+    expect(truncations).toEqual([{ index: 1, originalLength: 10, cappedLength: 5 }]);
+  });
+
+  test("maxInputChars=0 disables the cap (long text sent whole, no report)", async () => {
+    const sent: string[][] = [];
+    const truncations: EmbedTruncation[] = [];
+    const embedder = new OpenAIEmbedder({
+      baseUrl: "https://api.openai.com",
+      model: "m",
+      apiKey: "k",
+      fetchImpl: recordingFetch(sent),
+      maxInputChars: 0,
+      onTruncate: (info) => truncations.push(info),
+      ...noWait,
+    });
+    await embedder.embed(["x".repeat(50)]);
+    expect(sent[0]?.[0]?.length).toBe(50);
+    expect(truncations).toEqual([]);
+  });
+
+  test("Ollama applies the cap too (silent head-truncation made explicit)", async () => {
+    const sent: string[][] = [];
+    const fetchImpl: FetchLike = (_url, init) => {
+      const { input } = JSON.parse(String(init?.body)) as { input: string[] };
+      sent.push(input);
+      return Promise.resolve(
+        new Response(JSON.stringify({ embeddings: input.map((t) => [t.length]) }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+    const embedder = new OllamaEmbedder({
+      baseUrl: "http://localhost:11434",
+      model: "bge-m3",
+      fetchImpl,
+      maxInputChars: 4,
+      ...noWait,
+    });
+    const out = await embedder.embed(["abcdefgh"]);
+    expect(sent).toEqual([["abcd"]]);
+    expect(out).toEqual([[4]]);
+  });
+
+  test("createEmbedder threads maxInputChars from config", async () => {
+    const sent: string[][] = [];
+    const embedder = createEmbedder(
+      {
+        backend: "openai",
+        baseUrl: "https://api.openai.com",
+        model: "m",
+        apiKey: "k",
+        maxInputChars: 3,
+      },
+      recordingFetch(sent),
+      noWait,
+    );
+    await embedder?.embed(["abcdef"]);
+    expect(sent).toEqual([["abc"]]);
+  });
+});
+
+describe("embedder per-text failure isolation (retrieval-m1)", () => {
+  /** 400 any batch containing a text with "POISON" (non-retryable); else echo len. */
+  function poisonFetch(): FetchLike {
+    return (_url, init) => {
+      const { input } = JSON.parse(String(init?.body)) as { input: string[] };
+      if (input.some((t) => t.includes("POISON"))) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: "input too long" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      const data = input.map((t, idx) => ({ index: idx, embedding: [t.length] }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ data }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+  }
+
+  function poisonEmbedder(maxBatch: number): OpenAIEmbedder {
+    return new OpenAIEmbedder({
+      baseUrl: "https://api.openai.com",
+      model: "m",
+      apiKey: "k",
+      fetchImpl: poisonFetch(),
+      maxBatch,
+      maxInputChars: 0, // isolate on the poison marker, not the length cap
+      ...noWait,
+    });
+  }
+
+  test("a single poison text yields a hole while its siblings keep vectors", async () => {
+    // One batch [aa, POISON, bbbb] 400s; isolation re-embeds each alone.
+    const out = await poisonEmbedder(10).embed(["aa", "POISON", "bbbb"]);
+    expect(out).toEqual([[2], undefined, [4]]);
+  });
+
+  test("isolation preserves order across multiple batches", async () => {
+    // maxBatch 2 → chunks [a, POISON] (fails → isolate) and [ccc, dddd] (ok).
+    const out = await poisonEmbedder(2).embed(["a", "POISON", "ccc", "dddd"]);
+    expect(out).toEqual([[1], undefined, [3], [4]]);
+  });
+
+  test("a wholly-unembeddable input throws (systemic — nothing embedded)", async () => {
+    await expect(poisonEmbedder(10).embed(["POISON1", "POISON2"])).rejects.toBeInstanceOf(
+      EmbeddingError,
+    );
+  });
+
+  test("keeps earlier vectors and stops after a mid-run dead batch (no throw)", async () => {
+    // maxBatch 1 → per-text batches. "a" succeeds, then "POISON" is a dead batch
+    // after prior success → keep [1], pad the rest as holes without hammering.
+    const out = await poisonEmbedder(1).embed(["a", "POISON", "b"]);
+    expect(out).toEqual([[1], undefined, undefined]);
+  });
+
+  test("a batch-level count mismatch fails loud (not isolated per-text)", async () => {
+    // Always returns exactly one vector regardless of input count — malformed for
+    // a 2-input batch. A wrong vector count is a protocol error, not a poison text,
+    // so it must throw rather than be quietly "repaired" by re-requesting each
+    // input alone (which would mask the misbehaving API).
+    const embedder = new OpenAIEmbedder({
+      baseUrl: "https://api.openai.com",
+      model: "m",
+      apiKey: "k",
+      fetchImpl: jsonFetch({ data: [{ index: 0, embedding: [1] }] }),
+      maxInputChars: 0,
+      ...noWait,
+    });
+    await expect(embedder.embed(["a", "b"])).rejects.toBeInstanceOf(EmbeddingError);
+  });
+
+  test("DimensionCheckedEmbedder ignores holes when probing the dimension", async () => {
+    // A hole at index 0 must not read as a 0-dim mismatch; the check uses the
+    // first present vector (here the 1-dim echo of "bb", matching expectedDim 1).
+    const guard = new DimensionCheckedEmbedder(poisonEmbedder(10), 1);
+    const out = await guard.embed(["POISON", "bb"]);
+    expect(out).toEqual([undefined, [2]]);
   });
 });
 

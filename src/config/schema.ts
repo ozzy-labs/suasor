@@ -56,6 +56,16 @@ const DEFAULT_EMBEDDING_DIM = 1024;
  */
 const DEFAULT_EMBEDDING_MAX_BATCH = 64;
 /**
+ * Default per-text character cap before embedding (retrieval-m1). A whole document
+ * body is embedded as one vector, so a long body otherwise head-truncates silently
+ * (Ollama) or hard-fails the request (OpenAI/Voyage 400, zeroing the batch). This
+ * caps each text deterministically first — a coarse, backend-independent safeguard
+ * sized to keep the common 8k-token models within their window even for CJK text.
+ * `0` disables it. The real fix is chunked multi-vector (a follow-up; see
+ * docs/guide/embedding.md). Mirrors the embedder default in src/retrieval/embedding.
+ */
+const DEFAULT_EMBEDDING_MAX_INPUT_CHARS = 8000;
+/**
  * Default per-request embedding timeout (ms, Issue #267). A hung external API
  * call would otherwise block a sync indefinitely; on timeout the attempt aborts
  * and is retried as a transient failure (see src/util/retry.ts).
@@ -116,6 +126,19 @@ export const EmbeddingConfig = z
      * vector space is unchanged — only request shape (no content change, ADR-0003).
      */
     maxBatch: z.number().int().positive().default(DEFAULT_EMBEDDING_MAX_BATCH),
+    /**
+     * Max characters per input text before embedding (retrieval-m1). A longer body
+     * is truncated to this length *explicitly and deterministically* before the
+     * request, replacing the model-dependent silent behaviour a long body triggers
+     * (Ollama head-truncates to its context invisibly; OpenAI/Voyage reject the
+     * whole request with a 400, losing every vector in the batch). Each truncation
+     * is logged. `0` disables the cap. This is a coarse interim safeguard — the
+     * real fix, chunked multi-vector embedding, is a follow-up (see the embedding
+     * guide). Combined with per-text failure isolation, an over-cap text can never
+     * poison its batch. Raise it on large-context models; lower it for stricter
+     * guarantees.
+     */
+    maxInputChars: z.number().int().nonnegative().default(DEFAULT_EMBEDDING_MAX_INPUT_CHARS),
     /**
      * Per-request timeout (ms) for an embedding call (Issue #267). On timeout the
      * attempt aborts and is retried with backoff (src/util/retry.ts); only the

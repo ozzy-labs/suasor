@@ -37,6 +37,7 @@ baseUrl = "http://localhost:11434"  # /api/embed は client が付与
 model = "bge-m3"                     # ingest と query で必ず同一（ベクトル空間整合）
 dim = 1024                           # model の出力次元と一致必須（bge-m3=1024、nomic-embed-text=768 等）
 # maxBatch = 64                       # 1 リクエスト最大件数。超過は順序保持で分割（Issue #267）
+# maxInputChars = 8000                # 1 text の最大文字数。超過は embed 前に明示 truncate（retrieval-m1・0 で無効）
 # requestTimeoutMs = 60000            # per-request timeout（ms）。超過は abort→retry（0 で無効）
 # maxRetries = 3                      # 429/5xx の最大試行回数（初回含む）。1 で retry 無効
 # allowRemote = false                 # 非 loopback な ollama サイドカーのとき true 必須（Issue #436）
@@ -109,6 +110,7 @@ baseUrl = "https://api.openai.com"  # /v1/embeddings は client が付与（voya
 model = "text-embedding-3-small"    # ingest と query で必ず同一
 dim = 1536                           # model の出力次元と一致必須（上表参照）
 # maxBatch = 64                       # 大規模 sync で 413 / context 超過を避ける分割上限（Issue #267）
+# maxInputChars = 8000                # 1 text の最大文字数。長文は embed 前に明示 truncate（retrieval-m1・0 で無効）
 # requestTimeoutMs = 60000            # 外部 API のハングを防ぐ per-request timeout（ms）
 # maxRetries = 3                      # 429/5xx の指数 backoff + jitter retry 回数（Retry-After 尊重）
 ```
@@ -138,10 +140,20 @@ OS キーチェーンに保存する場合は service `suasor` / account `embedd
 
 - **retry / backoff**: `429`（rate limit）と `5xx`（サーバ）を**指数 backoff + full jitter**で再試行する。`Retry-After` ヘッダがあれば尊重（上限 60s）。最大試行回数は `maxRetries`（既定 3、初回含む。`1` で無効）。`4xx`（401/404 等）は config エラーとして即 fail（再試行しない）。共有ロジックは `src/util/retry.ts` にあり connector（slack/github の `_fetch.ts`）と同じポリシー。
 - **batch 分割**: `maxBatch`（既定 64）を超える入力は**順序を保って分割**し、各 chunk の結果を結合する。1 リクエストに全件を詰めて 413 / model context 超過で**全ベクトルを失う**事故を防ぐ。
+- **per-text 長 cap + 失敗隔離**: `maxInputChars`（既定 8000・`0` で無効）で 1 text を embed 前に明示 truncate し、長文が failure を起こしても兄弟ベクトルを巻き込まないよう per-text 隔離する（[retrieval-m1](#長文ドキュメントの扱いretrieval-m1)。egress backend だけでなく Ollama にも適用）。
 - **per-request timeout**: `requestTimeoutMs`（既定 60000ms）。外部 API がハングしても sync を止めない。timeout は abort して transient 失敗として retry する（`0` で無効）。
 - **次元不一致 fail-fast**: `model` の実出力次元が `[embedding].dim` と異なる場合、**初回 embed で actionable な `EmbeddingError`**（「model は N-dim だが dim は M」「`dim = N` に直し新規 DB / delete + rebuild + 再 sync」）を投げる。従来は vec0 insert が静かに全失敗し recall が無言で空になっていた（例: `dim` 既定 1024 のまま `backend=openai` model `text-embedding-3-small`=1536）。`suasor doctor` も backend 有効時に 1 件 probe して「model 出力次元 vs `dim`」を検査し、不一致を ERROR で surface する（probe は外部 backend では 1 回の egress を伴う）。
 
 > **cost 注意**: 外部 backend は本文を送る課金 egress。大規模 sync は `maxBatch` でリクエスト数が、retry で失敗時の追加リクエストが増える。コスト・レート制限を踏まえて値を調整する。
+
+## 長文ドキュメントの扱い（retrieval-m1）
+
+文書全文は 1 source = 1 ベクトルとして vec0 に格納される（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。長文（[ADR-0024](../adr/0024-document-extraction.md) で `sources` に載る Office/PDF 本文など）を無加工で送ると backend 依存の壊れ方をする — Ollama は model context までを**無音で先頭切詰め**、OpenAI / Voyage は 8192 token 超で**リクエストごと 400（非再試行）**し、同一 batch の**全ベクトルを巻き込んで失う**。さらに `embeddings drain` は毒 chunk で先頭に固定されると以降の id を**恒久 stuck**させていた。これを次の 2 段で防ぐ（本文は変えず挙動のみ・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）。
+
+- **per-text 長 cap（明示 truncation）**: embed 前に 1 text を `maxInputChars`（既定 8000・`0` で無効）へ**決定的に truncate** する。model 依存の無音挙動を、backend 非依存で観測可能な truncation に置き換える。切詰めた件数は sync / `embeddings rebuild|drain` の完了時に stderr warning で 1 行サマリする。既定 8000 は 8k-token 級 model（bge-m3 / text-embedding-3）を CJK（最悪 ~1 token/char）でも窓内に収める粗い安全弁で、latin script では model 自身の上限より早めに切れる（超長文 single-vector の tail 網羅を捨てて決定性を取る割り切り）。大 context model では上げる / `0` で無効化、厳格側では下げる。
+- **per-text 失敗隔離**: batch が失敗したら各 text を単独で埋め直し、落ちた 1 text だけを穴（vector なし）にして兄弟ベクトルは残す。1 長文が sync 全体のベクトルを 0 にしたり drain を塞ぐことはもうない。穴になった source は pending のまま次回 sync / drain で再試行される。**全 text が単独でも落ちた場合のみ**（＝systemic 障害）`EmbeddingError` を投げて best-effort 集計と warning に載せる。ベクトル数不一致など**プロトコル異常はマスクせず即 fail**（毒 text ではないため）。
+
+> **設計メモ（follow-up）**: cap は long-document 対応の**恒久解ではなく暫定安全弁**。恒久解は **chunked multi-vector** — embed 時に長文を model 窓サイズの chunk に分割し、`(external_id, chunk_ix)` をキーに vec0 へ複数行格納、`recallSearch` で per-source max-sim 集約する。これで tail まで recall 対象になる。key スキーマ変更・recall 集約・`embeddings status` の集計・rebuild/drain の per-chunk 化を伴い規模が大きいため別 Issue で実装する（本 Issue は cap + 隔離まで。[retrieval-m1](https://github.com/ozzy-labs/suasor/issues/438)）。
 
 ## 保守 verb（status / rebuild / drain / list-failed / find-duplicates）
 
