@@ -13,12 +13,18 @@
  *   - `triage`      → `InboxItemTriaged`
  *   - `commitment`  → `CommitmentOpened` (ADR-0021)
  *
- * Idempotence (the issue's acceptance criterion): each candidate's target entity
- * id is content-derived (id.ts), and apply first checks the projection for that
- * id — if it already exists, the candidate is reported `skipped` and NO event is
- * appended, so re-applying the same approved set is a no-op (no duplicate events,
- * no projection drift). This keeps the append-only log free of redundant entries
- * while staying replay-deterministic.
+ * Idempotence is scoped to the proposal round-trip ([boundary/propose-1], Issue
+ * #435), not the domain entity's lifetime:
+ *   - a persisted candidate whose proposals-ledger round-trip is already `applied`
+ *     is a no-op (`skipped`, reason `already_applied`) — re-applying the same
+ *     approved set appends nothing;
+ *   - otherwise the target id is content-derived (id.ts). For a *task* applied
+ *     outside the ledger (a pure generate→apply / direct call), the id is resolved
+ *     terminal-aware (`resolveTaskId`): an open instance no-ops (`skipped`, reason
+ *     `exists`) but a purely-terminal history mints a fresh recurrence id so an
+ *     identically-titled task can coexist rather than being blocked forever.
+ * Either way NO event is appended on a skip, so replay stays deterministic (the
+ * appended event carries the resolved id).
  */
 import { z } from "zod";
 import type { loadActuator } from "../connectors/actuator-registry.ts";
@@ -29,6 +35,7 @@ import { McpToolError } from "../mcp/errors.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type Candidate, Candidate as CandidateSchema } from "./candidates.ts";
 import { entityId } from "./id.ts";
+import { resolveTaskId } from "./recurrence.ts";
 import { hasDefaultHome, type TaskHomeConfig, taskPublish } from "./task-publish.ts";
 
 /** Input to `propose.apply`: the approved, id-stamped candidates to persist. */
@@ -47,13 +54,20 @@ export const ProposeApplyInput = z.object({
 /** Accepted at the call site (candidate defaults applied by `parse`). */
 export type ProposeApplyInput = z.input<typeof ProposeApplyInput>;
 
-/** Per-candidate apply result: `applied` (event appended) or `skipped` (existing). */
+/** Per-candidate apply result: `applied` (event appended) or `skipped` (no-op). */
 export interface AppliedCandidate {
   candidateId: string;
   kind: Candidate["kind"];
-  /** Target entity id the event carries / upserted. */
+  /** Target entity id the event carries / upserted (the existing one on a skip). */
   entityId: string;
   status: "applied" | "skipped";
+  /**
+   * Why a candidate was skipped (absent when `applied`):
+   *   - `already_applied` — this candidate's proposal round-trip was already
+   *     applied (the proposals-ledger dedupe — re-applying an approved set);
+   *   - `exists`          — a domain entity / open task instance already exists.
+   */
+  skipReason?: "already_applied" | "exists";
 }
 
 /** Per-task publish result when `publish: true` (best-effort; never throws). */
@@ -78,17 +92,29 @@ export interface ProposeApplyDeps {
   loadActuatorImpl?: typeof loadActuator;
 }
 
+/** A proposals-ledger row's state + target entity id (id generate stored). */
+export interface ProposalLedgerRow {
+  state: string;
+  entityId: string;
+}
+
 /**
- * Current proposals-ledger state for a candidateId, or `null` when no ledger row
+ * Current proposals-ledger row for a candidateId, or `null` when no ledger row
  * exists (e.g. a pure `proposeGenerate` candidate never persisted, or a direct
  * `task.create` entity that skips the proposal ledger entirely).
  */
+export function proposalLedgerRow(store: Store, candidateId: string): ProposalLedgerRow | null {
+  const row = store.connection.sqlite
+    .query<{ state: string; entity_id: string }, [string]>(
+      "SELECT state, entity_id FROM proposals WHERE candidate_id = ?",
+    )
+    .get(candidateId);
+  return row ? { state: row.state, entityId: row.entity_id } : null;
+}
+
+/** Current proposals-ledger state for a candidateId (`null` when no ledger row). */
 export function proposalLedgerState(store: Store, candidateId: string): string | null {
-  return (
-    store.connection.sqlite
-      .query<{ state: string }, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
-      .get(candidateId)?.state ?? null
-  );
+  return proposalLedgerRow(store, candidateId)?.state ?? null;
 }
 
 /**
@@ -138,6 +164,46 @@ export function entityExists(store: Store, candidate: Candidate, id: string): bo
       // it must not resurrect a resolved/dismissed one nor duplicate an open one.
       return sqlite.query("SELECT 1 FROM commitments WHERE id = ?").get(id) !== null;
   }
+}
+
+/** The id to append at, plus (when a no-op) why the candidate is skipped. */
+interface ApplyTarget {
+  id: string;
+  skipReason?: "already_applied" | "exists";
+}
+
+/**
+ * Decide the target entity id for a candidate and whether it is a no-op, scoping
+ * idempotency to the proposal round-trip ([boundary/propose-1]):
+ *
+ *  1. Ledger round-trip already `applied` → skip (`already_applied`). This is the
+ *     primary dedupe for the persisted flow: re-applying an approved set appends
+ *     nothing, keyed on the candidateId rather than the entity's lifetime.
+ *  2. Ledger-less **task** (pure generate→apply / direct) → resolve terminal-aware
+ *     (`resolveTaskId`): an open instance no-ops (`exists`); a purely-terminal
+ *     history mints a fresh recurrence id so an identically-titled task coexists.
+ *  3. Otherwise (a persisted-pending candidate, or a non-task) → the base content
+ *     id. Reusing generate's stored id keeps the reducer's ledger-marking (by
+ *     `entity_id`) matching; an already-present entity no-ops (`exists`).
+ *
+ * The caller must have run `assertNotRejected` first (a `rejected` round-trip
+ * throws rather than skipping).
+ */
+function decideApplyTarget(store: Store, candidate: Candidate): ApplyTarget {
+  const ledger = proposalLedgerRow(store, candidate.candidateId);
+  if (ledger?.state === "applied") {
+    return { id: ledger.entityId, skipReason: "already_applied" };
+  }
+  if (candidate.kind === "task" && ledger === null) {
+    const resolved = resolveTaskId(store, entityId(candidate));
+    if (resolved.openDuplicate !== null) {
+      return { id: resolved.openDuplicate.taskId, skipReason: "exists" };
+    }
+    return { id: resolved.id };
+  }
+  const id = entityId(candidate);
+  if (entityExists(store, candidate, id)) return { id, skipReason: "exists" };
+  return { id };
 }
 
 /** Build the domain event a candidate maps to, targeting the given entity id. */
@@ -192,8 +258,9 @@ export function candidateToEvent(candidate: Candidate, id: string): NewEvent {
  * (src/propose/batch.ts) wraps a whole mixed apply/reject set in a single
  * transaction and calls this per apply op so the batch is atomic (Issue #197).
  *
- * Same idempotence contract as `proposeApply`: an existing entity (matched by
- * content-derived id) is `skipped` and NO event is appended.
+ * Same idempotence contract as `proposeApply`: an already-applied round-trip or an
+ * existing entity/open instance is `skipped` (with its reason) and NO event is
+ * appended.
  */
 export function applyCandidateStep(
   store: Store,
@@ -204,29 +271,35 @@ export function applyCandidateStep(
   // apply (ADR-0004). Throwing here rolls the whole propose.batch transaction
   // back (all-or-nothing), so a rejected member can't half-commit the batch.
   assertNotRejected(store, candidate);
-  const id = entityId(candidate);
-  if (entityExists(store, candidate, id)) {
+  const target = decideApplyTarget(store, candidate);
+  if (target.skipReason !== undefined) {
     return {
       candidateId: candidate.candidateId,
       kind: candidate.kind,
-      entityId: id,
+      entityId: target.id,
       status: "skipped",
+      skipReason: target.skipReason,
     };
   }
-  const persisted = appendEvent(store.connection.sqlite, candidateToEvent(candidate, id), now);
+  const persisted = appendEvent(
+    store.connection.sqlite,
+    candidateToEvent(candidate, target.id),
+    now,
+  );
   applyEvent(store.connection.sqlite, persisted);
   return {
     candidateId: candidate.candidateId,
     kind: candidate.kind,
-    entityId: id,
+    entityId: target.id,
     status: "applied",
   };
 }
 
 /**
- * Apply approved candidates, appending one event per *new* candidate. Existing
- * entities (matched by content-derived id) are skipped, making re-application a
- * no-op (idempotent). The host must have obtained human approval before calling.
+ * Apply approved candidates, appending one event per *new* candidate. An
+ * already-applied round-trip or an existing entity / open task instance is
+ * skipped (with its reason), making re-application a no-op (idempotent, scoped to
+ * the proposal round-trip). The host must have obtained human approval first.
  */
 export function proposeApply(
   store: Store,
@@ -246,21 +319,22 @@ export function proposeApply(
   const results: AppliedCandidate[] = [];
 
   for (const candidate of candidates) {
-    const id = entityId(candidate);
-    if (entityExists(store, candidate, id)) {
+    const target = decideApplyTarget(store, candidate);
+    if (target.skipReason !== undefined) {
       results.push({
         candidateId: candidate.candidateId,
         kind: candidate.kind,
-        entityId: id,
+        entityId: target.id,
         status: "skipped",
+        skipReason: target.skipReason,
       });
       continue;
     }
-    store.record(candidateToEvent(candidate, id), now);
+    store.record(candidateToEvent(candidate, target.id), now);
     results.push({
       candidateId: candidate.candidateId,
       kind: candidate.kind,
-      entityId: id,
+      entityId: target.id,
       status: "applied",
     });
   }

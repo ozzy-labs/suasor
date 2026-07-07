@@ -52,6 +52,82 @@ describe("task.create (direct HITL task creation, #12 追補 D2)", () => {
     expect(() => taskCreate(store, { title: "" })).toThrow();
   });
 
+  describe("recurring titles ([boundary/propose-1], #435)", () => {
+    /** Drive a task to a terminal state via a TaskApplied event (reducer folds it). */
+    function moveTo(taskId: string, state: "completed" | "dropped" | "in_progress") {
+      store.record({ type: "TaskApplied", taskId, state });
+    }
+
+    test("an open duplicate blocks creation and is reported (id / state / updated_at)", () => {
+      const first = taskCreate(store, { title: "経費精算" });
+      expect(first.status).toBe("created");
+
+      const second = taskCreate(store, { title: "経費精算" });
+      expect(second.status).toBe("existing");
+      expect(second.taskId).toBe(first.taskId);
+      expect(second.duplicate).toBeDefined();
+      expect(second.duplicate?.taskId).toBe(first.taskId);
+      expect(second.duplicate?.state).toBe("proposed");
+      expect(typeof second.duplicate?.updatedAt).toBe("string");
+      expect(tasks()).toHaveLength(1);
+    });
+
+    test("an in_progress instance still counts as an open duplicate", () => {
+      const first = taskCreate(store, { title: "recurring" });
+      moveTo(first.taskId, "in_progress");
+      const second = taskCreate(store, { title: "recurring" });
+      expect(second.status).toBe("existing");
+      expect(second.duplicate?.state).toBe("in_progress");
+      expect(tasks()).toHaveLength(1);
+    });
+
+    test("once the prior instance is completed, a fresh disambiguated task is created", () => {
+      const first = taskCreate(store, { title: "経費精算" });
+      moveTo(first.taskId, "completed");
+
+      const second = taskCreate(store, { title: "経費精算" });
+      expect(second.status).toBe("created");
+      expect(second.taskId).not.toBe(first.taskId);
+      expect(second.taskId).toBe(`${first.taskId}~2`);
+      expect(second.duplicate).toBeUndefined();
+      // The completed instance coexists with the fresh recurrence.
+      expect(tasks()).toHaveLength(2);
+    });
+
+    test("a dropped instance also frees the title for a fresh recurrence", () => {
+      const first = taskCreate(store, { title: "cancelled then redo" });
+      moveTo(first.taskId, "dropped");
+      const second = taskCreate(store, { title: "cancelled then redo" });
+      expect(second.status).toBe("created");
+      expect(second.taskId).toBe(`${first.taskId}~2`);
+    });
+
+    test("recurrence indices increase monotonically across terminal cycles", () => {
+      const base = taskCreate(store, { title: "monthly" }).taskId;
+      moveTo(base, "completed");
+      const second = taskCreate(store, { title: "monthly" });
+      expect(second.taskId).toBe(`${base}~2`);
+      moveTo(second.taskId, "completed");
+      const third = taskCreate(store, { title: "monthly" });
+      expect(third.taskId).toBe(`${base}~3`);
+      // While ~3 is open, another create is blocked (points at the open ~3).
+      const blocked = taskCreate(store, { title: "monthly" });
+      expect(blocked.status).toBe("existing");
+      expect(blocked.duplicate?.taskId).toBe(`${base}~3`);
+    });
+
+    test("recurrences survive a projection rebuild (event-sourced, ADR-0002)", () => {
+      const base = taskCreate(store, { title: "rebuildable recur" }).taskId;
+      store.record({ type: "TaskApplied", taskId: base, state: "completed" });
+      const second = taskCreate(store, { title: "rebuildable recur" }).taskId;
+      store.rebuild();
+      const rows = tasks();
+      expect(rows).toHaveLength(2);
+      expect(rows.find((r) => r.id === base)?.state).toBe("completed");
+      expect(rows.find((r) => r.id === second)?.state).toBe("proposed");
+    });
+  });
+
   describe("scheduling fields (ADR-0028)", () => {
     function schedulingOf(taskId: string) {
       return store.connection.sqlite

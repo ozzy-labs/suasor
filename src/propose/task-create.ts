@@ -8,15 +8,19 @@
  * behind approval (`readOnlyHint: false`, no auto-apply, ADR-0004) — and appends
  * a `TaskProposed` event that folds into the `tasks` projection (ADR-0002).
  *
- * Idempotence mirrors `propose.apply`: the `taskId` is content-derived from the
- * title + provenance, so re-creating the same task upserts the same row rather
- * than duplicating it; the result reports whether the event was appended
- * (`created`) or the task already existed (`existing`).
+ * Idempotence is scoped to *open* instances ([boundary/propose-1], Issue #435):
+ * the `taskId` is content-derived from the title + provenance, so while an
+ * instance with that content is still open (proposed / open / in_progress) a
+ * re-create is a no-op (`existing`, reporting the open `duplicate` so a host can
+ * offer reopen-vs-create). But once every prior instance is terminal (completed /
+ * dropped) a fresh, disambiguated id is minted (`created`) so a genuinely
+ * recurring task ("経費精算") is no longer blocked for the store's lifetime.
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
 import { TaskPriority } from "../events/types.ts";
 import { entityId } from "./id.ts";
+import { type OpenDuplicate, resolveTaskId } from "./recurrence.ts";
 
 /** ISO 8601 timestamp (matches the event payload's `dueDate`). */
 const IsoDateTime = z.iso.datetime({ offset: true });
@@ -37,16 +41,26 @@ export type TaskCreateInput = z.input<typeof TaskCreateInput>;
 export interface TaskCreateOutput {
   taskId: string;
   status: "created" | "existing";
+  /**
+   * Present only when `status === "existing"`: the still-open instance that
+   * blocked creation (its id / state / updated_at). Lets a host offer explicit
+   * reopen-vs-create instead of the create silently vanishing ([boundary/
+   * propose-1]).
+   */
+  duplicate?: OpenDuplicate;
 }
 
 /**
  * Create a task (append `TaskProposed`). The host must have human approval first.
- * Idempotent on content: an existing task with the derived id is a no-op.
+ * Idempotent on *open* content: an open task with the derived id is a no-op
+ * (`existing`, with the open `duplicate` reported); once every prior instance is
+ * terminal (completed / dropped) a fresh disambiguated id is minted (`created`)
+ * so the task can recur (`resolveTaskId`).
  *
  * `dueDate` / `priority` (ADR-0028) are NOT part of the derived id (so changing a
  * task's due date does not split it into a new task — id stays title + provenance);
  * they are carried on the `TaskProposed` event and folded onto a freshly-created
- * task. Re-creating an existing task is `existing` (no event), unchanged behaviour.
+ * task.
  */
 export function taskCreate(
   store: Store,
@@ -54,18 +68,25 @@ export function taskCreate(
   now: Date = new Date(),
 ): TaskCreateOutput {
   const { title, dueDate, priority, sourceExternalIds } = TaskCreateInput.parse(input);
-  const taskId = entityId({
+  const baseId = entityId({
     kind: "task",
     candidateId: "task.create",
     title,
     sourceExternalIds,
   });
 
-  const existing = store.connection.sqlite.query("SELECT 1 FROM tasks WHERE id = ?").get(taskId);
-  if (existing !== null) {
-    return { taskId, status: "existing" };
+  const resolved = resolveTaskId(store, baseId);
+  if (resolved.openDuplicate !== null) {
+    return {
+      taskId: resolved.openDuplicate.taskId,
+      status: "existing",
+      duplicate: resolved.openDuplicate,
+    };
   }
 
-  store.record({ type: "TaskProposed", taskId, title, dueDate, priority, sourceExternalIds }, now);
-  return { taskId, status: "created" };
+  store.record(
+    { type: "TaskProposed", taskId: resolved.id, title, dueDate, priority, sourceExternalIds },
+    now,
+  );
+  return { taskId: resolved.id, status: "created" };
 }

@@ -169,7 +169,8 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Persist approved candidates (from propose.generate) as domain events. " +
         "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: candidates whose entity already exists are skipped. " +
+        "Idempotent, scoped to the proposal round-trip: an already-applied candidate " +
+        "(or an existing entity / open task instance) is skipped with a skipReason. " +
         "Optionally `publish: true` also pushes applied task candidates to the " +
         "single external home in one motion (ADR-0036; best-effort per task).",
       inputSchema: {
@@ -346,7 +347,9 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Create a task directly (appends TaskProposed → tasks projection). " +
         "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: re-creating the same task (title + provenance) is a no-op. " +
+        "Idempotent while an instance is open: re-creating an open task (title + " +
+        "provenance) is a no-op (existing, with the open duplicate reported); once " +
+        "every prior instance is completed/dropped a fresh recurrence is created. " +
         "Optional dueDate / priority scheduling fields (ADR-0028).",
       inputSchema: {
         title: z.string().min(1).describe("Task title."),

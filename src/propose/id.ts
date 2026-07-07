@@ -37,9 +37,16 @@ function candidateFingerprint(candidate: CandidateInput): string {
     case "task":
       return ["task", candidate.title, [...candidate.sourceExternalIds].sort().join(",")].join(SEP);
     case "decision":
-      return ["decision", candidate.title, [...candidate.sourceExternalIds].sort().join(",")].join(
-        SEP,
-      );
+      // `rationale` is part of a decision's identity ([boundary/propose-1]): two
+      // decisions with the same title + provenance but a *different* rationale are
+      // distinct records that must coexist, not collide (the old fingerprint
+      // excluded rationale, so the second silently lost its rationale on skip).
+      return [
+        "decision",
+        candidate.title,
+        candidate.rationale,
+        [...candidate.sourceExternalIds].sort().join(","),
+      ].join(SEP);
     case "reply_draft":
       return ["reply_draft", candidate.replyToExternalId, candidate.body].join(SEP);
     case "triage":

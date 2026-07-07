@@ -57,4 +57,36 @@ describe("decision.record (direct HITL decision recording, #88)", () => {
   test("rejects an empty title", () => {
     expect(() => decisionRecord(store, { title: "" })).toThrow();
   });
+
+  test("a different rationale is a distinct decision, not a spurious 'existing' ([boundary/propose-1])", () => {
+    const first = decisionRecord(store, { title: "use bun", rationale: "fast" });
+    expect(first.status).toBe("created");
+
+    // Same title + provenance but a DIFFERENT rationale → a distinct record that
+    // coexists (the old fingerprint excluded rationale, so this silently collided
+    // and the second rationale was lost).
+    const second = decisionRecord(store, { title: "use bun", rationale: "team familiarity" });
+    expect(second.status).toBe("created");
+    expect(second.decisionId).not.toBe(first.decisionId);
+
+    const rows = decisions();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.rationale).sort()).toEqual(["fast", "team familiarity"]);
+  });
+
+  test("an identical decision (same title + rationale + provenance) is still a no-op", () => {
+    const first = decisionRecord(store, {
+      title: "same",
+      rationale: "r",
+      sourceExternalIds: ["gh:1"],
+    });
+    const second = decisionRecord(store, {
+      title: "same",
+      rationale: "r",
+      sourceExternalIds: ["gh:1"],
+    });
+    expect(second.status).toBe("existing");
+    expect(second.decisionId).toBe(first.decisionId);
+    expect(decisions()).toHaveLength(1);
+  });
 });

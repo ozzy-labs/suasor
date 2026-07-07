@@ -78,6 +78,21 @@ describe("propose.apply — candidate → event mapping", () => {
     expect(items[0]?.state).toBe("done");
   });
 
+  test("two decision candidates that differ only in rationale both apply ([boundary/propose-1])", () => {
+    const generated = proposeGenerate({
+      mode: "meeting_followup",
+      candidates: [
+        { kind: "decision", title: "use bun", rationale: "fast" },
+        { kind: "decision", title: "use bun", rationale: "team familiarity" },
+      ],
+    });
+    const out = proposeApply(store, { candidates: generated.candidates });
+    expect(out.applied).toBe(2);
+    const decisions = rows("decisions") as Array<{ rationale: string }>;
+    expect(decisions).toHaveLength(2);
+    expect(decisions.map((d) => d.rationale).sort()).toEqual(["fast", "team familiarity"]);
+  });
+
   test("applies a mixed candidate set in one call, reporting per-candidate results", () => {
     const generated = proposeGenerate({
       mode: "source_extract",
@@ -121,6 +136,8 @@ describe("propose.apply — idempotence (acceptance criterion)", () => {
     expect(second.applied).toBe(0);
     expect(second.skipped).toBe(1);
     expect(second.results[0]?.status).toBe("skipped");
+    // A ledger-less re-apply of a still-open task is skipped as an existing entity.
+    expect(second.results[0]?.skipReason).toBe("exists");
     // No new event appended on the idempotent re-apply.
     expect(countEvents()).toBe(eventsAfterFirst);
     // Projection still has exactly one task.
