@@ -41,7 +41,7 @@ read で集めて、write は HITL。**auto-apply 経路は存在しない**（[
 `propose.*` 経由のモデル提案に対し、人自身の捕捉・解決は直接 write tool でも行える（いずれも HITL）:
 
 - `inbox.add`（`sourceExternalId`）— source を `open` で捕捉する
-- `inbox.triage`（`inboxId` / `action` = `task` / `decision` / `discard`）— `open` 項目を解決する。`task` / `decision` は source 由来の task/decision を生成し項目を `done` に、`discard` は `dismissed` に遷移する。生成 entity は `task.create` / `decision.record` と同一の content 由来 id に着地する。`open` 以外の項目を triage しようとすると拒否される（state machine）
+- `inbox.triage`（`inboxId` / `action` = `task` / `decision` / `discard`）— `open` 項目を解決する。`task` / `decision` は source 由来の task/decision を生成し項目を `done` に、`discard` は `dismissed` に遷移する。生成 entity は `task.create` / `decision.record` と同一の content 由来 identity に着地する（live な同一内容 task は再利用、`completed` / `dropped` の一致のみなら新規 task を採番。#435）。`open` 以外の項目を triage しようとすると拒否される（state machine）
 
 ## 制約
 
