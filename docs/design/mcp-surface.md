@@ -324,7 +324,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 - **第 3 の選択肢（feedback）**: `proposal.feedback` は pending 候補に reason を記録するが **state は遷移させない**（`pending` のまま）。apply（承認）/ reject（却下）の二択に対し「修正して再生成」のヒントを残す経路（#279）。記録した reason は `propose.list` で読め、次の `propose.generate` の手がかりになる。
 - **一括処理**: `propose.batch` は apply / reject を 1 RPC・単一トランザクションで混在処理する（#197）。op ごとの状態遷移・event は `propose.apply` / `propose.reject` と同一で、トランザクション境界だけが 1 つに畳まれる（atomic）。
 - **ledger と domain entity の分離**: `propose.generate` は **候補（ledger 行）のみ**を `pending` で記録し、domain entity（task / decision 等）は書かない。entity が永続化されるのは `propose.apply` のときだけ（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の「提案 → 承認 → 適用」境界を維持）。
-- **状態遷移の駆動**: `applied` 遷移は `propose.apply` が append する entity event（`TaskProposed` 等）を reducer が **`entity_id` 一致**で ledger に反映して起こす（候補 id を entity event に持たせず provenance を保つ）。`rejected` 遷移は `ProposalRejected` event。いずれも replay で同一終状態に収束する（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
+- **状態遷移の駆動**: `applied` 遷移は `propose.apply` が append する entity event を reducer が ledger に反映して起こす。task / decision の entity event は `candidateId` を任意フィールドで携行し（#435）、reducer は **`candidate_id` 一致**で該当行だけを `applied` に遷移させつつ、実際に採番された entity id（base または `-N` suffix 付き）を `entity_id` に記録する。`candidateId` を持たない event（`task.create` 等の直接 write・#435 以前の既存 event）は従来どおり **`entity_id` 一致**にフォールバックする（後方互換 replay）。`rejected` 遷移は `ProposalRejected` event。いずれも replay で同一終状態に収束する（[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 - event: `ProposalGenerated`（→ `pending`）/ `ProposalRejected`（→ `rejected`）/ `ProposalFeedback`（pending の `reason` を更新・state 据え置き）。`applied` は既存 entity event の副作用。
 
 ### `propose.generate`（確定・write / HITL・[ADR-0006](../adr/0006-ml-delegation.md) ML 委譲）
@@ -366,7 +366,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 
 引数（Zod）: `{ "candidates": Candidate[] }`（`propose.generate` の戻り値の候補。承認分のみ渡す）。
 
-**idempotent**: 各候補の対象 entity id は content 由来（`src/propose/id.ts`）。適用前に projection に同 id が存在すれば **event を append せず** `skipped` を返すため、同じ承認済み集合の再適用は no-op（重複 event / projection drift なし）。`triage` のみ `(inboxId, state)` で判定し、別 state への遷移は適用する。
+**idempotent（proposal round-trip スコープ、#435）**: 冪等性は **candidateId（提案の round-trip）に限定**する。適用前に proposals ledger を candidateId で参照し、既に `applied` の候補は **event を append せず** `skipped` を返す（entity id は ledger 記録済みの採番値を echo）ため、同じ承認済み集合の再適用は no-op（重複 event / projection drift なし）。同一呼び出し内の重複 candidateId も 1 回だけ append する。`task` / `decision` の entity id は **apply 時に採番**する（`src/propose/identity.ts`）: content 由来の base id（`src/propose/id.ts`）が空いていればそのまま、占有済みなら `-2`, `-3`, … と suffix を進める。これにより同名 task の再来（「経費精算」等）や rationale 違いの同名 decision が、store の寿命にわたって 1 回しか作れない衝突を起こさない（[boundary/propose-1]。decision は rationale も fingerprint に含む）。`reply_draft` / `commitment` は従来どおり entity の存在で判定（content 同一 = 意味同一）し、`triage` のみ `(inboxId, state)` で判定して別 state への遷移は適用する。
 
 **却下の強制（[boundary/missed-reject]）**: apply / batch は適用前に proposals ledger を参照し、candidateId の ledger 行が `rejected` の候補は `REJECTED_CANDIDATE` tool error で拒否する（人の「却下」が下流で無視され、ledger が `rejected` のまま entity が生まれる監査自己矛盾の防止・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。apply は集合全体を事前検査してから 1 件も append しない（部分適用の回避）。batch は単一トランザクション内で throw して全ロールバック（atomic）。ledger 行を持たない候補（純 `proposeGenerate` 産・`task.create` 直挿入）は影響を受けない。
 
@@ -382,7 +382,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 }
 ```
 
-適用に伴い、対応する `proposals` ledger 行（`entity_id` 一致）は `pending` → `applied` に遷移する（#89。reducer 副作用）。`task.create` 等 ledger 行を持たない直接 entity 追加では何も遷移しない。
+適用に伴い、対応する `proposals` ledger 行は `pending` → `applied` に遷移する（#89。reducer 副作用。task / decision は entity event が携行する `candidateId` 一致で該当行のみ遷移 + 採番済み entity id を `entity_id` に記録、その他 kind は `entity_id` 一致・#435）。`task.create` 等 ledger 行を持たない直接 entity 追加では何も遷移しない。
 
 ### `propose.list`（確定・read）
 
@@ -430,7 +430,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 - `{ "action": "apply", "candidate": Candidate }` — 承認済みの id 付き候補を適用。apply は domain event を組むため候補ペイロード全体が必要（ledger は summary / entity_id しか持たないので candidateId だけでは不足。`propose.generate` の戻り値の候補をホストが再投入する＝`propose.apply` と同じ契約）。
 - `{ "action": "reject", "candidateId": string, "reason"?: string }` — pending 候補を candidateId で却下。
 
-op ごとのロジック・semantics は `propose.apply` / `propose.reject` をそのまま再利用する（apply は entity 存在で `skipped`・idempotent、reject は pending のときのみ却下し `applied` / `missing` / `already_rejected` は報告のみ）。差分は**トランザクション境界だけ**: バッチ全体を 1 transaction で包むため、いずれかの op が throw（不正な候補等）すると **バッチ全体が rollback** する（部分書き込みなし、[ADR-0002](../adr/0002-event-sourced-architecture.md)）。HITL（`readOnlyHint: false`、auto-apply なし、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+op ごとのロジック・semantics は `propose.apply` / `propose.reject` をそのまま再利用する（apply は candidateId の round-trip 冪等・#435 — 適用済み ledger 行 / 同一バッチ内の重複 candidateId は `skipped`、reject は pending のときのみ却下し `applied` / `missing` / `already_rejected` は報告のみ）。差分は**トランザクション境界だけ**: バッチ全体を 1 transaction で包むため、いずれかの op が throw（不正な候補等）すると **バッチ全体が rollback** する（部分書き込みなし、[ADR-0002](../adr/0002-event-sourced-architecture.md)）。HITL（`readOnlyHint: false`、auto-apply なし、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 戻り値:
 
@@ -441,7 +441,7 @@ op ごとのロジック・semantics は `propose.apply` / `propose.reject` を�
     { "action": "reject", "candidateId": "cand_...", "status": "rejected" }
   ],
   "applied": 1,   // apply op で append された候補数
-  "skipped": 0,   // apply op で既存により no-op だった候補数
+  "skipped": 0,   // apply op で適用済み（round-trip 冪等）により no-op だった候補数
   "rejected": 1   // reject op で pending → rejected に遷移した候補数
 }
 ```
@@ -459,7 +459,10 @@ op ごとのロジック・semantics は `propose.apply` / `propose.reject` を�
 | `priority` | `enum`（`low` / `normal` / `high`・任意） | null | 優先度（[ADR-0028](../adr/0028-task-scheduling-fields.md)） |
 | `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
 
-戻り値: `{ "taskId": "task_...", "status": "created" | "existing" }`。`taskId` は title + provenance 由来（`dueDate` / `priority` は id に含めない＝期日変更で別 task に分裂しない、[ADR-0028](../adr/0028-task-scheduling-fields.md)）で、同一内容の再作成は `existing`（no-op、idempotent）。
+戻り値: `{ "taskId": "task_...", "status": "created" | "existing", "duplicate"?: { "taskId", "state", "updatedAt" } }`。`taskId` は title + provenance 由来（`dueDate` / `priority` は id に含めない＝期日変更で別 task に分裂しない、[ADR-0028](../adr/0028-task-scheduling-fields.md)）。同一内容の重複判定は task の lifecycle 状態を見る（#435）:
+
+- **live な重複あり**（`proposed` / `open` / `in_progress`）→ `existing`（no-op）。`duplicate` に重複行の id / state / updatedAt を返すので、ホストは「reopen する / 既存を示す」vs「本当に新規」を明示的に人へ提示できる（silent nothing にしない）
+- **terminal な一致のみ**（`completed` / `dropped`）→ **新規作成をブロックしない**。`-N` suffix 付きの id を採番して `created`（繰り返しタイトル「経費精算」等が store の寿命で 1 回しか作れない問題の解消・[boundary/propose-1]）
 
 ### `task.update`（確定・write / HITL）
 
@@ -503,7 +506,7 @@ task の lifecycle 状態を遷移させる write tool（`task.create` が task 
 | `rationale` | `string`（任意） | `""` | 決定理由 |
 | `sourceExternalIds` | `string[]`（任意） | `[]` | provenance（→ `links`） |
 
-戻り値: `{ "decisionId": "dec_...", "status": "created" | "existing" }`。`decisionId` は title + provenance 由来（`rationale` は id に含めない＝`propose.apply` の `decision` 候補と同一 fingerprint）で、同一内容の再記録は `existing`（no-op、idempotent）。
+戻り値: `{ "decisionId": "dec_...", "status": "created" | "existing" }`。`decisionId` は title + **rationale** + provenance 由来（`propose.apply` の `decision` 候補と同一 fingerprint・#435）で、同一内容の再記録は `existing`（no-op、idempotent）。rationale が異なれば **別 decision として記録**される（従来は rationale を id に含めず「先勝ち」で後の rationale が黙って失われた）。
 
 ### `inbox.add`（確定・write / HITL・[Issue #88](https://github.com/ozzy-labs/suasor/issues/88)）
 
@@ -532,7 +535,7 @@ task の lifecycle 状態を遷移させる write tool（`task.create` が task 
 | `title` | `string`（任意） | — | 生成する task/decision の title（`task` / `decision` で必須） |
 | `rationale` | `string`（任意） | — | 生成する decision の rationale（`decision` のみ） |
 
-生成される task/decision の id は `task.create` / `decision.record` と同一の content 由来 id（`src/propose/id.ts`）で、同一内容なら同じ projection 行に着地する。
+生成される task/decision の id は `task.create` / `decision.record` と同一の content 由来 identity（`src/propose/id.ts` / `identity.ts`）で、同一内容なら同じ projection 行に着地する。task は `task.create` と同じ重複判定に従う（#435）: live な同一内容 task があればその行を再利用し、terminal（`completed` / `dropped`）の一致のみなら `-N` suffix 付きの新規 task を採番する（再来する source の再 triage が完了済み行を黙って上書きしない）。
 
 戻り値: `{ "inboxId": "inbox_...", "action": "...", "state": "done" | "dismissed", "createdEntityId"?: "task_..." | "dec_..." }`。
 

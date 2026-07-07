@@ -13,12 +13,16 @@
  *   - `triage`      → `InboxItemTriaged`
  *   - `commitment`  → `CommitmentOpened` (ADR-0021)
  *
- * Idempotence (the issue's acceptance criterion): each candidate's target entity
- * id is content-derived (id.ts), and apply first checks the projection for that
- * id — if it already exists, the candidate is reported `skipped` and NO event is
- * appended, so re-applying the same approved set is a no-op (no duplicate events,
- * no projection drift). This keeps the append-only log free of redundant entries
- * while staying replay-deterministic.
+ * Idempotence is scoped to the *proposal round-trip*, not the domain entity
+ * (#435, [boundary/propose-1]): a candidate whose proposals-ledger row is
+ * already `applied` (matched by `candidateId`) is reported `skipped` and NO
+ * event is appended, so re-applying the same approved set is a no-op (no
+ * duplicate events, no projection drift). For `task` / `decision` the target
+ * entity id is minted at apply time (identity.ts): the content-derived base id
+ * gets a `-N` suffix when occupied, so identically-titled entities can recur
+ * over time instead of colliding with a long-completed row forever.
+ * `reply_draft` / `triage` / `commitment` keep their entity-level idempotence
+ * (content equality IS semantic equality for those kinds — see entityExists).
  */
 import { z } from "zod";
 import type { loadActuator } from "../connectors/actuator-registry.ts";
@@ -29,6 +33,7 @@ import { McpToolError } from "../mcp/errors.ts";
 import { applyEvent } from "../projections/reducer.ts";
 import { type Candidate, Candidate as CandidateSchema } from "./candidates.ts";
 import { entityId } from "./id.ts";
+import { mintEntityId } from "./identity.ts";
 import { hasDefaultHome, type TaskHomeConfig, taskPublish } from "./task-publish.ts";
 
 /** Input to `propose.apply`: the approved, id-stamped candidates to persist. */
@@ -78,17 +83,30 @@ export interface ProposeApplyDeps {
   loadActuatorImpl?: typeof loadActuator;
 }
 
+/** A proposals-ledger row's decision-relevant slice (state + target entity). */
+export interface ProposalLedgerRow {
+  state: string;
+  /** Target entity id — updated to the actually minted id once applied (#435). */
+  entityId: string;
+}
+
 /**
- * Current proposals-ledger state for a candidateId, or `null` when no ledger row
+ * Current proposals-ledger row for a candidateId, or `null` when no ledger row
  * exists (e.g. a pure `proposeGenerate` candidate never persisted, or a direct
  * `task.create` entity that skips the proposal ledger entirely).
  */
+export function proposalLedgerRow(store: Store, candidateId: string): ProposalLedgerRow | null {
+  const row = store.connection.sqlite
+    .query<{ state: string; entity_id: string }, [string]>(
+      "SELECT state, entity_id FROM proposals WHERE candidate_id = ?",
+    )
+    .get(candidateId);
+  return row === null ? null : { state: row.state, entityId: row.entity_id };
+}
+
+/** Current proposals-ledger state for a candidateId (`null` = no ledger row). */
 export function proposalLedgerState(store: Store, candidateId: string): string | null {
-  return (
-    store.connection.sqlite
-      .query<{ state: string }, [string]>("SELECT state FROM proposals WHERE candidate_id = ?")
-      .get(candidateId)?.state ?? null
-  );
+  return proposalLedgerRow(store, candidateId)?.state ?? null;
 }
 
 /**
@@ -110,7 +128,14 @@ export function assertNotRejected(store: Store, candidate: Candidate): void {
   }
 }
 
-/** True when an entity with this id already exists in the relevant projection. */
+/**
+ * True when an entity with this id already exists in the relevant projection.
+ * Since #435 the apply path consults this only for `reply_draft` / `triage` /
+ * `commitment` (whose content equality is semantic equality); `task` /
+ * `decision` dedupe on the proposals ledger instead and mint a fresh id when
+ * they apply (identity.ts). The task/decision branches remain for direct
+ * existence checks (task.create / decision.record and tests).
+ */
 export function entityExists(store: Store, candidate: Candidate, id: string): boolean {
   const sqlite = store.connection.sqlite;
   switch (candidate.kind) {
@@ -140,13 +165,18 @@ export function entityExists(store: Store, candidate: Candidate, id: string): bo
   }
 }
 
-/** Build the domain event a candidate maps to, targeting the given entity id. */
+/**
+ * Build the domain event a candidate maps to, targeting the given entity id.
+ * Task/decision events carry the `candidateId` (#435) so the reducer can flip
+ * exactly that proposals-ledger row to `applied` and record the minted id.
+ */
 export function candidateToEvent(candidate: Candidate, id: string): NewEvent {
   switch (candidate.kind) {
     case "task":
       return {
         type: "TaskProposed",
         taskId: id,
+        candidateId: candidate.candidateId,
         title: candidate.title,
         sourceExternalIds: candidate.sourceExternalIds,
       };
@@ -154,6 +184,7 @@ export function candidateToEvent(candidate: Candidate, id: string): NewEvent {
       return {
         type: "DecisionRecorded",
         decisionId: id,
+        candidateId: candidate.candidateId,
         title: candidate.title,
         rationale: candidate.rationale,
         sourceExternalIds: candidate.sourceExternalIds,
@@ -186,47 +217,71 @@ export function candidateToEvent(candidate: Candidate, id: string): NewEvent {
 }
 
 /**
+ * Resolve a candidate's target entity id + whether the apply is a no-op.
+ * Dedupe order (#435):
+ *   1. Same candidateId already applied earlier in THIS call/batch (`seen`) —
+ *      skipped, echoing the id minted then (covers ledger-less duplicates).
+ *   2. Proposals-ledger row already `applied` — skipped, echoing the entity id
+ *      the ledger recorded (the round-trip idempotence contract).
+ *   3. `task` / `decision` — mint a fresh id (base or `-N`-suffixed) and apply;
+ *      an occupied base id no longer blocks a recurring title.
+ *   4. Other kinds — entity-level idempotence unchanged (existing → skipped).
+ */
+function resolveCandidateTarget(
+  store: Store,
+  candidate: Candidate,
+  seen: Map<string, string> | undefined,
+): { id: string; status: AppliedCandidate["status"] } {
+  const seenId = seen?.get(candidate.candidateId);
+  if (seenId !== undefined) return { id: seenId, status: "skipped" };
+  const ledger = proposalLedgerRow(store, candidate.candidateId);
+  if (ledger !== null && ledger.state === "applied") {
+    return { id: ledger.entityId, status: "skipped" };
+  }
+  if (candidate.kind === "task" || candidate.kind === "decision") {
+    return { id: mintEntityId(store.connection.sqlite, candidate), status: "applied" };
+  }
+  const id = entityId(candidate);
+  return { id, status: entityExists(store, candidate, id) ? "skipped" : "applied" };
+}
+
+/**
  * Apply one approved candidate WITHOUT opening its own transaction (cf.
  * `proposeApply`, which records each candidate in a per-candidate transaction).
  * The caller is responsible for the transaction boundary — `propose.batch`
  * (src/propose/batch.ts) wraps a whole mixed apply/reject set in a single
  * transaction and calls this per apply op so the batch is atomic (Issue #197).
  *
- * Same idempotence contract as `proposeApply`: an existing entity (matched by
- * content-derived id) is `skipped` and NO event is appended.
+ * Same idempotence contract as `proposeApply` (round-trip scoped, #435). The
+ * optional `seen` map (candidateId → minted entity id) carries in-call dedupe
+ * state across the ops of one batch; pass the same map for every op.
  */
 export function applyCandidateStep(
   store: Store,
   candidate: Candidate,
   now: Date,
+  seen?: Map<string, string>,
 ): AppliedCandidate {
   // Consult the ledger before touching the domain: a rejected candidate must not
   // apply (ADR-0004). Throwing here rolls the whole propose.batch transaction
   // back (all-or-nothing), so a rejected member can't half-commit the batch.
   assertNotRejected(store, candidate);
-  const id = entityId(candidate);
-  if (entityExists(store, candidate, id)) {
-    return {
-      candidateId: candidate.candidateId,
-      kind: candidate.kind,
-      entityId: id,
-      status: "skipped",
-    };
+  const { id, status } = resolveCandidateTarget(store, candidate, seen);
+  if (status === "applied") {
+    const persisted = appendEvent(store.connection.sqlite, candidateToEvent(candidate, id), now);
+    applyEvent(store.connection.sqlite, persisted);
+    seen?.set(candidate.candidateId, id);
   }
-  const persisted = appendEvent(store.connection.sqlite, candidateToEvent(candidate, id), now);
-  applyEvent(store.connection.sqlite, persisted);
-  return {
-    candidateId: candidate.candidateId,
-    kind: candidate.kind,
-    entityId: id,
-    status: "applied",
-  };
+  return { candidateId: candidate.candidateId, kind: candidate.kind, entityId: id, status };
 }
 
 /**
- * Apply approved candidates, appending one event per *new* candidate. Existing
- * entities (matched by content-derived id) are skipped, making re-application a
- * no-op (idempotent). The host must have obtained human approval before calling.
+ * Apply approved candidates, appending one event per *new* candidate. A
+ * candidate whose ledger row is already `applied` (same candidateId — the
+ * proposal round-trip) is skipped, making re-application of the same approved
+ * set a no-op; a *distinct* candidate with an equal title (different
+ * provenance / mode / rationale) mints a fresh entity id and applies (#435).
+ * The host must have obtained human approval before calling.
  */
 export function proposeApply(
   store: Store,
@@ -244,24 +299,21 @@ export function proposeApply(
   }
 
   const results: AppliedCandidate[] = [];
+  // In-call dedupe (candidateId → minted id): the same candidate listed twice
+  // in one call must not append twice even when it has no ledger row.
+  const seen = new Map<string, string>();
 
   for (const candidate of candidates) {
-    const id = entityId(candidate);
-    if (entityExists(store, candidate, id)) {
-      results.push({
-        candidateId: candidate.candidateId,
-        kind: candidate.kind,
-        entityId: id,
-        status: "skipped",
-      });
-      continue;
+    const { id, status } = resolveCandidateTarget(store, candidate, seen);
+    if (status === "applied") {
+      store.record(candidateToEvent(candidate, id), now);
+      seen.set(candidate.candidateId, id);
     }
-    store.record(candidateToEvent(candidate, id), now);
     results.push({
       candidateId: candidate.candidateId,
       kind: candidate.kind,
       entityId: id,
-      status: "applied",
+      status,
     });
   }
 

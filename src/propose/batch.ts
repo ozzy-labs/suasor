@@ -58,7 +58,7 @@ export interface ProposeBatchOutput {
   results: BatchResult[];
   /** Candidates whose entity event was appended (apply, status=applied). */
   applied: number;
-  /** Apply ops that were no-ops because the entity already existed. */
+  /** Apply ops that were no-ops (candidate already applied — round-trip dedupe, #435). */
   skipped: number;
   /** Candidates flipped pending → rejected (reject, status=rejected). */
   rejected: number;
@@ -77,10 +77,13 @@ export function proposeBatch(
 ): ProposeBatchOutput {
   const { operations } = ProposeBatchInput.parse(input);
 
+  // In-call dedupe shared across the batch's apply ops (#435): the same
+  // candidateId listed twice must not append twice even without a ledger row.
+  const seen = new Map<string, string>();
   const results = store.connection.sqlite.transaction((): BatchResult[] =>
     operations.map((op): BatchResult => {
       if (op.action === "apply") {
-        return { action: "apply", ...applyCandidateStep(store, op.candidate, now) };
+        return { action: "apply", ...applyCandidateStep(store, op.candidate, now, seen) };
       }
       return { action: "reject", ...rejectCandidateStep(store, op.candidateId, op.reason, now) };
     }),

@@ -116,4 +116,40 @@ describe("inbox.triage (state machine, #88)", () => {
     // @ts-expect-error — 'snooze' is not a triage action.
     expect(() => inboxTriage(store, { inboxId: id, action: "snooze" })).toThrow();
   });
+
+  describe("task identity across recurrence (#435)", () => {
+    /** Move a triaged (done) item back to `open` so it can be triaged again. */
+    function reopenItem(inboxId: string, sourceExternalId: string): void {
+      store.record({ type: "InboxItemTriaged", inboxId, sourceExternalId, state: "open" });
+    }
+
+    test("re-triaging equal content while the prior task is LIVE reuses its id", () => {
+      const item = seedItem("gh:7");
+      const first = inboxTriage(store, { inboxId: item, action: "task", title: "follow up" });
+      reopenItem(item, "gh:7");
+      const second = inboxTriage(store, { inboxId: item, action: "task", title: "follow up" });
+      expect(second.createdEntityId).toBe(first.createdEntityId as string);
+      expect(tasks()).toHaveLength(1);
+    });
+
+    test("re-triaging equal content after the prior task completed mints a NEW task", () => {
+      const item = seedItem("gh:8");
+      const first = inboxTriage(store, { inboxId: item, action: "task", title: "経費精算" });
+      store.record({
+        type: "TaskApplied",
+        taskId: first.createdEntityId as string,
+        state: "completed",
+      });
+
+      reopenItem(item, "gh:8");
+      const second = inboxTriage(store, { inboxId: item, action: "task", title: "経費精算" });
+      expect(second.createdEntityId).toBe(`${first.createdEntityId}-2`);
+      const rows = store.connection.sqlite
+        .query("SELECT id, state FROM tasks ORDER BY id")
+        .all() as Array<{ id: string; state: string }>;
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.state).toBe("completed");
+      expect(rows[1]?.state).toBe("proposed");
+    });
+  });
 });

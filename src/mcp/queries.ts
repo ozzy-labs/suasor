@@ -582,6 +582,10 @@ export interface ProposalRecord {
   candidateId: string;
   mode: string;
   kind: string;
+  /**
+   * Target entity id: the planned (base) id while pending; once `applied`,
+   * the actually minted id (task/decision may carry a `-N` suffix, #435).
+   */
   entityId: string;
   summary: string;
   /** Lifecycle state: pending / applied / rejected. */

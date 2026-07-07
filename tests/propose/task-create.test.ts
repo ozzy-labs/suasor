@@ -39,13 +39,55 @@ describe("task.create (direct HITL task creation, #12 追補 D2)", () => {
     expect(links.map((l) => l.to_id).sort()).toEqual(["gh:1", "gh:2"]);
   });
 
-  test("is idempotent on content: re-creating the same task is a no-op", () => {
+  test("a live duplicate is a no-op: `existing` plus the duplicate's id/state/updatedAt (#435)", () => {
     const first = taskCreate(store, { title: "dup", sourceExternalIds: ["gh:1"] });
     expect(first.status).toBe("created");
     const second = taskCreate(store, { title: "dup", sourceExternalIds: ["gh:1"] });
     expect(second.status).toBe("existing");
     expect(second.taskId).toBe(first.taskId);
+    // The output discloses the live duplicate so the host can offer reopen-vs-create.
+    expect(second.duplicate).toMatchObject({ taskId: first.taskId, state: "proposed" });
+    expect(typeof second.duplicate?.updatedAt).toBe("string");
     expect(tasks()).toHaveLength(1);
+  });
+
+  test("a terminal (completed) duplicate does NOT block: a new task is created under a `-N` id (#435)", () => {
+    const first = taskCreate(store, { title: "経費精算" });
+    store.record({ type: "TaskApplied", taskId: first.taskId, state: "completed" });
+
+    const second = taskCreate(store, { title: "経費精算" });
+    expect(second.status).toBe("created");
+    expect(second.duplicate).toBeUndefined();
+    expect(second.taskId).toBe(`${first.taskId}-2`);
+
+    const rows = tasks();
+    expect(rows).toHaveLength(2);
+    expect(rows.find((t) => t.id === first.taskId)?.state).toBe("completed");
+    expect(rows.find((t) => t.id === second.taskId)?.state).toBe("proposed");
+  });
+
+  test("recurrence keeps working: each completed generation mints the next suffix", () => {
+    const a = taskCreate(store, { title: "monthly" });
+    store.record({ type: "TaskApplied", taskId: a.taskId, state: "dropped" });
+    const b = taskCreate(store, { title: "monthly" });
+    store.record({ type: "TaskApplied", taskId: b.taskId, state: "completed" });
+    const c = taskCreate(store, { title: "monthly" });
+    expect(c.status).toBe("created");
+    expect([a.taskId, b.taskId, c.taskId]).toEqual([a.taskId, `${a.taskId}-2`, `${a.taskId}-3`]);
+    expect(tasks()).toHaveLength(3);
+  });
+
+  test("with a mix of terminal and live rows, the LIVE one is reported as the duplicate", () => {
+    const done = taskCreate(store, { title: "mixed" });
+    store.record({ type: "TaskApplied", taskId: done.taskId, state: "completed" });
+    const live = taskCreate(store, { title: "mixed" });
+    store.record({ type: "TaskApplied", taskId: live.taskId, state: "in_progress" });
+
+    const third = taskCreate(store, { title: "mixed" });
+    expect(third.status).toBe("existing");
+    expect(third.taskId).toBe(live.taskId);
+    expect(third.duplicate?.state).toBe("in_progress");
+    expect(tasks()).toHaveLength(2);
   });
 
   test("rejects an empty title", () => {

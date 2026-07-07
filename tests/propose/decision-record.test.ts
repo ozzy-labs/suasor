@@ -54,6 +54,21 @@ describe("decision.record (direct HITL decision recording, #88)", () => {
     expect(decisions()).toHaveLength(1);
   });
 
+  test("rationale is part of the identity: same title, different rationale → distinct decisions (#435)", () => {
+    const a = decisionRecord(store, { title: "use bun", rationale: "fast" });
+    const b = decisionRecord(store, { title: "use bun", rationale: "single binary" });
+    expect(a.status).toBe("created");
+    expect(b.status).toBe("created");
+    expect(b.decisionId).not.toBe(a.decisionId);
+    expect(decisions()).toHaveLength(2);
+    // Neither rationale was silently lost to the other.
+    expect(
+      decisions()
+        .map((d) => d.rationale)
+        .sort(),
+    ).toEqual(["fast", "single binary"]);
+  });
+
   test("rejects an empty title", () => {
     expect(() => decisionRecord(store, { title: "" })).toThrow();
   });

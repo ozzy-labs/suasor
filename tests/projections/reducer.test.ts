@@ -568,6 +568,75 @@ describe("invalid / no-op transitions (no fabricated rows)", () => {
     expect(proposal?.state).toBe("applied"); // not "rejected"
   });
 
+  test("TaskProposed WITH candidateId flips exactly that proposal and records the minted id (#435)", () => {
+    // Two pending proposals share the same planned (base) entity id — e.g. the
+    // same content generated via two modes. Applying ONE of them must flip only
+    // that candidate's row, and must record the actually minted (suffixed) id.
+    for (const cid of ["cand_a", "cand_b"]) {
+      store.record(
+        {
+          type: "ProposalGenerated",
+          candidateId: cid,
+          mode: "source_extract",
+          kind: "task",
+          entityId: "task_base",
+          summary: "same content",
+        },
+        now,
+      );
+    }
+    store.record(
+      {
+        type: "TaskProposed",
+        taskId: "task_base-2",
+        candidateId: "cand_b",
+        title: "same content",
+        sourceExternalIds: [],
+      },
+      now,
+    );
+    const states = store.connection.sqlite
+      .query<{ candidate_id: string; state: string; entity_id: string }, []>(
+        "SELECT candidate_id, state, entity_id FROM proposals ORDER BY candidate_id",
+      )
+      .all();
+    expect(states).toEqual([
+      { candidate_id: "cand_a", state: "pending", entity_id: "task_base" },
+      { candidate_id: "cand_b", state: "applied", entity_id: "task_base-2" },
+    ]);
+  });
+
+  test("DecisionRecorded WITH candidateId flips its proposal by candidate id (#435)", () => {
+    store.record(
+      {
+        type: "ProposalGenerated",
+        candidateId: "cand_d",
+        mode: "meeting_followup",
+        kind: "decision",
+        entityId: "dec_base",
+        summary: "use bun",
+      },
+      now,
+    );
+    store.record(
+      {
+        type: "DecisionRecorded",
+        decisionId: "dec_base-2",
+        candidateId: "cand_d",
+        title: "use bun",
+        rationale: "fast",
+        sourceExternalIds: [],
+      },
+      now,
+    );
+    const proposal = store.connection.sqlite
+      .query<{ state: string; entity_id: string }, [string]>(
+        "SELECT state, entity_id FROM proposals WHERE candidate_id = ?",
+      )
+      .get("cand_d");
+    expect(proposal).toEqual({ state: "applied", entity_id: "dec_base-2" });
+  });
+
   test("ProposalRejected on a still-pending candidate records the reason", () => {
     store.record(
       {
