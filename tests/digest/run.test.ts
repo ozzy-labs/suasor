@@ -97,7 +97,7 @@ describe("runDigest", () => {
     const results = await runDigest(sqlite(), [fileJob("morning"), slackJob], {
       now: NOW,
       exportDir,
-      resolveSlackToken: async () => null, // no token in the keychain
+      resolveSlackTokens: async () => [], // no token pool in the keychain
       resolveSlackSelfId: () => "U_ME",
     });
 
@@ -115,7 +115,7 @@ describe("runDigest", () => {
     const results = await runDigest(sqlite(), [slackJob], {
       now: NOW,
       exportDir,
-      resolveSlackToken: async () => "xoxb-token",
+      resolveSlackTokens: async () => ["xoxb-token"],
       resolveSlackSelfId: () => "U_ME",
       deliveryDeps: {
         slackDm: {

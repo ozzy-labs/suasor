@@ -109,6 +109,7 @@ repo = "owner/repo"          # 起票先リポジトリ（本物の Issue）
 
 # [tasks.homes.slack]         # Slack List に起票（列/option id は list 固有＝config 駆動）
 # list = "L0123"                  # 起票先 list id
+# team = "T0123"                  # 任意。pool から優先する workspace（auth.test 照合・ADR-0042 決定 7）
 # slackTitleColumnId = "..."      # title 列 / slackStatusColumnId / slackDoneOptionId / slackTodoOptionId
 # slackDroppedOptionId = "..."    # drop 用（任意）/ slackCheckboxColumnId / slackMarkerColumnId
 #                                 # read-back（ADR-0036 §6）には同 list を `[connectors.slack].lists` にも
@@ -146,7 +147,7 @@ limit = 10                 # priority scorer 上位 N（既定 10・ADR-0041）
 
 - **proactive push lane**（[ADR-0040](../adr/0040-proactive-push-lane.md)）。`suasor digest` を cron から 1 回起動し、構成済み job ごとに priority scorer 上位 N（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)）+ brief warnings を bundle・render してチャネルへ送る。要約生成はしない（ML 委譲 [ADR-0006](../adr/0006-ml-delegation.md)）
 - **standing consent（定常同意）**: job を構成する行為が承認。job が空なら一切出力しない（unsolicited 通知の禁止は維持・[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) の per-event HITL は write tool に対して不変）
-- **チャネル**: `file` は `[export].dir` sandbox 配下へ書く（[ADR-0025](../adr/0025-local-draft-export.md)・basename・local root 直下不可）/ `os-notification` は OS 通知（osascript / notify-send / PowerShell）/ `slack-dm` は actuator 経路で自分宛て DM（[ADR-0036](../adr/0036-task-external-home.md)・token は pool の先頭・self id は `[connectors.slack].self_user_ids`（[ADR-0042](../adr/0042-slack-workspace-less-connector.md)）・失敗は構造化エラー）
+- **チャネル**: `file` は `[export].dir` sandbox 配下へ書く（[ADR-0025](../adr/0025-local-draft-export.md)・basename・local root 直下不可）/ `os-notification` は OS 通知（osascript / notify-send / PowerShell）/ `slack-dm` は actuator 経路で自分宛て DM（[ADR-0036](../adr/0036-task-external-home.md)・token は pool から bounded failover（先頭 +1 枚、[ADR-0042](../adr/0042-slack-workspace-less-connector.md) 決定 7）・self id は `[connectors.slack].self_user_ids`・失敗は構造化エラー）
 - **cadence** は OS scheduler（cron / launchd / systemd）が持つ（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)・no daemon）。導線は [scheduling guide](../guide/scheduling.md)
 
 ### 他セクション（後続 Issue が拡張）

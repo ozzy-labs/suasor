@@ -36,6 +36,13 @@ import { taskMarker } from "./github-actuator.ts";
 /** `[tasks.homes.slack]` config slice (slack-prefixed to avoid github field collision). */
 export const SlackListsActuatorConfig = z.object({
   list: z.string().min(1),
+  /**
+   * Optional workspace (team id) disambiguator (ADR-0042 決定 7 / #471): when
+   * the pool holds several tokens, tokens whose `auth.test` team matches are
+   * preferred for this list. Purely an ordering hint — the bounded failover
+   * still tries another token when the preferred one fails.
+   */
+  team: z.string().min(1).optional(),
   slackTitleColumnId: z.string().min(1),
   slackStatusColumnId: z.string().min(1).optional(),
   slackDoneOptionId: z.string().min(1).optional(),
@@ -62,6 +69,12 @@ export function textToRichText(text: string): unknown[] {
 
 /** The Slack Lists API surface this actuator depends on (structural, for test fakes). */
 export interface SlackListsClient {
+  /**
+   * `auth.test` self-description for the optional `team` disambiguator (#471).
+   * Optional: a fake without it (or a probe failure) skips team matching and
+   * keeps the pool order.
+   */
+  authTest?(): Promise<{ ok?: boolean; team_id?: string }>;
   /** Find an item whose `columnId` text cell contains `marker` → its row id, or null. */
   findItemByMarker(args: {
     listId: string;
@@ -89,6 +102,10 @@ const defaultClientFactory: SlackListsClientFactory = (token) => {
     return cached as { apiCall(method: string, args: Record<string, unknown>): Promise<unknown> };
   }
   return {
+    async authTest() {
+      const w = await web();
+      return (await w.apiCall("auth.test", {})) as { ok?: boolean; team_id?: string };
+    },
     async findItemByMarker({ listId, columnId, marker }) {
       const w = await web();
       const res = (await w.apiCall("slackLists.items.list", { list_id: listId, limit: 100 })) as {
@@ -153,40 +170,89 @@ export function createSlackListsActuator(
 ): Actuator {
   const cfg = SlackListsActuatorConfig.parse(config);
 
-  async function client(ctx: ActuatorContext): Promise<SlackListsClient> {
+  /**
+   * Run one actuator operation with reachability-style token selection
+   * (ADR-0042 決定 7 / #471): tokens matching the optional `team` disambiguator
+   * go first (auth.test probe, best-effort), then pool order; the op is tried
+   * on the first token plus **one** failover (the same bounded policy sync
+   * uses). A publish retried after a mid-flight throw is absorbed by the marker
+   * scan when `slackMarkerColumnId` is configured; otherwise a thrown create is
+   * treated as not-created (unchanged from the single-token behaviour).
+   */
+  async function withClient<T>(
+    ctx: ActuatorContext,
+    op: (client: SlackListsClient) => Promise<T>,
+  ): Promise<T> {
     const { parseTokenPool, SLACK_TOKENS_SECRET } = await import("./slack.ts");
-    const token = parseTokenPool(await ctx.secret(SLACK_TOKENS_SECRET))[0] ?? null;
-    if (!token) {
-      throw new Error("slack lists actuator: missing write-scoped token (secret 'token')");
+    const pool = parseTokenPool(await ctx.secret(SLACK_TOKENS_SECRET));
+    if (pool.length === 0) {
+      throw new Error(
+        "slack lists actuator: no token pool configured " +
+          "(run `suasor slack auth set` or set SUASOR_CONNECTOR_SLACK_TOKENS)",
+      );
     }
-    return clientFactory(token);
+    let ordered = pool;
+    if (cfg.team && pool.length > 1) {
+      const matched: string[] = [];
+      const rest: string[] = [];
+      for (const token of pool) {
+        let isMatch = false;
+        const probe = clientFactory(token);
+        if (probe.authTest) {
+          try {
+            const res = await probe.authTest();
+            isMatch = res.ok !== false && res.team_id === cfg.team;
+          } catch {
+            // Best-effort: an unprobeable token just keeps its pool position.
+          }
+        }
+        (isMatch ? matched : rest).push(token);
+      }
+      ordered = [...matched, ...rest];
+    }
+    const attempts = ordered.slice(0, 2); // picked token + one failover (ADR-0042)
+    let lastError: unknown;
+    for (const token of attempts) {
+      try {
+        return await op(clientFactory(token));
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw new Error(
+      `slack lists actuator: ${attempts.length} pool token(s) failed for list '${cfg.list}' — ` +
+        "add that workspace's token (`suasor slack auth set`)" +
+        `${cfg.team ? "" : " or set [tasks.homes.slack].team to prefer the right workspace"}: ` +
+        `${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
   }
 
   return {
     destination: "slack",
 
     async publish(task: PublishableTask, ctx: ActuatorContext): Promise<PublishResult> {
-      const slack = await client(ctx);
-      const marker = taskMarker(task.taskId);
-      if (cfg.slackMarkerColumnId) {
-        const existing = await slack.findItemByMarker({
-          listId: cfg.list,
-          columnId: cfg.slackMarkerColumnId,
-          marker,
-        });
-        if (existing) return { externalId: `slack:list:${cfg.list}:item:${existing}` };
-      }
-      const initialFields: SlackListField[] = [
-        { column_id: cfg.slackTitleColumnId, rich_text: textToRichText(task.title) },
-      ];
-      if (cfg.slackMarkerColumnId) {
-        initialFields.push({
-          column_id: cfg.slackMarkerColumnId,
-          rich_text: textToRichText(marker),
-        });
-      }
-      const rowId = await slack.createItem({ listId: cfg.list, initialFields });
-      return { externalId: `slack:list:${cfg.list}:item:${rowId}` };
+      return withClient(ctx, async (slack) => {
+        const marker = taskMarker(task.taskId);
+        if (cfg.slackMarkerColumnId) {
+          const existing = await slack.findItemByMarker({
+            listId: cfg.list,
+            columnId: cfg.slackMarkerColumnId,
+            marker,
+          });
+          if (existing) return { externalId: `slack:list:${cfg.list}:item:${existing}` };
+        }
+        const initialFields: SlackListField[] = [
+          { column_id: cfg.slackTitleColumnId, rich_text: textToRichText(task.title) },
+        ];
+        if (cfg.slackMarkerColumnId) {
+          initialFields.push({
+            column_id: cfg.slackMarkerColumnId,
+            rich_text: textToRichText(marker),
+          });
+        }
+        const rowId = await slack.createItem({ listId: cfg.list, initialFields });
+        return { externalId: `slack:list:${cfg.list}:item:${rowId}` };
+      });
     },
 
     async act(externalId: string, action: ActuatorAction, ctx: ActuatorContext): Promise<void> {
@@ -198,13 +264,16 @@ export function createSlackListsActuator(
       // so drop needs a dedicated status option. Without it → no-op + warn (don't
       // throw — the local cache still records the drop, ADR-0036 §3).
       if (action.kind === "drop") {
-        if (cfg.slackStatusColumnId && cfg.slackDroppedOptionId) {
-          const slack = await client(ctx);
-          await slack.updateField({
-            listId,
-            rowId,
-            field: { column_id: cfg.slackStatusColumnId, select: [cfg.slackDroppedOptionId] },
-          });
+        const statusColumn = cfg.slackStatusColumnId;
+        const droppedOption = cfg.slackDroppedOptionId;
+        if (statusColumn && droppedOption) {
+          await withClient(ctx, (slack) =>
+            slack.updateField({
+              listId,
+              rowId,
+              field: { column_id: statusColumn, select: [droppedOption] },
+            }),
+          );
         } else {
           ctx.onWarn?.(
             "slack: drop is a no-op (needs slackStatusColumnId + slackDroppedOptionId in [tasks.homes.slack])",
@@ -212,29 +281,34 @@ export function createSlackListsActuator(
         }
         return;
       }
-      const slack = await client(ctx);
       const done = action.kind === "complete";
-      if (cfg.slackCheckboxColumnId) {
-        await slack.updateField({
-          listId,
-          rowId,
-          field: { column_id: cfg.slackCheckboxColumnId, checkbox: done },
-        });
+      const checkboxColumn = cfg.slackCheckboxColumnId;
+      if (checkboxColumn) {
+        await withClient(ctx, (slack) =>
+          slack.updateField({
+            listId,
+            rowId,
+            field: { column_id: checkboxColumn, checkbox: done },
+          }),
+        );
         return;
       }
+      const statusColumn = cfg.slackStatusColumnId;
       const optionId = done ? cfg.slackDoneOptionId : cfg.slackTodoOptionId;
-      if (!cfg.slackStatusColumnId || !optionId) {
+      if (!statusColumn || !optionId) {
         throw new Error(
           `slack lists: ${action.kind} requires slackCheckboxColumnId, or slackStatusColumnId + ${
             done ? "slackDoneOptionId" : "slackTodoOptionId"
           } in [tasks.homes.slack]`,
         );
       }
-      await slack.updateField({
-        listId,
-        rowId,
-        field: { column_id: cfg.slackStatusColumnId, select: [optionId] },
-      });
+      await withClient(ctx, (slack) =>
+        slack.updateField({
+          listId,
+          rowId,
+          field: { column_id: statusColumn, select: [optionId] },
+        }),
+      );
     },
   };
 }

@@ -138,7 +138,7 @@ describe("deliverToSlackDm (ADR-0036 egress)", () => {
   test("opens the self-DM then posts the digest text", async () => {
     const seen: string[] = [];
     const delivery = await deliverToSlackDm(
-      { kind: "slack-dm", token: "xoxb-secret", selfUserId: "U_ME" },
+      { kind: "slack-dm", tokens: ["xoxb-secret"], selfUserId: "U_ME" },
       PAYLOAD,
       {
         slackFetch: fakeSlack(
@@ -157,7 +157,7 @@ describe("deliverToSlackDm (ADR-0036 egress)", () => {
 
   test("missing token → SLACK_TOKEN_NOT_CONFIGURED (no network)", async () => {
     const seen: string[] = [];
-    const p = deliverToSlackDm({ kind: "slack-dm", token: "", selfUserId: "U_ME" }, PAYLOAD, {
+    const p = deliverToSlackDm({ kind: "slack-dm", tokens: [], selfUserId: "U_ME" }, PAYLOAD, {
       slackFetch: fakeSlack({}, seen),
     });
     await expect(p).rejects.toMatchObject({ code: "SLACK_TOKEN_NOT_CONFIGURED" });
@@ -165,16 +165,50 @@ describe("deliverToSlackDm (ADR-0036 egress)", () => {
   });
 
   test("missing self id → SLACK_SELF_ID_NOT_CONFIGURED", async () => {
-    const p = deliverToSlackDm({ kind: "slack-dm", token: "xoxb", selfUserId: "" }, PAYLOAD, {
+    const p = deliverToSlackDm({ kind: "slack-dm", tokens: ["xoxb"], selfUserId: "" }, PAYLOAD, {
       slackFetch: fakeSlack({}, []),
     });
     await expect(p).rejects.toMatchObject({ code: "SLACK_SELF_ID_NOT_CONFIGURED" });
   });
 
   test("a Slack ok:false surfaces as SLACK_API_ERROR", async () => {
-    const p = deliverToSlackDm({ kind: "slack-dm", token: "xoxb", selfUserId: "U_ME" }, PAYLOAD, {
-      slackFetch: fakeSlack({ open: { ok: false, error: "not_allowed" } }, []),
-    });
+    const p = deliverToSlackDm(
+      { kind: "slack-dm", tokens: ["xoxb"], selfUserId: "U_ME" },
+      PAYLOAD,
+      {
+        slackFetch: fakeSlack({ open: { ok: false, error: "not_allowed" } }, []),
+      },
+    );
     await expect(p).rejects.toMatchObject({ code: "SLACK_API_ERROR" });
+  });
+
+  test("fails over to the second pool token when the first cannot open the DM (#471)", async () => {
+    const tokensSeen: string[] = [];
+    const slackFetch = (async (url: string, opts: { token: string }) => {
+      tokensSeen.push(opts.token);
+      if (opts.token === "tok-wrong") {
+        return {
+          status: 200,
+          headers: new Headers(),
+          body: { ok: false, error: "user_not_found" },
+        };
+      }
+      return {
+        status: 200,
+        headers: new Headers(),
+        body: url.includes("conversations.open")
+          ? { ok: true, channel: { id: "D9" } }
+          : { ok: true },
+      };
+    }) as unknown as NonNullable<Parameters<typeof deliverToSlackDm>[2]>["slackFetch"];
+    const delivery = await deliverToSlackDm(
+      { kind: "slack-dm", tokens: ["tok-wrong", "tok-right"], selfUserId: "U_ME" },
+      PAYLOAD,
+      { slackFetch },
+    );
+    expect(delivery.status).toBe("delivered");
+    // The wrong-workspace token was tried once, then the failover delivered.
+    expect(tokensSeen[0]).toBe("tok-wrong");
+    expect(tokensSeen).toContain("tok-right");
   });
 });

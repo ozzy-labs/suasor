@@ -111,8 +111,8 @@ export class DigestCommand extends Command {
         warnings,
         exportDir,
         localRoots,
-        resolveSlackToken: async () =>
-          parseTokenPool(await resolveSecret("slack", SLACK_TOKENS_SECRET))[0] ?? null,
+        resolveSlackTokens: async () =>
+          parseTokenPool(await resolveSecret("slack", SLACK_TOKENS_SECRET)),
         resolveSlackSelfId,
       });
 
