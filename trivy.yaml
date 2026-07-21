@@ -6,3 +6,7 @@ scan:
     - node_modules
     - .pnpm-store
     - .venv
+    # Harness-managed git worktrees for parallel subagents. They are separate
+    # working copies of other branches (each carries its own bun.lock), so
+    # scanning them here double-reports findings this checkout cannot fix.
+    - .claude/worktrees
