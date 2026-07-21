@@ -221,8 +221,12 @@ export async function deliverToOsNotification(
 /** Resolved `slack-dm` target: DM-to-self via a workspace token + self user id. */
 export interface SlackDmTarget {
   kind: "slack-dm";
-  /** Bearer token (from the OS keychain); never echoed in errors. */
-  token: string;
+  /**
+   * Pool tokens (from the OS keychain, ADR-0042); never echoed in errors. The
+   * DM is tried with the first token plus one bounded failover (#471) — the
+   * self-DM only opens with a token from the workspace the self id lives in.
+   */
+  tokens: string[];
   /** Operator's own Slack user id, the DM counterpart (ADR-0012). */
   selfUserId: string;
   /** API base (default `https://slack.com/api`); overridden in tests. */
@@ -251,18 +255,42 @@ export async function deliverToSlackDm(
   payload: DigestPayload,
   deps: SlackDmDeps = {},
 ): Promise<DigestDelivery> {
-  if (target.token.length === 0) {
+  const tokens = target.tokens.filter((t) => t.length > 0);
+  if (tokens.length === 0) {
     throw new DigestChannelError(
       "SLACK_TOKEN_NOT_CONFIGURED",
-      "no Slack token in the keychain (run `suasor slack auth set`)",
+      "no Slack token pool in the keychain (run `suasor slack auth set`)",
     );
   }
   if (target.selfUserId.length === 0) {
     throw new DigestChannelError(
       "SLACK_SELF_ID_NOT_CONFIGURED",
-      "no Slack self_user_id configured ([connectors.slack].self_user_id)",
+      "no Slack self id configured ([connectors.slack].self_user_ids)",
     );
   }
+  // Bounded failover (ADR-0042 / #471): the first pool token plus one more —
+  // the self-DM only opens with a token from the self id's own workspace.
+  const attempts = tokens.slice(0, 2);
+  let lastError: DigestChannelError | null = null;
+  for (const [i, token] of attempts.entries()) {
+    try {
+      return await deliverWithToken(target, payload, token, deps);
+    } catch (error) {
+      if (!(error instanceof DigestChannelError)) throw error;
+      lastError = error;
+      if (i < attempts.length - 1) continue;
+    }
+  }
+  throw lastError as DigestChannelError;
+}
+
+/** One delivery attempt with a single token (extracted for the failover loop). */
+async function deliverWithToken(
+  target: SlackDmTarget,
+  payload: DigestPayload,
+  token: string,
+  deps: SlackDmDeps,
+): Promise<DigestDelivery> {
   const base = target.apiBase ?? "https://slack.com/api";
   const call = deps.slackFetch ?? defaultSlackFetch;
   const fetchOpt = deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {};
@@ -270,7 +298,7 @@ export async function deliverToSlackDm(
   // 1) Resolve (open) the DM channel with oneself.
   const open = await call(
     `${base}/conversations.open?users=${encodeURIComponent(target.selfUserId)}`,
-    { token: target.token, method: "POST", ...fetchOpt },
+    { token, method: "POST", ...fetchOpt },
   );
   if (open.body.ok !== true) {
     throw new DigestChannelError(
@@ -290,7 +318,7 @@ export async function deliverToSlackDm(
       : payload.text;
   const post = await call(
     `${base}/chat.postMessage?channel=${encodeURIComponent(channel)}&text=${encodeURIComponent(text)}`,
-    { token: target.token, method: "POST", ...fetchOpt },
+    { token, method: "POST", ...fetchOpt },
   );
   if (post.body.ok !== true) {
     throw new DigestChannelError(

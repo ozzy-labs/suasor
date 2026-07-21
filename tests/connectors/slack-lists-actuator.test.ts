@@ -42,6 +42,75 @@ const statusCfg = {
   slackTodoOptionId: "opt_todo",
 };
 
+describe("slack-lists-actuator token selection (ADR-0042 決定 7 / #471)", () => {
+  const poolCtx: ActuatorContext = { secret: async () => "tok-a,tok-b" };
+
+  test("fails over to the second pool token when the first throws", async () => {
+    const good = fakeClient();
+    const factory = (token: string): SlackListsClient =>
+      token === "tok-a"
+        ? {
+            async findItemByMarker() {
+              throw new Error("invalid_auth");
+            },
+            async createItem() {
+              throw new Error("invalid_auth");
+            },
+            async updateField() {
+              throw new Error("invalid_auth");
+            },
+          }
+        : good.client;
+    const actuator = createSlackListsActuator(checkboxCfg, factory);
+    const result = await actuator.publish({ taskId: "t1", title: "Review" }, poolCtx);
+    expect(result.externalId).toBe("slack:list:L1:item:Rec1");
+    expect(good.created).toHaveLength(1);
+  });
+
+  test("team disambiguator prefers the matching token (auth.test probe)", async () => {
+    const wrong = fakeClient();
+    const right = fakeClient();
+    const withTeam = (client: SlackListsClient, teamId: string): SlackListsClient => ({
+      ...client,
+      authTest: async () => ({ ok: true, team_id: teamId }),
+    });
+    const factory = (token: string): SlackListsClient =>
+      token === "tok-a" ? withTeam(wrong.client, "T_WRONG") : withTeam(right.client, "T_RIGHT");
+    const actuator = createSlackListsActuator({ ...checkboxCfg, team: "T_RIGHT" }, factory);
+    await actuator.publish({ taskId: "t1", title: "Review" }, poolCtx);
+    // The matching token was preferred: the T_RIGHT client created the item.
+    expect(right.created).toHaveLength(1);
+    expect(wrong.created).toHaveLength(0);
+  });
+
+  test("every attempted token failing surfaces one guided error", async () => {
+    const factory = (): SlackListsClient => ({
+      async findItemByMarker() {
+        throw new Error("list_not_found");
+      },
+      async createItem() {
+        throw new Error("list_not_found");
+      },
+      async updateField() {
+        throw new Error("list_not_found");
+      },
+    });
+    const actuator = createSlackListsActuator(checkboxCfg, factory);
+    await expect(actuator.publish({ taskId: "t1", title: "x" }, poolCtx)).rejects.toThrow(
+      /pool token\(s\) failed for list 'L1'.*suasor slack auth set/,
+    );
+  });
+
+  test("an empty pool fails with the standard guidance", async () => {
+    const fake = fakeClient();
+    const actuator = createSlackListsActuator(checkboxCfg, () => fake.client);
+    const emptyCtx: ActuatorContext = { secret: async () => null };
+    await expect(actuator.publish({ taskId: "t1", title: "x" }, emptyCtx)).rejects.toThrow(
+      /no token pool configured/,
+    );
+  });
+});
+
 describe("slack-lists-actuator publish", () => {
   test("creates an item with a rich_text title, returns slack list externalId", async () => {
     const fake = fakeClient();
