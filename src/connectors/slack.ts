@@ -1044,14 +1044,15 @@ class SlackConnector implements Connector {
         lastError = error;
         const message = error instanceof Error ? error.message : String(error);
         ctx.onWarn?.(`workspace '${ws.alias}' failed mid-sync: ${message}`);
-        const ownedChannels = new Set(ws.channels);
+        const configuredChannels = new Set(ws.channels);
         const preserved: Record<string, string> = {};
         for (const [key, ts] of Object.entries(prevChannels)) {
           // Preserve both the plain `<channel>` cursor and its per-thread
-          // `<channel>#<thread_ts>` high-water marks for owned channels (ADR-0015 R1).
+          // `<channel>#<thread_ts>` high-water marks for configured channels
+          // (ADR-0015 R1), so a mid-fetch failure is not a cursor reset.
           const parsed = parseThreadCursorKey(key);
           const channel = parsed ? parsed.channel : key;
-          if (ownedChannels.has(channel)) preserved[key] = ts;
+          if (configuredChannels.has(channel)) preserved[key] = ts;
         }
         if (Object.keys(preserved).length > 0) this.cursors[ws.alias] = preserved;
         this.workspaceStatus.push({

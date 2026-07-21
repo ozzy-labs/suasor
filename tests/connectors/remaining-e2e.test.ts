@@ -70,6 +70,43 @@ describe("Slack: sync → projection → FTS", () => {
     });
     expect(out2).toMatchObject({ observed: 0, updated: 0, unchanged: 1 });
   });
+
+  test("a channel shared across two aliases collapses to one source (ADR-0042)", async () => {
+    // Both aliases list C1; the canonical externalId (`slack:C1:<ts>`) makes the
+    // second alias's fetch an unchanged re-observation, not a duplicate source —
+    // the store-level invariant the owner-election removal rests on.
+    const message = { ts: "1700000000.000100", text: "shared grid channel", user: "U1" };
+    const connector = createSlackConnector(
+      {
+        workspaces: {
+          acme: { team: "TA", channels: ["C1"] },
+          beta: { team: "TB", channels: ["C1"] },
+        },
+      },
+      {
+        clientFactory: () => ({
+          conversations: {
+            history: async () => ({ messages: [message] }),
+            replies: async () => ({ messages: [] }),
+          },
+        }),
+        usersTransport: async () => ({ ok: true, user: { name: "U1" } }),
+      },
+    );
+    const out = await syncConnector(store, connector, {
+      secrets: {
+        env: {
+          SUASOR_CONNECTOR_SLACK_ACME_TOKEN: "tok-a",
+          SUASOR_CONNECTOR_SLACK_BETA_TOKEN: "tok-b",
+        },
+      },
+    });
+    // One source observed, the double fetch absorbed as unchanged.
+    expect(out).toMatchObject({ observed: 1, unchanged: 1 });
+    const hits = searchSources(store.connection.sqlite, "grid").hits;
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.externalId).toBe("slack:C1:1700000000.000100");
+  });
 });
 
 describe("MS Graph: sync → projection → FTS", () => {
