@@ -35,7 +35,7 @@ message の externalId を `slack:<team>:<channel>:<ts>` から **`slack:<channe
 - 共有チャンネルはどの workspace・どの token で取り込んでも**同一 externalId に collapse** し、fingerprint の externalId 冪等性（[ADR-0002](0002-event-sourced-architecture.md)）だけで重複が消える。**owner election（ADR-0038 の 3 層）は概念ごと不要になる。**
 - Lists の externalId（`slack:list:…`）と同じ「identity は Slack のグローバル一意 id、org/team は表示 facet」という原則に message も揃い、非対称が解消する。
 - [#464](https://github.com/ozzy-labs/suasor/issues/464) 起票時の `slack:<enterprise_id ?? team_id>:<channel>:<ts>` 案は本 ADR で**さらに簡約**した。org prefix は (a) dedup 上の価値がゼロ（channel id が既に一意）、(b) standalone workspace の Grid 編入で namespace が変わり identity break する edge を持ち込む、(c) Slack Connect（cross-org 共有・同一 channel id）を二重化させる — の 3 点で劣後する。channel-only なら (b)(c) も構造的に消える。
-- **ADR-0036 の task read-back join は影響を受けない**: `published_external_id` が参照するのは task home（`gh:…` / jira / `slack:list:…`）の externalId であり、message の externalId は join 対象でない（実装 PR で `src/projections/task-readback.ts` を検証しこの前提を確認する）。ADR-0038 §7 が canonical 化を見送った理由は message id には当たらない。
+- **ADR-0036 の task read-back join は影響を受けない（確認済み）**: `published_external_id` を構成するのは task home の externalId（`slack:list:<id>:item:<id>` — `src/connectors/slack-lists-actuator.ts`、`jira:…` — `src/connectors/jira-actuator.ts`、GitHub 形式）のみで、message の externalId は join 対象でない。ADR-0038 §7 が canonical 化を見送った理由は message id には当たらない。
 - org / team は **表示 facet として `meta`（`teamId` / team 名、[ADR-0037](0037-slack-name-enrichment.md)）に保持**する。検索・brief で「どの workspace の話か」を出す用途は identity ではなく metadata が担う。
 
 ### 2. token — 無名 credential プール（alias 命名の廃止）
@@ -47,7 +47,8 @@ per-alias token を廃止し、**命名しない token プール**に置き換�
 - **各 token はツールが `auth.test` で自己記述**する（org/team 名・self user id・granted scopes・到達 channel 数）。ユーザーは alias を発明せず、表示ラベルは org/team 名から自動で振る。
 - **同一 team への重複 token は無害**（どちらか 1 枚を使う。仕様として明記）。
 - **導線は「可能なら org-level（org-wide app）token 1 枚」を最短として案内**し、無理なら workspace token を必要数、とする（貼る枚数の最小化）。
-- `self_user_id` config は廃止し、**各 token の `auth.test` が返す user id を自動採用**する（[ADR-0012](0012-slack-demand-digest.md) の @mention 検出は token ごとの self id 集合で判定）。
+- `self_user_id` config は **`self_user_ids = ["U…"]`（任意・複数）に置き換え、user token からの自動導出で補完**する。`auth.test` の user id 自動採用は **user token（`xoxp-`）に限る** — bot token（`xoxb-`）の `auth.test` は bot 自身の user id を返すため、これを self に採ると [ADR-0012](0012-slack-demand-digest.md) の @mention 検出が「bot 宛て mention」を拾う silent wrong answer になる（[ADR-0007](0007-connector-contract.md) 違反）。判定は「config の `self_user_ids` ∪ pool 内 user token の auth.test user id」の集合で行い、**どちらも無い場合は既存挙動どおり DM-only へ degrade し明示 warn** する。
+- **user-token 限定機能の token 選択は scope ベース**: engagement axis（`slack conversations --sort=last_self_post`、`search:read`＝User Token 限定、[ADR-0013](0013-slack-engagement-axis.md)）などは、pool から必要 scope を満たす token を選んで実行し、該当 token が無ければ従来どおり `N/A` degrade する。
 
 ### 3. 取得 — 到達性ベースの token 選択 + bounded failover
 
