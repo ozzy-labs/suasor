@@ -51,7 +51,7 @@ export class DigestCommand extends Command {
       { loadConfig },
       { Store },
       { deriveBriefWarnings },
-      { resolveSelfUserIds, workspaceSecretName },
+      { parseTokenPool, resolveSelfUserIds, SLACK_TOKENS_SECRET },
       { resolveSecret },
       { runDigest },
     ] = await Promise.all([
@@ -92,18 +92,9 @@ export class DigestCommand extends Command {
 
     const slackCfg = config.connectors.slack ?? {};
     const selfUserIds = resolveSelfUserIds(slackCfg);
-    const resolveSlackSelfId = (workspace?: string): string | null => {
-      if (workspace !== undefined) {
-        const workspaces = slackCfg.workspaces as
-          | Record<string, { self_user_id?: string }>
-          | undefined;
-        const wsId = workspaces?.[workspace]?.self_user_id;
-        if (typeof wsId === "string" && wsId.length > 0) return wsId;
-      }
-      const flat = slackCfg.self_user_id;
-      if (typeof flat === "string" && flat.length > 0) return flat;
-      return selfUserIds[0] ?? null;
-    };
+    // slack-dm channel (ADR-0042 決定 7): the first pool token + the first
+    // configured self id (a DM-to-self needs no workspace disambiguation).
+    const resolveSlackSelfId = (): string | null => selfUserIds[0] ?? null;
 
     const warnings = deriveBriefWarnings({
       slackConfigured: config.connectors.slack !== undefined,
@@ -120,8 +111,8 @@ export class DigestCommand extends Command {
         warnings,
         exportDir,
         localRoots,
-        resolveSlackToken: (workspace?: string) =>
-          resolveSecret("slack", workspaceSecretName(workspace)),
+        resolveSlackToken: async () =>
+          parseTokenPool(await resolveSecret("slack", SLACK_TOKENS_SECRET))[0] ?? null,
         resolveSlackSelfId,
       });
 

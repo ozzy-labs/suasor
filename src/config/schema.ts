@@ -397,8 +397,6 @@ export const DigestJob = z
     schedule: z.string().min(1).optional(),
     /** `file` channel: output basename in the export sandbox (default `<name>.md`). */
     filename: z.string().min(1).optional(),
-    /** `slack-dm` channel: workspace alias whose token / self id to use (ADR-0014). */
-    workspace: z.string().min(1).optional(),
   })
   .passthrough();
 export type DigestJob = z.infer<typeof DigestJob>;

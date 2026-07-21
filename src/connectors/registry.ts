@@ -104,13 +104,13 @@ const CONFIG_SCHEMAS: Record<string, SchemaLoader> = {
  * disclosing its value. Web needs no auth (public pages only), so it has none.
  *
  * Kept here next to the registry so adding a connector declares its secret in
- * one place. Slack's flat/default workspace uses `"token"`; named workspaces use
- * `"<alias>:token"` (ADR-0014) — only the default token is introspected here.
- * Web and local read the filesystem / public pages only, so they need no auth.
+ * one place. Slack uses the unnamed token pool `"tokens"` (ADR-0042; newline/
+ * comma separated, replace-all). Web and local read the filesystem / public
+ * pages only, so they need no auth.
  */
 const SECRET_NAMES: Record<string, readonly string[]> = {
   github: ["token"],
-  slack: ["token"],
+  slack: ["tokens"],
   "ms-graph": ["clientSecret"],
   google: ["refreshToken"],
   box: ["token"],

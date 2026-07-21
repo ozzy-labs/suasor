@@ -482,19 +482,19 @@ function stubSlackApi(
 
 describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
   const realFetch = globalThis.fetch;
-  const realToken = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+  const realToken = process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
 
   afterEach(() => {
     globalThis.fetch = realFetch;
-    if (realToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
-    else process.env.SUASOR_CONNECTOR_SLACK_TOKEN = realToken;
+    if (realToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
+    else process.env.SUASOR_CONNECTOR_SLACK_TOKENS = realToken;
   });
 
-  test("stores the pasted token under the flat `token` secret", async () => {
+  test("stores the pasted token under the pool `tokens` secret (ADR-0042)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
     // The env override keeps the probe off the real keychain; the pasted token is
     // the one asserted to land in the (in-memory) keychain under `slack:token`.
-    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxb-env";
     stubSlackApi();
     const keychain = memoryKeychain();
     try {
@@ -504,7 +504,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
         keychain,
       });
       expect(code).toBe(0);
-      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("slack", "token")}`)).toBe(
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("slack", "tokens")}`)).toBe(
         "xoxb-pasted",
       );
     } finally {
@@ -514,7 +514,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
 
   test("appends a [connectors.slack] block with only the joined channels from the probe", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
-    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxb-env";
     // C0JOIN is a member channel (goes into config); C0NOPE is not joined (excluded
     // — it would ingest nothing until the bot joins, ADR-0011).
     stubSlackApi({
@@ -537,7 +537,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
       const toml = await Bun.file(join(dir, "config.toml")).text();
       expect(toml).toContain("[connectors.slack]");
       expect(toml).toContain("enabled = true");
-      expect(toml).toContain('team = "T0ACME"');
+      expect(toml).toContain("# workspace: T0ACME");
       expect(toml).toContain('"C0JOIN"');
       // The unjoined channel is not auto-configured.
       expect(toml).not.toContain("C0NOPE");
@@ -548,7 +548,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
 
   test("falls back to the placeholder slice + reason when the conversations probe fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
-    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxb-env";
     // auth.test succeeds (so a team id resolves) but the listing leaf throws.
     stubSlackApi({ conversationsError: "internal_error" });
     try {
@@ -572,7 +572,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
 
   test("leaves an existing [connectors.slack] (enabled = false) untouched", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
-    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxb-env";
     stubSlackApi({ publicChannels: [{ id: "C0JOIN", name: "general", is_member: true }] });
     try {
       const configPath = join(dir, "config.toml");
@@ -594,7 +594,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
     }
   });
 
-  test("a multi-workspace config falls back to the manual per-workspace導線", async () => {
+  test("a legacy multi-workspace config falls back to the migration checklist (ADR-0042)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
     // No env override / fetch stub: a multi-workspace config bails before the token
     // read + probe, so nothing touches stdin or the network.
@@ -608,9 +608,8 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
         configDir: dir,
       });
       expect(code).toBe(0);
-      // The wizard points at the per-workspace導線 and re-surfaces the checklist.
-      expect(out).toContain("multiple workspaces configured (acme)");
-      expect(out).toContain("suasor slack auth set --workspace");
+      // The wizard points at the ADR-0042 migration and re-surfaces the checklist.
+      expect(out).toContain("legacy multi-workspace config detected (acme)");
       expect(out).toContain("setup is not complete yet");
       expect(out).toContain("Setup needs manual steps");
       // Config is left byte-for-byte untouched (no flat bridge write).
@@ -651,7 +650,7 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
     // Hermetic: the env override keeps the slack probe off the real OS keychain,
     // and the fetch stub keeps its auth.test / conversations round-trips off the
     // network (a flat, unconfigured slack config runs the bridge under --skip-auth).
-    process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxb-env";
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxb-env";
     stubSlackApi();
     try {
       const { code, out } = await run(

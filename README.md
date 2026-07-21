@@ -67,8 +67,8 @@ suasor init
 # slice (enabled = true), run the first sync, and print the scheduler + MCP
 # snippets — all in the correct order (ADR-0029).
 suasor onboard --connector github,slack   # interactive on a TTY; --json for a summary
-# slack now completes here too: onboard bridges its flat/single-workspace setup
-# (multi-workspace still uses `suasor slack auth set --workspace <alias>`).
+# slack completes here too: onboard bridges the workspace-less setup — one token
+# pool covers every workspace (`suasor slack auth set`, ADR-0042).
 
 # Verify config / DB / connector readiness (diagnostic only; creates nothing).
 suasor doctor

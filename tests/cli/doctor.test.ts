@@ -451,7 +451,7 @@ describe("suasor doctor", () => {
   // one workspace alias and warns which owner will ingest it (early detection,
   // without running a sync). The owner rule (lexicographically smallest alias)
   // is shared with sync via `channelOwnership`.
-  test("a channel duplicated across aliases emits no warning (ADR-0042 natural collapse)", async () => {
+  test("a legacy multi-workspace config is a slack.config error (ADR-0042 決定 9)", async () => {
     await run(["init"]);
     await writeConfig(
       [
@@ -465,122 +465,36 @@ describe("suasor doctor", () => {
       ].join("\n"),
     );
     const { code, out } = await run(["doctor", "--json"]);
-    expect(code).toBe(0);
+    // The loader itself rejects the legacy shape, so doctor surfaces it as the
+    // config-load error carrying the mechanical migration message.
+    expect(code).toBe(1);
     const report = JSON.parse(out) as DoctorReport;
-    // The owner-wins dedup layers were dropped (ADR-0042): the canonical
-    // externalId collapses a duplicated listing at ingest, so doctor no longer
-    // flags shared channels — a duplicate is a redundant fetch, not a defect.
-    const shared = report.checks.filter((c) => c.name === "slack" && c.status === "warn");
-    expect(shared).toHaveLength(0);
+    const cfg = report.checks.filter((c) => c.name === "config" && c.status === "error");
+    expect(cfg).toHaveLength(1);
+    expect(cfg[0]?.detail).toContain("remove 'workspaces'");
   });
 
-  test("no shared Slack channel: no slack warning (ADR-0038)", async () => {
+  test("flat workspace-less slack config emits no slack.config error (ADR-0042)", async () => {
     await run(["init"]);
-    await writeConfig(
-      [
-        "[connectors.slack.workspaces.employees]",
-        'team = "T_EMP"',
-        'channels = ["C_EMP_ONLY"]',
-        "",
-        "[connectors.slack.workspaces.bp]",
-        'team = "T_BP"',
-        'channels = ["C_BP_ONLY"]',
-      ].join("\n"),
-    );
+    await writeConfig('[connectors.slack]\nchannels = ["C1", "C2"]\nself_user_ids = ["U1"]\n');
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
-    expect(report.checks.some((c) => c.name === "slack")).toBe(false);
+    expect(report.checks.some((c) => c.name === "slack.config")).toBe(false);
+    expect(report.checks.some((c) => c.name === "slack.demand")).toBe(false);
   });
 
-  test("flat single-workspace slack config emits no shared-channel warning (ADR-0038)", async () => {
+  test("missing self_user_ids is an info hint (ADR-0042 決定 2)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1", "C2"]\n');
-    const { out } = await run(["doctor", "--json"]);
-    const report = JSON.parse(out) as DoctorReport;
-    expect(report.checks.some((c) => c.name === "slack")).toBe(false);
-  });
-
-  // Issue #371 theme 2: the connector-credential check only probes the static
-  // primary secret (connector:slack:token), so a multi-workspace config whose
-  // per-alias token is missing would otherwise read as "ok" and then silently
-  // skip that workspace at sync time. doctor probes each named workspace token.
-  test("multi-workspace slack: a missing per-workspace token is a warning (#371)", async () => {
-    await run(["init"]);
-    await writeConfig(
-      [
-        "[connectors.slack.workspaces.acme]",
-        'team = "T_ACME"',
-        'channels = ["C1"]',
-        "",
-        "[connectors.slack.workspaces.bp]",
-        'team = "T_BP"',
-        'channels = ["C2"]',
-      ].join("\n"),
-    );
-    // Only acme has a token; bp is missing → bp warns, acme does not.
-    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxb-acme";
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');
     const { code, out } = await run(["doctor", "--json"]);
-    // Missing per-workspace token is a warning, not an error → still exits 0.
-    expect(code).toBe(0);
-    const report = JSON.parse(out) as DoctorReport;
-    const tokenWarns = report.checks.filter((c) => c.name === "slack.token");
-    expect(tokenWarns).toHaveLength(1);
-    expect(tokenWarns[0]?.status).toBe("warn");
-    expect(tokenWarns[0]?.detail).toContain("bp");
-    expect(tokenWarns[0]?.detail).toContain("skipped: no token");
-    // The recovery command names the specific alias.
-    expect(tokenWarns[0]?.detail).toContain("slack auth set --workspace bp");
-    // The alias whose token is present is not flagged, and the value is never printed.
-    expect(tokenWarns.some((c) => c.detail.includes("'acme'"))).toBe(false);
-    expect(out).not.toContain("xoxb-acme");
-  });
-
-  test("multi-workspace slack: all per-workspace tokens set emits no token warning (#371)", async () => {
-    await run(["init"]);
-    await writeConfig(
-      [
-        "[connectors.slack.workspaces.acme]",
-        'team = "T_ACME"',
-        'channels = ["C1"]',
-        "",
-        "[connectors.slack.workspaces.bp]",
-        'team = "T_BP"',
-        'channels = ["C2"]',
-      ].join("\n"),
-    );
-    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxb-acme";
-    process.env.SUASOR_CONNECTOR_SLACK_BP_TOKEN = "xoxb-bp";
-    const { out } = await run(["doctor", "--json"]);
-    const report = JSON.parse(out) as DoctorReport;
-    expect(report.checks.some((c) => c.name === "slack.token")).toBe(false);
-  });
-
-  test("multi-workspace slack: a missing self_user_id is an info hint (#371)", async () => {
-    await run(["init"]);
-    await writeConfig(
-      [
-        "[connectors.slack.workspaces.acme]",
-        'team = "T_ACME"',
-        'channels = ["C1"]',
-        'self_user_id = "U_ACME"',
-        "",
-        "[connectors.slack.workspaces.bp]",
-        'team = "T_BP"',
-        'channels = ["C2"]',
-      ].join("\n"),
-    );
-    const { code, out } = await run(["doctor", "--json"]);
-    // self_user_id degrade is info, not error/warn → exits 0.
+    // self id degrade is info, not error/warn → exits 0.
     expect(code).toBe(0);
     const report = JSON.parse(out) as DoctorReport;
     const demand = report.checks.filter((c) => c.name === "slack.demand");
-    // Only bp lacks self_user_id.
     expect(demand).toHaveLength(1);
     expect(demand[0]?.status).toBe("info");
-    expect(demand[0]?.detail).toContain("bp");
     expect(demand[0]?.detail).toContain("DM-only");
-    expect(demand[0]?.detail).toContain("slack auth test --workspace bp");
-    expect(demand.some((c) => c.detail.includes("'acme'"))).toBe(false);
+    expect(demand[0]?.detail).toContain("self_user_ids");
   });
 
   // Issue #388 item 4: the discovery-drift WARN now also carries the last-sweep
@@ -589,11 +503,9 @@ describe("suasor doctor", () => {
   // from the `__discovery__` marker; freshness formatting reuses slack-time.ts.
   test("slack discovery drift: a persisted marker with new conversations warns with freshness (ADR-0039, #388)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');
     // Marker: workspace 'default' had a sweep that found 3 new conversations.
-    await seedSlackCursor(
-      JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:3" } }),
-    );
+    await seedSlackCursor(JSON.stringify({ C1: "1.0", __discovery__: "1000:3" }));
     const { code, out } = await run(["doctor", "--json"]);
     // Drift is a warning, not an error → exit 0.
     expect(code).toBe(0);
@@ -609,7 +521,7 @@ describe("suasor doctor", () => {
 
   test("slack discovery drift: a zero-count marker stays quiet (ADR-0039)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');
     await seedSlackCursor(
       JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:0" } }),
     );
@@ -622,7 +534,7 @@ describe("suasor doctor", () => {
   // offline (#388 item 4).
   test("slack discovery drift: no marker stays quiet (ADR-0039, #388)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');
     await seedSlackCursor(JSON.stringify({ default: { C1: "1.0" } }));
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
@@ -634,10 +546,8 @@ describe("suasor doctor", () => {
   // skip". No freshness for the disabled case, and exit code stays 0.
   test("slack discovery drift: opting out (discover_new = false) shows disabled, not the stale count (ADR-0039, #388)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\ndiscover_new = false\n');
-    await seedSlackCursor(
-      JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "1000:5" } }),
-    );
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\ndiscover_new = false\n');
+    await seedSlackCursor(JSON.stringify({ C1: "1.0", __discovery__: "1000:5" }));
     const { code, out } = await run(["doctor", "--json"]);
     expect(code).toBe(0);
     const report = JSON.parse(out) as DoctorReport;
@@ -650,16 +560,17 @@ describe("suasor doctor", () => {
     expect(disc[0]?.detail).not.toContain("last swept");
   });
 
-  test("flat single-workspace slack config emits no per-workspace token/identity checks (#371)", async () => {
+  test("flat config with channels and no self ids: only the demand info hint (ADR-0042)", async () => {
     await run(["init"]);
-    // Flat config with no token and no self_user_id: the connector-credential
-    // check covers the default token, so the multi-workspace probes stay silent
-    // (no regression to the flat/single-workspace path).
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
+    // No per-workspace token probes remain (the pool is one secret, covered by
+    // the connector-credential check); the self-id degrade is an info hint.
     expect(report.checks.some((c) => c.name === "slack.token")).toBe(false);
-    expect(report.checks.some((c) => c.name === "slack.demand")).toBe(false);
+    const demand = report.checks.filter((c) => c.name === "slack.demand");
+    expect(demand).toHaveLength(1);
+    expect(demand[0]?.status).toBe("info");
   });
 
   // Issue #388 item 3: an enabled connector whose config resolves to no ingest
@@ -668,7 +579,7 @@ describe("suasor doctor", () => {
   // the shared pre-sync `noopWarning` detector; exit code stays unchanged.
   test("enabled slack with no channels warns nothing-to-ingest (connectors.noop) (#388)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\n');
+    await writeConfig("[connectors.slack]\nenabled = true\n");
     const { code, out } = await run(["doctor", "--json"]);
     // Nothing-to-ingest is a warning, not an error → still exits 0.
     expect(code).toBe(0);
@@ -683,7 +594,7 @@ describe("suasor doctor", () => {
 
   test("slack with channels configured emits no nothing-to-ingest warning (#388)", async () => {
     await run(["init"]);
-    await writeConfig('[connectors.slack]\nteam = "T1"\nchannels = ["C1"]\n');
+    await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.some((c) => c.name === "connectors.noop")).toBe(false);
@@ -696,7 +607,7 @@ describe("suasor doctor", () => {
     await run(["init"]);
     // Enabling slack with no channels adds `connectors.noop` (15) — the widest
     // name in this run — which a fixed pad(11) would have mis-aligned against.
-    await writeConfig('[connectors.slack]\nteam = "T1"\n');
+    await writeConfig("[connectors.slack]\nenabled = true\n");
     const { out } = await run(["doctor"]); // human-readable (not --json)
     expect(out).toContain("connectors.noop");
     // Rows render as `  [LABEL] <name padded> <detail>`; the name field starts at

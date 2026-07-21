@@ -17,7 +17,8 @@
  *   (best-effort, first page) to absorb publish RPC retries.
  * - **complete/reopen** — set the checkbox column (when configured) or the status
  *   single-select; **comment is unsupported** (Slack List records have no comment API).
- * - **secret** — the write-scoped token comes from `ctx.secret("token")`
+ * - **secret** — the write-scoped token comes from the unnamed pool
+ *   (`ctx.secret("tokens")`, first token; ADR-0042 決定 7)
  *   (`slack-actuator` namespace, scope `lists:write`).
  *
  * Import-clean: `@slack/web-api` is lazy-imported inside the client factory.
@@ -153,7 +154,8 @@ export function createSlackListsActuator(
   const cfg = SlackListsActuatorConfig.parse(config);
 
   async function client(ctx: ActuatorContext): Promise<SlackListsClient> {
-    const token = await ctx.secret("token");
+    const { parseTokenPool, SLACK_TOKENS_SECRET } = await import("./slack.ts");
+    const token = parseTokenPool(await ctx.secret(SLACK_TOKENS_SECRET))[0] ?? null;
     if (!token) {
       throw new Error("slack lists actuator: missing write-scoped token (secret 'token')");
     }

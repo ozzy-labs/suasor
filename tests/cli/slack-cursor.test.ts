@@ -4,7 +4,7 @@
  * via the Store, then the CLI reads/mutates it — no network or token needed.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -110,7 +110,7 @@ async function seedChannel(
 }
 
 /** Seed a `slack_teams` projection row via a SlackTeamObserved event (ADR-0037 §10). */
-async function seedTeam(teamId: string, displayName: string): Promise<void> {
+async function _seedTeam(teamId: string, displayName: string): Promise<void> {
   const prev = process.env.SUASOR_CONFIG_DIR;
   process.env.SUASOR_CONFIG_DIR = dir;
   try {
@@ -133,22 +133,13 @@ async function seedTeam(teamId: string, displayName: string): Promise<void> {
 }
 
 describe("suasor slack status / cursor reset (ADR-0016)", () => {
-  test("status names the workspace team id + resolved name (Issue #371 theme 3)", async () => {
+  test("status reads a legacy nested (per-alias) cursor flattened (ADR-0042)", async () => {
     await run(["init"]);
-    // A named-workspace config so the alias joins to a real team id; the flat
-    // `default` placeholder stays label-less (covered by the other status tests).
-    writeFileSync(
-      join(dir, "config.toml"),
-      '[connectors.slack.workspaces.acme]\nteam = "T1"\nchannels = []\n',
-    );
-    await seedCursor(JSON.stringify({ acme: { C1: "111.000000" } }));
-    await seedTeam("T1", "Acme Inc");
-    const { code, out } = await run(["slack", "status"]);
+    // Pre-ADR-0042 nested cursor: channels flatten with a max-ts merge.
+    await seedCursor(JSON.stringify({ acme: { C1: "111.000000" }, beta: { C1: "222.000000" } }));
+    const { code, out } = await run(["slack", "status", "--json"]);
     expect(code).toBe(0);
-    expect(out).toContain("[acme]");
-    // Team id + resolved name are both surfaced beside the alias header.
-    expect(out).toContain("team T1");
-    expect(out).toContain("Acme Inc");
+    expect(JSON.parse(out)).toEqual({ C1: "222.000000" });
   });
 
   test("status reports no cursor on a fresh store", async () => {
@@ -158,12 +149,11 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     expect(out).toContain("(none");
   });
 
-  test("status prints the per-workspace / channel cursor with a humanized ts (#84)", async () => {
+  test("status prints the per-channel cursor with a humanized ts (#84)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000", C2: "222.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000", C2: "222.000000" }));
     const { code, out } = await run(["slack", "status"]);
     expect(code).toBe(0);
-    expect(out).toContain("[default]");
     // The raw epoch ts is rendered as a local "YYYY-MM-DD HH:MM (… ago)" column;
     // the channel id is kept and the date prefix is deterministic (1970-01-01).
     expect(out).toContain("C1  1970-01-01");
@@ -174,15 +164,15 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
 
   test("status --json emits the cursor map", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000" }));
     const { code, out } = await run(["slack", "status", "--json"]);
     expect(code).toBe(0);
-    expect(JSON.parse(out)).toEqual({ default: { C1: "111.000000" } });
+    expect(JSON.parse(out)).toEqual({ C1: "111.000000" });
   });
 
   test("status names channels from the slack_channels projection (ADR-0037 §1)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000", D2: "222.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000", D2: "222.000000" }));
     await seedChannel("C1", "general", "public");
     await seedChannel("D2", "Ada Lovelace", "dm");
     const { code, out } = await run(["slack", "status"]);
@@ -194,7 +184,7 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
 
   test("status leaves an unresolved channel id-only (no regression, ADR-0037 §6)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000", C9: "999.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000", C9: "999.000000" }));
     await seedChannel("C1", "general", "public");
     // C9 has no projection row → falls back to the raw id (two spaces, no name).
     const { out } = await run(["slack", "status"]);
@@ -205,35 +195,35 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
 
   test("status --json adds a `names` sibling but keeps the cursor map (ADR-0037 §1)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000" }));
     await seedChannel("C1", "general", "public");
     const { code, out } = await run(["slack", "status", "--json"]);
     expect(code).toBe(0);
     const parsed = JSON.parse(out);
-    // Existing key path is untouched (back-compat); names is a raw-name sidecar.
-    expect(parsed.default).toEqual({ C1: "111.000000" });
+    // The flat cursor keys are untouched; names is a raw-name sidecar.
+    expect(parsed.C1).toBe("111.000000");
     expect(parsed.names).toEqual({ C1: "general" });
   });
 
   test("status --json omits `names` when nothing is resolved (exact prior shape)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000" }));
     const { out } = await run(["slack", "status", "--json"]);
-    expect(JSON.parse(out)).toEqual({ default: { C1: "111.000000" } });
+    expect(JSON.parse(out)).toEqual({ C1: "111.000000" });
   });
 
   test("cursor reset preview names the targeted channel (ADR-0037 §1)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000" }));
     await seedChannel("C1", "general", "public");
     const preview = await run(["slack", "cursor", "reset", "--channel", "C1"]);
     expect(preview.code).toBe(0);
-    expect(preview.out).toContain("[default] C1 #general");
+    expect(preview.out).toContain("C1 #general");
   });
 
   test("cursor backfill preview names the targeted channel (ADR-0037 §1)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "999999999.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "999999999.000000" }));
     await seedChannel("C1", "general", "public");
     const preview = await run([
       "slack",
@@ -245,34 +235,34 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
       "2026-01-01",
     ]);
     expect(preview.code).toBe(0);
-    expect(preview.out).toContain("[default] C1 #general:");
+    expect(preview.out).toContain("C1 #general:");
   });
 
   test("cursor reset without --yes previews and does not mutate", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000", C2: "222.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000", C2: "222.000000" }));
     const preview = await run(["slack", "cursor", "reset", "--channel", "C1"]);
     expect(preview.code).toBe(0);
     expect(preview.out).toContain("would reset");
-    expect(preview.out).toContain("[default] C1");
+    expect(preview.out).toContain("C1");
     // Unchanged: C1 still present.
     const status = await run(["slack", "status", "--json"]);
-    expect(JSON.parse(status.out)).toEqual({ default: { C1: "111.000000", C2: "222.000000" } });
+    expect(JSON.parse(status.out)).toEqual({ C1: "111.000000", C2: "222.000000" });
   });
 
   test("cursor reset --yes removes the channel; others remain", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000", C2: "222.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000", C2: "222.000000" }));
     const reset = await run(["slack", "cursor", "reset", "--channel", "C1", "--yes"]);
     expect(reset.code).toBe(0);
     expect(reset.out).toContain("reset:");
     const status = await run(["slack", "status", "--json"]);
-    expect(JSON.parse(status.out)).toEqual({ default: { C2: "222.000000" } });
+    expect(JSON.parse(status.out)).toEqual({ C2: "222.000000" });
   });
 
   test("cursor reset --all --yes clears everything", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "111.000000" }, acme: { C9: "9.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "111.000000", C9: "9.000000" }));
     const reset = await run(["slack", "cursor", "reset", "--all", "--yes"]);
     expect(reset.code).toBe(0);
     const status = await run(["slack", "status"]);
@@ -288,7 +278,7 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
 
   test("cursor backfill without --yes previews and does not mutate (#57)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "999999999.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "999999999.000000" }));
     const preview = await run([
       "slack",
       "cursor",
@@ -301,12 +291,12 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     expect(preview.code).toBe(0);
     expect(preview.out).toContain("would backfill");
     const status = await run(["slack", "status", "--json"]);
-    expect(JSON.parse(status.out)).toEqual({ default: { C1: "999999999.000000" } });
+    expect(JSON.parse(status.out)).toEqual({ C1: "999999999.000000" });
   });
 
   test("cursor backfill --yes lowers the channel cursor to the floor (#57)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "999999999.000000" } }));
+    await seedCursor(JSON.stringify({ C1: "999999999.000000" }));
     const floorTs = `${Math.floor(Date.parse("2026-01-01") / 1000)}.000000`;
     const reset = await run([
       "slack",
@@ -321,12 +311,12 @@ describe("suasor slack status / cursor reset (ADR-0016)", () => {
     expect(reset.code).toBe(0);
     expect(reset.out).toContain("backfilled");
     const status = await run(["slack", "status", "--json"]);
-    expect(JSON.parse(status.out)).toEqual({ default: { C1: floorTs } });
+    expect(JSON.parse(status.out)).toEqual({ C1: floorTs });
   });
 
   test("cursor backfill warns when --since is not older than the current cursor (#57 footgun)", async () => {
     await run(["init"]);
-    await seedCursor(JSON.stringify({ default: { C1: "100.000000" } })); // current is old
+    await seedCursor(JSON.stringify({ C1: "100.000000" })); // current is old
     // 2026-01-01 ts (~1.7e9) is newer than 100 → advancing, not backfilling.
     const { err } = await run([
       "slack",
@@ -367,7 +357,9 @@ describe("suasor slack status / cursor — per-thread cursors (ADR-0015 R1, #418
     await run(["init"]);
     await seedCursor(
       JSON.stringify({
-        default: { C1: "111.000000", "C1#100.000000": "150.000000", "C1#200.000000": "250.000000" },
+        C1: "111.000000",
+        "C1#100.000000": "150.000000",
+        "C1#200.000000": "250.000000",
       }),
     );
     const { code, out } = await run(["slack", "status"]);
@@ -381,7 +373,7 @@ describe("suasor slack status / cursor — per-thread cursors (ADR-0015 R1, #418
 
   test("status --json keeps the raw per-thread cursor keys", async () => {
     await run(["init"]);
-    const cursor = { default: { C1: "111.000000", "C1#100.000000": "150.000000" } };
+    const cursor = { C1: "111.000000", "C1#100.000000": "150.000000" };
     await seedCursor(JSON.stringify(cursor));
     const { code, out } = await run(["slack", "status", "--json"]);
     expect(code).toBe(0);
@@ -391,23 +383,19 @@ describe("suasor slack status / cursor — per-thread cursors (ADR-0015 R1, #418
   test("cursor reset --channel --yes clears the channel's thread cursors too", async () => {
     await run(["init"]);
     await seedCursor(
-      JSON.stringify({
-        default: { C1: "111.000000", "C1#100.000000": "150.000000", C2: "222.000000" },
-      }),
+      JSON.stringify({ C1: "111.000000", "C1#100.000000": "150.000000", C2: "222.000000" }),
     );
     const reset = await run(["slack", "cursor", "reset", "--channel", "C1", "--yes"]);
     expect(reset.code).toBe(0);
     expect(reset.out).toContain("(+1 thread)");
     const status = await run(["slack", "status", "--json"]);
     // C1 and its thread mark are gone; C2 (and any of its threads) untouched.
-    expect(JSON.parse(status.out)).toEqual({ default: { C2: "222.000000" } });
+    expect(JSON.parse(status.out)).toEqual({ C2: "222.000000" });
   });
 
   test("cursor backfill --channel --yes clears the channel's thread cursors", async () => {
     await run(["init"]);
-    await seedCursor(
-      JSON.stringify({ default: { C1: "999999999.000000", "C1#100.000000": "150.000000" } }),
-    );
+    await seedCursor(JSON.stringify({ C1: "999999999.000000", "C1#100.000000": "150.000000" }));
     const floorTs = `${Math.floor(Date.parse("2026-01-01") / 1000)}.000000`;
     const backfill = await run([
       "slack",
@@ -422,6 +410,6 @@ describe("suasor slack status / cursor — per-thread cursors (ADR-0015 R1, #418
     expect(backfill.code).toBe(0);
     expect(backfill.out).toContain("thread cursor(s) cleared");
     const status = await run(["slack", "status", "--json"]);
-    expect(JSON.parse(status.out)).toEqual({ default: { C1: floorTs } });
+    expect(JSON.parse(status.out)).toEqual({ C1: floorTs });
   });
 });

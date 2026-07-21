@@ -24,9 +24,9 @@ afterEach(() => {
 
 async function run(args: string[]): Promise<{ code: number; out: string; err: string }> {
   const prev = process.env.SUASOR_CONFIG_DIR;
-  const prevTok = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+  const prevTok = process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
   process.env.SUASOR_CONFIG_DIR = dir;
-  delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+  delete process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
   let out = "";
   let err = "";
   const cli = buildCli();
@@ -52,8 +52,8 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
   } finally {
     if (prev === undefined) delete process.env.SUASOR_CONFIG_DIR;
     else process.env.SUASOR_CONFIG_DIR = prev;
-    if (prevTok === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
-    else process.env.SUASOR_CONNECTOR_SLACK_TOKEN = prevTok;
+    if (prevTok === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
+    else process.env.SUASOR_CONNECTOR_SLACK_TOKENS = prevTok;
   }
 }
 
@@ -110,27 +110,15 @@ describe("suasor slack resolve-names (ADR-0037 §11)", () => {
     expect(parsed.channels).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
     expect(parsed.users).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
     expect(parsed.teams).toEqual({ resolved: 0, skipped: 0, degraded: 0 });
-    expect(parsed.tokenlessWorkspaces).toEqual([]);
-    expect(parsed.orphanTeamIds).toBe(0);
   });
 
-  test("a tokenless workspace with ingested ids is skipped, not fetched", async () => {
+  test("ingested ids with no token pool exit 1 with guidance (no network)", async () => {
     await run(["init"]);
-    // A source under team `default` (the flat/default workspace), but no token
-    // configured → the workspace is skipped whole, so nothing reaches Slack.
-    await seedSource({ team: "default", channel: "C1", user: "U1" });
-    const { code, out, err } = await run(["slack", "resolve-names"]);
-    expect(code).toBe(0);
-    expect(out).toContain("channels: 0 resolved");
-    expect(err).toContain("skipped workspace(s) with no token: default");
-  });
-
-  test("ids under a team no workspace claims are reported as orphans (no network)", async () => {
-    await run(["init"]);
-    await seedSource({ team: "TX", channel: "CX", user: "UX" });
-    const { code, out } = await run(["slack", "resolve-names", "--json"]);
-    expect(code).toBe(0);
-    // No configured workspace has team `TX` → both ids are orphans, none fetched.
-    expect(JSON.parse(out).orphanTeamIds).toBe(2);
+    // A source exists but the pool is empty → the pass cannot resolve anything
+    // and fails loudly with the recovery command (ADR-0042).
+    await seedSource({ team: "T1", channel: "C1", user: "U1" });
+    const { code, err } = await run(["slack", "resolve-names"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no Slack token pool configured");
   });
 });

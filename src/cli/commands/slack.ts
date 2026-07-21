@@ -1,9 +1,15 @@
 /**
- * Slack operational verbs (ADR-0011): `slack auth set` · `slack auth test` ·
- * `slack conversations`. These are operational commands, not ingest — they are
+ * Slack operational verbs (ADR-0011 / ADR-0042): `slack auth set` · `slack auth
+ * test` · `slack conversations` · `slack status` · `slack cursor …` ·
+ * `slack resolve-names`. These are operational commands, not ingest — they are
  * Slack-specific (the generic connector contract stays `sync`-only, ADR-0007)
- * and exist to close the onboarding gap: store a token, verify its scopes, and
- * discover conversation ids without hand-hunting them.
+ * and exist to close the onboarding gap: store the token pool, verify each
+ * token's scopes, and discover conversation ids without hand-hunting them.
+ *
+ * Workspace-less (ADR-0042): there is no `--workspace` anywhere. Tokens live in
+ * one unnamed pool (`connector:slack:tokens`, env
+ * `SUASOR_CONNECTOR_SLACK_TOKENS`, newline/comma separated, replace-all) and
+ * every verb spans the whole pool.
  *
  * Lazy-import discipline (NFR-PRF-1): top-level imports are clipanion + the
  * import-clean secret-entry helper (`../read-secret.ts`, no SDK) only. The
@@ -15,55 +21,10 @@ import { Command, Option } from "clipanion";
 // Type-only imports are erased at compile time, so they add no runtime require
 // and keep the lazy-import discipline (NFR-PRF-1) intact.
 import type { KeychainBackend } from "../../connectors/secrets.ts";
-import type {
-  ConversationsResult,
-  ConversationType,
-  SlackConversation,
-} from "../../connectors/slack/conversations.ts";
+import type { ConversationType, SlackConversation } from "../../connectors/slack/conversations.ts";
 import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
 const SLACK = "slack";
-
-/** Shared `--workspace <alias>` description (ADR-0014). */
-const WORKSPACE_DESC =
-  "Workspace alias for a multi-workspace setup (omit to auto-select when unambiguous).";
-
-/**
- * Alias of the flat / single-workspace (`[connectors.slack]`) config shape. Local
- * mirror of `DEFAULT_WORKSPACE_ALIAS` in `../../connectors/slack.ts` so the pure
- * {@link chooseWorkspaceAlias} helper stays import-clean (NFR-PRF-1, no runtime
- * require of the connector module just to read a constant).
- */
-const DEFAULT_WORKSPACE_ALIAS = "default";
-
-/**
- * Decide which workspace alias an operational verb should act on, from the
- * `--workspace` flag and the configured alias set (Issue #371 theme 1, ADR-0014).
- * Pure so the resolution is unit-testable without config / keychain:
- *
- * - an explicit `--workspace` always wins (`ok`, that alias);
- * - a flat / single-workspace config (0 or 1 configured alias) auto-selects the
- *   sole alias — `undefined` for the flat shape (the `token` secret) or the one
- *   named alias (so a named-only setup is no longer a silent no-op / wrong-secret
- *   lookup);
- * - a multi-workspace config that declares a `default` alias falls back to it;
- * - a multi-workspace config with 2+ aliases and no `default` is ambiguous
- *   (`!ok`) — the caller lists the available aliases and asks for `--workspace`
- *   instead of silently touching the wrong (or a non-existent) workspace.
- */
-export function chooseWorkspaceAlias(
-  explicit: string | undefined,
-  configuredAliases: readonly string[],
-):
-  | { readonly ok: true; readonly alias: string | undefined }
-  | { readonly ok: false; readonly aliases: readonly string[] } {
-  if (explicit !== undefined) return { ok: true, alias: explicit };
-  if (configuredAliases.length <= 1) return { ok: true, alias: configuredAliases[0] };
-  if (configuredAliases.includes(DEFAULT_WORKSPACE_ALIAS)) {
-    return { ok: true, alias: DEFAULT_WORKSPACE_ALIAS };
-  }
-  return { ok: false, aliases: configuredAliases };
-}
 
 /**
  * Render one `slack conversations` table row (pure, so it is unit-testable
@@ -81,110 +42,96 @@ export function formatConversationRow(
   return `  ${joined}       ${conv.id}  ${conv.displayName}${archived}${engagement}`;
 }
 
-/** `slack auth set` — store the Slack token in the OS keychain. */
+/** `slack auth set` — replace the Slack token pool in the OS keychain. */
 export class SlackAuthSetCommand extends Command {
   static override paths = [[SLACK, "auth", "set"]];
 
   static override usage = Command.Usage({
     category: "Slack",
-    description: "Store the Slack token in the OS keychain (service 'suasor').",
+    description: "Store the Slack token pool in the OS keychain (service 'suasor').",
     details: `
-      Persists the token so 'slack auth test', 'slack conversations', and
-      'slack sync' resolve it without it ever touching config.toml (NFR-PRV-4).
-      Pass --token, or omit it to read the token from stdin (e.g. a pipe). Use
-      --workspace <alias> to store a per-workspace token (ADR-0014).
+      Persists the unnamed token pool (ADR-0042) so 'slack auth test',
+      'slack conversations', and 'slack sync' resolve it without it ever touching
+      config.toml (NFR-PRV-4). Pass --token (comma-separated for multiple), or
+      omit it to read from stdin. The pool is **replaced as a whole** on every
+      set, so a dead token never lingers by accident. One org-level (org-wide
+      app) token can cover a whole Enterprise Grid; otherwise add one workspace
+      token per workspace you need.
     `,
     examples: [
-      ["Store a token from stdin", "echo xoxb-… | suasor slack auth set"],
-      ["Store a token inline", "suasor slack auth set --token xoxb-…"],
-      ["Store a workspace token", "suasor slack auth set --workspace acme --token xoxb-…"],
+      ["Store one token from stdin", "echo xoxb-… | suasor slack auth set"],
+      ["Store a pool of two", "suasor slack auth set --token xoxb-aaa…,xoxp-bbb…"],
     ],
   });
 
-  token = Option.String("--token", { description: "Token value (omit to read from stdin)." });
-  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  token = Option.String("--token", {
+    description: "Token value(s), comma-separated (omit to read from stdin).",
+  });
 
   override async execute(): Promise<number> {
-    let token = this.token?.trim();
-    if (!token) {
+    let raw = this.token?.trim();
+    if (!raw) {
       // On a TTY prompt to stderr (stdout stays machine-readable over a pipe).
       // The read is line-based and echo-suppressed (Issue #383).
       if (isInteractiveStdin(this.context.stdin)) {
-        this.context.stderr.write("Paste the Slack token and press Enter (input is not echoed):\n");
+        this.context.stderr.write(
+          "Paste the Slack token(s) — comma-separated for multiple — and press Enter " +
+            "(input is not echoed):\n",
+        );
       }
-      token = (
-        await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
-      ).trim();
+      raw = (await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })).trim();
     }
-    if (!token) {
+
+    const [{ storeSecret }, { parseTokenPool, SLACK_TOKENS_SECRET }] = await Promise.all([
+      import("../../connectors/secrets.ts"),
+      import("../../connectors/slack.ts"),
+    ]);
+    const pool = parseTokenPool(raw);
+    if (pool.length === 0) {
       this.context.stderr.write("error: no token provided (pass --token or pipe it on stdin)\n");
       return 1;
     }
 
-    // Resolve which workspace to store under (Issue #371 theme 1): an explicit
-    // --workspace wins; otherwise a single-workspace config auto-selects, and a
-    // multi-workspace config with no `default` errors rather than silently
-    // storing under the wrong (flat `token`) secret.
-    const resolved = await resolveWorkspaceAlias(this.workspace);
-    if (!resolved.ok) {
-      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
-      return 1;
-    }
-    const alias = resolved.alias;
-
     const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
-    const [{ storeSecret }, { workspaceSecretName }] = await Promise.all([
-      import("../../connectors/secrets.ts"),
-      import("../../connectors/slack.ts"),
-    ]);
-    await storeSecret(SLACK, workspaceSecretName(alias), token, keychain ? { keychain } : {});
-    const where = alias ? ` for workspace '${alias}'` : "";
+    // Canonical storage form: newline-separated (replace-all, ADR-0042 決定 2).
+    await storeSecret(SLACK, SLACK_TOKENS_SECRET, pool.join("\n"), keychain ? { keychain } : {});
     this.context.stdout.write(
-      `Stored Slack token${where} in the OS keychain (service 'suasor').\n`,
+      `Stored ${pool.length} Slack token(s) in the OS keychain (service 'suasor'); ` +
+        "the pool was replaced as a whole.\n",
     );
-    const verify = alias ? ` --workspace ${alias}` : "";
-    this.context.stdout.write(`next: verify it with \`suasor slack auth test${verify}\`.\n`);
+    this.context.stdout.write("next: verify it with `suasor slack auth test`.\n");
     return 0;
   }
 }
 
-/** `slack auth test` — verify the token and report granted scopes + readiness. */
+/** `slack auth test` — verify every pool token and report scopes + readiness. */
 export class SlackAuthTestCommand extends Command {
   static override paths = [[SLACK, "auth", "test"]];
 
   static override usage = Command.Usage({
     category: "Slack",
-    description: "Verify the Slack token and report granted scopes + per-feature readiness.",
+    description: "Verify every pool token and report granted scopes + per-feature readiness.",
     details: `
-      Calls auth.test once: prints the resolved principal/team/user, the granted
-      OAuth scopes, and a 'features:' block assessing each ingestion feature as
-      READY / READY (degraded) / MISSING <scope> / N/A (ADR-0011). Readiness is a
-      scope verdict only — it does not guarantee channel membership.
+      Calls auth.test once per pool token: prints each token's resolved
+      principal/team/user, the granted OAuth scopes, and a 'features:' block
+      assessing each ingestion feature as READY / READY (degraded) / MISSING
+      <scope> / N/A (ADR-0011). Readiness is a scope verdict only — it does not
+      guarantee channel membership. A failing token is reported as dead (replace
+      the pool with 'slack auth set') and the command exits 1.
     `,
-    examples: [
-      ["Test the stored token", "suasor slack auth test"],
-      ["Test a workspace's token", "suasor slack auth test --workspace acme"],
-    ],
+    examples: [["Test the stored pool", "suasor slack auth test"]],
   });
 
-  json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
-  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  json = Option.Boolean("--json", false, { description: "Emit the results as JSON." });
 
   override async execute(): Promise<number> {
-    const resolved = await resolveWorkspaceAlias(this.workspace);
-    if (!resolved.ok) {
-      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
-      return 1;
-    }
-    const alias = resolved.alias;
-
-    const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
+    const [{ resolveSecret }, { parseTokenPool, SLACK_TOKENS_SECRET }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
     ]);
-    const token = await resolveSecret(SLACK, workspaceSecretName(alias));
-    if (!token) {
-      this.context.stderr.write(await noTokenError(alias));
+    const pool = parseTokenPool(await resolveSecret(SLACK, SLACK_TOKENS_SECRET));
+    if (pool.length === 0) {
+      this.context.stderr.write(await noTokenError());
       return 1;
     }
 
@@ -193,79 +140,106 @@ export class SlackAuthTestCommand extends Command {
       import("../../connectors/slack/scopes.ts"),
     ]);
 
-    let result: Awaited<ReturnType<typeof testToken>>;
-    try {
-      result = await testToken(token);
-    } catch (cause) {
-      this.context.stderr.write(
-        `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
-      );
-      return 1;
+    type TokenReport =
+      | ({ index: number; ok: true } & Awaited<ReturnType<typeof testToken>> & {
+            features: ReturnType<typeof assessReadiness>;
+          })
+      | { index: number; ok: false; error: string };
+    const reports: TokenReport[] = [];
+    for (const [i, token] of pool.entries()) {
+      try {
+        const result = await testToken(token);
+        reports.push({
+          index: i + 1,
+          ok: true,
+          ...result,
+          features: assessReadiness(result.scopes, result.principal),
+        });
+      } catch (cause) {
+        reports.push({
+          index: i + 1,
+          ok: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
     }
+    const anyDead = reports.some((r) => !r.ok);
 
     if (this.json) {
-      const features = assessReadiness(result.scopes, result.principal);
-      this.context.stdout.write(`${JSON.stringify({ ...result, features }, null, 2)}\n`);
-      return 0;
+      this.context.stdout.write(`${JSON.stringify({ tokens: reports }, null, 2)}\n`);
+      return anyDead ? 1 : 0;
     }
 
-    this.context.stdout.write(
-      `ok: ${result.principal} token for ${result.user} @ ${result.team} (${result.teamId})\n`,
-    );
-    // Surface the resolved user id (Issue #371 theme 2): it is the value the
-    // operator copies into `self_user_id` so `demand.list` can detect their
-    // own @mentions. Without it, demand silently degrades to DM-only (ADR-0012).
-    const section = alias ? `[connectors.slack.workspaces.${alias}]` : "[connectors.slack]";
-    this.context.stdout.write(`user_id: ${result.userId}\n`);
-    this.context.stdout.write(
-      `note: add \`self_user_id = "${result.userId}"\` under ${section} so demand.list ` +
-        "detects your @mentions — without it, demand degrades to DM-only (ADR-0012).\n",
-    );
-    this.context.stdout.write(`scopes: ${result.scopes || "(none reported)"}\n`);
-    this.context.stdout.write("features:\n");
-    for (const line of renderFeaturesBlock(result.scopes, result.principal)) {
-      this.context.stdout.write(`${line}\n`);
+    const label = (i: number): string => (pool.length > 1 ? `token #${i}: ` : "");
+    const userIds: string[] = [];
+    for (const r of reports) {
+      if (!r.ok) {
+        this.context.stderr.write(
+          `${label(r.index)}dead — ${r.error} (replace the pool with \`suasor slack auth set\`)\n`,
+        );
+        continue;
+      }
+      this.context.stdout.write(
+        `${label(r.index)}ok: ${r.principal} token for ${r.user} @ ${r.team} (${r.teamId})\n`,
+      );
+      this.context.stdout.write(`user_id: ${r.userId}\n`);
+      if (r.principal === "user") userIds.push(r.userId);
+      this.context.stdout.write(`scopes: ${r.scopes || "(none reported)"}\n`);
+      this.context.stdout.write("features:\n");
+      for (const line of renderFeaturesBlock(r.scopes, r.principal)) {
+        this.context.stdout.write(`${line}\n`);
+      }
     }
-    return 0;
+    // Surface the self-id guidance once (ADR-0012 / ADR-0042 決定 2): the ids
+    // the operator copies into `self_user_ids` so `demand.list` detects their
+    // own @mentions. Without them, demand silently degrades to DM-only.
+    const idHint =
+      userIds.length > 0 ? `, e.g. \`self_user_ids = ${JSON.stringify(userIds)}\`` : "";
+    this.context.stdout.write(
+      "note: add your own user id(s) to `self_user_ids` under [connectors.slack] so " +
+        `demand.list detects your @mentions${idHint} — without it, demand degrades ` +
+        "to DM-only (ADR-0012).\n",
+    );
+    return anyDead ? 1 : 0;
   }
 }
 
-/** `slack conversations` — list conversations the token can see + a config block. */
+/** One Grid workspace surfaced by the pool sweep (grouping / labels only). */
+interface SweepTeam {
+  readonly id: string;
+  /** Workspace name, or the id when unknown (matches `SlackTeam`). */
+  readonly name: string;
+}
+
+/** `slack conversations` — list conversations the pool can see + a config block. */
 export class SlackConversationsCommand extends Command {
   static override paths = [[SLACK, "conversations"]];
 
   static override usage = Command.Usage({
     category: "Slack",
-    description: "List conversations the token can see and print a paste-ready config block.",
+    description: "List conversations the token pool can see and print a paste-ready config block.",
     details: `
-      Enumerates public/private channels + DMs + group-DMs (users.conversations),
-      type by type, so a missing listing scope self-reports per type rather than
-      failing the sweep (ADR-0011). Prints a [connectors.slack] block you can
-      paste into config.toml, then run 'suasor slack sync'.
+      Enumerates public/private channels + DMs + group-DMs (users.conversations)
+      across **every pool token** (ADR-0042), type by type, so a missing listing
+      scope self-reports per type rather than failing the sweep (ADR-0011).
+      Prints a flat [connectors.slack] block you can paste into config.toml, then
+      run 'suasor slack sync'.
 
-      On Enterprise Grid, an org-level (org-wide app) token auto-enumerates every
-      workspace it is approved for (auth.teams.list) and lists channels across all
-      of them, grouped per workspace with a paste-ready multi-workspace block
-      (Issue #350). Pass --team-id <T…> to scope to a single workspace. A
-      workspace-level token cannot span the grid: it lists its own workspace and,
-      if --team-id is given, warns (Slack ignores it) — use a per-workspace token
-      each via --workspace <alias> instead (ADR-0014).
+      An org-level (org-wide app) token additionally auto-enumerates every Grid
+      workspace it is approved for (auth.teams.list). Rows from multiple
+      workspaces are grouped with a workspace label; pass --team-id <T…> to scope
+      an org-level token to a single workspace.
 
-      A channel shared across several Grid workspaces (one global channel id) is
-      listed once — under its owner (the lexicographically smallest alias) — and
-      marked "shared across [<aliases>]"; --json adds a per-row sharedAcross array.
-      In the config block it is a real channels entry only under its owner and a
-      "# <id> shared, owned by <alias>" comment elsewhere, so pasting the whole
-      block ingests it exactly once (ADR-0038).
+      A channel visible via several workspaces (one global channel id) is listed
+      once and marked "shared across [<workspaces>]"; --json adds a per-row
+      sharedAcross array. In the config block it appears once (a comment
+      elsewhere) — pure paste hygiene: with the canonical externalId (ADR-0042)
+      a duplicated entry would only cost a redundant fetch.
 
-      Pass --new to show only the config *drift* (ADR-0039): the conversations you
-      are a member of but have not listed in config (paste-ready), plus a warning
-      for configured channels the token can no longer reach (left/archived/
-      renamed). This avoids hunting a long full listing for what changed. --new
-      defaults its sweep to public+private (DMs/group-DMs are noise); pass --types
-      to widen it. --new --json emits { new: [...], removed: [...] } — the plain
-      (full-listing) --json shape is unchanged. --new resolves a single workspace
-      (--workspace); Enterprise Grid auto-enumeration is skipped.
+      Pass --new to show only the config *drift* (ADR-0039): the conversations
+      you are a member of (via any pool token) but have not listed in config
+      (paste-ready), plus a warning for configured channels no token can reach.
+      --new --json emits { new: [...], removed: [...] }.
     `,
     examples: [
       ["List everything visible", "suasor slack conversations"],
@@ -288,10 +262,9 @@ export class SlackConversationsCommand extends Command {
   limit = Option.String("--limit", { description: "Maximum number of conversations to list." });
   teamId = Option.String("--team-id", {
     description:
-      "Enterprise Grid workspace (team) id to scope the listing to (org-level token only, #350).",
+      "Enterprise Grid workspace (team) id to scope an org-level token's sweep to (#350).",
   });
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
-  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
   sort = Option.String("--sort", {
     description: "Sort order: last_self_post (engagement; User Token only, ADR-0013).",
   });
@@ -337,28 +310,20 @@ export class SlackConversationsCommand extends Command {
       return 1;
     }
 
-    const resolved = await resolveWorkspaceAlias(this.workspace);
-    if (!resolved.ok) {
-      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
-      return 1;
-    }
-    const alias = resolved.alias;
-
-    const [{ resolveSecret }, { workspaceSecretName }] = await Promise.all([
+    const [{ resolveSecret }, { parseTokenPool, SLACK_TOKENS_SECRET }] = await Promise.all([
       import("../../connectors/secrets.ts"),
       import("../../connectors/slack.ts"),
     ]);
-    const token = await resolveSecret(SLACK, workspaceSecretName(alias));
-    if (!token) {
-      this.context.stderr.write(await noTokenError(alias));
+    const pool = parseTokenPool(await resolveSecret(SLACK, SLACK_TOKENS_SECRET));
+    if (pool.length === 0) {
+      this.context.stderr.write(await noTokenError());
       return 1;
     }
 
-    // --new shows only the config drift (ADR-0039) and is scoped to a single
-    // workspace, so it takes a dedicated, simpler path (no Grid auto-enumeration,
-    // no engagement sort). Everything above (arg validation, workspace + token
-    // resolution) is shared.
-    if (this.new) return this.executeNew(alias, token, types, limit);
+    // --new shows only the config drift (ADR-0039) and needs no Grid
+    // auto-enumeration / engagement sort. Everything above (arg validation,
+    // pool resolution) is shared.
+    if (this.new) return this.executeNew(pool, types, limit);
 
     const [
       { testToken },
@@ -383,35 +348,59 @@ export class SlackConversationsCommand extends Command {
     );
 
     try {
-      // One auth.test resolves the team id for the config block + the principal
-      // (engagement sort is User Token only — ADR-0013).
-      const { teamId, principal, isEnterpriseInstall } = await testToken(token);
-      // --team-id only scopes the sweep on an org-level (org-wide app) token;
-      // Slack silently ignores it for a workspace-level token, so passing it
-      // there would tag rows with a workspace Slack never honoured (Issue #350).
-      // Only scope when the token can honour it; warn (below) otherwise.
-      const scopeTeamId = this.teamId && isEnterpriseInstall ? this.teamId : undefined;
+      // Sweep every pool token (ADR-0042): each token contributes the
+      // conversations it can see, tagged with its workspace (team) so rows can
+      // be grouped. An org-level token additionally auto-enumerates its Grid
+      // workspaces (#350); a workspace token contributes its own workspace.
+      const merged: SlackConversation[] = [];
+      const missingScopes: Record<string, string> = {};
+      const teamsById = new Map<string, SweepTeam>();
+      let firstTeamId: string | undefined;
+      let anyEnterprise = false;
+      let engagementToken: string | undefined;
+      let liveTokens = 0;
 
-      // Enterprise Grid auto-enumeration (#350): an org-level token with no
-      // explicit --team-id sweeps every workspace the org-wide app is approved
-      // for (auth.teams.list), not just its default one. Enumeration is
-      // best-effort — a non-Grid token, a missing scope, or a single workspace
-      // falls back to the current single sweep (teams.length <= 1).
-      const teams =
-        isEnterpriseInstall && !this.teamId
-          ? await listTeams(token, { onProgress: () => progress.tick() })
-          : [];
-      const multi = teams.length > 1;
-      const aliasByTeam = multi ? workspaceAliases(teams) : new Map<string, string>();
+      for (const [i, token] of pool.entries()) {
+        let identity: Awaited<ReturnType<typeof testToken>>;
+        try {
+          identity = await testToken(token);
+        } catch (cause) {
+          this.context.stderr.write(
+            `warning: token #${i + 1} is dead (${
+              cause instanceof Error ? cause.message : String(cause)
+            }) — replace the pool with \`suasor slack auth set\`\n`,
+          );
+          continue;
+        }
+        liveTokens += 1;
+        firstTeamId = firstTeamId ?? identity.teamId;
+        if (identity.principal === "user" && engagementToken === undefined) {
+          engagementToken = token;
+        }
+        if (identity.isEnterpriseInstall) anyEnterprise = true;
+        // --team-id only scopes the sweep on an org-level (org-wide app) token;
+        // Slack silently ignores it for a workspace-level token (Issue #350).
+        const scopeTeamId = this.teamId && identity.isEnterpriseInstall ? this.teamId : undefined;
 
-      let result: ConversationsResult;
-      if (multi) {
-        // Sweep each workspace and merge; every row is tagged with its team so
-        // the listing + config block can group by workspace. Missing listing
-        // scopes are unioned across workspaces (one warning per type).
-        const merged: SlackConversation[] = [];
-        const missingScopes: Record<string, string> = {};
-        for (const team of teams) {
+        // Enterprise Grid auto-enumeration (#350): an org-level token with no
+        // explicit --team-id sweeps every workspace the org-wide app is
+        // approved for. Best-effort — non-Grid / missing scope / single
+        // workspace falls back to the token's own workspace.
+        const gridTeams =
+          identity.isEnterpriseInstall && !this.teamId
+            ? await listTeams(token, { onProgress: () => progress.tick() })
+            : [];
+        const sweepTeams: SweepTeam[] =
+          gridTeams.length > 1
+            ? gridTeams
+            : [
+                {
+                  id: scopeTeamId ?? identity.teamId,
+                  name: scopeTeamId ?? identity.team ?? identity.teamId,
+                },
+              ];
+        for (const team of sweepTeams) {
+          if (!teamsById.has(team.id)) teamsById.set(team.id, team);
           const r = await listConversations(token, {
             ...(types ? { types } : {}),
             teamId: team.id,
@@ -419,29 +408,49 @@ export class SlackConversationsCommand extends Command {
             onProgress: () => progress.tick(),
           });
           merged.push(...r.conversations);
-          for (const [type, scope] of Object.entries(r.missingScopes)) missingScopes[type] = scope;
+          for (const [type, scope] of Object.entries(r.missingScopes)) {
+            missingScopes[type] = scope;
+          }
         }
-        // --limit caps the merged total across workspaces (parity with the
-        // single-sweep limit, which caps the output not the fetch).
-        const capped = limit !== undefined ? merged.slice(0, limit) : merged;
-        result = { conversations: capped, missingScopes };
-      } else {
-        result = await listConversations(token, {
-          ...(types ? { types } : {}),
-          ...(limit !== undefined ? { limit } : {}),
-          ...(scopeTeamId ? { teamId: scopeTeamId } : {}),
-          includeArchived: this.includeArchived,
-          onProgress: () => progress.tick(),
-        });
       }
+      if (liveTokens === 0) {
+        progress.finish();
+        this.context.stderr.write(
+          "error: every pool token failed auth.test — replace the pool " +
+            "(`suasor slack auth set` / SUASOR_CONNECTOR_SLACK_TOKENS)\n",
+        );
+        return 1;
+      }
+      if (this.teamId && !anyEnterprise) {
+        this.context.stderr.write(
+          `warning: --team-id is ignored for workspace-level tokens (Slack honours it only ` +
+            `for org-level/org-wide-app tokens); listed each token's own workspace instead.\n`,
+        );
+      }
+
+      // Exact duplicates (two tokens of the same workspace listing the same
+      // channel) collapse first; the cross-workspace collapse happens below.
+      const seenRows = new Set<string>();
+      let conversations = merged.filter((c) => {
+        const key = `${c.teamId ?? ""}:${c.id}`;
+        if (seenRows.has(key)) return false;
+        seenRows.add(key);
+        return true;
+      });
+      // --limit caps the merged total across the pool (parity with the old
+      // single-sweep limit, which caps the output not the fetch).
+      if (limit !== undefined) conversations = conversations.slice(0, limit);
+
+      const teams = [...teamsById.values()];
+      const multi = teams.length > 1;
+      const aliasByTeam = workspaceAliases(teams);
 
       // Engagement axis (--sort=last_self_post): resolve each conversation's
       // last self-post ts via search.messages and sort by it. Requires a User
-      // Token; a Bot Token degrades to N/A and the default order (ADR-0013).
+      // Token; a pool with none degrades to N/A and the default order (ADR-0013).
       let lastSelfPost: Map<string, string> | null = null;
-      let conversations = result.conversations;
       if (this.sort === "last_self_post") {
-        if (principal !== "user") {
+        if (engagementToken === undefined) {
           progress.finish();
           this.context.stderr.write(
             "warning: --sort=last_self_post is N/A (User Token only) — listing in default order\n",
@@ -450,7 +459,9 @@ export class SlackConversationsCommand extends Command {
           const { searchLastSelfPost, sortByLastSelfPost } = await import(
             "../../connectors/slack/search.ts"
           );
-          lastSelfPost = await searchLastSelfPost(token, { onProgress: () => progress.tick() });
+          lastSelfPost = await searchLastSelfPost(engagementToken, {
+            onProgress: () => progress.tick(),
+          });
           conversations = sortByLastSelfPost(conversations, lastSelfPost);
           progress.finish();
           this.context.stderr.write(
@@ -460,12 +471,11 @@ export class SlackConversationsCommand extends Command {
       }
       progress.finish();
 
-      // Collapse the multi-workspace sweep by global channel id (display
-      // hygiene). With the canonical externalId (ADR-0042) a shared channel
-      // ingests identically wherever it is configured — the listing just shows
-      // it once (placed under the smallest alias, purely for stable display)
-      // and marks which aliases it spans. Single-workspace / --team-id sweeps
-      // have no cross-workspace duplication, so `displayed` stays raw there.
+      // Collapse the sweep by global channel id (display hygiene). With the
+      // canonical externalId (ADR-0042) a shared channel ingests identically
+      // wherever it is configured — the listing just shows it once (placed
+      // under the smallest workspace label, purely for stable display) and
+      // marks which workspaces it spans.
       const aliasOfRow = (c: SlackConversation): string =>
         (c.teamId && aliasByTeam.get(c.teamId)) || c.teamId || "";
       const collapsed = multi
@@ -476,34 +486,16 @@ export class SlackConversationsCommand extends Command {
             })),
           )
         : null;
-      // channel id → the aliases it is shared across (ascending), only for the
-      // ≥2-alias channels; drives the `sharedAcross` JSON field + text note.
+      // channel id → the workspaces it is shared across (ascending), only for
+      // the ≥2-workspace channels; drives the `sharedAcross` field + text note.
       const sharedAliases = collapsed?.shared ?? new Map<string, string[]>();
-      // The collapsed listing: keep one row per channel id — its placement's.
-      // A non-shared channel is placed under its sole alias, so its row is
-      // always kept; a shared channel keeps one row (the others still surface
-      // as comments in the per-workspace config block below).
       const displayed = collapsed
         ? conversations.filter((c) => collapsed.placement.get(c.id) === aliasOfRow(c))
         : conversations;
 
-      // --team-id is honoured by Slack only for org-level (org-wide app) tokens;
-      // a workspace-level token silently ignores it and lists its own workspace
-      // instead. Warn before the --json branch so both output modes surface the
-      // mismatch (Issue #350): to reach other Enterprise Grid workspaces, add a
-      // per-workspace token via `slack auth set --workspace <alias>` (ADR-0014).
-      if (this.teamId && !isEnterpriseInstall) {
-        this.context.stderr.write(
-          `warning: --team-id is ignored for a workspace-level token (Slack honours it only for ` +
-            `org-level/org-wide-app tokens); listed this token's own workspace instead. To reach ` +
-            `other Enterprise Grid workspaces, add a per-workspace token with ` +
-            "`suasor slack auth set --workspace <alias>` (ADR-0014).\n",
-        );
-      }
-
       if (this.json) {
         // Additive, back-compatible per-row fields: `lastSelfPost` (engagement
-        // sort) and `sharedAcross` (the aliases a shared channel spans,
+        // sort) and `sharedAcross` (the workspaces a shared channel spans,
         // ADR-0042 display collapse). Both are omitted when absent so the
         // single-workspace, non-shared shape is byte-for-byte unchanged.
         const withEngagement = displayed.map((c) => {
@@ -524,9 +516,9 @@ export class SlackConversationsCommand extends Command {
         this.context.stdout.write(
           `${JSON.stringify(
             {
-              teamId,
+              teamId: firstTeamId,
               conversations: withEngagement,
-              missingScopes: result.missingScopes,
+              missingScopes,
               ...(workspaces ? { workspaces } : {}),
             },
             null,
@@ -542,7 +534,7 @@ export class SlackConversationsCommand extends Command {
       this.context.stdout.write(
         multi
           ? `${displayed.length} conversation(s) across ${teams.length} workspace(s):\n`
-          : `${displayed.length} conversation(s) visible to this token:\n`,
+          : `${displayed.length} conversation(s) visible to the pool:\n`,
       );
       // Label the columns Joined / ID / Name so it is unambiguous that the second
       // column is the value to copy into `channels` (config wants ids, not names —
@@ -551,7 +543,7 @@ export class SlackConversationsCommand extends Command {
       if (displayed.length > 0) {
         this.context.stdout.write("  Joined  ID / Name\n");
       }
-      // `✓` = the token's principal is a member (reachable by sync); a blank cell
+      // `✓` = a token's principal is a member (reachable by sync); a blank cell
       // means not joined → that channel returns `not_in_channel` and ingests
       // nothing until the bot joins / is /invite'd (ADR-0011). See
       // formatConversationRow for the row layout.
@@ -561,10 +553,10 @@ export class SlackConversationsCommand extends Command {
           const ts = lastSelfPost.get(c.id);
           engagement = `  last_self_post=${ts ? formatSlackTs(ts, this.now) : "-"}`;
         }
-        // In a multi-workspace sweep, label each row with its workspace alias so
-        // it is clear which Grid workspace a channel belongs to (Issue #350).
+        // In a multi-workspace sweep, label each row with its workspace so it is
+        // clear which Grid workspace a channel belongs to (Issue #350).
         const wsLabel = multi && c.teamId ? `  [${aliasByTeam.get(c.teamId) ?? c.teamId}]` : "";
-        // A shared channel is listed once; mark the aliases it spans so the
+        // A shared channel is listed once; mark the workspaces it spans so the
         // operator sees it is Grid-shared, not duplicated (ADR-0042).
         const sharedAcross = sharedAliases.get(c.id);
         const sharedNote = sharedAcross ? `  (shared across [${sharedAcross.join(", ")}])` : "";
@@ -579,13 +571,13 @@ export class SlackConversationsCommand extends Command {
           "note: channels without a ✓ are not joined — they return `not_in_channel` and ingest nothing until the bot joins / is /invite'd (ADR-0011)\n",
         );
       }
-      for (const [type, scope] of Object.entries(result.missingScopes)) {
+      for (const [type, scope] of Object.entries(missingScopes)) {
         this.context.stderr.write(`warning: ${type} not listed — missing scope ${scope}\n`);
       }
       this.context.stdout.write("\n");
-      // A multi-workspace sweep renders per-workspace sub-sections so each id
-      // keeps its own `team` prefix at sync time; a single sweep keeps the flat
-      // block (Issue #350 / ADR-0014).
+      // The config block is a single flat [connectors.slack] either way
+      // (ADR-0042): a multi-workspace sweep groups the ids with workspace
+      // comment headers for orientation only.
       const configLines = multi
         ? renderWorkspacesConfigBlock(
             teams.map((t) => ({
@@ -594,24 +586,10 @@ export class SlackConversationsCommand extends Command {
               conversations: conversations.filter((c) => c.teamId === t.id),
             })),
           )
-        : renderConfigBlock(teamId, { conversations, missingScopes: result.missingScopes });
+        : renderConfigBlock(firstTeamId ?? "", { conversations, missingScopes });
       for (const line of configLines) {
         this.context.stdout.write(`${line}\n`);
       }
-      // A multi-workspace sweep pastes a `[connectors.slack.workspaces.<alias>]`
-      // block, and each workspace needs its own token — flag the format + the
-      // per-workspace token导线 so the operator does not paste a multi block and
-      // then hit `workspace 'X' skipped: no token` at sync time (Issue #371).
-      if (multi) {
-        this.context.stderr.write(
-          "note: this is a multi-workspace ([connectors.slack.workspaces.<alias>]) block — " +
-            "each workspace needs its own token: `suasor slack auth set --workspace <alias>` " +
-            "(or the SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN env override).\n",
-        );
-      }
-      this.context.stderr.write(
-        "next: paste the block above into config.toml, then run `suasor slack sync`.\n",
-      );
       return 0;
     } catch (cause) {
       progress.finish();
@@ -623,37 +601,39 @@ export class SlackConversationsCommand extends Command {
   }
 
   /**
-   * `slack conversations --new` — surface only the config drift (ADR-0039 Layer
-   * 1). Sweeps the token's visible conversations (default public+private), diffs
-   * against the workspace's configured `channels`, and prints the member
-   * conversations not yet configured (paste-ready: a flat `[connectors.slack]`
-   * block, or a `[connectors.slack.workspaces.<alias>]` sub-section when config is
-   * multi-workspace, so the fragment matches the section sync actually ingests)
-   * plus a warn for configured channels the token can no longer reach. `--new
-   * --json` emits `{ new, removed }`; the full-listing `--json` shape is untouched.
-   * Single-workspace scoped: no Enterprise Grid auto-enumeration / engagement sort.
+   * `slack conversations --new` — surface only the config drift (ADR-0039).
+   * Sweeps every pool token's visible conversations (default public+private),
+   * unions them, diffs against the flat configured `channels`, and prints the
+   * member conversations not yet configured (paste-ready flat block) plus a
+   * warn for configured channels no token can reach. `--new --json` emits
+   * `{ new, removed }`; the full-listing `--json` shape is untouched.
    */
   private async executeNew(
-    alias: string | undefined,
-    token: string,
+    pool: readonly string[],
     requestedTypes: ConversationType[] | undefined,
     limit: number | undefined,
   ): Promise<number> {
     const [
-      { testToken },
-      { listConversations, renderConfigBlock, renderWorkspacesConfigBlock, diffConversations },
-      config,
+      { listConversations, renderConfigBlock, diffConversations },
+      { SlackConnectorConfig, rejectLegacySlackConfig },
+      { loadConfig },
     ] = await Promise.all([
-      import("../../connectors/slack/auth.ts"),
       import("../../connectors/slack/conversations.ts"),
-      loadResolvedSlackConfig(),
+      import("../../connectors/slack.ts"),
+      import("../../config/index.ts"),
     ]);
 
-    if (config.error) {
-      this.context.stderr.write(`error: ${config.error}\n`);
+    let configured: string[];
+    try {
+      const config = await loadConfig();
+      rejectLegacySlackConfig(config.connectors[SLACK] ?? {});
+      configured = SlackConnectorConfig.parse(config.connectors[SLACK] ?? {}).channels;
+    } catch (cause) {
+      this.context.stderr.write(
+        `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
       return 1;
     }
-    const configured = configuredChannelsForAlias(config.workspaces, alias);
 
     // Diff defaults to public + private: DMs / group-DMs are noisy and rarely
     // configured, so include them only when explicitly requested (ADR-0039 §3).
@@ -666,20 +646,31 @@ export class SlackConversationsCommand extends Command {
       this.noProgress ? false : undefined,
     );
     try {
-      const { teamId } = await testToken(token);
-      const result = await listConversations(token, {
-        types,
-        includeArchived: this.includeArchived,
-        ...(limit !== undefined ? { limit } : {}),
-        onProgress: () => progress.tick(),
-      });
+      // Union of every pool token's visible conversations: a channel reachable
+      // via any token is visible, and a configured channel is only "removed"
+      // when no token at all can reach it (ADR-0042).
+      const byId = new Map<string, SlackConversation>();
+      const missingScopes: Record<string, string> = {};
+      for (const token of pool) {
+        const result = await listConversations(token, {
+          types,
+          includeArchived: this.includeArchived,
+          ...(limit !== undefined ? { limit } : {}),
+          onProgress: () => progress.tick(),
+        });
+        for (const c of result.conversations) {
+          const prev = byId.get(c.id);
+          // A member row wins over a non-member row for the same channel.
+          if (!prev || (!prev.isMember && c.isMember)) byId.set(c.id, c);
+        }
+        for (const [type, scope] of Object.entries(result.missingScopes)) {
+          missingScopes[type] = scope;
+        }
+      }
       progress.finish();
 
-      const diff = diffConversations({
-        visible: result.conversations,
-        configured,
-        sweptTypes: types,
-      });
+      const visible = [...byId.values()];
+      const diff = diffConversations({ visible, configured, sweptTypes: types });
 
       if (this.json) {
         // New (additive) flag → new shape, so the existing full-listing --json is
@@ -701,20 +692,12 @@ export class SlackConversationsCommand extends Command {
           this.context.stdout.write(`${formatConversationRow(c)}\n`);
         }
         this.context.stdout.write("\n");
-        // Paste-ready fragment for the *new* channels only (ADR-0039 §2). The
-        // TOML section must match the config shape sync ingests: a named
-        // `[connectors.slack.workspaces.<alias>]` config discards the flat
-        // `channels` (resolveWorkspaces), so a flat block pasted there is silently
-        // ignored — render the workspace sub-section for the resolved alias
-        // instead. --new is single-workspace scoped, so there is no cross-workspace
-        // shared-channel de-dup to apply.
-        const configLines =
-          config.multi && alias !== undefined
-            ? renderWorkspacesConfigBlock([{ teamId, alias, conversations: diff.added }])
-            : renderConfigBlock(teamId, {
-                conversations: diff.added,
-                missingScopes: result.missingScopes,
-              });
+        // Paste-ready fragment for the *new* channels only (ADR-0039 §2), always
+        // the flat [connectors.slack] shape (ADR-0042).
+        const configLines = renderConfigBlock("", {
+          conversations: diff.added,
+          missingScopes,
+        });
         for (const line of configLines) {
           this.context.stdout.write(`${line}\n`);
         }
@@ -731,7 +714,7 @@ export class SlackConversationsCommand extends Command {
             `(left/archived/renamed): ${diff.removed.join(", ")}\n`,
         );
       }
-      for (const [type, scope] of Object.entries(result.missingScopes)) {
+      for (const [type, scope] of Object.entries(missingScopes)) {
         this.context.stderr.write(`warning: ${type} not listed — missing scope ${scope}\n`);
       }
       return 0;
@@ -745,13 +728,13 @@ export class SlackConversationsCommand extends Command {
   }
 }
 
-/** `slack status` — show the saved resume cursor (per workspace / channel). */
+/** `slack status` — show the saved resume cursor (per channel). */
 export class SlackStatusCommand extends Command {
   static override paths = [[SLACK, "status"]];
 
   static override usage = Command.Usage({
     category: "Slack",
-    description: "Show the saved Slack resume cursor (per workspace / channel).",
+    description: "Show the saved Slack resume cursor (per channel).",
     details: `
       Prints the high-water-mark ts each channel resumes from (ADR-0016). Useful
       to confirm a 'since' floor took effect or to see what 'slack cursor reset'
@@ -775,18 +758,16 @@ export class SlackStatusCommand extends Command {
     const channelNames = await readSlackChannelNames();
 
     if (this.json) {
-      // Additive back-compat: the top-level object stays the alias → channel →
-      // ts cursor map (existing consumers read `parsed[alias][channel]`
-      // unchanged). Resolved names are surfaced under a sibling `names` map
-      // (channel id → resolved name), only when at least one resolved — so the
-      // no-projection case emits the exact prior shape (ADR-0037 §1/§6).
+      // The top-level object is the flat channel → ts cursor map (ADR-0042).
+      // Resolved names are surfaced under a sibling `names` map (channel id →
+      // resolved name), only when at least one resolved.
       const names = Object.fromEntries([...channelNames].map(([id, { name }]) => [id, name]));
       const payload = Object.keys(names).length > 0 ? { ...map, names } : map;
       this.context.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
       return 0;
     }
-    const aliases = Object.keys(map);
-    if (aliases.length === 0) {
+    const keys = Object.keys(map);
+    if (keys.length === 0) {
       this.context.stdout.write("slack cursors: (none — never synced, or reset)\n");
       return 0;
     }
@@ -794,34 +775,26 @@ export class SlackStatusCommand extends Command {
     // when" at a glance; the --json path above keeps the raw ts (#84). `now` is
     // injectable so the relative phrasing is deterministic under test.
     const { formatSlackTs } = await import("../slack-time.ts");
-    // Join each alias to its team id / resolved workspace name so a multi-
-    // workspace operator can tell which Grid workspace a cursor block belongs to
-    // (Issue #371 theme 3). Local projection join — no live fetch; unknown → alias
-    // only.
-    const identities = await readSlackWorkspaceIdentities();
     const { parseThreadCursorKey } = await import("../../connectors/slack.ts");
     this.context.stdout.write("slack cursors:\n");
-    for (const alias of aliases) {
-      this.context.stdout.write(`  [${alias}]${workspaceIdentityLabel(identities.get(alias))}\n`);
-      // Per-thread cursors (`<channel>#<thread_ts>`, ADR-0015 R1) are a
-      // steady-state-capture detail. Fold them into a per-channel active count
-      // rather than printing one noisy row each; `--json` keeps the raw keys.
-      const threadCounts = new Map<string, number>();
-      for (const key of Object.keys(map[alias] ?? {})) {
-        const parsed = parseThreadCursorKey(key);
-        if (parsed) threadCounts.set(parsed.channel, (threadCounts.get(parsed.channel) ?? 0) + 1);
-      }
-      for (const [channel, ts] of Object.entries(map[alias] ?? {})) {
-        if (parseThreadCursorKey(channel)) continue; // thread cursor — summarised below
-        const rec = channelNames.get(channel);
-        const label = rec ? `  ${slackChannelLabel(rec.name, rec.kind)}` : "";
-        const threads = threadCounts.get(channel) ?? 0;
-        const threadNote =
-          threads > 0 ? `  (+${threads} active thread${threads === 1 ? "" : "s"})` : "";
-        this.context.stdout.write(
-          `    ${channel}${label}  ${formatSlackTs(ts, this.now)}${threadNote}\n`,
-        );
-      }
+    // Per-thread cursors (`<channel>#<thread_ts>`, ADR-0015 R1) are a
+    // steady-state-capture detail. Fold them into a per-channel active count
+    // rather than printing one noisy row each; `--json` keeps the raw keys.
+    const threadCounts = new Map<string, number>();
+    for (const key of keys) {
+      const parsed = parseThreadCursorKey(key);
+      if (parsed) threadCounts.set(parsed.channel, (threadCounts.get(parsed.channel) ?? 0) + 1);
+    }
+    for (const [channel, ts] of Object.entries(map)) {
+      if (parseThreadCursorKey(channel)) continue; // thread cursor — summarised
+      const rec = channelNames.get(channel);
+      const label = rec ? `  ${slackChannelLabel(rec.name, rec.kind)}` : "";
+      const threads = threadCounts.get(channel) ?? 0;
+      const threadNote =
+        threads > 0 ? `  (+${threads} active thread${threads === 1 ? "" : "s"})` : "";
+      this.context.stdout.write(
+        `  ${channel}${label}  ${formatSlackTs(ts, this.now)}${threadNote}\n`,
+      );
     }
     return 0;
   }
@@ -838,22 +811,18 @@ export class SlackCursorResetCommand extends Command {
       Recovery verb (ADR-0016): appends a new cursor with the targeted channels
       removed, so the next 'slack sync' re-fetches them from the configured
       'since' floor (or from the start when no floor is set). Pass --channel
-      C1,C2 (optionally --workspace) or --all. Requires --yes to apply; without
-      it the targets are previewed only.
+      C1,C2 or --all. Requires --yes to apply; without it the targets are
+      previewed only.
     `,
     examples: [
       ["Preview a reset", "suasor slack cursor reset --channel C0123"],
       ["Reset two channels", "suasor slack cursor reset --channel C0123,C0456 --yes"],
-      ["Reset a whole workspace", "suasor slack cursor reset --workspace acme --all --yes"],
       ["Reset everything", "suasor slack cursor reset --all --yes"],
     ],
   });
 
   channel = Option.String("--channel", { description: "Channel id(s) to reset, comma-separated." });
-  all = Option.Boolean("--all", false, {
-    description: "Reset every channel (of the workspace, or all).",
-  });
-  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
+  all = Option.Boolean("--all", false, { description: "Reset every channel." });
   yes = Option.Boolean("--yes", false, {
     description: "Apply the reset (without it, preview only).",
   });
@@ -874,7 +843,7 @@ export class SlackCursorResetCommand extends Command {
     if (current === null) return 1;
 
     // Local channel-name join so a previewed / reset channel shows its name
-    // (`[alias] C0123 #general`) beside the id (ADR-0037 §1). No live fetch.
+    // (`C0123 #general`) beside the id (ADR-0037 §1). No live fetch.
     const channelNames = await readSlackChannelNames();
 
     const [{ serializeCursor, parseThreadCursorKey }, { loadConfig }, { Store }] =
@@ -884,56 +853,33 @@ export class SlackCursorResetCommand extends Command {
         import("../../db/index.ts"),
       ]);
 
-    const next: Record<string, Record<string, string>> = structuredClone(current);
+    const next: Record<string, string> = structuredClone(current);
     const targets: string[] = [];
-    if (this.all && !this.workspace) {
-      // --all with no --workspace clears every workspace's cursors — unambiguous,
-      // so it skips alias resolution (does not error on a multi-workspace config).
-      for (const a of Object.keys(next)) targets.push(`[${a}] (all)`);
-      for (const a of Object.keys(next)) delete next[a];
+    if (this.all) {
+      if (Object.keys(next).length > 0) targets.push("(all)");
+      for (const key of Object.keys(next)) delete next[key];
     } else {
-      // Resolve the target workspace (Issue #371 theme 1): a single-workspace
-      // config auto-selects its sole alias instead of resetting a `default` that
-      // may not exist (the old `this.workspace ?? "default"` silent no-op); a
-      // multi-workspace config with no `default` errors with the alias list.
-      const resolved = await resolveWorkspaceAlias(this.workspace);
-      if (!resolved.ok) {
-        this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
-        return 1;
-      }
-      const alias = resolved.alias ?? DEFAULT_WORKSPACE_ALIAS;
-      // Name the team the reset targets (Issue #371 theme 3), on stderr so the
-      // stdout preview / summary stays a clean machine-readable target list.
-      const idLabel = workspaceIdentityLabel((await readSlackWorkspaceIdentities()).get(alias));
-      if (idLabel) this.context.stderr.write(`workspace: [${alias}]${idLabel}\n`);
-      if (this.all) {
-        if (next[alias]) targets.push(`[${alias}] (all)`);
-        delete next[alias];
-      } else {
-        const aliasMap = next[alias] ?? {};
-        for (const ch of channels) {
-          let matched = aliasMap[ch] !== undefined;
-          delete aliasMap[ch];
-          // Resetting a channel also clears its per-thread high-water marks
-          // (`<channel>#<thread_ts>`, ADR-0015 R1) so its threads re-discover
-          // from the floor rather than resuming from a stale mark.
-          let threadN = 0;
-          for (const key of Object.keys(aliasMap)) {
-            const parsed = parseThreadCursorKey(key);
-            if (parsed && parsed.channel === ch) {
-              delete aliasMap[key];
-              threadN += 1;
-              matched = true;
-            }
-          }
-          if (matched) {
-            const rec = channelNames.get(ch);
-            const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
-            const threadNote = threadN > 0 ? ` (+${threadN} thread)` : "";
-            targets.push(`[${alias}] ${ch}${label}${threadNote}`);
+      for (const ch of channels) {
+        let matched = next[ch] !== undefined;
+        delete next[ch];
+        // Resetting a channel also clears its per-thread high-water marks
+        // (`<channel>#<thread_ts>`, ADR-0015 R1) so its threads re-discover
+        // from the floor rather than resuming from a stale mark.
+        let threadN = 0;
+        for (const key of Object.keys(next)) {
+          const parsed = parseThreadCursorKey(key);
+          if (parsed && parsed.channel === ch) {
+            delete next[key];
+            threadN += 1;
+            matched = true;
           }
         }
-        next[alias] = aliasMap;
+        if (matched) {
+          const rec = channelNames.get(ch);
+          const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
+          const threadNote = threadN > 0 ? ` (+${threadN} thread)` : "";
+          targets.push(`${ch}${label}${threadNote}`);
+        }
       }
     }
 
@@ -993,7 +939,6 @@ export class SlackCursorBackfillCommand extends Command {
 
   channel = Option.String("--channel", { description: "Channel id to backfill." });
   since = Option.String("--since", { description: "Floor to lower to (30d / 4w / 2026-01-01)." });
-  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
   yes = Option.Boolean("--yes", false, {
     description: "Apply the backfill (without it, preview only).",
   });
@@ -1019,24 +964,11 @@ export class SlackCursorBackfillCommand extends Command {
     if (current === null) return 1;
 
     // Local channel-name join so the backfill summary names the target channel
-    // (`[alias] C0123 #general: … → …`) beside the id (ADR-0037 §1). No live fetch.
+    // (`C0123 #general: … → …`) beside the id (ADR-0037 §1). No live fetch.
     const channelNames = await readSlackChannelNames();
 
-    // Resolve the target workspace (Issue #371 theme 1): single-workspace configs
-    // auto-select; a multi-workspace config with no `default` errors with the
-    // alias list rather than backfilling a `default` that may not exist.
-    const resolved = await resolveWorkspaceAlias(this.workspace);
-    if (!resolved.ok) {
-      this.context.stderr.write(workspaceAmbiguityError(resolved.aliases));
-      return 1;
-    }
-    const alias = resolved.alias ?? DEFAULT_WORKSPACE_ALIAS;
-    // Name the team the backfill targets (Issue #371 theme 3), on stderr.
-    const idLabel = workspaceIdentityLabel((await readSlackWorkspaceIdentities()).get(alias));
-    if (idLabel) this.context.stderr.write(`workspace: [${alias}]${idLabel}\n`);
-    const next: Record<string, Record<string, string>> = structuredClone(current);
-    const aliasMap = next[alias] ?? {};
-    const before = aliasMap[this.channel];
+    const next: Record<string, string> = structuredClone(current);
+    const before = next[this.channel];
     // Backfill goes OLDER. If the floor is not older than the current cursor it
     // would *advance* it and skip unfetched messages — warn (footgun guard).
     if (before !== undefined && Number.parseFloat(floorTs) >= Number.parseFloat(before)) {
@@ -1045,25 +977,24 @@ export class SlackCursorBackfillCommand extends Command {
           "this advances the cursor and would skip unfetched messages\n",
       );
     }
-    aliasMap[this.channel] = floorTs;
+    next[this.channel] = floorTs;
     // Lowering the channel cursor re-fetches its older history; also drop the
     // channel's per-thread high-water marks (`<channel>#<thread_ts>`, ADR-0015
     // R1) so threads in the re-fetched window are rediscovered rather than
     // resuming from a mark ahead of the new floor.
     let threadCleared = 0;
-    for (const key of Object.keys(aliasMap)) {
+    for (const key of Object.keys(next)) {
       const parsed = parseThreadCursorKey(key);
       if (parsed && parsed.channel === this.channel) {
-        delete aliasMap[key];
+        delete next[key];
         threadCleared += 1;
       }
     }
-    next[alias] = aliasMap;
 
     const rec = channelNames.get(this.channel);
     const label = rec ? ` ${slackChannelLabel(rec.name, rec.kind)}` : "";
     const threadNote = threadCleared > 0 ? ` (+${threadCleared} thread cursor(s) cleared)` : "";
-    const summary = `[${alias}] ${this.channel}${label}: ${before ?? "(none)"} → ${floorTs}${threadNote}`;
+    const summary = `${this.channel}${label}: ${before ?? "(none)"} → ${floorTs}${threadNote}`;
     if (!this.yes) {
       this.context.stdout.write(`would backfill: ${summary}\n`);
       this.context.stdout.write("(preview — re-run with --yes to apply)\n");
@@ -1115,21 +1046,21 @@ export class SlackResolveNamesCommand extends Command {
     details: `
       Forward 'slack sync' only names messages it newly ingests; sources ingested
       before name resolution existed stay id-only (C…/U…). This verb scans the
-      local slack_message sources, collects the distinct channel + user ids per
-      workspace, and re-resolves the ones whose name is still missing via
-      users.info / conversations.info — the same path sync uses — enriching the
-      slack_channels + person projections (ADR-0037 §11). Idempotent: already-named
-      ids are skipped (pass --force to re-resolve). A scope-less / erroring id is
-      degraded (counted, id fallback kept) so it never aborts the pass (§6).
+      local slack_message sources, collects the distinct channel + user ids, and
+      re-resolves the ones whose name is still missing via users.info /
+      conversations.info — the same path sync uses — enriching the
+      slack_channels + person projections (ADR-0037 §11). Ids resolve via the
+      pool token whose workspace matches, with one failover (ADR-0042).
+      Idempotent: already-named ids are skipped (pass --force to re-resolve). A
+      scope-less / erroring id is degraded (counted, id fallback kept) so it
+      never aborts the pass (§6).
     `,
     examples: [
-      ["Backfill every workspace", "suasor slack resolve-names"],
-      ["Backfill one workspace", "suasor slack resolve-names --workspace acme"],
+      ["Backfill missing names", "suasor slack resolve-names"],
       ["Re-resolve even named ids", "suasor slack resolve-names --force"],
     ],
   });
 
-  workspace = Option.String("--workspace", { description: WORKSPACE_DESC });
   force = Option.Boolean("--force", false, {
     description: "Re-resolve ids that already carry a resolved name (default: skip them).",
   });
@@ -1152,7 +1083,7 @@ export class SlackResolveNamesCommand extends Command {
 
     const [
       { backfillSlackNames },
-      { SlackConnectorConfig, defaultSlackClientFactory },
+      { SlackConnectorConfig, defaultSlackClientFactory, rejectLegacySlackConfig },
       { defaultUsersTransport },
       { makeSecretResolver },
       { createProgress },
@@ -1166,6 +1097,7 @@ export class SlackResolveNamesCommand extends Command {
 
     let slackConfig: ReturnType<typeof SlackConnectorConfig.parse>;
     try {
+      rejectLegacySlackConfig(config.connectors[SLACK] ?? {});
       slackConfig = SlackConnectorConfig.parse(config.connectors[SLACK] ?? {});
     } catch (cause) {
       this.context.stderr.write(
@@ -1194,7 +1126,6 @@ export class SlackResolveNamesCommand extends Command {
           secret: makeSecretResolver(SLACK),
         },
         {
-          ...(this.workspace ? { workspace: this.workspace } : {}),
           force: this.force,
           onProgress: () => progress.tick(),
         },
@@ -1228,31 +1159,17 @@ export class SlackResolveNamesCommand extends Command {
       `teams:    ${teams.resolved} resolved, ${teams.skipped} already named, ` +
         `${teams.degraded} unresolved (scope/API)\n`,
     );
-    if (summary.tokenlessWorkspaces.length > 0) {
-      this.context.stderr.write(
-        `warning: skipped workspace(s) with no token: ${summary.tokenlessWorkspaces.join(", ")} ` +
-          "(run `suasor slack auth set [--workspace <alias>]`)\n",
-      );
-    }
-    if (summary.orphanTeamIds > 0) {
-      this.context.stderr.write(
-        `note: ${summary.orphanTeamIds} id(s) belong to a team no configured workspace claims — ` +
-          "left id-only (add the workspace to config to resolve them)\n",
-      );
-    }
     return 0;
   }
 }
 
 /**
- * Load the saved Slack cursor as an alias → channel → ts map, or `null` on a
- * config error (after writing the error to stderr). Shared by `slack status`,
+ * Load the saved Slack cursor as a flat channel → ts map, or `null` on a config
+ * error (after writing the error to stderr). Shared by `slack status`,
  * `slack cursor reset`, and `slack cursor backfill`.
  */
-async function readSlackCursor(
-  cmd: Command,
-): Promise<Record<string, Record<string, string>> | null> {
-  const [{ loadConfig }, { Store }, { lastCursor }, { cursorToAliasMap }] = await Promise.all([
+async function readSlackCursor(cmd: Command): Promise<Record<string, string> | null> {
+  const [{ loadConfig }, { Store }, { lastCursor }, { cursorToChannelMap }] = await Promise.all([
     import("../../config/index.ts"),
     import("../../db/index.ts"),
     import("../../connectors/sync.ts"),
@@ -1266,197 +1183,23 @@ async function readSlackCursor(
   }
   const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
   try {
-    return cursorToAliasMap(lastCursor(store.connection.sqlite, SLACK));
+    return cursorToChannelMap(lastCursor(store.connection.sqlite, SLACK));
   } finally {
     store.close();
   }
 }
 
 /**
- * Resolve which workspace alias to act on from the `--workspace` flag and the
- * configured workspaces (Issue #371 theme 1). Loads the config to read the
- * `[connectors.slack.workspaces.*]` alias set, then delegates the decision to the
- * pure {@link chooseWorkspaceAlias}. Reads the raw `workspaces` keys (not a Zod
- * parse) so a validation error elsewhere in the slice never turns a plain alias
- * lookup into a hard failure. Shared by `slack auth set/test`, `conversations`,
- * and `cursor reset/backfill` so all resolve the same workspace.
+ * The stderr message for a missing Slack token pool: names the `slack auth set`
+ * recovery command and the env override that would satisfy it headless.
  */
-async function resolveWorkspaceAlias(
-  explicit: string | undefined,
-): Promise<
-  | { readonly ok: true; readonly alias: string | undefined }
-  | { readonly ok: false; readonly aliases: readonly string[] }
-> {
-  if (explicit !== undefined) return { ok: true, alias: explicit };
-  const { loadConfig } = await import("../../config/index.ts");
-  const config = await loadConfig();
-  const slack = config.connectors[SLACK] as { workspaces?: Record<string, unknown> } | undefined;
-  return chooseWorkspaceAlias(undefined, Object.keys(slack?.workspaces ?? {}));
-}
-
-/** A workspace's configured channel ids for the `--new` drift diff (ADR-0039). */
-interface SlackWorkspaceChannels {
-  readonly alias: string;
-  readonly channels: readonly string[];
-}
-
-/**
- * Load + resolve the Slack connector config into per-workspace channel lists for
- * the `slack conversations --new` drift diff (ADR-0039). Reuses `resolveWorkspaces`
- * so `--new` sees the exact same channel set sync would ingest, for either config
- * shape (flat `[connectors.slack]` or `[connectors.slack.workspaces.<alias>]`). A
- * parse error is returned (not thrown) so the caller reports it as a clean error.
- */
-async function loadResolvedSlackConfig(): Promise<{
-  workspaces: SlackWorkspaceChannels[];
-  /**
-   * `true` when config uses the named `[connectors.slack.workspaces.<alias>]`
-   * shape. `resolveWorkspaces` then ingests **only** those sub-sections and
-   * discards the flat `channels`, so `--new` must render a
-   * `[connectors.slack.workspaces.<alias>]` fragment (not a flat block sync would
-   * silently ignore).
-   */
-  multi: boolean;
-  error?: string;
-}> {
-  const [{ loadConfig }, { SlackConnectorConfig, resolveWorkspaces }] = await Promise.all([
-    import("../../config/index.ts"),
-    import("../../connectors/slack.ts"),
-  ]);
-  const config = await loadConfig();
-  try {
-    const parsed = SlackConnectorConfig.parse(config.connectors[SLACK] ?? {});
-    const resolved = resolveWorkspaces(parsed);
-    const multi = parsed.workspaces !== undefined && Object.keys(parsed.workspaces).length > 0;
-    return { workspaces: resolved.map((w) => ({ alias: w.alias, channels: w.channels })), multi };
-  } catch (cause) {
-    return {
-      workspaces: [],
-      multi: false,
-      error: `invalid Slack connector config: ${cause instanceof Error ? cause.message : String(cause)}`,
-    };
-  }
-}
-
-/**
- * Pick the configured channel ids for the resolved workspace alias (ADR-0039).
- * `resolveWorkspaceAlias` yields `undefined` for a flat config, which
- * `resolveWorkspaces` models as the `default` alias; an explicit alias matches by
- * name. An unknown alias falls back to no configured channels (so every member
- * conversation reads as new) — the safe drift signal, not a silent empty diff.
- */
-function configuredChannelsForAlias(
-  workspaces: readonly SlackWorkspaceChannels[],
-  alias: string | undefined,
-): string[] {
-  const target = alias ?? DEFAULT_WORKSPACE_ALIAS;
-  const ws =
-    workspaces.find((w) => w.alias === target) ?? (alias === undefined ? workspaces[0] : undefined);
-  return [...(ws?.channels ?? [])];
-}
-
-/**
- * The stderr message for an ambiguous `--workspace` omission (Issue #371 theme
- * 1): a multi-workspace config with no `default` alias. Lists the configured
- * aliases so the operator can pick one instead of silently touching the wrong
- * workspace.
- */
-function workspaceAmbiguityError(aliases: readonly string[]): string {
+async function noTokenError(): Promise<string> {
+  const { secretEnvName } = await import("../../connectors/secrets.ts");
+  const env = secretEnvName(SLACK, "tokens");
   return (
-    `error: multiple Slack workspaces configured (${aliases.join(", ")}); ` +
-    "pass --workspace <alias> to choose one.\n"
+    "error: no Slack token pool configured " +
+    `(run \`suasor slack auth set\` or set env $${env} — newline/comma separated)\n`
   );
-}
-
-/**
- * The per-connector env override name for a workspace's token (Issue #371 theme
- * 4): `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN` for a named alias (non-alphanumeric
- * chars, e.g. `-`, normalised to `_`), or `SUASOR_CONNECTOR_SLACK_TOKEN` for the
- * flat/default workspace. Surfaced in token-missing errors so the headless / WSL
- * override is discoverable from the CLI.
- */
-async function slackTokenEnvName(alias: string | undefined): Promise<string> {
-  const [{ secretEnvName }, { workspaceSecretName }] = await Promise.all([
-    import("../../connectors/secrets.ts"),
-    import("../../connectors/slack.ts"),
-  ]);
-  return secretEnvName(SLACK, workspaceSecretName(alias));
-}
-
-/**
- * The stderr message for a missing Slack token (Issue #371 theme 1/4): names the
- * workspace it looked under, the `slack auth set` recovery command, and the env
- * override that would satisfy it headless.
- */
-async function noTokenError(alias: string | undefined): Promise<string> {
-  const env = await slackTokenEnvName(alias);
-  const where = alias ? ` for workspace '${alias}'` : "";
-  const wsHint = alias ? ` --workspace ${alias}` : "";
-  return (
-    `error: no Slack token configured${where} ` +
-    `(run \`suasor slack auth set${wsHint}\` or set env $${env})\n`
-  );
-}
-
-/** A workspace's team identity for output enrichment (Issue #371 theme 3). */
-interface SlackWorkspaceIdentity {
-  readonly teamId: string;
-  readonly teamName?: string;
-}
-
-/**
- * Build an alias → team identity map for enriching operational output (Issue
- * #371 theme 3): each configured workspace's `team` id joined to its resolved
- * name from the local `slack_teams` projection (ADR-0037 §10, Issue #361). Pure
- * local join — no live fetch. Returns an empty map on a config / parse error
- * (output falls back to alias-only). Shared by `slack status` and `slack cursor`.
- */
-async function readSlackWorkspaceIdentities(): Promise<Map<string, SlackWorkspaceIdentity>> {
-  const [{ loadConfig }, { Store }, { SlackConnectorConfig, resolveWorkspaces }] =
-    await Promise.all([
-      import("../../config/index.ts"),
-      import("../../db/index.ts"),
-      import("../../connectors/slack.ts"),
-    ]);
-  const config = await loadConfig();
-  let workspaces: ReturnType<typeof resolveWorkspaces>;
-  try {
-    workspaces = resolveWorkspaces(SlackConnectorConfig.parse(config.connectors[SLACK] ?? {}));
-  } catch {
-    return new Map();
-  }
-  const names = new Map<string, string>();
-  const dbPath = config.storage.dbPath;
-  if (dbPath !== null) {
-    const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
-    try {
-      const rows = store.connection.sqlite
-        .query("SELECT team_id AS id, name FROM slack_teams WHERE name <> ''")
-        .all() as { id: string; name: string }[];
-      for (const r of rows) names.set(r.id, r.name);
-    } finally {
-      store.close();
-    }
-  }
-  const out = new Map<string, SlackWorkspaceIdentity>();
-  for (const ws of workspaces) {
-    const teamName = names.get(ws.team);
-    out.set(ws.alias, { teamId: ws.team, ...(teamName ? { teamName } : {}) });
-  }
-  return out;
-}
-
-/**
- * Format a workspace's team identity for an output label (Issue #371 theme 3):
- * `  team T0123 (Acme)` when the name is resolved, `  team T0123` when only the
- * id is known, or `""` for the unconfigured flat placeholder (`team = "default"`)
- * so a plain single-workspace `[default]` header stays unchanged (no regression).
- */
-function workspaceIdentityLabel(id: SlackWorkspaceIdentity | undefined): string {
-  if (!id) return "";
-  if (id.teamName) return `  team ${id.teamId} (${id.teamName})`;
-  if (id.teamId && id.teamId !== DEFAULT_WORKSPACE_ALIAS) return `  team ${id.teamId}`;
-  return "";
 }
 
 /** A resolved Slack channel name + kind, as stored in the `slack_channels` projection. */

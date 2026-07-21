@@ -234,7 +234,7 @@ describe("suasor brief", () => {
   test("emits no warnings when Slack is configured and embedding is enabled (Issue #189)", async () => {
     await Bun.write(
       join(dir, "config.toml"),
-      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_id = "U1"\n',
+      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_ids = ["U1"]\n',
     );
     await seed();
     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);

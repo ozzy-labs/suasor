@@ -7,7 +7,7 @@
  * sort (search.messages) → render the config block — was untested. These drive
  * the whole command through the one seam every Slack leaf module shares: the
  * global `fetch` wrapped by `slackFetch` (ADR-0019). A token is supplied via the
- * `SUASOR_CONNECTOR_SLACK_TOKEN` env override so the keychain is never touched.
+ * `SUASOR_CONNECTOR_SLACK_TOKENS` env override so the keychain is never touched.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -32,8 +32,8 @@ let dir: string;
 
 beforeEach(() => {
   realFetch = globalThis.fetch;
-  savedToken = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
-  process.env.SUASOR_CONNECTOR_SLACK_TOKEN = "xoxp-test-token";
+  savedToken = process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
+  process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxp-test-token";
   // Isolate the config dir so `--workspace` resolution (Issue #371 theme 1) reads
   // an empty (flat) config — not the developer's real multi-workspace config,
   // which would flip these single-token sweeps into an ambiguity error.
@@ -44,8 +44,8 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
-  if (savedToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
-  else process.env.SUASOR_CONNECTOR_SLACK_TOKEN = savedToken;
+  if (savedToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
+  else process.env.SUASOR_CONNECTOR_SLACK_TOKENS = savedToken;
   if (savedDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
   else process.env.SUASOR_CONFIG_DIR = savedDir;
   rmSync(dir, { recursive: true, force: true });
@@ -133,9 +133,10 @@ describe("suasor slack conversations — network seam", () => {
     expect(out).toContain("C001");
     expect(out).toContain("#general");
     expect(out).toContain("C002");
-    // The paste-ready config block carries the resolved team id.
+    // The paste-ready config block carries the team id as a comment (the
+    // `team` config key is gone, ADR-0042).
     expect(out).toContain("[connectors.slack]");
-    expect(out).toContain('team = "T123"');
+    expect(out).toContain("# workspace: T123");
   });
 
   test("cursor paging: a next_cursor is followed until exhausted", async () => {
@@ -342,7 +343,6 @@ describe("suasor slack conversations — network seam", () => {
     expect(code).toBe(0);
     expect(out).toContain("C001");
     expect(err).toContain("--team-id is ignored");
-    expect(err).toContain("ADR-0014");
   });
 
   test("--team-id + --json on a workspace-level token warns and does not mis-tag rows (#350)", async () => {
@@ -374,11 +374,14 @@ describe("suasor slack conversations — network seam", () => {
     expect(code).toBe(0);
     // The warning reaches --json users too (it goes to stderr, stdout stays clean JSON).
     expect(err).toContain("--team-id is ignored");
-    // team_id is NOT sent for a workspace-level token (Slack would ignore it),
-    // so rows are not tagged with a workspace Slack never honoured.
-    expect(seen.every((t) => t === null)).toBe(true);
+    // Rows are tagged with the token's OWN team (its auth.test id), never the
+    // ignored --team-id value (ADR-0042 pool sweep tags rows for grouping).
+    expect(seen.every((t) => t === null || t === "T123")).toBe(true);
     const report = JSON.parse(out) as { conversations: { id: string; teamId?: string }[] };
-    expect(report.conversations.every((c) => c.teamId === undefined)).toBe(true);
+    // Rows carry the token's own team tag, never the ignored --team-id value.
+    expect(report.conversations.every((c) => c.teamId === undefined || c.teamId === "T123")).toBe(
+      true,
+    );
   });
 
   test("org-level token with no --team-id auto-enumerates workspaces and sweeps each (#350)", async () => {
@@ -419,14 +422,13 @@ describe("suasor slack conversations — network seam", () => {
     expect(calls).toContain("auth.teams.list");
     expect(seenTeamIds).toContain("T01");
     expect(seenTeamIds).toContain("T02");
-    // Both workspaces' channels are surfaced, grouped with per-workspace blocks.
+    // Both workspaces' channels are surfaced in one flat block, grouped with
+    // workspace comment headers (ADR-0042).
     expect(out).toContain("across 2 workspace(s)");
     expect(out).toContain("C_A");
     expect(out).toContain("C_B");
-    expect(out).toContain("[connectors.slack.workspaces.acme]");
-    expect(out).toContain('team = "T01"');
-    expect(out).toContain("[connectors.slack.workspaces.beta-co]");
-    expect(out).toContain('team = "T02"');
+    expect(out).toContain("# — acme (T01) —");
+    expect(out).toContain("# — beta-co (T02) —");
   });
 
   test("multi-workspace --json adds a workspaces grouping and tags rows by team (#350)", async () => {
@@ -653,30 +655,28 @@ describe("suasor slack auth test — network seam", () => {
     // The resolved user_id is surfaced with a self_user_id copy hint (Issue #371
     // theme 2) — the value the operator pastes so demand detects their @mentions.
     expect(out).toContain("user_id: U001");
-    expect(out).toContain('self_user_id = "U001"');
+    expect(out).toContain('self_user_ids = ["U001"]');
     expect(out).toContain("[connectors.slack]");
   });
 
-  test("names the workspace section when --workspace is given (theme 2)", async () => {
+  test("a multi-token pool reports each token with its index label (ADR-0042)", async () => {
+    let calls = 0;
     installFetch((url) => {
       if (url.includes("auth.test")) {
-        return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
+        calls += 1;
+        return {
+          headers: { "x-oauth-scopes": "channels:read" },
+          body: calls === 1 ? USER_AUTH : { ...USER_AUTH, team: "Beta", team_id: "T456" },
+        };
       }
       throw new Error(`unexpected url: ${url}`);
     });
-    // The acme workspace resolves the `acme:token` secret — supply it via its own
-    // env override so the lookup succeeds.
-    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxp-acme-token";
-    try {
-      // --workspace is explicit, so it wins regardless of config shape; the
-      // self_user_id hint points at that workspace's sub-section.
-      const { code, out } = await run(["slack", "auth", "test", "--workspace", "acme"]);
-      expect(code).toBe(0);
-      expect(out).toContain('self_user_id = "U001"');
-      expect(out).toContain("[connectors.slack.workspaces.acme]");
-    } finally {
-      delete process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN;
-    }
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxp-a,xoxp-b";
+    const { code, out } = await run(["slack", "auth", "test"]);
+    expect(code).toBe(0);
+    expect(out).toContain("token #1: ok:");
+    expect(out).toContain("token #2: ok:");
+    expect(out).toContain("Beta (T456)");
   });
 
   test("--json emits the resolved identity + scopes + features (token never echoed)", async () => {
@@ -689,10 +689,12 @@ describe("suasor slack auth test — network seam", () => {
 
     const { code, out } = await run(["slack", "auth", "test", "--json"]);
     expect(code).toBe(0);
-    const report = JSON.parse(out) as { teamId: string; scopes: string; features: unknown };
-    expect(report.teamId).toBe("T123");
-    expect(report.scopes).toContain("channels:read");
-    expect(report.features).toBeDefined();
+    const report = JSON.parse(out) as {
+      tokens: { teamId: string; scopes: string; features: unknown }[];
+    };
+    expect(report.tokens[0]?.teamId).toBe("T123");
+    expect(report.tokens[0]?.scopes).toContain("channels:read");
+    expect(report.tokens[0]?.features).toBeDefined();
     expect(out).not.toContain("xoxp-test-token");
   });
 
@@ -746,9 +748,8 @@ describe("suasor slack conversations --new — drift diff (ADR-0039)", () => {
     expect(out).toContain("C002");
     expect(out).not.toContain("C001");
     expect(out).not.toContain("C003");
-    // Paste-ready block for the new channel(s).
+    // Paste-ready flat block for the new channel(s) (ADR-0042).
     expect(out).toContain("[connectors.slack]");
-    expect(out).toContain('team = "T123"');
     // The configured-but-unreachable channel is surfaced as a warn (not removed).
     expect(err).toContain("no longer reachable");
     expect(err).toContain("CGONE");
@@ -816,44 +817,18 @@ describe("suasor slack conversations --new — drift diff (ADR-0039)", () => {
     expect(err).not.toContain("no longer reachable");
   });
 
-  test("multi-workspace config emits a [connectors.slack.workspaces.<alias>] fragment", async () => {
-    // A named-workspace config discards the flat `channels` (resolveWorkspaces), so
-    // the paste-ready block must target the workspace sub-section sync ingests, not
-    // a flat [connectors.slack] block that would be silently ignored.
+  test("a legacy multi-workspace config fails --new with the migration error (ADR-0042)", async () => {
     writeFileSync(
       join(dir, "config.toml"),
       '[connectors.slack.workspaces.acme]\nteam = "T123"\nchannels = ["C001"]\n',
     );
-    process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN = "xoxp-acme-token";
-    try {
-      installFetch((url, params) => {
-        if (url.includes("auth.test"))
-          return { headers: { "x-oauth-scopes": "channels:read" }, body: USER_AUTH };
-        if (url.includes("users.conversations")) {
-          if (params.get("types") === "public_channel") {
-            return {
-              body: {
-                ok: true,
-                channels: [
-                  { id: "C001", name: "general", is_member: true }, // configured
-                  { id: "C002", name: "random", is_member: true }, // new
-                ],
-              },
-            };
-          }
-          return { body: { ok: true, channels: [] } };
-        }
-        throw new Error(`unexpected url: ${url}`);
-      });
-
-      const { code, out } = await run(["slack", "conversations", "--new", "--workspace", "acme"]);
-      expect(code).toBe(0);
-      expect(out).toContain("C002");
-      // The fragment targets the workspace sub-section (flat renderConfigBlock
-      // never emits a workspaces.<alias> table), so sync actually ingests it.
-      expect(out).toContain("[connectors.slack.workspaces.acme]");
-    } finally {
-      delete process.env.SUASOR_CONNECTOR_SLACK_ACME_TOKEN;
-    }
+    installFetch(() => {
+      throw new Error("no network expected");
+    });
+    const { code, err } = await run(["slack", "conversations", "--new"]);
+    expect(code).toBe(1);
+    // The loader surfaces the mechanical migration message (ADR-0042 決定 9).
+    expect(err).toContain("remove 'workspaces'");
+    expect(err).toContain("0042-slack-workspace-less-connector");
   });
 });

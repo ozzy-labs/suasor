@@ -18,8 +18,9 @@
  * - **import-clean** — `@slack/web-api` is **lazy-imported inside `sync`**, so
  *   building the connector / registry never pulls the SDK (ADR-0007, NFR-PRF-1).
  *   This module's top-level imports are limited to `zod` + the contract types.
- * - **secrets** — the bot token comes from `ctx.secret("token")` (keychain + env
- *   override, NFR-PRV-4); it is never read from config.
+ * - **secrets** — tokens come from the unnamed pool `ctx.secret("tokens")`
+ *   (keychain + env override, newline/comma separated, ADR-0042 / NFR-PRV-4);
+ *   they are never read from config.
  */
 import { z } from "zod";
 import { ConfigError } from "../config/error.ts";
@@ -46,11 +47,16 @@ import {
 } from "./slack/resolve.ts";
 import { resolveTeamName } from "./slack/team.ts";
 
-/** One workspace's ingest target (a single Slack team). */
-export const SlackWorkspaceConfig = z.object({
-  /** Team / workspace id used to prefix ids (kept stable across renames). */
-  team: z.string().min(1).default("default"),
-  /** Channel ids to ingest (e.g. "C0123ABCD"). */
+/**
+ * `[connectors.slack]` config (docs/design/config.md, ADR-0042): one flat
+ * channel list. The ADR-0014 workspace tables (`workspaces.<alias>`, per-alias
+ * `team` / `self_user_id` / tokens) were removed by ADR-0042 — tokens live in an
+ * unnamed pool (`connector:slack:tokens`) and each channel is fetched via
+ * whichever token can reach it. Channel ids are globally unique, so no
+ * workspace classification is needed in config.
+ */
+export const SlackConnectorConfig = z.object({
+  /** Channel ids to ingest (e.g. "C0123ABCD"); globally unique across the Grid. */
   channels: z.array(z.string().min(1)).default([]),
   /**
    * Cold-start date floor (ADR-0016): messages older than this are never
@@ -61,170 +67,108 @@ export const SlackWorkspaceConfig = z.object({
   since: z.string().min(1).optional(),
   /**
    * Per-channel `since` override (ADR-0016 / #57): a map of channel id → floor
-   * (`30d` / `2026-01-01`) that takes precedence over the workspace-level
+   * (`30d` / `2026-01-01`) that takes precedence over the connector-level
    * `since` for those channels. Channels not listed fall back to `since`.
    */
   channel_since: z.record(z.string(), z.string().min(1)).optional(),
   /**
-   * The operator's own Slack user id (`Uxxxx`) for this workspace, used by
-   * `demand.list` to detect `<@you>` mentions (ADR-0012/ADR-0041). Resolve it from
-   * `slack auth test` (the `userId` field). Optional: without it, demand falls
-   * back to DM-only.
+   * The operator's own Slack user ids (`Uxxxx`, one per workspace they exist
+   * in), used by `demand.list` to detect `<@you>` mentions (ADR-0012 /
+   * ADR-0042 決定 2). Resolve them from `slack auth test` (each user token's
+   * `userId`). Optional: without any, demand falls back to DM-only.
    */
-  self_user_id: z.string().min(1).optional(),
-  /** Slack List ids to mirror for task read-back in this workspace (ADR-0036 §6). */
-  lists: z.array(z.string().min(1)).optional(),
-  /**
-   * Opt out of the sync-time discovery-drift sweep for this workspace (ADR-0039
-   * Layer 2). When unset, the connector-level `discover_new` (default `true`)
-   * applies; `false` here overrides it off for this one workspace, `true`
-   * overrides it on. The sweep never ingests — it only warns that newly-joined
-   * conversations are not yet in `channels` (cursor unchanged, no auto-follow).
-   */
-  discover_new: z.boolean().optional(),
-});
-export type SlackWorkspaceConfig = z.infer<typeof SlackWorkspaceConfig>;
-
-/**
- * `[connectors.slack]` config (docs/design/config.md, ADR-0014).
- *
- * Two shapes, mutually exclusive:
- * - **flat** (`team` + `channels`) — a single workspace, the `default` alias.
- *   Backward compatible with the pre-multi-workspace config.
- * - **multi** (`[connectors.slack.workspaces.<alias>]`) — N workspaces, each
- *   with its own team/channels and its own token (`connector:slack:<alias>:token`).
- * When `workspaces` is present and non-empty it wins; otherwise the flat fields
- * synthesize the single `default` workspace.
- */
-export const SlackConnectorConfig = z.object({
-  team: z.string().min(1).default("default"),
-  channels: z.array(z.string().min(1)).default([]),
-  /** Cold-start date floor for the flat/default workspace (ADR-0016). */
-  since: z.string().min(1).optional(),
-  /** Per-channel `since` override for the flat/default workspace (ADR-0016 / #57). */
-  channel_since: z.record(z.string(), z.string().min(1)).optional(),
-  /** Operator's own user id for the flat/default workspace (ADR-0012). */
-  self_user_id: z.string().min(1).optional(),
+  self_user_ids: z.array(z.string().min(1)).optional(),
   /**
    * Slack List ids to mirror as `slack_list_item` sources for task read-back
    * (ADR-0036 §6). The items are ingested with **raw cells** (no interpretation);
-   * `reconcileReadback` maps them to a task state using `[tasks.homes.slack]` column ids.
-   * Uses the flat/default token (`lists:read`). Multi-workspace lists are a
-   * follow-up.
+   * `reconcileReadback` maps them to a task state using `[tasks.homes.slack]`
+   * column ids. Fetched via whichever pool token can reach the list (`lists:read`).
    */
   lists: z.array(z.string().min(1)).optional(),
   /**
    * Whether `slack sync` sweeps for newly-joined conversations not yet in
-   * `channels` and warns about the drift (ADR-0039 Layer 2). Default `true`.
-   * Set `false` to opt the whole connector out; a named workspace can override
-   * it per-alias with `[connectors.slack.workspaces.<alias>] discover_new`. The
-   * sweep is cadence-gated (once per 24h) and never ingests — it only surfaces a
-   * one-line warn pointing at `slack conversations --new` (cursor unchanged).
+   * `channels` and warns about the drift (ADR-0039 Layer 2). Default `true`;
+   * connector-level only (the ADR-0014 per-alias override is gone). The sweep is
+   * cadence-gated (once per 24h) and never ingests — it only surfaces a one-line
+   * warn pointing at `slack conversations --new` (cursor unchanged).
    */
   discover_new: z.boolean().optional(),
-  workspaces: z.record(z.string(), SlackWorkspaceConfig).optional(),
 });
 export type SlackConnectorConfig = z.infer<typeof SlackConnectorConfig>;
 
 /**
- * Collect the operator's Slack user ids from the connector config slice across
- * the flat/default workspace and every `workspaces.<alias>` (ADR-0012). Used by
- * the `demand.list` / `priority.list` MCP tools to detect `<@you>` mentions.
- * Returns a de-duplicated list (empty when none configured → DM-only demand).
+ * Config keys of the superseded ADR-0014 multi-workspace shape. Detected at
+ * connector build time so an un-migrated config fails loudly with migration
+ * guidance instead of silently ignoring the removed keys (ADR-0007 "no silent
+ * wrong answer"; ADR-0042 決定 9 deliberately ships no automatic conversion).
+ */
+const LEGACY_WORKSPACE_KEYS = ["workspaces", "team", "self_user_id"] as const;
+
+/**
+ * Fail fast when the config slice still uses the removed ADR-0014 shape
+ * (`workspaces` tables / `team` / `self_user_id`). The error names each legacy
+ * key and the flat replacement so the migration is mechanical.
+ */
+export function rejectLegacySlackConfig(config: ConnectorConfig): void {
+  const raw = (config ?? {}) as Record<string, unknown>;
+  const present = LEGACY_WORKSPACE_KEYS.filter((k) => raw[k] !== undefined);
+  if (present.length === 0) return;
+  throw new ConfigError("legacy Slack multi-workspace config (removed by ADR-0042)", [
+    `connectors.slack: remove ${present.map((k) => `'${k}'`).join(", ")} — the workspace-less shape is a single flat [connectors.slack] with 'channels' (merge every workspace's channel ids into one list), optional 'self_user_ids' (replaces per-workspace self_user_id), and one token pool: keychain 'connector:slack:tokens' via \`suasor slack auth set\`, or env SUASOR_CONNECTOR_SLACK_TOKENS (newline/comma separated). Per-alias 'since' moves to [connectors.slack.channel_since]. See docs/adr/0042-slack-workspace-less-connector.md.`,
+  ]);
+}
+
+/**
+ * The operator's Slack user ids from the connector config slice (ADR-0012 /
+ * ADR-0042 決定 2). Used by the `demand.list` / `priority.list` MCP tools to
+ * detect `<@you>` mentions. Empty when none configured → DM-only demand
+ * (`slack auth test` prints each user token's own user id to paste here).
  */
 export function resolveSelfUserIds(config: ConnectorConfig): string[] {
   const parsed = SlackConnectorConfig.parse(config ?? {});
-  const ids = new Set<string>();
-  if (parsed.self_user_id) ids.add(parsed.self_user_id);
-  for (const ws of Object.values(parsed.workspaces ?? {})) {
-    if (ws.self_user_id) ids.add(ws.self_user_id);
-  }
-  return [...ids];
+  return [...new Set(parsed.self_user_ids ?? [])];
 }
 
 export const SLACK_CONNECTOR_NAME = "slack";
 
-/** Alias of the flat (single-workspace) config shape. */
-export const DEFAULT_WORKSPACE_ALIAS = "default";
+/**
+ * The single keychain secret name of the unnamed token pool (ADR-0042 決定 2):
+ * keychain account `connector:slack:tokens`, env override
+ * `SUASOR_CONNECTOR_SLACK_TOKENS` (derived by `secretEnvName`). The stored value
+ * is a newline- or comma-separated token list; writes are **replace-all** so a
+ * dead token never lingers by accident.
+ */
+export const SLACK_TOKENS_SECRET = "tokens";
 
 /**
- * The keychain secret name (passed to `ctx.secret`) for a workspace alias:
- * `"token"` for the flat/default workspace (backward compatible with the
- * single-token account `connector:slack:token`), or `"<alias>:token"` for a
- * named workspace (`connector:slack:<alias>:token`). Shared by the connector and
- * the `slack auth` CLI so both resolve the same account (ADR-0014).
+ * Parse the stored token pool: split on newlines / commas, trim, drop empties,
+ * and de-duplicate preserving order (a token pasted twice — or two tokens for
+ * the same workspace — is harmless; the first occurrence wins).
  */
-export function workspaceSecretName(alias?: string): string {
-  return alias ? `${alias}:token` : "token";
-}
-
-/** A workspace resolved for a sync pass: where to read + which secret to use. */
-export interface ResolvedWorkspace {
-  alias: string;
-  team: string;
-  channels: string[];
-  /** Slack List ids to mirror for read-back in this workspace (ADR-0036 §6). */
-  lists: string[];
-  secretName: string;
-  since?: string;
-  channelSince?: Record<string, string>;
-  /** Operator's own user id, excluded from group-DM name joins (ADR-0037 §4). */
-  selfUserId?: string;
-  /**
-   * Whether the sync-time discovery-drift sweep runs for this workspace (ADR-0039
-   * Layer 2). Resolved from `discover_new`: a per-workspace value wins, else the
-   * connector-level value, else the default `true`.
-   */
-  discoverNew: boolean;
-}
-
-/** Expand the config into the concrete list of workspaces to sync. */
-export function resolveWorkspaces(config: SlackConnectorConfig): ResolvedWorkspace[] {
-  const ws = config.workspaces;
-  if (ws && Object.keys(ws).length > 0) {
-    return Object.entries(ws).map(([alias, w]) => ({
-      alias,
-      team: w.team,
-      channels: w.channels,
-      lists: w.lists ?? [],
-      secretName: workspaceSecretName(alias),
-      // Per-workspace opt-out wins over the connector default; both default true.
-      discoverNew: w.discover_new ?? config.discover_new ?? true,
-      ...(w.since ? { since: w.since } : {}),
-      ...(w.channel_since ? { channelSince: w.channel_since } : {}),
-      ...(w.self_user_id ? { selfUserId: w.self_user_id } : {}),
-    }));
+export function parseTokenPool(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[\n,]/)) {
+    const token = part.trim();
+    if (token.length === 0 || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
   }
-  return [
-    {
-      alias: DEFAULT_WORKSPACE_ALIAS,
-      team: config.team,
-      channels: config.channels,
-      lists: config.lists ?? [],
-      secretName: workspaceSecretName(),
-      discoverNew: config.discover_new ?? true,
-      ...(config.since ? { since: config.since } : {}),
-      ...(config.channel_since ? { channelSince: config.channel_since } : {}),
-      ...(config.self_user_id ? { selfUserId: config.self_user_id } : {}),
-    },
-  ];
+  return out;
 }
 
 /**
  * Credential precondition (ADR-0007 "credential 解決は scope-emptiness 判定に先行
- * する", Issue #440). Slack is multi-account (ADR-0014): the requirement lists
- * every configured workspace's secret name and is satisfied when **at least one**
- * resolves (any-of). A total absence throws centrally (in the sync service); a
- * per-workspace absence is handled by the connector's own isolation (a tokenless
- * alias is skipped with a warning inside `sync`). This is the manifest form of
- * the token hoist that #385 hand-rolled inside `sync`.
+ * する", Issue #440): the single pool secret must resolve. Individual dead
+ * tokens inside the pool are handled by the connector's own per-token isolation.
  */
-export function slackCredentials(config: SlackConnectorConfig): CredentialRequirement {
+export function slackCredentials(): CredentialRequirement {
   return {
-    secretNames: resolveWorkspaces(config).map((ws) => ws.secretName),
+    secretNames: [SLACK_TOKENS_SECRET],
     missingMessage:
-      "slack connector: no token configured for any workspace " +
-      "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
+      "slack connector: no token pool configured " +
+      "(set SUASOR_CONNECTOR_SLACK_TOKENS — newline/comma separated — or run `suasor slack auth set`)",
   };
 }
 
@@ -273,49 +217,23 @@ export function validateSlackSince(config: SlackConnectorConfig): void {
   const issues: string[] = [];
 
   // Recovery hint (Issue #380): once the floor is corrected, older history can be
-  // re-fetched with the `slack cursor backfill` verb. The alias is a real value;
-  // `channel_since` embeds its concrete channel while a workspace-level `since`
-  // (which spans every channel) uses a `<channel-id>` placeholder.
-  const backfillHint = (alias: string, channel: string): string =>
-    `Tip: after correcting it, backfill older history with 'suasor slack cursor backfill --workspace ${alias} --channel ${channel} --since <floor> --yes'`;
+  // re-fetched with the `slack cursor backfill` verb. `channel_since` embeds its
+  // concrete channel while the connector-level `since` (which spans every
+  // channel) uses a `<channel-id>` placeholder.
+  const backfillHint = (channel: string): string =>
+    `Tip: after correcting it, backfill older history with 'suasor slack cursor backfill --channel ${channel} --since <floor> --yes'`;
 
-  const checkSince = (
-    value: string | undefined,
-    label: string,
-    alias: string,
-    channel: string,
-  ): void => {
+  const checkSince = (value: string | undefined, label: string, channel: string): void => {
     if (value !== undefined && !isSinceParseable(value)) {
       issues.push(
-        `${label}: invalid since '${value}' (expected relative '30d'/'4w'/'12h' or ISO date '2026-01-01'). ${backfillHint(alias, channel)}`,
+        `${label}: invalid since '${value}' (expected relative '30d'/'4w'/'12h' or ISO date '2026-01-01'). ${backfillHint(channel)}`,
       );
     }
   };
-  const checkChannelSince = (
-    map: Record<string, string> | undefined,
-    label: string,
-    alias: string,
-  ): void => {
-    for (const [channel, value] of Object.entries(map ?? {})) {
-      checkSince(value, `${label}.${channel}`, alias, channel);
-    }
-  };
 
-  // Flat / default workspace.
-  checkSince(config.since, "connectors.slack.since", DEFAULT_WORKSPACE_ALIAS, "<channel-id>");
-  checkChannelSince(
-    config.channel_since,
-    "connectors.slack.channel_since",
-    DEFAULT_WORKSPACE_ALIAS,
-  );
-  // Named workspaces.
-  for (const [alias, ws] of Object.entries(config.workspaces ?? {})) {
-    checkSince(ws.since, `connectors.slack.workspaces.${alias}.since`, alias, "<channel-id>");
-    checkChannelSince(
-      ws.channel_since,
-      `connectors.slack.workspaces.${alias}.channel_since`,
-      alias,
-    );
+  checkSince(config.since, "connectors.slack.since", "<channel-id>");
+  for (const [channel, value] of Object.entries(config.channel_since ?? {})) {
+    checkSince(value, `connectors.slack.channel_since.${channel}`, channel);
   }
 
   if (issues.length > 0) {
@@ -405,7 +323,7 @@ interface SlackMessageItem {
  * team id fallback at display).
  */
 function toRecord(
-  team: string,
+  team: string | undefined,
   channel: string,
   item: SlackMessageItem,
   userName?: string | null,
@@ -423,7 +341,7 @@ function toRecord(
     // Slack `ts` is `<unix-seconds>.<microseconds>`; expose it as ISO 8601.
     observedAt: new Date(Math.floor(Number.parseFloat(item.ts) * 1000)).toISOString(),
     meta: {
-      team,
+      ...(team ? { team } : {}),
       channel,
       ts: item.ts,
       user: item.user ?? null,
@@ -497,7 +415,7 @@ export interface SlackClientLike {
    * (ADR-0037 §10, Issue #361). Optional so existing message-only fakes need not
    * implement it — team-name resolution then degrades to id-only (no live fetch).
    */
-  authTest?: () => Promise<{ ok?: boolean; team?: string; team_id?: string }>;
+  authTest?: () => Promise<{ ok?: boolean; team?: string; team_id?: string; user_id?: string }>;
   /**
    * `auth.teams.list` — Enterprise Grid workspace enumeration for team names
    * (ADR-0037 §10, Issue #361). Optional; a fake without it (or a non-Grid token)
@@ -565,7 +483,7 @@ export const defaultSlackClientFactory: SlackClientFactory = async (token) => {
   // Team-name resolution (ADR-0037 §10, Issue #361): `auth.test` for the token's
   // own team, `auth.teams.list` (untyped → apiCall) for Grid enumeration.
   like.authTest = () =>
-    web.auth.test() as Promise<{ ok?: boolean; team?: string; team_id?: string }>;
+    web.auth.test() as Promise<{ ok?: boolean; team?: string; team_id?: string; user_id?: string }>;
   like.authTeamsList = (args) =>
     web.apiCall("auth.teams.list", args) as Promise<{
       ok?: boolean;
@@ -595,74 +513,75 @@ export interface SlackConnectorOptions {
 }
 
 /**
- * Parse the resume cursor into a per-alias → per-channel high-water-mark map
- * (ADR-0014). Three input shapes are accepted for backward compatibility:
- * - **nested** `{ "<alias>": { "<channel>": "<ts>" } }` — the current format.
- * - **flat** `{ "<channel>": "<ts>" }` — the pre-multi-workspace format
- *   (ADR-0011); read as the `default` alias.
- * - **bare ts** — the pre-per-channel legacy cursor (ADR-0011); returned as a
- *   `legacyFloor` applied to the `default` workspace's channels on first run.
- */
-function parseCursor(raw: string | null): {
-  byAlias: Record<string, Record<string, string>>;
-  legacyFloor: string | null;
-} {
-  if (!raw) return { byAlias: {}, legacyFloor: null };
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("{")) return { byAlias: {}, legacyFloor: trimmed };
-  try {
-    const obj = JSON.parse(trimmed) as Record<string, unknown>;
-    const byAlias: Record<string, Record<string, string>> = {};
-    const flat: Record<string, string> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (typeof value === "string") {
-        flat[key] = value; // flat (legacy single-workspace) entry
-      } else if (value && typeof value === "object") {
-        const inner: Record<string, string> = {};
-        for (const [ch, ts] of Object.entries(value)) if (typeof ts === "string") inner[ch] = ts;
-        byAlias[key] = inner;
-      }
-    }
-    if (Object.keys(flat).length > 0) {
-      byAlias[DEFAULT_WORKSPACE_ALIAS] = { ...flat, ...byAlias[DEFAULT_WORKSPACE_ALIAS] };
-    }
-    return { byAlias, legacyFloor: null };
-  } catch {
-    // Unparseable cursor → treat as a fresh start rather than crash.
-    return { byAlias: {}, legacyFloor: null };
-  }
-}
-
-/**
- * Reserved cursor "alias" key that carries the per-workspace discovery-drift
- * marker (ADR-0039 Layer 2), stashed inside the connector's own opaque cursor so
- * it needs no extra projection / event wiring — the same lightweight persistence
- * the channel cursors use. Its inner map is `{ "<workspace-alias>":
- * "<lastSweptEpochMs>:<newCount>" }`, NOT channel→ts. The `__…__` prefix cannot
- * collide with a real workspace alias, and {@link cursorToAliasMap} strips it so
- * `slack status` / `cursor reset` / `cursor backfill` never see or clobber it.
+ * Reserved cursor key that carries the discovery-drift marker (ADR-0039 Layer
+ * 2), stashed inside the connector's own opaque cursor so it needs no extra
+ * projection / event wiring. Its value is `"<lastSweptEpochMs>:<newCount>"`
+ * (pool-wide — the per-workspace cadence went away with the aliases). The
+ * `__…__` prefix cannot collide with a channel id, and
+ * {@link cursorToChannelMap} strips it so `slack status` / `cursor reset` /
+ * `cursor backfill` never see or clobber it.
  */
 const DISCOVERY_CURSOR_KEY = "__discovery__";
 
 /**
- * The stored cursor as an alias → channel → ts map (ADR-0016 `slack status` /
+ * Parse the resume cursor into a flat channel → high-water-mark map (ADR-0042;
+ * per-thread `<channel>#<thread_ts>` keys sit alongside, ADR-0015 R1). Three
+ * input shapes are accepted:
+ * - **flat** `{ "<channel>": "<ts>" }` — the current format.
+ * - **nested** `{ "<alias>": { "<channel>": "<ts>" } }` — the superseded
+ *   ADR-0014 per-alias format; flattened by taking the **max ts per channel**
+ *   across aliases (deterministic, one-time — avoids a cold restart on upgrade).
+ *   The legacy nested discovery marker is dropped (the sweep just re-runs once).
+ * - **bare ts** — the pre-per-channel legacy cursor (ADR-0011); returned as a
+ *   `legacyFloor` applied to every channel on the first run.
+ */
+function parseCursor(raw: string | null): {
+  channels: Record<string, string>;
+  legacyFloor: string | null;
+} {
+  if (!raw) return { channels: {}, legacyFloor: null };
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return { channels: {}, legacyFloor: trimmed };
+  try {
+    const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    const channels: Record<string, string> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (typeof value === "string") {
+        channels[key] = value; // flat entry (channel, thread key, or marker)
+      } else if (value && typeof value === "object") {
+        // Superseded nested alias map (ADR-0014) → flatten with max-ts merge.
+        // The old discovery marker nested under this key holds `"<ms>:<count>"`
+        // values that are not ts — skip the whole reserved key.
+        if (key === DISCOVERY_CURSOR_KEY) continue;
+        for (const [ch, ts] of Object.entries(value)) {
+          if (typeof ts !== "string") continue;
+          const prev = channels[ch];
+          channels[ch] = prev === undefined ? ts : maxTs(prev, ts);
+        }
+      }
+    }
+    return { channels, legacyFloor: null };
+  } catch {
+    // Unparseable cursor → treat as a fresh start rather than crash.
+    return { channels: {}, legacyFloor: null };
+  }
+}
+
+/**
+ * The stored cursor as a flat channel → ts map (ADR-0016 `slack status` /
  * `slack cursor reset` read this). A bare-ts legacy cursor has no per-channel
  * structure and yields `{}`. The reserved discovery marker
  * ({@link DISCOVERY_CURSOR_KEY}) is stripped so the recovery verbs that
- * re-serialize this map never surface or drop it as if it were a workspace.
+ * re-serialize this map never surface or drop it as if it were a channel.
  */
-export function cursorToAliasMap(raw: string | null): Record<string, Record<string, string>> {
-  const { [DISCOVERY_CURSOR_KEY]: _discovery, ...aliases } = parseCursor(raw).byAlias;
-  return aliases;
+export function cursorToChannelMap(raw: string | null): Record<string, string> {
+  const { [DISCOVERY_CURSOR_KEY]: _discovery, ...channels } = parseCursor(raw).channels;
+  return channels;
 }
 
-/** Serialize an alias → channel → ts map back to a cursor string (empty → `null`). */
-export function serializeCursor(map: Record<string, Record<string, string>>): string | null {
-  const out: Record<string, Record<string, string>> = {};
-  for (const [alias, channels] of Object.entries(map)) {
-    if (Object.keys(channels).length > 0) out[alias] = channels;
-  }
-  return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
+/** Serialize a flat channel → ts map back to a cursor string (empty → `null`). */
+export function serializeCursor(map: Record<string, string>): string | null {
+  return Object.keys(map).length > 0 ? JSON.stringify(map) : null;
 }
 
 /**
@@ -717,13 +636,11 @@ function maxTs(a: string, b: string): string {
   return Number.parseFloat(a) >= Number.parseFloat(b) ? a : b;
 }
 
-/** One workspace's persisted discovery-drift marker (ADR-0039 Layer 2). */
+/** The pool-wide persisted discovery-drift marker (ADR-0039 Layer 2 / ADR-0042). */
 export interface DiscoveryMarker {
-  /** Workspace alias the marker belongs to. */
-  readonly alias: string;
   /** Epoch ms of the last discovery sweep (drives the 24h cadence). */
   readonly lastSweptMs: number;
-  /** New (member, not-yet-configured) conversations that sweep found. */
+  /** New (member, not-yet-configured) conversations the sweep found. */
   readonly newCount: number;
 }
 
@@ -740,21 +657,17 @@ function parseDiscoveryMarkerValue(
 }
 
 /**
- * Read the per-workspace discovery-drift markers the sync sweep persisted into
- * the connector cursor (ADR-0039 Layer 2). Offline: parses the stored cursor,
- * with no network. Used by `suasor doctor` to surface "N new Slack conversation(s)
- * not in config" without sweeping the network itself. Returns `[]` when no sweep
- * has run (or the cursor predates this feature).
+ * Read the pool-wide discovery-drift marker the sync sweep persisted into the
+ * connector cursor (ADR-0039 Layer 2). Offline: parses the stored cursor, with
+ * no network. Used by `suasor doctor` to surface "N new Slack conversation(s)
+ * not in config" without sweeping the network itself. Returns `null` when no
+ * sweep has run — including when the cursor predates ADR-0042 and only carries
+ * the old per-alias nested marker, which is dropped (the sweep re-runs once).
  */
-export function readDiscoveryMarkers(raw: string | null): DiscoveryMarker[] {
-  const meta = parseCursor(raw).byAlias[DISCOVERY_CURSOR_KEY];
-  if (!meta) return [];
-  const out: DiscoveryMarker[] = [];
-  for (const [alias, value] of Object.entries(meta)) {
-    const parsed = parseDiscoveryMarkerValue(value);
-    if (parsed) out.push({ alias, ...parsed });
-  }
-  return out;
+export function readDiscoveryMarker(raw: string | null): DiscoveryMarker | null {
+  const value = parseCursor(raw).channels[DISCOVERY_CURSOR_KEY];
+  if (!value) return null;
+  return parseDiscoveryMarkerValue(value);
 }
 
 /**
@@ -765,444 +678,422 @@ export function readDiscoveryMarkers(raw: string | null): DiscoveryMarker[] {
  */
 const DISCOVERY_SWEEP_TYPES: readonly ConversationType[] = ["public", "private"];
 
-/** Cadence for the discovery sweep (ADR-0039 §3): at most once per 24h per workspace. */
+/** Cadence for the discovery sweep (ADR-0039 §3): at most once per 24h (pool-wide). */
 const DISCOVERY_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-/** Per-workspace outcome of a sync pass, used to build the summary (ADR-0014). */
-type WorkspaceStatus = "ok" | "failed" | "skipped";
+/**
+ * One pool token resolved for this run: its client plus the `auth.test`
+ * self-description (ADR-0042 決定 2). `teamId` / `teamName` / `userId` stay
+ * undefined when the client exposes no `authTest` (test fakes) — the token is
+ * still usable; labels and `meta.team` then degrade to the pool position.
+ */
+interface TokenIdentity {
+  readonly token: string;
+  readonly client: SlackClientLike;
+  /** 1-based pool position, the label of last resort. */
+  readonly index: number;
+  readonly teamId?: string;
+  readonly teamName?: string;
+  /** The token's own user id (`auth.test`), excluded from group-DM name joins. */
+  readonly userId?: string;
+  /** Set when a token-wide failure (auth / rate limit / network) occurs mid-run. */
+  failed: boolean;
+}
 
-/** Slack connector implementing the read-only contract (ADR-0007 / ADR-0014). */
+/** Human label for a token in warns / the summary: name > team id > position. */
+function tokenLabel(t: { index: number; teamId?: string; teamName?: string }): string {
+  if (t.teamName) return t.teamId ? `${t.teamId} "${t.teamName}"` : t.teamName;
+  return t.teamId ?? `#${t.index}`;
+}
+
+/** Per-token outcome of a sync pass, used to build the summary (ADR-0042 決定 5). */
+type TokenStatus = "ok" | "dead" | "failed";
+
+/** Slack connector implementing the read-only contract (ADR-0007 / ADR-0042). */
 class SlackConnector implements Connector {
   readonly name = SLACK_CONNECTOR_NAME;
   readonly sourceType = "slack";
-  /** Any-of over the configured workspaces' tokens; enforced centrally (#440). */
+  /** The single pool secret; enforced centrally (#440). */
   readonly credentials: CredentialRequirement;
 
-  /** Per-alias → per-channel highest `ts` observed this run → next-run cursor. */
-  private cursors: Record<string, Record<string, string>> = {};
+  /** Flat channel → highest `ts` observed this run → next-run cursor. */
+  private cursors: Record<string, string> = {};
 
   /**
-   * Per-workspace status for this run (insertion order = config order), used to
-   * build the end-of-run summary line and decide the partial-failure flag
-   * (ADR-0014 / #166). Reset at the start of each `sync`.
+   * Per-token status for this run (pool order), used to build the end-of-run
+   * summary line and the partial-failure flag (ADR-0042 決定 5: a dead token —
+   * replace it — is told apart from an unreachable channel — add a token).
    */
-  private workspaceStatus: {
-    alias: string;
-    /** Team id (Txxxx) this workspace targets, for summary identity (#371). */
-    team: string;
-    /**
-     * Workspace name resolved this run (ADR-0037/#361), when available. Absent
-     * for skipped workspaces (no token → no resolution) and for failures that
-     * abort before resolution; the summary then falls back to the team id.
-     */
-    teamName?: string;
-    status: WorkspaceStatus;
-  }[] = [];
+  private tokenStatus: { label: string; status: TokenStatus }[] = [];
+
+  /** Channels no token could ingest this run (drives the partial-failure flag). */
+  private failedChannelCount = 0;
 
   constructor(
     private readonly config: SlackConnectorConfig,
     private readonly clientFactory: SlackClientFactory,
     private readonly now: () => number = () => Date.now(),
     private readonly usersTransport: SlackUsersTransport = defaultUsersTransport,
-    /** Sweep transport for the discovery drift check (ADR-0039); default `slackFetch`. */
+    /** Sweep transport for discovery + reachability (ADR-0039/0042); default `slackFetch`. */
     private readonly conversationsTransport?: SlackConversationsTransport,
   ) {
-    this.credentials = slackCredentials(config);
+    this.credentials = slackCredentials();
   }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
-    const allWorkspaces = resolveWorkspaces(this.config);
-
-    // Resolve every workspace's token (env override / keychain via ctx.secret)
-    // up front for per-workspace use below. The "at least one token resolves"
-    // precondition (ADR-0007 "credential 解決は scope-emptiness 判定に先行する") is
-    // now enforced centrally by the sync service before `sync()` runs, driven by
-    // this connector's `credentials` (the any-of over these same workspace secret
-    // names) — so an enabled-but-unconfigured slice (no channels, no token: the
-    // fresh-onboard state) fails loudly there rather than hiding behind the
-    // channels-empty advisory. A tokenless *individual* alias is still skipped
-    // with a warning (per-workspace isolation, ADR-0014) inside the loop below.
-    const tokens = new Map<string, string | null>();
-    for (const ws of allWorkspaces) {
-      tokens.set(ws.alias, (await ctx.secret(ws.secretName)) ?? null);
-    }
-
-    // Keep any workspace that has channels (messages) OR lists (read-back, §6).
-    const workspaces = allWorkspaces.filter((w) => w.channels.length > 0 || w.lists.length > 0);
-    if (workspaces.length === 0) return;
-
-    // No shared-channel owner election (ADR-0042, supersedes ADR-0038): the
-    // externalId is canonical (`slack:<channel>:<ts>`, no team prefix), so a
-    // channel listed by multiple workspace aliases collapses to the same source
-    // ids and the fingerprint idempotency absorbs the overlap. A duplicated
-    // listing costs a redundant fetch, nothing more.
-    const { byAlias: previous, legacyFloor } = parseCursor(ctx.cursor);
-    // Lift the reserved discovery-drift markers out of `previous` so it stays a
-    // pure alias→channel→ts map for the ingest logic below (ADR-0039 Layer 2).
-    // The markers are carried forward per workspace and re-stashed after the loop.
-    const prevDiscovery = previous[DISCOVERY_CURSOR_KEY] ?? {};
-    delete previous[DISCOVERY_CURSOR_KEY];
-    const discoveryMarkers: Record<string, string> = {};
-    // Start empty and seed only configured aliases/channels below, so cursors
-    // for workspaces/channels removed from config don't accumulate forever.
+    const cfg = this.config;
+    const channels = cfg.channels;
+    const lists = cfg.lists ?? [];
     this.cursors = {};
-    this.workspaceStatus = [];
-    // Single clock read for this run, shared by the cold-start `since` floor and
-    // the per-thread active-window prune (ADR-0015 R1) so both agree.
-    const nowMs = this.now();
-    let resolvedCount = 0; // workspaces that had a token
-    let failedCount = 0; // workspaces that errored mid-fetch
-    let lastError: unknown;
+    this.tokenStatus = [];
+    this.failedChannelCount = 0;
+    if (channels.length === 0 && lists.length === 0) return;
+
+    // The pool secret resolves centrally before sync runs (#440); parse it into
+    // individual tokens (newline/comma separated, ADR-0042 決定 2).
+    const pool = parseTokenPool(await ctx.secret(SLACK_TOKENS_SECRET));
+    if (pool.length === 0) {
+      throw new Error(
+        "slack connector: no token pool configured " +
+          "(set SUASOR_CONNECTOR_SLACK_TOKENS — newline/comma separated — or run `suasor slack auth set`)",
+      );
+    }
 
     // Surface non-id channel values (e.g. a `#general` name) before any fetch:
     // `conversations.history` keys off the id, so a name silently ingests zero
     // messages. Warn (don't fail) so a future-valid id prefix is never locked
     // out (ADR-0007 "no silent wrong answer", Issue #158).
-    for (const ws of workspaces) {
-      for (const channel of ws.channels) {
-        if (!looksLikeSlackChannelId(channel)) {
-          ctx.onWarn?.(
-            `workspace '${ws.alias}' channel '${channel}' does not look like a Slack id ` +
-              "(ids start with C/D/G) — channels must be ids, not names; run " +
-              "`suasor slack conversations` to find the id",
-          );
-        }
+    for (const channel of channels) {
+      if (!looksLikeSlackChannelId(channel)) {
+        ctx.onWarn?.(
+          `channel '${channel}' does not look like a Slack id ` +
+            "(ids start with C/D/G) — channels must be ids, not names; run " +
+            "`suasor slack conversations` to find the id",
+        );
       }
     }
 
-    for (const ws of workspaces) {
-      const token = tokens.get(ws.alias); // resolved once in the hoist above
-      if (!token) {
-        // Per-workspace isolation (ADR-0014): skip this workspace, keep the rest
-        // syncing, and preserve its prior cursor so the skip isn't a reset.
-        const hint =
-          ws.alias === DEFAULT_WORKSPACE_ALIAS
-            ? "`suasor slack auth set`"
-            : `\`suasor slack auth set --workspace ${ws.alias}\``;
-        ctx.onWarn?.(`workspace '${ws.alias}' skipped: no token (run ${hint})`);
-        if (previous[ws.alias]) this.cursors[ws.alias] = { ...previous[ws.alias] };
-        // No token → cannot sweep; carry the prior marker forward unchanged so a
-        // transient skip does not reset the discovery cadence (ADR-0039).
-        const skipMarker = prevDiscovery[ws.alias];
-        if (skipMarker) discoveryMarkers[ws.alias] = skipMarker;
-        this.workspaceStatus.push({ alias: ws.alias, team: ws.team, status: "skipped" });
-        continue;
+    const { channels: prevAll, legacyFloor } = parseCursor(ctx.cursor);
+    const prevMarker = prevAll[DISCOVERY_CURSOR_KEY];
+    delete prevAll[DISCOVERY_CURSOR_KEY];
+    const prevChannels = prevAll;
+    const nowMs = this.now();
+
+    // 1. Self-describe each token via `auth.test` when the client exposes it
+    // (ADR-0042 決定 2); a fake without `authTest` stays usable with an unknown
+    // identity. A failing `auth.test` = a **dead token**: it is excluded from
+    // this run and named in one warn + the summary (決定 5 — the recovery is
+    // "replace it", distinct from an unreachable channel's "add a token").
+    const identities: TokenIdentity[] = [];
+    for (const [i, token] of pool.entries()) {
+      const client = await this.clientFactory(token);
+      let described: Pick<TokenIdentity, "teamId" | "teamName" | "userId"> = {};
+      if (client.authTest) {
+        try {
+          const res = await client.authTest();
+          if (res.ok === false) throw new Error("auth.test returned ok:false");
+          described = {
+            ...(res.team_id ? { teamId: res.team_id } : {}),
+            ...(res.team ? { teamName: res.team } : {}),
+            ...(res.user_id ? { userId: res.user_id } : {}),
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.onWarn?.(
+            `token #${i + 1} is dead (auth.test failed: ${message}) — replace the pool with ` +
+              "`suasor slack auth set` / SUASOR_CONNECTOR_SLACK_TOKENS",
+          );
+          this.tokenStatus.push({ label: `#${i + 1}`, status: "dead" });
+          continue;
+        }
       }
-      resolvedCount += 1;
-      const prevChannels = previous[ws.alias] ?? {};
-      // Discovery-drift sweep (ADR-0039 Layer 2): cadence-gated, opt-out-aware,
-      // best-effort. Warns about newly-joined conversations not in `channels`;
-      // never ingests and never advances a channel cursor. Runs before the
-      // ingest fetch so a mid-sync channel failure still records the marker.
-      const marker = await this.sweepDiscovery(ctx, ws, token, prevDiscovery[ws.alias]);
-      if (marker !== undefined) discoveryMarkers[ws.alias] = marker;
-      // Hoisted so the summary carries the workspace name even when a later
-      // fetch fails (the catch below runs outside the try scope). Reset each
-      // workspace; stays undefined if resolution degrades or never runs.
-      let teamName: string | undefined;
+      identities.push({ token, client, index: i + 1, failed: false, ...described });
+    }
+    if (identities.length === 0) {
+      throw new Error(
+        "slack connector: every token in the pool failed auth.test — replace the pool " +
+          "(`suasor slack auth set` / SUASOR_CONNECTOR_SLACK_TOKENS)",
+      );
+    }
 
-      try {
-        const client = await this.clientFactory(token);
-        const aliasCursors: Record<string, string> = {};
-        // Per-workspace author-name cache (ADR-0037 §5): the same `Uxxxx`
-        // resolves `users.info` at most once per workspace this run. Keyed by
-        // this workspace's token so ids never cross-resolve between workspaces.
-        const nameCache = new Map<string, string | null>();
-        // Per-workspace channel-name cache (ADR-0037 §3/§5): each channel id is
-        // resolved via `conversations.info` (+ members for group DMs) at most once
-        // this run. Shares `nameCache` for DM / group-DM participant names.
-        const channelCache = new Map<string, ResolvedChannel>();
-        // Per-workspace team-name resolution (ADR-0037 §10, Issue #361): resolve
-        // this workspace's team id → workspace name once per run via
-        // `auth.teams.list` (Grid) / `auth.test` (single). Best-effort degrade to
-        // undefined → the display layer falls back to the team id. Stashed into
-        // `meta.teamName` so `teamFromMeta` folds a SlackTeamObserved per team.
-        const teamCache = new Map<string, string | null>();
-        teamName = (await resolveTeamName(client, ws.team, teamCache)) ?? undefined;
-        // Channels this run could not reach (not_in_channel / channel_not_found /
-        // is_archived): collected per channel and surfaced as one aggregated warn
-        // so READY-but-unjoined channels are no longer silently empty (ADR-0011).
-        const unreachable: { channel: string; code: string }[] = [];
+    // 2. Discovery-drift sweep (ADR-0039 Layer 2), pool-wide cadence: the union
+    // of every live token's visible-but-unconfigured conversations.
+    const marker = await this.sweepDiscovery(ctx, identities, prevMarker);
+    if (marker !== undefined) this.cursors[DISCOVERY_CURSOR_KEY] = marker;
 
-        // The default workspace's legacy floor (bare-ts cursor pre-ADR-0011).
-        const legacy =
-          ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined;
+    // 3. Reachability map (ADR-0042 決定 3): with 2+ live tokens, sweep each
+    // token's joined conversations once so every channel is fetched via a token
+    // that can actually read it. Best-effort: a failed sweep leaves that token's
+    // reachability **unknown** (`null`) and it stays a candidate for every
+    // channel — the bounded failover below absorbs a wrong pick. A single-token
+    // pool skips the sweep entirely (the only token is the only candidate).
+    const reach = new Map<TokenIdentity, Set<string> | null>();
+    if (identities.length > 1) {
+      for (const id of identities) {
+        try {
+          const { conversations } = await listConversations(id.token, {
+            ...(this.conversationsTransport ? { transport: this.conversationsTransport } : {}),
+          });
+          reach.set(id, new Set(conversations.filter((c) => c.isMember).map((c) => c.id)));
+        } catch {
+          reach.set(id, null);
+        }
+      }
+    } else {
+      reach.set(identities[0] as TokenIdentity, null);
+    }
 
-        for (const channel of ws.channels) {
-          // Cold-start floor (ADR-0016 / #57): a per-channel `since` override
-          // wins over the workspace `since`, combined with the legacy floor.
-          // Applied only to channels with no saved cursor (a resumed channel
-          // keeps its own high-water mark).
-          const sinceStr = ws.channelSince?.[channel] ?? ws.since;
-          const sinceFloor = sinceStr ? (parseSinceToTs(sinceStr, nowMs) ?? undefined) : undefined;
-          const floor = higherTs(sinceFloor, legacy);
-          // Each channel resumes from its OWN high-water mark; a never-synced
-          // channel starts at the floor so cold-start stays bounded.
-          const oldest = prevChannels[channel] ?? floor;
-          // Per-thread high-water marks for this channel carried over from the
-          // previous cursor (ADR-0015 R1): `<channel>#<thread_ts>` keys live
-          // beside the plain `<channel>` key in the alias map. Active threads are
-          // re-polled every sync so a reply to a thread whose parent has already
-          // fallen behind the channel cursor (the steady-state cron case) is
-          // still captured. `threadOut` receives the surviving marks to persist.
-          const savedThreadCursors = new Map<string, string>();
-          for (const [key, ts] of Object.entries(prevChannels)) {
-            const parsed = parseThreadCursorKey(key);
-            if (parsed && parsed.channel === channel) savedThreadCursors.set(parsed.threadTs, ts);
-          }
-          const threadOut = new Map<string, string>();
-          try {
-            for await (const item of fetchChannelItems(
-              client,
+    // Pool-wide per-run caches (ADR-0037 §5): Slack ids are globally unique
+    // within a Grid, so one cache spans every token this run.
+    const nameCache = new Map<string, string | null>();
+    const channelCache = new Map<string, ResolvedChannel>();
+    const teamCache = new Map<string, string | null>();
+
+    // Channels this run could not reach with any candidate token: collected and
+    // surfaced as one aggregated warn (ADR-0011 / ADR-0042 決定 5).
+    const unreachable: { channel: string; code: string }[] = [];
+    let ingestedChannels = 0;
+    let tokenWideError: unknown;
+
+    for (const channel of channels) {
+      // The reachability map is advisory ORDERING, never a hard filter: a token
+      // can hold `channels:history` without the listing scopes (its sweep then
+      // reads empty), and the API — not the sweep — is the truth about whether a
+      // fetch works. Known-members first, unknown-sweep tokens next; if no token
+      // claims or might claim the channel, still try the pool front (the
+      // bounded attempts absorb the cost and `not_in_channel` gives the honest
+      // per-channel verdict, ADR-0011).
+      const live = identities.filter((id) => !id.failed);
+      const known = live.filter((id) => reach.get(id)?.has(channel));
+      const unknown = live.filter((id) => (reach.get(id) ?? null) === null);
+      const ordered = [...known, ...unknown];
+      const candidates = ordered.length > 0 ? ordered : live;
+      // Bounded failover (ADR-0042 決定 3): the picked token plus at most one more.
+      const attempts = candidates.slice(0, 2);
+
+      // Cold-start floor (ADR-0016 / #57): a per-channel `since` override wins
+      // over the connector `since`, combined with the legacy bare-ts floor.
+      // Applied only to channels with no saved cursor.
+      const sinceStr = cfg.channel_since?.[channel] ?? cfg.since;
+      const sinceFloor = sinceStr ? (parseSinceToTs(sinceStr, nowMs) ?? undefined) : undefined;
+      const floor = higherTs(sinceFloor, legacyFloor ?? undefined);
+      const oldest = prevChannels[channel] ?? floor;
+      // Per-thread high-water marks carried over from the previous cursor
+      // (ADR-0015 R1): `<channel>#<thread_ts>` keys beside the plain key.
+      const savedThreadCursors = new Map<string, string>();
+      for (const [key, ts] of Object.entries(prevChannels)) {
+        const parsed = parseThreadCursorKey(key);
+        if (parsed && parsed.channel === channel) savedThreadCursors.set(parsed.threadTs, ts);
+      }
+
+      let done = false;
+      let lastCode: string | null = null;
+      for (const id of attempts) {
+        const threadOut = new Map<string, string>();
+        try {
+          for await (const item of fetchChannelItems(
+            id.client,
+            channel,
+            oldest,
+            savedThreadCursors,
+            nowMs,
+            threadOut,
+          )) {
+            // History messages and thread replies advance the same per-channel
+            // cursor — the highest ts seen resumes next run. A failover retry
+            // may re-yield items already yielded by the failed attempt; the
+            // canonical externalId (ADR-0042) makes that an unchanged skip at
+            // the store, not a duplicate.
+            const seen = this.cursors[channel];
+            if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
+              this.cursors[channel] = item.ts;
+            }
+            // Resolve author / channel / team names at sync time (ADR-0037);
+            // best-effort — a failed resolution degrades to ids, never blocks.
+            const userName = item.user
+              ? await resolveUserName(id.token, item.user, this.usersTransport, nameCache)
+              : null;
+            const channelInfo = await resolveChannel(
+              id.client,
+              id.token,
               channel,
-              oldest,
-              savedThreadCursors,
-              nowMs,
-              threadOut,
-            )) {
-              // History messages and thread replies advance the same per-channel
-              // cursor — the highest ts seen (a reply may be newest) resumes next run.
-              const seen = aliasCursors[channel];
-              if (seen === undefined || Number.parseFloat(item.ts) > Number.parseFloat(seen)) {
-                aliasCursors[channel] = item.ts;
-              }
-              // Resolve the author id → display name at sync time so the person
-              // projection carries a human name (ADR-0037 §2). Best-effort: a
-              // failed resolution (missing `users:read`, API error) returns null
-              // → `meta.userName` unset, ingest continues (ADR-0037 §6 degrade).
-              const userName = item.user
-                ? await resolveUserName(token, item.user, this.usersTransport, nameCache)
-                : null;
-              // Resolve the channel name + kind at sync time so the
-              // slack_channels projection carries a human name (ADR-0037 §3).
-              // Cached per run; best-effort degrade to id-only (§6) never blocks
-              // ingest. Reuses `nameCache` for DM / group-DM participant names.
-              const channelInfo = await resolveChannel(
-                client,
-                token,
-                channel,
-                ws.selfUserId,
-                this.usersTransport,
-                nameCache,
-                channelCache,
-              );
-              yield toRecord(ws.team, channel, item, userName, channelInfo, teamName);
-            }
-            // Persist the surviving (active, non-pruned) per-thread high-water
-            // marks under their `<channel>#<thread_ts>` keys so the next sync
-            // re-polls them (ADR-0015 R1).
-            for (const [threadTs, hwm] of threadOut) {
-              aliasCursors[threadCursorKey(channel, threadTs)] = hwm;
-            }
-          } catch (error) {
-            // A channel-scoped unreachable error (not_in_channel etc.) must not
-            // abort the workspace's other channels: record it for the aggregated
-            // warn, preserve any prior cursor, and move on. Other errors
-            // (ratelimited, auth, network) are workspace-wide → rethrow to the
-            // per-workspace isolation below (#56).
-            const code = unreachableChannelCode(error);
-            if (code === null) throw error;
-            unreachable.push({ channel, code });
-            // Preserve the channel's prior cursor AND its per-thread high-water
-            // marks so a transient membership gap is not a reset (ADR-0015 R1).
-            if (prevChannels[channel]) aliasCursors[channel] = prevChannels[channel];
-            for (const [key, ts] of Object.entries(prevChannels)) {
-              const parsed = parseThreadCursorKey(key);
-              if (parsed && parsed.channel === channel) aliasCursors[key] = ts;
-            }
+              id.userId ?? cfg.self_user_ids?.[0],
+              this.usersTransport,
+              nameCache,
+              channelCache,
+            );
+            const teamName = id.teamId
+              ? await resolveTeamName(id.client, id.teamId, teamCache)
+              : null;
+            yield toRecord(id.teamId, channel, item, userName, channelInfo, teamName);
+          }
+          // Persist the surviving per-thread high-water marks (ADR-0015 R1).
+          for (const [threadTs, hwm] of threadOut) {
+            this.cursors[threadCursorKey(channel, threadTs)] = hwm;
+          }
+          done = true;
+          break;
+        } catch (error) {
+          const code = unreachableChannelCode(error);
+          if (code !== null) {
+            // Channel-scoped (not_in_channel etc.): this token cannot read the
+            // channel — fail over to the next candidate.
+            lastCode = code;
             continue;
           }
-
-          // Preserve the floor for a channel with no new messages so it is not
-          // re-scanned from scratch on the next run.
-          if (aliasCursors[channel] === undefined && oldest !== undefined) {
-            aliasCursors[channel] = oldest;
-          }
+          // Token-wide (auth / rate limit / network): mark the token failed so
+          // later channels stop picking it, and fail over for this channel.
+          id.failed = true;
+          tokenWideError = error;
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.onWarn?.(`token ${tokenLabel(id)} failed mid-sync: ${message} (cursor preserved)`);
         }
-        this.cursors[ws.alias] = aliasCursors;
-        this.workspaceStatus.push({
-          alias: ws.alias,
-          team: ws.team,
-          ...(teamName ? { teamName } : {}),
-          status: "ok",
-        });
+      }
 
-        // One aggregated warn naming every unreachable channel (which, and why),
-        // so the operator sees the membership gap instead of a silent empty sync.
-        if (unreachable.length > 0) {
-          const detail = unreachable.map((u) => `${u.channel} (${u.code})`).join(", ");
-          ctx.onWarn?.(
-            `workspace '${ws.alias}': ${unreachable.length} channel(s) unreachable — ${detail}; ` +
-              "the bot must join the channel (or be /invite'd) to ingest it",
-          );
+      if (done) {
+        ingestedChannels += 1;
+        // Preserve the floor for a channel with no new messages so it is not
+        // re-scanned from scratch on the next run.
+        if (this.cursors[channel] === undefined && oldest !== undefined) {
+          this.cursors[channel] = oldest;
         }
-      } catch (error) {
-        // Mid-fetch isolation (#56): a fetch failure in one workspace must not
-        // abort the others. Surface it as a warning and preserve this alias's
-        // prior cursor (its configured channels) so the failure isn't a reset.
-        failedCount += 1;
-        lastError = error;
-        const message = error instanceof Error ? error.message : String(error);
-        ctx.onWarn?.(`workspace '${ws.alias}' failed mid-sync: ${message}`);
-        const configuredChannels = new Set(ws.channels);
-        const preserved: Record<string, string> = {};
+      } else {
+        if (attempts.length === 0 || lastCode !== null) {
+          unreachable.push({ channel, code: lastCode ?? "no reachable token" });
+        }
+        this.failedChannelCount += 1;
+        // Preserve the channel's prior cursor AND its per-thread marks so a
+        // transient failure is not a reset (ADR-0015 R1).
         for (const [key, ts] of Object.entries(prevChannels)) {
-          // Preserve both the plain `<channel>` cursor and its per-thread
-          // `<channel>#<thread_ts>` high-water marks for configured channels
-          // (ADR-0015 R1), so a mid-fetch failure is not a cursor reset.
           const parsed = parseThreadCursorKey(key);
-          const channel = parsed ? parsed.channel : key;
-          if (configuredChannels.has(channel)) preserved[key] = ts;
+          const ch = parsed ? parsed.channel : key;
+          if (ch === channel) this.cursors[key] = ts;
         }
-        if (Object.keys(preserved).length > 0) this.cursors[ws.alias] = preserved;
-        this.workspaceStatus.push({
-          alias: ws.alias,
-          team: ws.team,
-          ...(teamName ? { teamName } : {}),
-          status: "failed",
-        });
       }
     }
 
-    // Re-stash the discovery markers under the reserved key so the 24h cadence +
-    // doctor drift count persist across runs (ADR-0039 Layer 2). Non-channel data
-    // (alias → "<epochMs>:<count>"), stripped from the cursor by cursorToAliasMap.
-    if (Object.keys(discoveryMarkers).length > 0) {
-      this.cursors[DISCOVERY_CURSOR_KEY] = discoveryMarkers;
+    // One aggregated warn naming every unreachable channel (which, and why), so
+    // the operator sees the coverage gap instead of a silent empty sync. The
+    // recovery is "add / fix a token for the right workspace" (決定 5) — distinct
+    // from a dead token's "replace it".
+    if (unreachable.length > 0) {
+      const detail = unreachable.map((u) => `${u.channel} (${u.code})`).join(", ");
+      ctx.onWarn?.(
+        `${unreachable.length} channel(s) unreachable — ${detail}; no configured token can ` +
+          "read them — join/invite the bot there, or add that workspace's token " +
+          "(`suasor slack auth set`)",
+      );
     }
 
     // Mirror configured Slack Lists as `slack_list_item` sources (ADR-0036 §6
-    // read-back), per workspace (each its own token). Raw cells only —
-    // `reconcileReadback` interprets them with the [tasks.homes.slack] column config.
-    // Best-effort: a per-list / token failure warns, not aborts.
-    yield* this.syncLists(ctx, workspaces);
+    // read-back) via whichever pool token can reach each list. Raw cells only —
+    // `reconcileReadback` interprets them with the [tasks.homes.slack] column
+    // config. Best-effort: a per-list failure warns, not aborts.
+    yield* this.syncLists(ctx, identities, lists);
 
-    // The fully-tokenless case already threw before the loop (#385); this
-    // catches the mixed case where the only token(s) belong to workspaces with
-    // no channels/lists (filtered out above) while every channel-bearing
-    // workspace was skipped — nothing was ingested, so surface the same error.
-    if (resolvedCount === 0 && workspaces.some((w) => w.channels.length > 0)) {
-      throw new Error(
-        "slack connector: no token configured for any workspace " +
-          "(set SUASOR_CONNECTOR_SLACK_TOKEN or run `suasor slack auth set`)",
-      );
+    // Record per-token outcomes for the summary (pool order, after the run so
+    // mid-sync failures are reflected).
+    for (const id of identities) {
+      this.tokenStatus.push({ label: tokenLabel(id), status: id.failed ? "failed" : "ok" });
     }
-    // Every workspace that had a token failed → surface the error rather than
-    // reporting a silent success. A partial failure (some succeeded) is isolated.
-    if (failedCount > 0 && failedCount === resolvedCount) {
-      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+
+    // Every channel failed on token-wide errors (nothing was merely unreachable
+    // and nothing ingested) → surface the error rather than a silent success.
+    if (
+      channels.length > 0 &&
+      ingestedChannels === 0 &&
+      unreachable.length === 0 &&
+      this.failedChannelCount > 0
+    ) {
+      throw tokenWideError instanceof Error ? tokenWideError : new Error(String(tokenWideError));
     }
   }
 
   /**
-   * Discovery-drift sweep for one workspace (ADR-0039 Layer 2). Enumerates the
-   * public + private conversations the token can see (`users.conversations`, via
-   * the shared rate-limit-aware `slackFetch`) and diffs them against the
-   * configured `channels`: any **member** conversation not in config is drift. It
-   * emits one aggregated warn pointing at `slack conversations --new` and returns
-   * the persisted marker `"<epochMs>:<newCount>"`. Crucially it **never ingests**
-   * and never advances a channel cursor — the explicit-enumeration privacy model
-   * is preserved; the sweep only makes the operator aware (ADR-0039 §Decision c).
+   * Discovery-drift sweep (ADR-0039 Layer 2), pool-wide (ADR-0042). Enumerates
+   * the public + private conversations each live token can see and diffs the
+   * union against the configured `channels`: any **member** conversation not in
+   * config is drift. Emits one aggregated warn pointing at
+   * `slack conversations --new` and returns the marker `"<epochMs>:<newCount>"`.
+   * It **never ingests** and never advances a channel cursor.
    *
-   * Guards, cheapest first:
-   * - **per-run override** (`ctx.discover`, from `slack sync --discover` /
-   *   `--no-discover`): `"skip"` suppresses the sweep this run; `"force"` runs it
-   *   now, overriding both the opt-out and the cadence gate below.
-   * - **opt-out**: `discover_new = false` (connector or per-workspace) → no sweep;
-   *   the prior marker is carried forward untouched (unless forced).
-   * - **cadence**: at most once per {@link DISCOVERY_SWEEP_INTERVAL_MS} (24h) per
-   *   workspace, keyed off the prior marker's timestamp (unless forced).
-   * - **best-effort**: any sweep error is warned and swallowed (the marker is
-   *   preserved) so a discovery hiccup never fails the ingest that follows.
-   *
-   * @returns the marker to persist for this workspace, or `undefined` when there
-   *   is nothing to persist (opted out with no prior marker).
+   * Guards, cheapest first: the per-run override (`ctx.discover`), the
+   * `discover_new = false` opt-out, the empty-`channels` guard (a lists-only
+   * config would read every visible channel as "new"), and the 24h cadence.
+   * Best-effort: a token whose sweep fails is skipped; if every token fails the
+   * prior marker is kept (so a hiccup never fails the ingest that follows).
    */
   private async sweepDiscovery(
     ctx: SyncContext,
-    ws: ResolvedWorkspace,
-    token: string,
+    identities: readonly TokenIdentity[],
     prevMarker: string | undefined,
   ): Promise<string | undefined> {
-    // Per-run override from `slack sync --discover` / `--no-discover` (ADR-0039
-    // Layer 2). It only steers this run — config (`discover_new`) and the
-    // persisted cadence marker are untouched.
     const override = ctx.discover;
-
-    // `--no-discover`: skip the sweep for this run even when config enables it.
-    // Keep the prior marker so the last cadence window is preserved.
     if (override === "skip") return prevMarker;
-
-    // Opt-out: keep the prior marker (if any) so re-enabling later still respects
-    // the last cadence window; do not sweep. `--discover` (force) overrides the
-    // opt-out for this single run.
-    if (!ws.discoverNew && override !== "force") return prevMarker;
-
-    // A channel-less workspace (e.g. lists-only) has no message-channel config to
-    // drift against — every visible channel would read as "new" and nag on every
-    // window. First-time discovery for such a workspace is the explicit
-    // `slack conversations --new` path, not a routine sync warn (ADR-0039).
-    if (ws.channels.length === 0) return prevMarker;
+    if (!(this.config.discover_new ?? true) && override !== "force") return prevMarker;
+    if (this.config.channels.length === 0) return prevMarker;
 
     const nowMs = this.now();
     const prev = prevMarker ? parseDiscoveryMarkerValue(prevMarker) : null;
-    // Cadence: swept recently enough → carry the marker forward without a fetch.
-    // `--discover` (force) bypasses the cadence gate to sweep immediately.
     if (override !== "force" && prev && nowMs - prev.lastSweptMs < DISCOVERY_SWEEP_INTERVAL_MS)
       return prevMarker;
 
-    const scope = ws.alias === DEFAULT_WORKSPACE_ALIAS ? "" : `workspace '${ws.alias}': `;
-    try {
-      const { conversations } = await listConversations(token, {
-        types: DISCOVERY_SWEEP_TYPES,
-        ...(this.conversationsTransport ? { transport: this.conversationsTransport } : {}),
-      });
-      const { added } = diffConversations({
-        visible: conversations,
-        configured: ws.channels,
-        sweptTypes: DISCOVERY_SWEEP_TYPES,
-      });
-      if (added.length > 0) {
-        ctx.onWarn?.(
-          `${scope}${added.length} new conversation(s) visible but not in config — ` +
-            "run `suasor slack conversations --new` to review " +
-            "(none ingested; cursor unchanged, ADR-0039)",
-        );
+    const added = new Set<string>();
+    let succeeded = 0;
+    for (const id of identities) {
+      try {
+        const { conversations } = await listConversations(id.token, {
+          types: DISCOVERY_SWEEP_TYPES,
+          ...(this.conversationsTransport ? { transport: this.conversationsTransport } : {}),
+        });
+        const diff = diffConversations({
+          visible: conversations,
+          configured: this.config.channels,
+          sweptTypes: DISCOVERY_SWEEP_TYPES,
+        });
+        for (const c of diff.added) added.add(c.id);
+        succeeded += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.onWarn?.(`discovery sweep skipped for token ${tokenLabel(id)}: ${message}`);
       }
-      return `${nowMs}:${added.length}`;
-    } catch (error) {
-      // Best-effort: a discovery sweep must never fail the sync. Keep the prior
-      // marker so the cadence window is respected rather than re-swept every run.
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.onWarn?.(`${scope}discovery sweep skipped: ${message}`);
-      return prevMarker;
     }
+    if (succeeded === 0) return prevMarker;
+    if (added.size > 0) {
+      ctx.onWarn?.(
+        `${added.size} new conversation(s) visible but not in config — ` +
+          "run `suasor slack conversations --new` to review " +
+          "(none ingested; cursor unchanged, ADR-0039)",
+      );
+    }
+    return `${nowMs}:${added.size}`;
   }
 
   /**
    * Ingest the configured Slack Lists' items as `slack_list_item` sources (raw
-   * cells, ADR-0036 §6). Uses the flat/default token. Paginated; per-list errors
-   * warn (best-effort) rather than aborting the sync.
+   * cells, ADR-0036 §6) via whichever pool token can reach each list (first
+   * token + one failover, mirroring the channel policy). Paginated; per-list
+   * errors warn (best-effort) rather than aborting the sync.
    */
   private async *syncLists(
     ctx: SyncContext,
-    workspaces: ResolvedWorkspace[],
+    identities: readonly TokenIdentity[],
+    lists: readonly string[],
   ): AsyncIterable<SourceRecord> {
+    if (lists.length === 0) return;
     const observedAt = new Date().toISOString();
-    for (const ws of workspaces) {
-      if (ws.lists.length === 0) continue;
-      const token = await ctx.secret(ws.secretName);
-      if (!token) {
-        ctx.onWarn?.(`workspace '${ws.alias}' lists skipped: no token (needs \`lists:read\`)`);
-        continue;
-      }
-      const client = await this.clientFactory(token);
-      if (!client.slackListsItems) continue; // a fake without list support
-      for (const listId of ws.lists) {
+    for (const listId of lists) {
+      const attempts = identities.filter((id) => !id.failed && id.client.slackListsItems);
+      if (attempts.length === 0) continue; // fakes without list support
+      let lastError: unknown;
+      let done = false;
+      for (const id of attempts.slice(0, 2)) {
+        const listFn = id.client.slackListsItems;
+        if (!listFn) continue;
         try {
           let cursor: string | undefined;
           do {
-            const res = await client.slackListsItems({
+            const res = await listFn({
               list_id: listId,
               limit: 100,
               ...(cursor ? { cursor } : {}),
@@ -1213,55 +1104,52 @@ class SlackConnector implements Connector {
             }
             cursor = res.response_metadata?.next_cursor || undefined;
           } while (cursor);
+          done = true;
+          break;
         } catch (error) {
-          ctx.onWarn?.(
-            `slack list '${listId}' (${ws.alias}) failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          lastError = error;
         }
+      }
+      if (!done) {
+        ctx.onWarn?.(
+          `slack list '${listId}' failed: ${
+            lastError instanceof Error ? lastError.message : String(lastError)
+          }`,
+        );
       }
     }
   }
 
   finalize(): SyncResult {
     const cursor = serializeCursor(this.cursors);
-    // No multi-workspace status to report (e.g. an empty/no-channel config that
-    // returned before the loop): keep the result minimal, no summary line.
-    if (this.workspaceStatus.length === 0) return { cursor };
+    // Nothing ran (e.g. an empty/no-channel config): minimal result, no summary.
+    if (this.tokenStatus.length === 0) return { cursor };
 
-    // One summary line naming each workspace's outcome (ADR-0014 / #166), e.g.
-    // `workspaces: acme (TA "Acme")=ok, beta (TB)=failed (cursor preserved),
-    // gamma (TG)=skipped (no token)`. A failed workspace's prior cursor is
-    // preserved (the failure is not a reset) — annotate it so an operator reads
-    // the recovery state inline.
-    //
-    // Named workspaces annotate their team id and, when resolved this run
-    // (ADR-0037/#361), the workspace name so many workspaces are told apart
-    // (#371). Degrade is silent: name → team id → alias only. The flat/default
-    // single workspace keeps its bare `default` label (no ambiguity to resolve,
-    // and `team` is a synthetic placeholder there) — no summary regression.
-    const identify = (ws: { alias: string; team: string; teamName?: string }): string => {
-      if (ws.alias === DEFAULT_WORKSPACE_ALIAS || !ws.team) return ws.alias;
-      const ident = ws.teamName ? `${ws.team} "${ws.teamName}"` : ws.team;
-      return `${ws.alias} (${ident})`;
+    // One summary line naming each token's outcome (ADR-0042 決定 5), e.g.
+    // `tokens: T0ACME "Acme"=ok, #2=dead (replace it), T0BETA=failed (cursor
+    // preserved)`. Emitted only when there is something to tell apart (2+ tokens
+    // or any non-ok), so the common single-healthy-token run stays terse.
+    const anyNotOk = this.tokenStatus.some((t) => t.status !== "ok");
+    const summaryLines: string[] = [];
+    if (this.tokenStatus.length > 1 || anyNotOk) {
+      const parts = this.tokenStatus.map((t) => {
+        if (t.status === "dead") return `${t.label}=dead (replace it)`;
+        if (t.status === "failed") return `${t.label}=failed (cursor preserved)`;
+        return `${t.label}=ok`;
+      });
+      summaryLines.push(`tokens: ${parts.join(", ")}`);
+    }
+
+    // Partial failure (ADR-0027 / #166): some token died / failed mid-run, or
+    // some channel could not be ingested, while the run as a whole proceeded (a
+    // total failure already threw). Exits 1 so cron / CI sees the gap.
+    const partialFailure = anyNotOk || this.failedChannelCount > 0;
+
+    return {
+      cursor,
+      ...(partialFailure ? { partialFailure } : {}),
+      ...(summaryLines.length > 0 ? { summaryLines } : {}),
     };
-    const parts = this.workspaceStatus.map((ws) => {
-      const label = identify(ws);
-      if (ws.status === "failed") return `${label}=failed (cursor preserved)`;
-      if (ws.status === "skipped") return `${label}=skipped (no token)`;
-      return `${label}=ok`;
-    });
-    const summaryLines = [`workspaces: ${parts.join(", ")}`];
-
-    // A partial failure: at least one workspace failed AND at least one did not
-    // (a clean run is all-ok/skipped; an all-failed run already threw upstream so
-    // finalize is never reached). The caller turns this into a non-zero exit so a
-    // partial failure is not hidden behind exit 0 in cron / CI (ADR-0027, #166).
-    const failed = this.workspaceStatus.filter((w) => w.status === "failed").length;
-    const partialFailure = failed > 0 && failed < this.workspaceStatus.length;
-
-    return { cursor, partialFailure, summaryLines };
   }
 }
 
@@ -1374,6 +1262,9 @@ export function createSlackConnector(
   config: ConnectorConfig,
   options: SlackConnectorOptions = {},
 ): Connector {
+  // Fail fast on the removed ADR-0014 multi-workspace shape (ADR-0042 決定 9:
+  // no silent conversion — the error carries the mechanical migration).
+  rejectLegacySlackConfig(config);
   const parsed = SlackConnectorConfig.parse(config ?? {});
   // Fail fast on an unparseable `since` / `channel_since` floor rather than
   // letting it silently degrade to "no floor" mid-sync (ADR-0007, Issue #157).
@@ -1400,10 +1291,9 @@ export const manifest: ConnectorManifest = {
   name: SLACK_CONNECTOR_NAME,
   sourceType: "slack",
   configSchema: SlackConnectorConfig,
-  // Introspection view only (`connectors list`): the default-workspace `token`.
-  // Named-workspace secrets are dynamic (`<alias>:token`, ADR-0014) and resolved
-  // per config at sync time via `slackCredentials`, not enumerated here.
-  secretNames: ["token"],
+  // The single unnamed token pool (ADR-0042): keychain `connector:slack:tokens`,
+  // env SUASOR_CONNECTOR_SLACK_TOKENS (newline/comma separated, replace-all).
+  secretNames: [SLACK_TOKENS_SECRET],
   needsAuth: true,
   bundledInBinary: false,
   sliceTemplate: {
@@ -1411,32 +1301,21 @@ export const manifest: ConnectorManifest = {
   },
   noopWarning(slice) {
     const cfg = SlackConnectorConfig.parse(slice ?? {});
-    // Multi-workspace shape (ADR-0014) wins when present and non-empty: it has a
-    // target if any workspace declares channels.
-    const workspaces = cfg.workspaces ?? {};
-    const aliases = Object.keys(workspaces);
-    if (aliases.length > 0) {
-      const anyChannels = aliases.some((alias) => (workspaces[alias]?.channels?.length ?? 0) > 0);
-      return anyChannels
-        ? null
-        : "none of the workspaces have channels set — nothing to ingest (set channels for each workspace — get ids with `suasor slack conversations`)";
-    }
-    // Flat/default workspace: a target exists when `channels` is non-empty.
-    if (cfg.channels.length === 0) {
+    // A target exists when `channels` (or `lists`) is non-empty (ADR-0042 flat shape).
+    if (cfg.channels.length === 0 && (cfg.lists ?? []).length === 0) {
       return "channels unset — nothing to ingest (set channels in config — get ids with `suasor slack conversations`)";
     }
     return null;
   },
-  // Slack keeps its own multi-workspace + scope-readiness flows (ADR-0011/0014),
+  // Slack keeps its own pool auth + scope-readiness flows (ADR-0011/0042),
   // so it is deliberately absent from the generic AUTH_SPECS / DISCOVERY_SPECS.
   genericAuth: false,
   genericDiscovery: false,
   surfacesChannels: true,
   surfacesTeams: true,
   capabilityNotes: {
-    genericAuth:
-      "own multi-workspace auth + scope readiness (`slack auth set/test`, ADR-0011/0014)",
+    genericAuth: "own token-pool auth + scope readiness (`slack auth set/test`, ADR-0011/0042)",
     genericDiscovery:
-      "own richer discovery with join marks / engagement sort (`slack conversations`, ADR-0011/0013/0014)",
+      "own richer discovery with join marks / engagement sort (`slack conversations`, ADR-0011/0013/0042)",
   },
 };

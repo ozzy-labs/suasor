@@ -235,7 +235,7 @@ describe("channelFromMeta (ADR-0037 §3)", () => {
     ).toBeUndefined();
   });
 
-  test("returns null for unknown connectors / missing id / invalid kind / missing team", () => {
+  test("returns null for unknown connectors / missing id / invalid kind", () => {
     expect(
       channelFromMeta("github", { channel: "C1", team: "T1", channelKind: "public" }),
     ).toBeNull();
@@ -243,7 +243,11 @@ describe("channelFromMeta (ADR-0037 §3)", () => {
     expect(
       channelFromMeta("slack", { channel: "C1", team: "T1", channelKind: "bogus" }),
     ).toBeNull();
-    expect(channelFromMeta("slack", { channel: "C1", channelKind: "public" })).toBeNull();
+    // A missing team no longer rejects the channel — the team is a display
+    // facet only (ADR-0042); the row is recorded with no teamId.
+    const noTeam = channelFromMeta("slack", { channel: "C1", channelKind: "public" });
+    expect(noTeam?.channelId).toBe("C1");
+    expect(noTeam?.teamId).toBeUndefined();
   });
 });
 
