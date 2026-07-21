@@ -66,6 +66,7 @@ channels = ["C0123ABCD", "G0456…"]   # 対象 channel id の flat リスト（
 since = "30d"                        # cold-start floor（ADR-0016。per-alias 概念は廃止）
 discover_new = true                  # ADR-0039（per-alias override は廃止、connector 単位のみ）
 lists = ["L0123"]                    # Slack Lists（従来どおり）
+# self_user_ids = ["U0SELF"]         # 任意。@mention 検出の self 集合（決定 2。user token からの自動導出を補完）
 [connectors.slack.channel_since]
 C0123ABCD = "90d"                    # per-channel override（従来どおり）
 ```
