@@ -743,7 +743,7 @@ export class OnboardCommand extends Command {
       if (!token) {
         stderr.write(
           "error: no token provided for slack " +
-            "(pipe it on stdin, or use --skip-auth with SUASOR_CONNECTOR_SLACK_TOKEN)\n",
+            "(pipe it on stdin, or use --skip-auth with SUASOR_CONNECTOR_SLACK_TOKENS)\n",
         );
         return 1;
       }
