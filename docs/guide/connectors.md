@@ -245,11 +245,28 @@ To wire it by hand:
 ```bash
 suasor slack auth set                  # save the token pool to the keychain (stdin / --token, comma-separated for multiple)
 suasor slack auth test                 # verify every pool token + granted scopes + feature readiness
-suasor slack conversations             # enumerate conversations visible to the pool and print a [connectors.slack] block
-suasor slack conversations --new       # show only newly-joined conversations not in config (below)
-# → paste the output block into config.toml and enable it, then
+suasor slack follow --suggest          # suggest-and-confirm: propose the joined channels, apply after one confirm (ADR-0042)
 suasor slack sync                      # (= <connector> sync) ingest
 ```
+
+Or inspect / paste by hand:
+
+```bash
+suasor slack conversations             # enumerate conversations visible to the pool and print a [connectors.slack] block
+suasor slack conversations --new       # show only newly-joined conversations not in config (below)
+# → paste the output block into config.toml and enable it, then run slack sync
+```
+
+**Follow / unfollow by name** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) 決定 6): day-to-day, channels are added and removed by **human name** (or id) — the tool resolves the name across the pool and edits the flat `channels` list surgically (your comments elsewhere survive; the **id is the truth**, the name is a comment label):
+
+```bash
+suasor slack follow '#eng-team'        # resolve the name across the pool → append the id
+suasor slack follow C0123ABCD          # ids are accepted as-is (no network)
+suasor slack follow --suggest [--yes]  # propose joined public/private channels not in config; one confirm applies
+suasor slack unfollow '#noise'         # names resolve OFFLINE via the slack_channels projection
+```
+
+A name that matches two different channels (e.g. `#general` in two workspaces) errors with the candidates — re-run with the id. `--suggest` never proposes DMs / group-DMs (they stay opt-in via an explicit `follow`), and applying always takes **one confirmation** (`--yes` for headless) — auto-ingest without a confirm is deliberately not offered ([ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) HITL). Unfollowing leaves already-ingested history in place (purge with `suasor source forget`).
 
   `auth test` prints, per scope, the readiness of `public channel sync` / `private channel sync` / `DM sync` / `group-DM (mpim) sync` / `engagement axis` (`READY` / `READY (degraded: +users:read …)` / `MISSING <scope>` / `N/A (User Token only)`). READY only guarantees scope; an unjoined channel stays `not_in_channel` (membership is a separate layer). Unjoined channels are made explicit by the aggregated warn at sync time (the "Warn for channels you have not joined" above). To see reachability before configuring, use the membership mark of `slack conversations` (below)
 

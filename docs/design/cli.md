@@ -49,6 +49,8 @@ suasor slack status [--json]           # 保存中の resume cursor（channel �
 suasor slack cursor reset (--channel C1,C2 | --all) [--yes]  # cursor を消し floor から取り直す
 suasor slack cursor backfill --channel C1 --since 180d [--yes]  # cursor を過去 floor へ下げ未取得分を取り直す
 suasor slack resolve-names [--force] [--no-progress] [--json]  # 既取り込み分の channel/user 名を遡及解決（ADR-0037・pool から到達性で解決）
+suasor slack follow <name|id>... | --suggest [--yes]  # channel を名前/ID で channels へ追加（--suggest は参加中 public/private を提案し 1 回確認で反映・ADR-0042）
+suasor slack unfollow <name|id>...     # channels から削除（名前は slack_channels projection でオフライン解決）
 suasor skills install [--scope S] [--host DIR] [--dry-run]  # アシスタント skill 展開
 suasor skills list [--scope S] [--host DIR] [--format F] [--json]  # アシスタント skill 状態一覧（detailed で category/境界併記）
 suasor skills search <kw> [--json]                          # name/description/category/triggers 横断検索
