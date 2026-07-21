@@ -779,15 +779,11 @@ class SlackConnector implements Connector {
     this.failedChannelCount = 0;
     if (channels.length === 0 && lists.length === 0) return;
 
-    // The pool secret resolves centrally before sync runs (#440); parse it into
-    // individual tokens (newline/comma separated, ADR-0042 決定 2).
+    // The pool secret resolves centrally before sync runs (#440 — runSyncPass
+    // enforces `Connector.credentials`, so an empty pool cannot reach this code
+    // in production; #458 dropped the redundant defense-in-depth throw here).
+    // Parse it into individual tokens (newline/comma separated, ADR-0042 決定 2).
     const pool = parseTokenPool(await ctx.secret(SLACK_TOKENS_SECRET));
-    if (pool.length === 0) {
-      throw new Error(
-        "slack connector: no token pool configured " +
-          "(set SUASOR_CONNECTOR_SLACK_TOKENS — newline/comma separated — or run `suasor slack auth set`)",
-      );
-    }
 
     // Surface non-id channel values (e.g. a `#general` name) before any fetch:
     // `conversations.history` keys off the id, so a name silently ingests zero
@@ -839,10 +835,14 @@ class SlackConnector implements Connector {
       }
       identities.push({ token, client, index: i + 1, failed: false, ...described });
     }
+    // No live token: every pool token failed auth.test — or a direct
+    // `connector.sync()` call bypassed the central credential precondition with
+    // an empty pool (#440/#458). Either way nothing can be ingested; fail loudly
+    // rather than yield a silent empty pass (ADR-0007).
     if (identities.length === 0) {
       throw new Error(
-        "slack connector: every token in the pool failed auth.test — replace the pool " +
-          "(`suasor slack auth set` / SUASOR_CONNECTOR_SLACK_TOKENS)",
+        "slack connector: no usable token in the pool (empty, or every token failed " +
+          "auth.test) — replace it (`suasor slack auth set` / SUASOR_CONNECTOR_SLACK_TOKENS)",
       );
     }
 
@@ -1346,6 +1346,9 @@ export const manifest: ConnectorManifest = {
   // so it is deliberately absent from the generic AUTH_SPECS / DISCOVERY_SPECS.
   genericAuth: false,
   genericDiscovery: false,
+  // `suasor onboard` drives slack through its dedicated bridge (#458; the
+  // behaviour lives in src/cli/onboard/slack-bridge.ts).
+  connectorSpecificOnboard: true,
   surfacesChannels: true,
   surfacesTeams: true,
   capabilityNotes: {

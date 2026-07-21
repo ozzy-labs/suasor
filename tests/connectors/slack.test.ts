@@ -306,11 +306,13 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
 });
 
 describe("Slack connector — guards", () => {
-  test("throws when no token pool is configured", async () => {
+  test("a direct sync with an empty pool fails loudly via the unified no-live-token throw", async () => {
+    // Production never reaches this (runSyncPass enforces the credential
+    // precondition centrally, #440); a direct call still fails loudly (#458).
     const { client } = fakeSlack([]);
     const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
-      /no token pool configured/,
+      /no usable token in the pool/,
     );
   });
 
@@ -338,7 +340,7 @@ describe("Slack connector — guards", () => {
     };
     const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => dead });
     await expect(collect(connector.sync(ctx({ onWarn: () => {} })))).rejects.toThrow(
-      /every token in the pool failed auth.test/,
+      /no usable token in the pool/,
     );
   });
 });
