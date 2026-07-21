@@ -82,3 +82,4 @@ NNNN-kebab-case-title.md
 | 0039 | Conversation discovery drift model (explicit enumeration = data minimization; drift surfacing, no default silent auto-follow) |
 | 0040 | Proactive push lane (cron one-shot digest + standing consent; no daemon) |
 | 0041 | Connector-neutral demand / priority substrate (`demand.list` + seen-state + deterministic scorer) |
+| 0042 | Slack workspace-less connector (canonical channel identity + unnamed token pool) |

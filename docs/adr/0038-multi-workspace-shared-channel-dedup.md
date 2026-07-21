@@ -1,6 +1,6 @@
 # 0038. Multi-workspace shared-channel de-duplication（owner-wins・global channel ID キー）
 
-- Status: Accepted
+- Status: Superseded by [ADR-0042](0042-slack-workspace-less-connector.md)（2026-07-21・[#464](https://github.com/ozzy-labs/suasor/issues/464)。本 ADR §7 で見送った恒久解＝externalId の canonical 化（`slack:<channel>:<ts>`）を採用し、owner election・3 層 dedup は概念ごと廃止。§7 の見送り理由だった ADR-0036 task read-back join は message externalId を参照しないことが確認され当たらない。到達性トラップ（Consequences 記載の「owner token 不達で取り込み失敗」）も構造的に解消）
 - Date: 2026-07-01
 - Deciders: Suasor maintainers
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（event-sourced / externalId 冪等性）, [ADR-0007](0007-connector-contract.md)（connector 契約＝read 専用・sync 一本）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（per-channel cursor / unreachable 集約 warn）, [ADR-0012](0012-slack-demand-digest.md)（`slack.demand.list` — 重複が demand へ波及）, [ADR-0014](0014-slack-multi-workspace.md)（`[connectors.slack.workspaces.<alias>]` — 本問題の発生源）, [ADR-0026](0026-source-forgetting.md)（既存重複 source の cleanup 経路）, [ADR-0036](0036-task-external-home.md)（task read-back が `sources.external_id` を join キーに使う）, [ADR-0037](0037-slack-name-enrichment.md)（`slack_channels` projection / team_id）

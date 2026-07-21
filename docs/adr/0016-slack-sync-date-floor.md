@@ -38,3 +38,10 @@
 
 - **floor を持たず常に全履歴** — 却下。cold-start が大規模 channel で破綻する。
 - **recovery を汎用 connector 契約に足す** — 却下。Slack 固有の cursor 構造に依存するため Slack CLI に置く（[ADR-0011](0011-slack-operational-verbs-and-readiness.md) §2 の方針）。
+
+## 追補（ADR-0042）: per-alias floor の廃止
+
+- Date: 2026-07-21
+- Related: [ADR-0042](0042-slack-workspace-less-connector.md)（workspace-less connector・[#464](https://github.com/ozzy-labs/suasor/issues/464)）
+
+[ADR-0042](0042-slack-workspace-less-connector.md) の workspace 廃止に伴い、決定 1 の「multi-workspace 時は per-alias」は失効し、`since` は **connector 単位の flat 値 + per-channel override（`channel_since`）のみ**になる。alias 単位で floor を変えていた環境は per-channel override で代替する。floor が per-channel cursor の下限として作用する規則（決定 2）・gap-backfill（決定 3）・recovery verb（決定 4。ただし `--workspace` フラグは削除）は不変。

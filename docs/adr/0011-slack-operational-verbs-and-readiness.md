@@ -95,3 +95,15 @@ Issue #85 の汎用 `auth test` は readiness を「scope が報告されたか�
 - **discovery 限定 / sync 不変**: 本追補は discovery（`slack conversations`）のみ。sync は channel id 直接指定（グリッド内グローバル一意）+ per-workspace token 前提を維持し、team_id を必要としない。
 - **import-clean 維持**: workspace 列挙は `src/connectors/slack/teams.ts` の `fetch`-only leaf（`slackFetch` 経由・SDK 非依存、ADR-0007 / ADR-0019）。
 - **未検証事項**: `auth.teams.list` / `users.conversations` team_id の org-level token 実挙動は org-wide app token での実機検証が必要（本追補時点で未実施、ユニットテストは fake transport で網羅）。
+
+## 追補（ADR-0042）: workspace-less 化に伴う運用 verb の改訂
+
+- Date: 2026-07-21
+- Related: [ADR-0042](0042-slack-workspace-less-connector.md)（workspace-less connector・[#464](https://github.com/ozzy-labs/suasor/issues/464)）
+
+[ADR-0042](0042-slack-workspace-less-connector.md) の workspace 廃止に伴い、本 ADR の運用 verb は次のとおり改訂される（scope readiness の capability model（決定 1）・per-channel cursor（決定 3）・「silent wrong answer を出さない」姿勢は不変）:
+
+- **`--workspace <alias>` フラグは全 verb から削除**。`slack auth set` は無名 token プール（`connector:slack:tokens`・全置換）への保存に、`slack auth test` は**プール内全 token の一括検証**（token ごとに org/team 名 + self user id + readiness を出す）に変わる。
+- **`slack conversations` はプール内全 token を sweep して横断列挙**する（追補 #350 の org-level token 限定だった横断が、workspace token プールでも成立）。同一 channel id は 1 行に集約。config block は flat `[connectors.slack]` のみを出力する（workspace 別 block は廃止）。
+- **cursor 系 verb（`cursor reset` / `backfill` / `status`）は alias 軸を失い channel 軸のみ**になる。`status` は token 死と channel 不達を区別して表示する（ADR-0042 決定 5）。
+- unreachable 集約 warn（#165）は「**全 token で**読めない channel」に対して出るよう再定義される（1 token の不達は failover で吸収）。

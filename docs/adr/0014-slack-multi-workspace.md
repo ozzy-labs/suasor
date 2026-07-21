@@ -1,6 +1,6 @@
 # 0014. Slack multi-workspace（`[connectors.slack.workspaces.<alias>]`）
 
-- Status: Accepted
+- Status: Superseded by [ADR-0042](0042-slack-workspace-less-connector.md)（2026-07-21・[#464](https://github.com/ozzy-labs/suasor/issues/464)。workspace alias（per-alias config / secret / cursor / `--workspace`）は廃止され、無名 token プール + flat config + canonical channel identity に置き換わる。**本 ADR 内「per-resource エラー分離の非 Slack への一般化（#193）」節の不変条件は Slack alias 構成に依存せず引き続き有効**で、ADR-0042 では token 軸の隔離として維持される）
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#50](https://github.com/ozzy-labs/suasor/issues/50) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)
