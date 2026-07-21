@@ -48,13 +48,9 @@ describe("noopWarning — empty/no-op slices warn", () => {
     expect(noopWarning("slack", {})).toContain("`suasor slack conversations`");
   });
 
-  test("slack: multi-workspace where no workspace has channels", () => {
-    const warn = noopWarning("slack", {
-      workspaces: { acme: { team: "T1", channels: [] } },
-    });
-    expect(warn).toContain("workspaces");
-    expect(warn).toContain("nothing to ingest");
-    expect(warn).toContain("`suasor slack conversations`");
+  test("slack: lists-only config has a target (no warn)", () => {
+    // ADR-0042: the flat shape has a target when channels OR lists are set.
+    expect(noopWarning("slack", { channels: [], lists: ["L1"] })).toBeNull();
   });
 
   test("notion: no databases + pages disabled", () => {
@@ -95,15 +91,8 @@ describe("noopWarning — configured slices do not warn", () => {
     expect(noopWarning("slack", { channels: ["C123"] })).toBeNull();
   });
 
-  test("slack: multi-workspace where one workspace has channels", () => {
-    expect(
-      noopWarning("slack", {
-        workspaces: {
-          acme: { team: "T1", channels: [] },
-          beta: { team: "T2", channels: ["C9"] },
-        },
-      }),
-    ).toBeNull();
+  test("slack: flat channels configured (ADR-0042)", () => {
+    expect(noopWarning("slack", { channels: ["C9"] })).toBeNull();
   });
 
   test("notion: databases configured, or pages discovery on (default)", () => {

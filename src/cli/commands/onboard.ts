@@ -709,23 +709,21 @@ export class OnboardCommand extends Command {
   ): Promise<number | undefined> {
     const stdout = this.context.stdout;
     const stderr = this.context.stderr;
-    const [{ workspaceSecretName }, { resolveSecret, storeSecret }] = await Promise.all([
+    const [{ SLACK_TOKENS_SECRET }, { resolveSecret, storeSecret }] = await Promise.all([
       import("../../connectors/slack.ts"),
       import("../../connectors/secrets.ts"),
     ]);
-    const secretName = workspaceSecretName(); // flat/default workspace → "token"
+    const secretName = SLACK_TOKENS_SECRET; // the unnamed token pool (ADR-0042)
 
-    // Multi-workspace configs are out of scope for the inline bridge (Issue #384):
-    // point at the per-workspace導線 and leave config untouched. authFlow stays
-    // `connector-specific`, so the recap surfaces the manual-pending state.
+    // A legacy ADR-0014 multi-workspace config cannot be driven (or synced) —
+    // point at the ADR-0042 migration and leave the config untouched.
     const aliases = await this.slackWorkspaceAliases();
     if (aliases.length > 0) {
-      manualSteps.set(SLACK_CONNECTOR, SLACK_MULTI_WORKSPACE_STEPS);
+      manualSteps.set(SLACK_CONNECTOR, SLACK_LEGACY_CONFIG_STEPS);
       if (!this.json) {
         stdout.write(
-          `slack: multiple workspaces configured (${aliases.join(", ")}) — onboard bridges only a ` +
-            "flat/single-workspace config; finish each workspace with " +
-            "`suasor slack auth set --workspace <alias>` (checklist below).\n",
+          `slack: legacy multi-workspace config detected (${aliases.join(", ")}) — migrate to ` +
+            "the flat ADR-0042 shape first (checklist below).\n",
         );
       }
       return undefined;
@@ -736,13 +734,16 @@ export class OnboardCommand extends Command {
     // #383 `readSecretLine`): resolves on Enter on a TTY and never echoes the token.
     if (!this.skipAuth) {
       if (interactive) {
-        stdout.write("Paste the slack bot token and press Enter (input is read from stdin):\n");
+        stdout.write(
+          "Paste the slack token(s) and press Enter — multiple tokens comma-separated " +
+            "(the pool is replaced as a whole):\n",
+        );
       }
       const token = (await readSecretLine(this.context.stdin, stderr, { mask: true })).trim();
       if (!token) {
         stderr.write(
           "error: no token provided for slack " +
-            "(pipe it on stdin, or use --skip-auth with SUASOR_CONNECTOR_SLACK_TOKEN)\n",
+            "(pipe it on stdin, or use --skip-auth with SUASOR_CONNECTOR_SLACK_TOKENS)\n",
         );
         return 1;
       }
@@ -935,17 +936,25 @@ export class OnboardCommand extends Command {
    * the first `sync` (as it does for every other connector), not from this probe.
    */
   private async slackWorkspaceAliases(): Promise<string[]> {
-    const { loadConfig } = await import("../../config/index.ts");
-    let config: Awaited<ReturnType<typeof loadConfig>>;
+    // Read the RAW config file (not `loadConfig`): the loader itself now rejects
+    // the legacy ADR-0014 shape, so a legacy config would throw before this
+    // detector could route to the migration checklist. Raw-TOML inspection keeps
+    // the detection working exactly when it matters. Any read/parse failure
+    // degrades to `[]` (treat as flat) — the flat bridge is non-destructive.
     try {
-      config = await loadConfig();
+      const [{ resolveConfigDir }, { join }] = await Promise.all([
+        import("../../config/index.ts"),
+        import("node:path"),
+      ]);
+      const file = Bun.file(join(resolveConfigDir(process.env), "config.toml"));
+      if (!(await file.exists())) return [];
+      const parsed = Bun.TOML.parse(await file.text()) as {
+        connectors?: { slack?: { workspaces?: Record<string, unknown> } };
+      };
+      return Object.keys(parsed.connectors?.slack?.workspaces ?? {});
     } catch {
       return [];
     }
-    const slack = config.connectors[SLACK_CONNECTOR] as
-      | { workspaces?: Record<string, unknown> }
-      | undefined;
-    return Object.keys(slack?.workspaces ?? {});
   }
 }
 
@@ -966,16 +975,17 @@ const CONNECTOR_SPECIFIC_STEPS: Record<string, readonly string[]> = {
 };
 
 /**
- * Per-workspace setup steps re-surfaced when a **multi-workspace** slack config
- * (`[connectors.slack.workspaces.<alias>]`) is detected (Issue #384). The inline
- * bridge only drives a flat/single-workspace config — onboard's single stdin
- * cannot carry N per-workspace tokens — so a multi-workspace config is finished by
- * hand, one `--workspace <alias>` at a time (ADR-0014).
+ * Migration checklist surfaced when a legacy ADR-0014 multi-workspace Slack
+ * config (`[connectors.slack.workspaces.<alias>]`) is detected. The shape was
+ * removed by ADR-0042 (flat channels + unnamed token pool); sync fails loudly on
+ * it, so onboard points at the mechanical migration instead of bridging it.
  */
-const SLACK_MULTI_WORKSPACE_STEPS: readonly string[] = [
-  "suasor slack auth set --workspace <alias>        # store each workspace's bot token",
-  "suasor slack auth test --workspace <alias>       # verify scopes per workspace",
-  "suasor slack conversations --workspace <alias>   # list channels; paste the block into config.toml",
+const SLACK_LEGACY_CONFIG_STEPS: readonly string[] = [
+  "# migrate config.toml: merge every workspace's channel ids into one flat [connectors.slack] channels list",
+  "#   (drop 'workspaces' tables, 'team', 'self_user_id'; per-alias since → [connectors.slack.channel_since])",
+  "suasor slack auth set          # store every workspace's token as one pool (comma/newline separated)",
+  "suasor slack auth test         # verify each pool token + scope readiness",
+  "suasor slack conversations     # list channels across the pool; paste the block",
   "suasor slack sync",
 ];
 

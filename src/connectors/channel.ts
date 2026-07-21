@@ -50,7 +50,8 @@ export function channelMetaConnectors(): string[] {
 /** One observed channel derived from a record's meta (the `SlackChannelObserved` payload). */
 export interface ObservedChannel {
   channelId: string;
-  teamId: string;
+  /** Team facet; absent when the fetching token exposed no identity (ADR-0042). */
+  teamId?: string;
   kind: SlackChannelKind;
   /** Resolved name; absent when unresolved (degrade → id fallback at display, §6). */
   displayName?: string;
@@ -81,13 +82,12 @@ export function channelFromMeta(
   const rawKind = meta[keys.kind];
   if (!isChannelKind(rawKind)) return null;
   const rawTeam = meta[keys.team];
-  // teamId is load-bearing (id-prefix scope, ADR-0014) and the event requires it;
-  // skip recording a channel that has no team rather than emit an invalid event.
-  if (typeof rawTeam !== "string" || rawTeam.trim() === "") return null;
 
   const channel: ObservedChannel = {
     channelId: rawId.trim(),
-    teamId: rawTeam.trim(),
+    // The team is a display facet only (ADR-0042): a record fetched via a token
+    // with no auth.test identity has none, and the channel is still recorded.
+    ...(typeof rawTeam === "string" && rawTeam.trim() !== "" ? { teamId: rawTeam.trim() } : {}),
     kind: rawKind,
   };
   const rawName = meta[keys.name];

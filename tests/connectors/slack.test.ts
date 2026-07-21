@@ -3,17 +3,18 @@ import { ConfigError } from "../../src/config/error.ts";
 import type { SourceRecord, SyncContext } from "../../src/connectors/contract.ts";
 import {
   createSlackConnector,
-  cursorToAliasMap,
+  cursorToChannelMap,
   isSinceParseable,
   isThreadActive,
   looksLikeSlackChannelId,
   parseSinceToTs,
+  parseTokenPool,
+  rejectLegacySlackConfig,
   resolveSelfUserIds,
   type SlackClientLike,
   SlackConnectorConfig,
   serializeCursor,
   validateSlackSince,
-  workspaceSecretName,
 } from "../../src/connectors/slack.ts";
 
 type HistoryArgs = { channel: string; oldest?: string; limit?: number; cursor?: string };
@@ -53,10 +54,23 @@ function fakeSlack(
 function ctx(overrides: Partial<SyncContext> = {}): SyncContext {
   return {
     cursor: null,
-    secret: async (name) => (name === "token" ? "xoxb-tok" : null),
+    secret: async (name) => (name === "tokens" ? "xoxb-tok" : null),
     ...overrides,
   };
 }
+
+/** A `SyncContext` whose pool carries the given tokens (newline separated). */
+function poolCtx(tokens: string[], overrides: Partial<SyncContext> = {}): SyncContext {
+  return ctx({
+    secret: async (name) => (name === "tokens" ? tokens.join("\n") : null),
+    ...overrides,
+  });
+}
+
+/** Offline conversations transport: the reachability sweep degrades to unknown. */
+const offlineConversations = async (): Promise<Record<string, unknown>> => {
+  throw new Error("offline");
+};
 
 async function collect(it: AsyncIterable<SourceRecord>): Promise<SourceRecord[]> {
   const out: SourceRecord[] = [];
@@ -65,10 +79,55 @@ async function collect(it: AsyncIterable<SourceRecord>): Promise<SourceRecord[]>
 }
 
 describe("SlackConnectorConfig", () => {
-  test("defaults: empty channels, team 'default'", () => {
+  test("defaults: empty channels", () => {
     const c = SlackConnectorConfig.parse({});
     expect(c.channels).toEqual([]);
-    expect(c.team).toBe("default");
+    expect(c.self_user_ids).toBeUndefined();
+  });
+});
+
+describe("parseTokenPool (ADR-0042)", () => {
+  test("splits on newlines and commas, trims, drops empties, dedupes", () => {
+    expect(parseTokenPool("a\nb")).toEqual(["a", "b"]);
+    expect(parseTokenPool("a, b ,c")).toEqual(["a", "b", "c"]);
+    expect(parseTokenPool(" a \n\n a ,")).toEqual(["a"]);
+    expect(parseTokenPool("")).toEqual([]);
+    expect(parseTokenPool(null)).toEqual([]);
+    expect(parseTokenPool(undefined)).toEqual([]);
+  });
+});
+
+describe("rejectLegacySlackConfig (ADR-0042 決定 9)", () => {
+  test("rejects the removed ADR-0014 keys with migration guidance", () => {
+    for (const legacy of [
+      { workspaces: { acme: { team: "TA", channels: ["C1"] } } },
+      { team: "T1", channels: ["C1"] },
+      { self_user_id: "U1" },
+    ]) {
+      let thrown: unknown;
+      try {
+        rejectLegacySlackConfig(legacy);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ConfigError);
+      expect((thrown as ConfigError).issues[0]).toContain("0042-slack-workspace-less-connector");
+      expect((thrown as ConfigError).issues[0]).toContain("SUASOR_CONNECTOR_SLACK_TOKENS");
+    }
+  });
+
+  test("accepts the flat workspace-less shape", () => {
+    expect(() =>
+      rejectLegacySlackConfig({ channels: ["C1"], self_user_ids: ["U1"], since: "30d" }),
+    ).not.toThrow();
+    expect(() => rejectLegacySlackConfig({})).not.toThrow();
+  });
+
+  test("createSlackConnector fails fast on a legacy config", () => {
+    expect(() => createSlackConnector({ team: "T1", channels: ["C1"] })).toThrow(ConfigError);
+    expect(() => createSlackConnector({ workspaces: { acme: { channels: ["C1"] } } })).toThrow(
+      ConfigError,
+    );
   });
 });
 
@@ -86,8 +145,10 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
         ],
       },
     ]);
+    // auth.test self-description (ADR-0042 決定 2) supplies the display facet.
+    client.authTest = async () => ({ ok: true, team: "Team One", team_id: "T1", user_id: "UB1" });
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       {
         clientFactory: () => client,
         usersTransport: async () => ({ ok: true, user: { profile: { display_name: "Ada" } } }),
@@ -100,6 +161,15 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
     expect(records[0]?.body).toBe("hello team");
     expect(records[0]?.meta).toMatchObject({ team: "T1", channel: "C1", user: "U1" });
     expect(records[0]?.observedAt).toBe("2023-11-14T22:13:20.000Z");
+  });
+
+  test("a client with no authTest still ingests — meta.team is simply absent", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
+    const records = await collect(connector.sync(ctx()));
+    expect(records).toHaveLength(1);
+    expect(records[0]?.externalId).toBe("slack:C1:1700000000.000100");
+    expect((records[0]?.meta as { team?: string }).team).toBeUndefined();
   });
 });
 
@@ -116,7 +186,7 @@ describe("Slack connector — author name resolution (ADR-0037 §2)", () => {
     ]);
     const lookups: string[] = [];
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       {
         clientFactory: () => client,
         usersTransport: async (_token, userId) => {
@@ -143,7 +213,7 @@ describe("Slack connector — author name resolution (ADR-0037 §2)", () => {
       { messages: [{ ts: "1700000001.000000", text: "a", user: "U1" }] },
     ]);
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       {
         clientFactory: () => client,
         // Simulate missing `users:read` scope — resolution must not abort ingest.
@@ -160,7 +230,7 @@ describe("Slack connector — author name resolution (ADR-0037 §2)", () => {
     const { client } = fakeSlack([{ messages: [{ ts: "1700000001.000000", text: "sys" }] }]);
     let called = false;
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       {
         clientFactory: () => client,
         usersTransport: async () => {
@@ -180,15 +250,12 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
     const { client, calls } = fakeSlack([
       { messages: [{ ts: "1700000001.000000" }, { ts: "1700000050.000000" }] },
     ]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await collect(connector.sync(ctx({ cursor: "1699999000.000000" })));
     expect(calls[0]?.oldest).toBe("1699999000.000000");
     const result = await connector.finalize?.();
-    // Cursor is now per-alias → per-channel; a single-workspace config is `default`.
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "1700000050.000000" } });
+    // Cursor is a flat channel → ts map (ADR-0042).
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1700000050.000000" });
   });
 
   test("per-channel cursor: a quiet channel keeps its own floor (no cross-channel skip)", async () => {
@@ -199,67 +266,50 @@ describe("Slack connector — delta cursor (FR-ING-3)", () => {
       { messages: [{ ts: "700.000000" }] }, // second history call → channel C2
     ]);
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1", "C2"] },
+      { channels: ["C1", "C2"] },
       { clientFactory: () => client },
     );
     await collect(
       connector.sync(ctx({ cursor: JSON.stringify({ C1: "900.000000", C2: "500.000000" }) })),
     );
-    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe("900.000000");
-    expect(calls.find((c) => c.channel === "C2")?.oldest).toBe("500.000000");
+    expect(calls[0]?.oldest).toBe("900.000000");
+    expect(calls[1]?.oldest).toBe("500.000000");
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      default: { C1: "1000.000000", C2: "700.000000" },
-    });
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "1000.000000", C2: "700.000000" });
   });
 
-  test("drops cursor entries for channels no longer in config (no unbounded growth)", async () => {
-    const { client } = fakeSlack([{ messages: [{ ts: "2000.000000" }] }]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    // The stored map still carries a stale C9 that is no longer configured.
+  test("a legacy nested (per-alias) cursor flattens with a max-ts merge (ADR-0042)", async () => {
+    const { client, calls } = fakeSlack([{ messages: [] }]);
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await collect(
-      connector.sync(ctx({ cursor: JSON.stringify({ C1: "1000.000000", C9: "999.000000" }) })),
+      connector.sync(
+        ctx({
+          cursor: JSON.stringify({
+            acme: { C1: "500.000000" },
+            beta: { C1: "900.000000" }, // max wins
+            __discovery__: { acme: "1700000000000:2" }, // legacy marker dropped
+          }),
+        }),
+      ),
     );
-    const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "2000.000000" } });
+    expect(calls[0]?.oldest).toBe("900.000000");
   });
 
-  test("a channel with no new messages preserves its floor", async () => {
+  test("a channel with no new messages preserves its floor for the next run", async () => {
     const { client } = fakeSlack([{ messages: [] }]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "1234.000000" }) })));
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
+    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "800.000000" }) })));
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "1234.000000" } });
-  });
-
-  test("first run omits `oldest` and paginates via next_cursor", async () => {
-    const { client, calls } = fakeSlack([
-      { messages: [{ ts: "1700000001.000000" }], response_metadata: { next_cursor: "p2" } },
-      { messages: [{ ts: "1700000002.000000" }] },
-    ]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    const records = await collect(connector.sync(ctx()));
-    expect(calls[0]?.oldest).toBeUndefined();
-    expect(calls[1]?.cursor).toBe("p2");
-    expect(records).toHaveLength(2);
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "800.000000" });
   });
 });
 
 describe("Slack connector — guards", () => {
-  test("throws when no token is configured", async () => {
+  test("throws when no token pool is configured", async () => {
     const { client } = fakeSlack([]);
     const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await expect(collect(connector.sync(ctx({ secret: async () => null })))).rejects.toThrow(
-      /no token configured/,
+      /no token pool configured/,
     );
   });
 
@@ -278,35 +328,17 @@ describe("Slack connector — guards", () => {
     expect(built).toBe(false);
   });
 
-  // The "no channels + no token → throw" fresh-onboard case (#385) is now
-  // enforced centrally by the sync service (Issue #440), driven by the Slack
-  // connector's any-of `credentials`, and is covered for every connector by the
-  // completeness test in `tests/connectors/manifest.test.ts`. The
-  // channels-configured direct-sync throw path (above) stays as connector-level
-  // defense-in-depth.
-
-  test("one workspace with a token keeps the channel-less config a quiet no-op (#385 regression)", async () => {
-    // acme resolves a token (but has no channels), beta has neither: at least
-    // one token exists, so the run stays the pre-#385 quiet no-op (0 records,
-    // no throw) — the noop advisory covers the empty scope.
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: [] },
-          beta: { team: "TB", channels: [] },
-        },
+  test("every pool token failing auth.test throws (replace the pool)", async () => {
+    const dead: SlackClientLike = {
+      ...fakeSlack([]).client,
+      authTest: async () => {
+        throw new Error("invalid_auth");
       },
-      { clientFactory: () => fakeSlack([]).client },
+    };
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => dead });
+    await expect(collect(connector.sync(ctx({ onWarn: () => {} })))).rejects.toThrow(
+      /every token in the pool failed auth.test/,
     );
-    const records = await collect(
-      connector.sync(
-        ctx({
-          secret: async (name) => (name === "acme:token" ? "tok-a" : null),
-          onWarn: () => {},
-        }),
-      ),
-    );
-    expect(records).toEqual([]);
   });
 });
 
@@ -324,7 +356,7 @@ describe("Slack connector — non-id channel warn (#158)", () => {
     const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
     const warns: string[] = [];
     const connector = createSlackConnector(
-      { team: "T1", channels: ["#general"] },
+      { channels: ["#general"] },
       { clientFactory: () => client },
     );
     const records = await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
@@ -341,7 +373,7 @@ describe("Slack connector — non-id channel warn (#158)", () => {
     const { client } = fakeSlack([{ messages: [] }]);
     const warns: string[] = [];
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C0123ABCD"] },
+      { channels: ["C0123ABCD"] },
       { clientFactory: () => client },
     );
     await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
@@ -349,339 +381,15 @@ describe("Slack connector — non-id channel warn (#158)", () => {
   });
 });
 
-describe("Slack connector — multi-workspace (ADR-0014)", () => {
-  test("workspaceSecretName: default workspace vs named alias", () => {
-    expect(workspaceSecretName()).toBe("token");
-    expect(workspaceSecretName("acme")).toBe("acme:token");
-  });
-
-  test("syncs each workspace with its own token (canonical channel ids, ADR-0042)", async () => {
-    const tokens: string[] = [];
-    const { client } = fakeSlack([
-      { messages: [{ ts: "10.000000" }] }, // acme → C1
-      { messages: [{ ts: "20.000000" }] }, // beta → C2
-    ]);
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C2"] },
-        },
-      },
-      {
-        clientFactory: (t) => {
-          tokens.push(t);
-          return client;
-        },
-      },
-    );
-    const records = await collect(
-      connector.sync(
-        ctx({
-          secret: async (name) =>
-            name === "acme:token" ? "tok-a" : name === "beta:token" ? "tok-b" : null,
-        }),
-      ),
-    );
-    expect(tokens).toEqual(["tok-a", "tok-b"]);
-    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000", "slack:C2:20.000000"]);
-    const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      acme: { C1: "10.000000" },
-      beta: { C2: "20.000000" },
-    });
-  });
-
-  test("skips a workspace with no token (warns) and keeps syncing the rest", async () => {
-    const warns: string[] = [];
-    const tokens: string[] = [];
-    const { client } = fakeSlack([{ messages: [{ ts: "30.000000" }] }]); // only beta fetches
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C2"] },
-        },
-      },
-      {
-        clientFactory: (t) => {
-          tokens.push(t);
-          return client;
-        },
-      },
-    );
-    const records = await collect(
-      connector.sync(
-        ctx({
-          secret: async (name) => (name === "beta:token" ? "tok-b" : null), // acme missing
-          onWarn: (m: string) => warns.push(m),
-        }),
-      ),
-    );
-    expect(tokens).toEqual(["tok-b"]); // acme never built a client (isolation)
-    expect(records.map((r) => r.externalId)).toEqual(["slack:C2:30.000000"]);
-    expect(warns.some((w) => w.includes("acme") && w.includes("--workspace acme"))).toBe(true);
-  });
-
-  test("preserves a skipped workspace's prior cursor (skip is not a reset)", async () => {
-    const { client } = fakeSlack([{ messages: [{ ts: "40.000000" }] }]);
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C2"] },
-        },
-      },
-      { clientFactory: () => client },
-    );
-    await collect(
-      connector.sync(
-        ctx({
-          secret: async (name) => (name === "beta:token" ? "tok-b" : null),
-          cursor: JSON.stringify({ acme: { C1: "5.000000" }, beta: { C2: "9.000000" } }),
-          onWarn: () => {},
-        }),
-      ),
-    );
-    const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      acme: { C1: "5.000000" }, // preserved (skipped)
-      beta: { C2: "40.000000" }, // advanced
-    });
-  });
-
-  test("throws only when NO workspace resolves a token", async () => {
-    const { client } = fakeSlack([]);
-    const connector = createSlackConnector(
-      { workspaces: { acme: { team: "TA", channels: ["C1"] } } },
-      { clientFactory: () => client },
-    );
-    await expect(
-      collect(connector.sync(ctx({ secret: async () => null, onWarn: () => {} }))),
-    ).rejects.toThrow(/no token configured for any workspace/);
-  });
-
-  test("reads a flat (pre-multi-workspace) cursor as the default workspace", async () => {
-    const { client, calls } = fakeSlack([{ messages: [{ ts: "100.000000" }] }]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "50.000000" }) })));
-    expect(calls[0]?.oldest).toBe("50.000000");
-    const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "100.000000" } });
-  });
-
-  test("isolates a mid-fetch failure: other workspaces still sync, failure warns (#56)", async () => {
-    const warns: string[] = [];
-    const okClient = fakeSlack([{ messages: [{ ts: "50.000000" }] }]).client;
-    const badClient: SlackClientLike = {
-      conversations: {
-        history: async () => {
-          throw new Error("ratelimited");
-        },
-        replies: async () => ({ messages: [] }),
-      },
-    };
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C2"] },
-        },
-      },
-      { clientFactory: (t) => (t === "tok-a" ? okClient : badClient) },
-    );
-    const records = await collect(
-      connector.sync(
-        ctx({
-          secret: async (n) => (n === "acme:token" ? "tok-a" : n === "beta:token" ? "tok-b" : null),
-          cursor: JSON.stringify({ beta: { C2: "9.000000" } }),
-          onWarn: (m: string) => warns.push(m),
-        }),
-      ),
-    );
-    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:50.000000"]); // acme synced
-    expect(warns.some((w) => w.includes("beta") && w.includes("failed mid-sync"))).toBe(true);
-    const result = await connector.finalize?.();
-    // acme advanced; beta's prior cursor preserved (failure is not a reset).
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      acme: { C1: "50.000000" },
-      beta: { C2: "9.000000" },
-    });
-  });
-
-  test("throws when every workspace with a token fails mid-fetch (#56)", async () => {
-    const badClient: SlackClientLike = {
-      conversations: {
-        history: async () => {
-          throw new Error("boom");
-        },
-        replies: async () => ({ messages: [] }),
-      },
-    };
-    const connector = createSlackConnector(
-      { workspaces: { acme: { team: "TA", channels: ["C1"] } } },
-      { clientFactory: () => badClient },
-    );
-    await expect(
-      collect(connector.sync(ctx({ secret: async () => "tok", onWarn: () => {} }))),
-    ).rejects.toThrow(/boom/);
-  });
-});
-
-describe("Slack connector — per-workspace summary + partial-failure flag (ADR-0014, #166)", () => {
-  const okClient = () => fakeSlack([{ messages: [{ ts: "50.000000" }] }]).client;
-  const badClient = (): SlackClientLike => ({
-    conversations: {
-      history: async () => {
-        throw new Error("ratelimited");
-      },
-      replies: async () => ({ messages: [] }),
-    },
-  });
-
-  test("partial failure (one ws fails, others sync): flag set + summary names each ws", async () => {
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] }, // ok
-          beta: { team: "TB", channels: ["C2"] }, // fails mid-fetch
-          gamma: { team: "TG", channels: ["C3"] }, // skipped (no token)
-        },
-      },
-      { clientFactory: (t) => (t === "tok-a" ? okClient() : badClient()) },
-    );
-    await collect(
-      connector.sync(
-        ctx({
-          secret: async (n) => (n === "acme:token" ? "tok-a" : n === "beta:token" ? "tok-b" : null),
-          onWarn: () => {},
-        }),
-      ),
-    );
-    const result = await connector.finalize?.();
-    expect(result?.partialFailure).toBe(true);
-    // team id is annotated for each named workspace (#371); teamName is absent
-    // here (the fake has no auth.test → resolution degrades to id-only).
-    expect(result?.summaryLines).toEqual([
-      "workspaces: acme (TA)=ok, beta (TB)=failed (cursor preserved), gamma (TG)=skipped (no token)",
-    ]);
-  });
-
-  test("all workspaces ok: no partial failure, summary all=ok", async () => {
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C2"] },
-        },
-      },
-      { clientFactory: () => okClient() },
-    );
-    await collect(connector.sync(ctx({ secret: async () => "tok", onWarn: () => {} })));
-    const result = await connector.finalize?.();
-    expect(result?.partialFailure).toBe(false);
-    expect(result?.summaryLines).toEqual(["workspaces: acme (TA)=ok, beta (TB)=ok"]);
-  });
-
-  test("summary annotates the resolved workspace name when available (#371)", async () => {
-    // A workspace whose name resolves this run is shown as `alias (id "Name")`;
-    // one that can't resolve degrades to `alias (id)` — same summary line.
-    const named = (teamName: string): SlackClientLike => ({
-      conversations: {
-        async history() {
-          return { messages: [{ ts: "50.000000" }] };
-        },
-        async replies() {
-          return { messages: [] };
-        },
-      },
-      authTest: async () => ({ ok: true, team: teamName, team_id: "ignored" }),
-    });
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] }, // name resolves
-          beta: { team: "TB", channels: ["C2"] }, // no auth.test → id only
-        },
-      },
-      { clientFactory: (t) => (t === "tok-a" ? named("Acme") : okClient()) },
-    );
-    await collect(
-      connector.sync(
-        ctx({
-          secret: async (n) => (n === "acme:token" ? "tok-a" : "tok-b"),
-          onWarn: () => {},
-        }),
-      ),
-    );
-    const result = await connector.finalize?.();
-    expect(result?.summaryLines).toEqual(['workspaces: acme (TA "Acme")=ok, beta (TB)=ok']);
-  });
-
-  test("failed workspace's prior cursor is preserved (failure is not a reset)", async () => {
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] }, // ok → advances
-          beta: { team: "TB", channels: ["C2"] }, // fails → cursor preserved
-        },
-      },
-      { clientFactory: (t) => (t === "tok-a" ? okClient() : badClient()) },
-    );
-    await collect(
-      connector.sync(
-        ctx({
-          secret: async (n) => (n === "acme:token" ? "tok-a" : "tok-b"),
-          cursor: JSON.stringify({ beta: { C2: "9.000000" } }),
-          onWarn: () => {},
-        }),
-      ),
-    );
-    const result = await connector.finalize?.();
-    expect(result?.partialFailure).toBe(true);
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      acme: { C1: "50.000000" }, // advanced
-      beta: { C2: "9.000000" }, // preserved (failure is not a reset)
-    });
-  });
-
-  test("single flat workspace success: summary present, no partial failure", async () => {
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => okClient() },
-    );
-    await collect(connector.sync(ctx()));
-    const result = await connector.finalize?.();
-    expect(result?.partialFailure).toBe(false);
-    expect(result?.summaryLines).toEqual(["workspaces: default=ok"]);
-  });
-
-  test("empty config (no channels): no summary line, no partial failure", async () => {
-    const connector = createSlackConnector(
-      { team: "T1", channels: [] },
-      { clientFactory: () => okClient() },
-    );
-    await collect(connector.sync(ctx()));
-    const result = await connector.finalize?.();
-    expect(result?.partialFailure ?? false).toBe(false);
-    expect(result?.summaryLines).toBeUndefined();
-  });
-});
-
-describe("Slack connector — shared-channel natural collapse (ADR-0042)", () => {
-  /** A client that returns one message (keyed by `ts`) per channel from `byChannel`. */
-  function byChannelClient(byChannel: Record<string, Msg[]>): {
-    client: SlackClientLike;
-    historyChannels: string[];
-  } {
-    const historyChannels: string[] = [];
+describe("Slack connector — token pool (ADR-0042)", () => {
+  /** A per-token client whose history returns the given messages per channel. */
+  function tokenClient(
+    byChannel: Record<string, Msg[]>,
+    identity?: { team?: string; team_id?: string; user_id?: string },
+  ): SlackClientLike {
     const client: SlackClientLike = {
       conversations: {
         async history(args) {
-          historyChannels.push(args.channel);
           return { messages: byChannel[args.channel] ?? [] };
         },
         async replies() {
@@ -689,106 +397,228 @@ describe("Slack connector — shared-channel natural collapse (ADR-0042)", () =>
         },
       },
     };
-    return { client, historyChannels };
+    if (identity) client.authTest = async () => ({ ok: true, ...identity });
+    return client;
   }
 
-  test("a shared channel collapses to the same canonical externalId under every alias", async () => {
+  test("a dead token is excluded (warn) and the rest of the pool still syncs", async () => {
     const warns: string[] = [];
-    // C1 is listed by both aliases (a shared Grid channel); C2 only by beta.
-    const { client, historyChannels } = byChannelClient({
-      C1: [{ ts: "10.000000", text: "shared" }],
-      C2: [{ ts: "20.000000", text: "beta-only" }],
-    });
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          beta: { team: "TB", channels: ["C1", "C2"] },
-          acme: { team: "TA", channels: ["C1"] },
-        },
+    const dead: SlackClientLike = {
+      ...fakeSlack([]).client,
+      authTest: async () => {
+        throw new Error("invalid_auth");
       },
-      { clientFactory: () => client },
+    };
+    const ok = tokenClient({ C1: [{ ts: "10.000000" }] }, { team: "Acme", team_id: "TA" });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: (t) => (t === "tok-dead" ? dead : ok),
+        conversationsTransport: offlineConversations,
+      },
     );
     const records = await collect(
-      connector.sync(
-        ctx({
-          secret: async (name) =>
-            name === "acme:token" ? "tok-a" : name === "beta:token" ? "tok-b" : null,
-          onWarn: (m: string) => warns.push(m),
-        }),
-      ),
+      connector.sync(poolCtx(["tok-dead", "tok-ok"], { onWarn: (m: string) => warns.push(m) })),
     );
-    // No owner election (ADR-0042): both aliases fetch C1 (a redundant fetch is
-    // allowed) and both observations carry the SAME canonical externalId, so
-    // the store's fingerprint idempotency collapses them to one source.
-    expect(historyChannels.filter((c) => c === "C1")).toEqual(["C1", "C1"]);
-    const ids = records.map((r) => r.externalId);
-    expect(ids.filter((id) => id === "slack:C1:10.000000")).toHaveLength(2);
-    expect(ids).toContain("slack:C2:20.000000");
-    expect(new Set(ids)).toEqual(new Set(["slack:C1:10.000000", "slack:C2:20.000000"]));
-    // No shared-channel warn: the overlap is not a correctness issue any more.
-    expect(warns.some((w) => w.includes("shared across"))).toBe(false);
-  });
-
-  test("cursor: every alias listing a shared channel keeps its own cursor", async () => {
-    const { client } = byChannelClient({
-      C1: [{ ts: "10.000000" }],
-      C2: [{ ts: "20.000000" }],
-    });
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          beta: { team: "TB", channels: ["C1", "C2"] },
-          acme: { team: "TA", channels: ["C1"] },
-        },
-      },
-      { clientFactory: () => client },
-    );
-    await collect(
-      connector.sync(
-        ctx({
-          secret: async (name) =>
-            name === "acme:token" ? "tok-a" : name === "beta:token" ? "tok-b" : null,
-          onWarn: () => {},
-        }),
-      ),
-    );
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000"]);
+    expect(warns.some((w) => w.includes("token #1 is dead"))).toBe(true);
     const result = await connector.finalize?.();
-    // Both aliases advance their own C1 cursor (no owner-only holding); a
-    // duplicated listing costs a redundant fetch, nothing more (ADR-0042).
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      acme: { C1: "10.000000" },
-      beta: { C1: "10.000000", C2: "20.000000" },
-    });
+    // Summary tells the dead token (replace it) apart from the live one.
+    expect(result?.summaryLines?.[0]).toContain("#1=dead (replace it)");
+    expect(result?.partialFailure).toBe(true);
   });
 
-  test("no warn and unchanged ingest when channels are not shared", async () => {
+  test("a token-wide mid-sync failure fails over to the next token (bounded)", async () => {
     const warns: string[] = [];
-    const { client } = byChannelClient({
-      C1: [{ ts: "10.000000" }],
-      C2: [{ ts: "20.000000" }],
-    });
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C2"] },
+    const bad: SlackClientLike = {
+      conversations: {
+        history: async () => {
+          throw new Error("ratelimited");
         },
+        replies: async () => ({ messages: [] }),
       },
-      { clientFactory: () => client },
+      authTest: async () => ({ ok: true, team: "Acme", team_id: "TA" }),
+    };
+    const ok = tokenClient({ C1: [{ ts: "10.000000" }] }, { team: "Beta", team_id: "TB" });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: (t) => (t === "tok-bad" ? bad : ok),
+        conversationsTransport: offlineConversations,
+      },
     );
     const records = await collect(
-      connector.sync(
-        ctx({
-          secret: async () => "tok",
-          onWarn: (m: string) => warns.push(m),
-        }),
-      ),
+      connector.sync(poolCtx(["tok-bad", "tok-ok"], { onWarn: (m: string) => warns.push(m) })),
     );
-    expect(records.map((r) => r.externalId).sort()).toEqual([
-      "slack:C1:10.000000",
-      "slack:C2:20.000000",
-    ]);
+    // The failover token ingested the channel; the failed token is named.
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000"]);
+    expect(warns.some((w) => w.includes("failed mid-sync"))).toBe(true);
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines?.[0]).toContain('TA "Acme"=failed (cursor preserved)');
+    expect(result?.summaryLines?.[0]).toContain('TB "Beta"=ok');
+  });
+
+  test("channel-scoped not_in_channel on one token fails over to the other", async () => {
+    const notIn: SlackClientLike = {
+      conversations: {
+        history: async () => {
+          const err = new Error("An API error occurred: not_in_channel") as Error & {
+            data: { ok: false; error: string };
+          };
+          err.data = { ok: false, error: "not_in_channel" };
+          throw err;
+        },
+        replies: async () => ({ messages: [] }),
+      },
+      authTest: async () => ({ ok: true, team: "Acme", team_id: "TA" }),
+    };
+    const ok = tokenClient({ C1: [{ ts: "10.000000" }] }, { team: "Beta", team_id: "TB" });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: (t) => (t === "tok-a" ? notIn : ok),
+        conversationsTransport: offlineConversations,
+      },
+    );
+    const warns: string[] = [];
+    const records = await collect(
+      connector.sync(poolCtx(["tok-a", "tok-b"], { onWarn: (m: string) => warns.push(m) })),
+    );
+    // Self-heal (ADR-0042): the second token reads the channel; no unreachable warn.
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000"]);
+    expect(warns.some((w) => w.includes("unreachable"))).toBe(false);
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure ?? false).toBe(false);
+  });
+
+  test("a channel no token can read lands in one aggregated unreachable warn", async () => {
+    const notIn = (code: string): SlackClientLike => ({
+      conversations: {
+        history: async () => {
+          const err = new Error(`An API error occurred: ${code}`) as Error & {
+            data: { ok: false; error: string };
+          };
+          err.data = { ok: false, error: code };
+          throw err;
+        },
+        replies: async () => ({ messages: [] }),
+      },
+      authTest: async () => ({ ok: true, team: "Acme", team_id: "TA" }),
+    });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: () => notIn("not_in_channel"),
+        conversationsTransport: offlineConversations,
+      },
+    );
+    const warns: string[] = [];
+    const records = await collect(
+      connector.sync(poolCtx(["tok-a", "tok-b"], { onWarn: (m: string) => warns.push(m) })),
+    );
+    expect(records).toEqual([]);
+    const warn = warns.find((w) => w.includes("unreachable"));
+    expect(warn).toContain("C1 (not_in_channel)");
+    expect(warn).toContain("no configured token can");
+  });
+
+  test("reachability sweep orders candidates: the member token fetches the channel", async () => {
+    const fetchedBy: string[] = [];
+    const mk = (teamId: string): SlackClientLike => ({
+      conversations: {
+        async history(args) {
+          fetchedBy.push(teamId);
+          return { messages: args.channel === "C2" ? [{ ts: "20.000000" }] : [] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTest: async () => ({ ok: true, team: teamId, team_id: teamId }),
+    });
+    // Transport keyed by token: tok-a is a member of C1 only, tok-b of C2 only.
+    const membership: Record<string, string[]> = { "tok-a": ["C1"], "tok-b": ["C2"] };
+    const transport = async (token: string, params: Record<string, string>) => {
+      const wanted = params.types === "public_channel" ? (membership[token] ?? []) : [];
+      return {
+        ok: true,
+        channels: wanted.map((id) => ({ id, name: id, is_member: true })),
+      };
+    };
+    const connector = createSlackConnector(
+      { channels: ["C2"] },
+      {
+        clientFactory: (t) => (t === "tok-a" ? mk("TA") : mk("TB")),
+        conversationsTransport: transport,
+      },
+    );
+    const records = await collect(connector.sync(poolCtx(["tok-a", "tok-b"])));
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C2:20.000000"]);
+    // The member token (tok-b / TB) was preferred — no wasted first attempt.
+    expect(fetchedBy).toEqual(["TB"]);
+  });
+
+  test("duplicate tokens for the same workspace are harmless (pool dedupes)", async () => {
+    const client = tokenClient({ C1: [{ ts: "10.000000" }] }, { team: "Acme", team_id: "TA" });
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
+    const records = await collect(connector.sync(poolCtx(["tok-a", "tok-a"])));
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000"]);
+  });
+});
+
+describe("Slack connector — shared-channel natural collapse (ADR-0042)", () => {
+  test("a shared channel collapses to the same canonical externalId via any token", async () => {
+    const warns: string[] = [];
+    const mk = (teamId: string): SlackClientLike => ({
+      conversations: {
+        async history(args) {
+          return { messages: args.channel === "C1" ? [{ ts: "10.000000", text: "shared" }] : [] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTest: async () => ({ ok: true, team: teamId, team_id: teamId }),
+    });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: (t) => (t === "tok-a" ? mk("TA") : mk("TB")),
+        conversationsTransport: offlineConversations,
+      },
+    );
+    const records = await collect(
+      connector.sync(poolCtx(["tok-a", "tok-b"], { onWarn: (m: string) => warns.push(m) })),
+    );
+    // One fetch (first candidate succeeds — no owner election, no double fetch),
+    // one canonical id; whichever token had fetched it, the id is identical.
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000"]);
     expect(warns.some((w) => w.includes("shared across"))).toBe(false);
+  });
+
+  test("cursor: the flat channel cursor advances regardless of which token fetched", async () => {
+    const mk = (msgs: Msg[]): SlackClientLike => ({
+      conversations: {
+        async history() {
+          return { messages: msgs };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTest: async () => ({ ok: true, team: "Acme", team_id: "TA" }),
+    });
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: () => mk([{ ts: "10.000000" }]),
+        conversationsTransport: offlineConversations,
+      },
+    );
+    await collect(connector.sync(poolCtx(["tok-a", "tok-b"])));
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "10.000000" });
   });
 });
 
@@ -829,7 +659,7 @@ describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)",
       { C1: [{ ts: "100.000000" }], C3: [{ ts: "200.000000" }] },
     );
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1", "C2", "C3"] },
+      { channels: ["C1", "C2", "C3"] },
       { clientFactory: () => client },
     );
     const records = await collect(connector.sync(ctx({ onWarn: (m: string) => warns.push(m) })));
@@ -847,7 +677,8 @@ describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)",
     // Cursor advanced for the reachable channels; C2 has no cursor (never read).
     const result = await connector.finalize?.();
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
-      default: { C1: "100.000000", C3: "200.000000" },
+      C1: "100.000000",
+      C3: "200.000000",
     });
   });
 
@@ -855,11 +686,11 @@ describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)",
     const warns: string[] = [];
     const client = perChannelClient({ C1: "not_in_channel", C2: "channel_not_found" });
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1", "C2"] },
+      { channels: ["C1", "C2"] },
       { clientFactory: () => client },
     );
-    // All-channel failure is NOT a workspace failure — it does not throw (the
-    // workspace token was valid; the bot simply is not in any channel).
+    // All-channel unreachability is NOT a token failure — it does not throw (the
+    // token was valid; the bot simply is not in any channel).
     const records = await collect(connector.sync(ctx({ onWarn: (m: string) => warns.push(m) })));
     expect(records).toEqual([]);
     const warn = warns.find((w) => w.includes("unreachable"));
@@ -870,20 +701,15 @@ describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)",
 
   test("unreachable channel preserves its prior cursor (skip is not a reset)", async () => {
     const client = perChannelClient({ C1: "not_in_channel" });
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await collect(
-      connector.sync(
-        ctx({ cursor: JSON.stringify({ default: { C1: "42.000000" } }), onWarn: () => {} }),
-      ),
+      connector.sync(ctx({ cursor: JSON.stringify({ C1: "42.000000" }), onWarn: () => {} })),
     );
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "42.000000" } });
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "42.000000" });
   });
 
-  test("a non-channel error (ratelimited) still aborts the workspace (not per-channel)", async () => {
+  test("a token-wide error (ratelimited) with a single token throws (all channels failed)", async () => {
     const client: SlackClientLike = {
       conversations: {
         history: async () => {
@@ -892,11 +718,9 @@ describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)",
         replies: async () => ({ messages: [] }),
       },
     };
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    // Only workspace → its sole error propagates (every resolved workspace failed).
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
+    // Only token → its sole error propagates (nothing ingested, nothing merely
+    // unreachable).
     await expect(collect(connector.sync(ctx({ onWarn: () => {} })))).rejects.toThrow(/ratelimited/);
   });
 });
@@ -922,7 +746,7 @@ describe("Slack connector — date floor (ADR-0016)", () => {
   test("applies the `since` floor as `oldest` for an unsynced channel", async () => {
     const { client, calls } = fakeSlack([{ messages: [{ ts: floorFor(0) }] }]);
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"], since: "30d" },
+      { channels: ["C1"], since: "30d" },
       { clientFactory: () => client, now: () => NOW },
     );
     await collect(connector.sync(ctx()));
@@ -932,47 +756,21 @@ describe("Slack connector — date floor (ADR-0016)", () => {
   test("a saved cursor wins over the floor (resume, don't re-fetch older)", async () => {
     const { client, calls } = fakeSlack([{ messages: [] }]);
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"], since: "30d" },
+      { channels: ["C1"], since: "30d" },
       { clientFactory: () => client, now: () => NOW },
     );
-    await collect(
-      connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: floorFor(1000) } }) })),
-    );
+    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: floorFor(1000) }) })));
     expect(calls[0]?.oldest).toBe(floorFor(1000)); // cursor, not the 30d floor
   });
 
-  test("per-workspace `since` floors apply independently", async () => {
+  test("per-channel `since` override wins over the connector since (#57)", async () => {
     const { client, calls } = fakeSlack([{ messages: [] }, { messages: [] }]);
     const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"], since: "7d" },
-          beta: { team: "TB", channels: ["C2"], since: "1d" },
-        },
-      },
-      {
-        clientFactory: () => client,
-        now: () => NOW,
-        // both tokens present
-      },
-    );
-    await collect(
-      connector.sync(
-        ctx({ secret: async (n) => (n === "acme:token" ? "a" : n === "beta:token" ? "b" : null) }),
-      ),
-    );
-    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(7 * 86400));
-    expect(calls.find((c) => c.channel === "C2")?.oldest).toBe(floorFor(1 * 86400));
-  });
-
-  test("per-channel `since` override wins over the workspace since (#57)", async () => {
-    const { client, calls } = fakeSlack([{ messages: [] }, { messages: [] }]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1", "C2"], since: "30d", channel_since: { C2: "1d" } },
+      { channels: ["C1", "C2"], since: "30d", channel_since: { C2: "1d" } },
       { clientFactory: () => client, now: () => NOW },
     );
     await collect(connector.sync(ctx()));
-    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(30 * 86400)); // workspace
+    expect(calls.find((c) => c.channel === "C1")?.oldest).toBe(floorFor(30 * 86400)); // connector
     expect(calls.find((c) => c.channel === "C2")?.oldest).toBe(floorFor(1 * 86400)); // override
   });
 });
@@ -991,10 +789,7 @@ describe("Slack connector — thread replies (ADR-0015)", () => {
         },
       },
     );
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     const records = await collect(connector.sync(ctx()));
     expect(records.map((r) => r.externalId)).toEqual([
       "slack:C1:100.000000", // parent, once (from history)
@@ -1005,17 +800,14 @@ describe("Slack connector — thread replies (ADR-0015)", () => {
     expect(replyCalls).toEqual([{ channel: "C1", ts: "100.000000", oldest: undefined }]);
     // The newest reply ts becomes the channel cursor.
     const result = await connector.finalize?.();
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ default: { C1: "102.000000" } });
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: "102.000000" });
   });
 
   test("does not call replies for messages without replies (N+1 guard)", async () => {
     const { client, replyCalls } = fakeSlack([
       { messages: [{ ts: "100.000000" }, { ts: "101.000000", reply_count: 0 }] },
     ]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     await collect(connector.sync(ctx()));
     expect(replyCalls).toEqual([]);
   });
@@ -1025,13 +817,8 @@ describe("Slack connector — thread replies (ADR-0015)", () => {
       [{ messages: [{ ts: "500.000000", reply_count: 1, thread_ts: "500.000000" }] }],
       { "500.000000": { messages: [{ ts: "501.000000", thread_ts: "500.000000" }] } },
     );
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    await collect(
-      connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: "499.000000" } }) })),
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
+    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: "499.000000" }) })));
     expect(replyCalls[0]?.oldest).toBe("499.000000");
   });
 });
@@ -1082,7 +869,7 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
       ],
     });
     const c1 = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       { clientFactory: () => run1.client, now: () => NOW_MS },
     );
     const rec1 = await collect(c1.sync(ctx()));
@@ -1092,7 +879,7 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
     ]);
     const cursor1 = JSON.parse((await c1.finalize?.())?.cursor ?? "{}");
     // Both the channel cursor and the per-thread `<channel>#<thread_ts>` mark.
-    expect(cursor1).toEqual({ default: { C1: R1, [`C1#${P}`]: R1 } });
+    expect(cursor1).toEqual({ C1: R1, [`C1#${P}`]: R1 });
 
     // Run 2 (steady state): a later top-level message has moved the channel
     // cursor past the parent, so the parent no longer appears in `history`. A new
@@ -1105,7 +892,7 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
       ],
     });
     const c2 = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       { clientFactory: () => run2.client, now: () => NOW_MS },
     );
     const rec2 = await collect(c2.sync(ctx({ cursor: JSON.stringify(cursor1) })));
@@ -1123,43 +910,39 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
     expect(reply?.meta).toMatchObject({ threadTs: P });
     // The thread mark advances to the newest reply for the next run.
     const cursor2 = JSON.parse((await c2.finalize?.())?.cursor ?? "{}");
-    expect(cursor2).toEqual({ default: { C1: R2, [`C1#${P}`]: R2 } });
+    expect(cursor2).toEqual({ C1: R2, [`C1#${P}`]: R2 });
   });
 
   test("prunes an inactive thread: no re-poll, its cursor is dropped", async () => {
     const stale = "1000000000.000000"; // year 2001 — far outside the 30d window
     const { client, replyCalls } = oldestAwareSlack([]); // no new history
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       { clientFactory: () => client, now: () => NOW_MS },
     );
     await collect(
-      connector.sync(
-        ctx({ cursor: JSON.stringify({ default: { C1: P, [`C1#${stale}`]: stale } }) }),
-      ),
+      connector.sync(ctx({ cursor: JSON.stringify({ C1: P, [`C1#${stale}`]: stale }) })),
     );
     // The stale thread is never re-polled (bounded-cost guard).
     expect(replyCalls).toEqual([]);
     // Its per-thread cursor is pruned; the channel cursor is preserved.
     const cursor = JSON.parse((await connector.finalize?.())?.cursor ?? "{}");
-    expect(cursor).toEqual({ default: { C1: P } });
+    expect(cursor).toEqual({ C1: P });
   });
 
   test("re-polls an active thread with no new replies and keeps its mark", async () => {
     const { client, replyCalls } = oldestAwareSlack([], { [P]: [{ ts: P, thread_ts: P }] });
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       { clientFactory: () => client, now: () => NOW_MS },
     );
-    await collect(
-      connector.sync(ctx({ cursor: JSON.stringify({ default: { C1: M, [`C1#${P}`]: R1 } }) })),
-    );
+    await collect(connector.sync(ctx({ cursor: JSON.stringify({ C1: M, [`C1#${P}`]: R1 }) })));
     // The active thread is re-polled from its mark (returns only the parent echo,
     // which is skipped → nothing new ingested).
     expect(replyCalls).toEqual([{ channel: "C1", ts: P, oldest: R1 }]);
     // The mark is retained unchanged for the next run.
     const cursor = JSON.parse((await connector.finalize?.())?.cursor ?? "{}");
-    expect(cursor).toEqual({ default: { C1: M, [`C1#${P}`]: R1 } });
+    expect(cursor).toEqual({ C1: M, [`C1#${P}`]: R1 });
   });
 
   test("isThreadActive: recent ts is active, older-than-window ts is not", () => {
@@ -1171,22 +954,20 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
   });
 });
 
-describe("Slack cursor helpers (ADR-0016)", () => {
-  test("cursorToAliasMap reads nested, flat, and bare-ts cursors", () => {
-    expect(cursorToAliasMap(JSON.stringify({ default: { C1: "1.0" } }))).toEqual({
-      default: { C1: "1.0" },
-    });
-    expect(cursorToAliasMap(JSON.stringify({ C1: "1.0" }))).toEqual({ default: { C1: "1.0" } });
-    expect(cursorToAliasMap(null)).toEqual({});
-    expect(cursorToAliasMap("1700.0")).toEqual({}); // bare ts has no per-channel structure
+describe("Slack cursor helpers (ADR-0016 / ADR-0042)", () => {
+  test("cursorToChannelMap reads flat, legacy nested, and bare-ts cursors", () => {
+    expect(cursorToChannelMap(JSON.stringify({ C1: "1.0" }))).toEqual({ C1: "1.0" });
+    // Legacy nested (ADR-0014) flattens with a max-ts merge per channel.
+    expect(
+      cursorToChannelMap(JSON.stringify({ acme: { C1: "1.0" }, beta: { C1: "2.0", C2: "3.0" } })),
+    ).toEqual({ C1: "2.0", C2: "3.0" });
+    expect(cursorToChannelMap(null)).toEqual({});
+    expect(cursorToChannelMap("1700.0")).toEqual({}); // bare ts has no per-channel structure
   });
 
-  test("serializeCursor prunes empty aliases and returns null when empty", () => {
-    expect(serializeCursor({ default: { C1: "1.0" }, beta: {} })).toBe(
-      JSON.stringify({ default: { C1: "1.0" } }),
-    );
+  test("serializeCursor returns null when empty", () => {
+    expect(serializeCursor({ C1: "1.0" })).toBe(JSON.stringify({ C1: "1.0" }));
     expect(serializeCursor({})).toBeNull();
-    expect(serializeCursor({ acme: {} })).toBeNull();
   });
 });
 
@@ -1206,7 +987,6 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
     expect(() =>
       validateSlackSince(
         SlackConnectorConfig.parse({
-          team: "T1",
           channels: ["C1", "C2"],
           since: "30d",
           channel_since: { C2: "2026-01-01" },
@@ -1218,7 +998,7 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
   test("createSlackConnector: a flat invalid `since` fails fast as ConfigError", () => {
     let thrown: unknown;
     try {
-      createSlackConnector({ team: "T1", channels: ["C1"], since: "3 weeks" });
+      createSlackConnector({ channels: ["C1"], since: "3 weeks" });
     } catch (error) {
       thrown = error;
     }
@@ -1229,19 +1009,8 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
 
   test("createSlackConnector: an invalid `channel_since` entry fails fast", () => {
     expect(() =>
-      createSlackConnector({ team: "T1", channels: ["C1"], channel_since: { C1: "bogus" } }),
+      createSlackConnector({ channels: ["C1"], channel_since: { C1: "bogus" } }),
     ).toThrow(ConfigError);
-  });
-
-  test("createSlackConnector: an invalid per-workspace `since` fails fast", () => {
-    let thrown: unknown;
-    try {
-      createSlackConnector({ workspaces: { acme: { team: "TA", channels: ["C1"], since: "5y" } } });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ConfigError);
-    expect((thrown as ConfigError).message).toContain("connectors.slack.workspaces.acme.since");
   });
 
   test("validateSlackSince: collects every offending entry in one error", () => {
@@ -1249,7 +1018,6 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
     try {
       validateSlackSince(
         SlackConnectorConfig.parse({
-          team: "T1",
           channels: ["C1"],
           since: "3 weeks",
           channel_since: { C1: "bad" },
@@ -1263,25 +1031,22 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
   });
 
   test("createSlackConnector: a valid `since` builds the connector", () => {
-    expect(() =>
-      createSlackConnector({ team: "T1", channels: ["C1"], since: "30d" }),
-    ).not.toThrow();
+    expect(() => createSlackConnector({ channels: ["C1"], since: "30d" })).not.toThrow();
   });
 
   test("validateSlackSince: an invalid flat `since` error carries a backfill recovery hint", () => {
     let thrown: unknown;
     try {
-      validateSlackSince(
-        SlackConnectorConfig.parse({ team: "T1", channels: ["C1"], since: "3 weeks" }),
-      );
+      validateSlackSince(SlackConnectorConfig.parse({ channels: ["C1"], since: "3 weeks" }));
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(ConfigError);
     const [issue] = (thrown as ConfigError).issues;
-    // Recovery hint names the backfill verb + the default workspace alias (Issue #380).
+    // Recovery hint names the backfill verb (Issue #380); no --workspace flag
+    // remains (ADR-0042).
     expect(issue).toContain("suasor slack cursor backfill");
-    expect(issue).toContain("--workspace default");
+    expect(issue).not.toContain("--workspace");
     expect(issue).toContain("--channel <channel-id>");
   });
 
@@ -1289,142 +1054,73 @@ describe("Slack `since` validation (Issue #157, ADR-0007)", () => {
     let thrown: unknown;
     try {
       validateSlackSince(
-        SlackConnectorConfig.parse({ team: "T1", channels: ["C1"], channel_since: { C1: "bad" } }),
+        SlackConnectorConfig.parse({ channels: ["C1"], channel_since: { C1: "bad" } }),
       );
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(ConfigError);
     const [issue] = (thrown as ConfigError).issues;
-    expect(issue).toContain("suasor slack cursor backfill");
     expect(issue).toContain("--channel C1");
-  });
-
-  test("validateSlackSince: a per-workspace `since` hint embeds the workspace alias", () => {
-    let thrown: unknown;
-    try {
-      validateSlackSince(
-        SlackConnectorConfig.parse({
-          workspaces: { acme: { team: "TA", channels: ["C1"], since: "5y" } },
-        }),
-      );
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ConfigError);
-    const [issue] = (thrown as ConfigError).issues;
-    expect(issue).toContain("suasor slack cursor backfill");
-    expect(issue).toContain("--workspace acme");
   });
 });
 
-describe("resolveSelfUserIds (ADR-0012)", () => {
-  test("collects flat + per-workspace ids, de-duplicated; empty when none", () => {
-    expect(resolveSelfUserIds({ self_user_id: "U1" })).toEqual(["U1"]);
-    expect(
-      resolveSelfUserIds({
-        workspaces: { a: { self_user_id: "U2" }, b: { self_user_id: "U3" } },
-      }).sort(),
-    ).toEqual(["U2", "U3"]);
-    expect(
-      resolveSelfUserIds({ self_user_id: "U1", workspaces: { a: { self_user_id: "U1" } } }),
-    ).toEqual(["U1"]); // de-duplicated
+describe("resolveSelfUserIds (ADR-0012 / ADR-0042)", () => {
+  test("reads self_user_ids, deduplicated; empty when unset", () => {
+    expect(resolveSelfUserIds({ self_user_ids: ["U1", "U2", "U1"] })).toEqual(["U1", "U2"]);
+    expect(resolveSelfUserIds({})).toEqual([]);
     expect(resolveSelfUserIds({})).toEqual([]);
   });
 });
 
 describe("Slack connector — channel name resolution (ADR-0037 §3)", () => {
-  test("stashes resolved channelName + channelKind into meta from conversations.info", async () => {
-    const client: SlackClientLike = {
-      conversations: {
-        async history() {
-          return { messages: [{ ts: "1700000000.000100", text: "hi", user: "U1" }] };
-        },
-        async replies() {
-          return { messages: [] };
-        },
-        async info({ channel }) {
-          return channel === "C1" ? { ok: true, channel: { name: "general" } } : { ok: false };
-        },
+  test("populates meta.channelKind/channelName via conversations.info (cached per run)", async () => {
+    const infoCalls: string[] = [];
+    const { client } = fakeSlack([
+      {
+        messages: [
+          { ts: "1.000000", text: "a" },
+          { ts: "2.000000", text: "b" },
+        ],
       },
+    ]);
+    client.conversations.info = async (args) => {
+      infoCalls.push(args.channel);
+      return { ok: true, channel: { name: "general" } };
     };
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     const records = await collect(connector.sync(ctx()));
-    expect(records[0]?.meta).toMatchObject({
-      channel: "C1",
-      channelKind: "public",
-      channelName: "general",
-    });
+    expect(records[0]?.meta).toMatchObject({ channelKind: "public", channelName: "general" });
+    expect(records[1]?.meta).toMatchObject({ channelKind: "public", channelName: "general" });
+    // Per-run cache: one conversations.info call for both messages (§5).
+    expect(infoCalls).toEqual(["C1"]);
   });
 
-  test("degrades to channelKind from id prefix (no channelName) when info is unavailable", async () => {
-    // A client without conversations.info (the existing message-only fake shape):
-    // resolution must not reach the network — kind from the id prefix, no name.
-    const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["D9"] },
-      { clientFactory: () => client },
-    );
+  test("degrades to kind-only when conversations.info fails (§6)", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "1.000000", text: "a" }] }]);
+    client.conversations.info = async () => {
+      throw new Error("missing_scope");
+    };
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     const records = await collect(connector.sync(ctx()));
-    expect(records[0]?.meta).toMatchObject({ channel: "D9", channelKind: "dm" });
+    expect(records[0]?.meta).toMatchObject({ channelKind: "public" });
     expect((records[0]?.meta as { channelName?: string }).channelName).toBeUndefined();
   });
 });
 
 describe("Slack connector — team name resolution (ADR-0037 §10, Issue #361)", () => {
-  test("stashes resolved teamName into meta from auth.test (single workspace)", async () => {
-    const client: SlackClientLike = {
-      conversations: {
-        async history() {
-          return { messages: [{ ts: "1700000000.000100", text: "hi", user: "U1" }] };
-        },
-        async replies() {
-          return { messages: [] };
-        },
-      },
-      authTest: async () => ({ ok: true, team: "Acme", team_id: "T1" }),
-    };
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+  test("populates meta.teamName from auth.test for the token's own team", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "1.000000", text: "a" }] }]);
+    client.authTest = async () => ({ ok: true, team: "Acme Inc", team_id: "T1" });
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     const records = await collect(connector.sync(ctx()));
-    expect(records[0]?.meta).toMatchObject({ team: "T1", teamName: "Acme" });
+    expect(records[0]?.meta).toMatchObject({ team: "T1", teamName: "Acme Inc" });
   });
 
-  test("resolves teamName from auth.teams.list enumeration (Enterprise Grid)", async () => {
-    const client: SlackClientLike = {
-      conversations: {
-        async history() {
-          return { messages: [{ ts: "1700000000.000100", text: "hi" }] };
-        },
-        async replies() {
-          return { messages: [] };
-        },
-      },
-      authTeamsList: async () => ({ ok: true, teams: [{ id: "T1", name: "Acme Grid" }] }),
-    };
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
+  test("degrades to no teamName when the client has no auth surface", async () => {
+    const { client } = fakeSlack([{ messages: [{ ts: "1.000000", text: "a" }] }]);
+    const connector = createSlackConnector({ channels: ["C1"] }, { clientFactory: () => client });
     const records = await collect(connector.sync(ctx()));
-    expect(records[0]?.meta).toMatchObject({ team: "T1", teamName: "Acme Grid" });
-  });
-
-  test("degrades to no meta.teamName when the client cannot resolve (no network)", async () => {
-    // The existing message-only fake has neither authTest nor authTeamsList:
-    // resolution must not reach the network — no teamName stashed.
-    const { client } = fakeSlack([{ messages: [{ ts: "1700000000.000100", text: "hi" }] }]);
-    const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
-      { clientFactory: () => client },
-    );
-    const records = await collect(connector.sync(ctx()));
-    expect(records[0]?.meta).toMatchObject({ team: "T1" });
     expect((records[0]?.meta as { teamName?: string }).teamName).toBeUndefined();
   });
 });

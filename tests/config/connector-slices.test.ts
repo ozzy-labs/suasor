@@ -38,18 +38,19 @@ describe("loadConfig — connector slice validation (valid slices pass)", () => 
     expect(cfg.connectors.github).toEqual({ repos: ["owner/repo"], state: "open" });
   });
 
-  test("slack: the flat (default workspace) shape passes", async () => {
-    const cfg = await loadWithConnectors({ slack: { team: "T1", channels: ["C1"] } });
-    expect(cfg.connectors.slack).toEqual({ team: "T1", channels: ["C1"] });
+  test("slack: the flat workspace-less shape passes (ADR-0042)", async () => {
+    const cfg = await loadWithConnectors({
+      slack: { channels: ["C1"], self_user_ids: ["U1"] },
+    });
+    expect(cfg.connectors.slack).toEqual({ channels: ["C1"], self_user_ids: ["U1"] });
   });
 
-  test("slack: the multi-workspace shape passes", async () => {
-    const cfg = await loadWithConnectors({
-      slack: { workspaces: { acme: { team: "T2", channels: ["C2"] } } },
-    });
-    expect(cfg.connectors.slack).toEqual({
-      workspaces: { acme: { team: "T2", channels: ["C2"] } },
-    });
+  test("slack: the legacy multi-workspace shape fails with the migration error (ADR-0042)", async () => {
+    await expect(
+      loadWithConnectors({
+        slack: { workspaces: { acme: { team: "T2", channels: ["C2"] } } },
+      }),
+    ).rejects.toThrow(/remove 'workspaces'/);
   });
 
   test("local: a correct roots/extensions slice (existing root) passes", async () => {

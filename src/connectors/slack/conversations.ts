@@ -59,18 +59,15 @@ export function collapseByChannelId(
 import { defaultUsersTransport, resolveUserName, type SlackUsersTransport } from "./resolve.ts";
 
 /**
- * The per-connector env override name for a workspace's token (Issue #371 theme
- * 4): `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN` for a named alias (`-` and other
- * non-alphanumeric chars normalised to `_`), or `SUASOR_CONNECTOR_SLACK_TOKEN`
- * for the flat/default workspace. Surfaced as a comment in the paste-ready config
- * block so the headless / WSL token override is discoverable at setup time. The
- * secret name mirrors `workspaceSecretName` in `../slack.ts` (`<alias>:token` /
- * `token`); kept as literals here to avoid a module cycle.
+ * The env override name for the token pool (ADR-0042):
+ * `SUASOR_CONNECTOR_SLACK_TOKENS` (newline/comma separated, replace-all).
+ * Surfaced as a comment in the paste-ready config block so the headless / WSL
+ * override is discoverable at setup time. The secret name mirrors
+ * `SLACK_TOKENS_SECRET` in `../slack.ts`; kept as a literal here to avoid a
+ * module cycle.
  */
-function tokenEnvComment(alias?: string): string {
-  const secret = alias ? `${alias}:token` : "token";
-  const cmd = alias ? `suasor slack auth set --workspace ${alias}` : "suasor slack auth set";
-  return `# token: \`${cmd}\` — or env ${secretEnvName("slack", secret)}`;
+function tokenEnvComment(): string {
+  return `# tokens: \`suasor slack auth set\` — or env ${secretEnvName("slack", "tokens")} (newline/comma separated)`;
 }
 
 // Re-exported so existing importers (and tests) keep resolving the type from
@@ -393,7 +390,14 @@ export function diffConversations(input: ConversationDiffInput): ConversationDif
  * conversation type) with a trailing `# <displayName>` comment.
  */
 export function renderConfigBlock(teamId: string, result: ConversationsResult): string[] {
-  const lines = ["[connectors.slack]", "enabled = true", tokenEnvComment(), `team = "${teamId}"`];
+  // The team id is orientation only (ADR-0042: identity carries no team; the
+  // removed `team` config key must not be re-suggested).
+  const lines = [
+    "[connectors.slack]",
+    "enabled = true",
+    tokenEnvComment(),
+    ...(teamId ? [`# workspace: ${teamId}`] : []),
+  ];
   if (result.conversations.length === 0) {
     lines.push("channels = []");
     return lines;
@@ -419,57 +423,45 @@ export interface WorkspaceConfigInput {
 }
 
 /**
- * Render a multi-workspace `[connectors.slack]` block for an Enterprise Grid
- * sweep (Issue #350 / ADR-0014). Emits the load-bearing `enabled = true` on the
- * connector once, then one `[connectors.slack.workspaces.<alias>]` sub-section
- * per workspace carrying that workspace's `team` id + discovered `channels`.
- *
- * This is the multi-workspace analogue of {@link renderConfigBlock}: grouping by
- * workspace keeps each id under the workspace that can actually reach it (each
- * alias has its own token). The `team` label is a display facet only — the
- * canonical identity (`slack:<channel>:<ts>`, ADR-0042) carries no team prefix.
+ * Render the flat `[connectors.slack]` block for a multi-workspace sweep
+ * (ADR-0042: config is one flat channel list — the ADR-0014
+ * `[connectors.slack.workspaces.<alias>]` sub-sections are gone). Channels are
+ * grouped visually by workspace with comment headers for orientation; the ids
+ * all land in the single `channels` array.
  *
  * A channel shared across several workspaces (one global channel id listed by
- * more than one alias) is listed once so pasting the whole block does not
- * configure the same id twice: it is emitted as a real `channels` entry only
- * under its display placement (smallest alias, {@link collapseByChannelId}) and
- * shown as a `# <id> shared, listed under '<alias>'` comment elsewhere. With the
- * canonical externalId (ADR-0042) a duplicated entry would only cost a redundant
- * fetch — this de-dup is paste hygiene, not correctness.
+ * more than one alias) is listed once so pasting the block does not list the
+ * same id twice: it is a real `channels` entry only under its display placement
+ * (smallest alias, {@link collapseByChannelId}) and a `# <id> shared, listed
+ * under '<alias>'` comment elsewhere. With the canonical externalId (ADR-0042)
+ * a duplicated entry would only cost a redundant fetch — this de-dup is paste
+ * hygiene, not correctness.
  */
 export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfigInput[]): string[] {
   const { placement, shared } = collapseByChannelId(
     workspaces.map((ws) => ({ alias: ws.alias, channels: ws.conversations.map((c) => c.id) })),
   );
 
-  const lines = ["[connectors.slack]", "enabled = true"];
+  const lines = ["[connectors.slack]", "enabled = true", tokenEnvComment()];
+  const total = workspaces.reduce((n, ws) => n + ws.conversations.length, 0);
+  if (total === 0) {
+    lines.push("channels = []");
+    return lines;
+  }
+  lines.push("# channels are ids (C…/G…/D…), not names — the # comment is just a label");
+  lines.push("channels = [");
   for (const ws of workspaces) {
-    // Each workspace needs its own token (Issue #371 theme 4): surface the
-    // per-workspace `slack auth set` command + env override so a pasted multi
-    // block does not silently hit `workspace 'X' skipped: no token` at sync time.
-    lines.push(
-      "",
-      `[connectors.slack.workspaces.${ws.alias}]`,
-      tokenEnvComment(ws.alias),
-      `team = "${ws.teamId}"`,
-    );
-    if (ws.conversations.length === 0) {
-      lines.push("channels = []");
-      continue;
-    }
-    lines.push("# channels are ids (C…/G…/D…), not names — the # comment is just a label");
-    lines.push("channels = [");
+    if (ws.conversations.length === 0) continue;
+    // Orientation-only workspace header (the identity carries no team, ADR-0042).
+    lines.push(`  # — ${ws.alias} (${ws.teamId}) —`);
     for (const c of ws.conversations) {
-      // A shared channel appears as a real entry only under its display
-      // placement; elsewhere it is a comment so the pasted block lists each id
-      // once (paste hygiene — ingest would collapse either way, ADR-0042).
       if (shared.has(c.id) && placement.get(c.id) !== ws.alias) {
         lines.push(`  # ${c.id} shared, listed under '${placement.get(c.id)}'  # ${c.displayName}`);
       } else {
         lines.push(`  "${c.id}",  # ${c.displayName}`);
       }
     }
-    lines.push("]");
   }
+  lines.push("]");
   return lines;
 }

@@ -618,7 +618,8 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
         )
         .run({
           $id: event.channelId,
-          $team: event.teamId,
+          // Display facet only (ADR-0042); a token with no identity yields "".
+          $team: event.teamId ?? "",
           $name: name,
           $kind: event.kind,
           $ts: event.recordedAt,

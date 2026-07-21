@@ -2,11 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  chooseWorkspaceAlias,
-  formatConversationRow,
-  slackChannelLabel,
-} from "../../src/cli/commands/slack.ts";
+import { formatConversationRow, slackChannelLabel } from "../../src/cli/commands/slack.ts";
 import { buildCli } from "../../src/cli/index.ts";
 import {
   KEYCHAIN_SERVICE,
@@ -29,7 +25,7 @@ afterEach(() => {
 });
 
 /** Write a `config.toml` into the isolated config dir for the current test. */
-function writeConfig(toml: string): void {
+function _writeConfig(toml: string): void {
   writeFileSync(join(dir, "config.toml"), toml);
 }
 
@@ -38,9 +34,9 @@ async function run(
   args: string[],
   opts: { stdin?: AsyncIterable<Buffer | string>; keychain?: KeychainBackend } = {},
 ): Promise<{ code: number; out: string; err: string }> {
-  const prevToken = process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+  const prevToken = process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
   const prevDir = process.env.SUASOR_CONFIG_DIR;
-  delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
+  delete process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
   process.env.SUASOR_CONFIG_DIR = dir;
   let out = "";
   let err = "";
@@ -69,8 +65,8 @@ async function run(
     const code = await cli.run(args, context);
     return { code, out, err };
   } finally {
-    if (prevToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKEN;
-    else process.env.SUASOR_CONNECTOR_SLACK_TOKEN = prevToken;
+    if (prevToken === undefined) delete process.env.SUASOR_CONNECTOR_SLACK_TOKENS;
+    else process.env.SUASOR_CONNECTOR_SLACK_TOKENS = prevToken;
     if (prevDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
     else process.env.SUASOR_CONFIG_DIR = prevDir;
   }
@@ -104,10 +100,10 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     expect(out).toContain("slack sync");
   });
 
-  test("auth test without a configured token exits 1 with guidance", async () => {
+  test("auth test without a configured token pool exits 1 with guidance", async () => {
     const { code, err } = await run(["slack", "auth", "test"]);
     expect(code).toBe(1);
-    expect(err).toContain("no Slack token configured");
+    expect(err).toContain("no Slack token pool configured");
   });
 
   test("conversations rejects an invalid --types before any token lookup", async () => {
@@ -122,28 +118,40 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
     expect(err).toContain("--limit must be a positive integer");
   });
 
-  test("conversations without a configured token exits 1 with guidance", async () => {
+  test("conversations without a configured token pool exits 1 with guidance", async () => {
     const { code, err } = await run(["slack", "conversations"]);
     expect(code).toBe(1);
-    expect(err).toContain("no Slack token configured");
+    expect(err).toContain("no Slack token pool configured");
   });
 
-  test("--workspace flows into the no-token guidance (ADR-0014)", async () => {
-    const { code, err } = await run(["slack", "auth", "test", "--workspace", "acme"]);
-    expect(code).toBe(1);
-    expect(err).toContain("auth set --workspace acme");
+  test("--workspace is gone (ADR-0042): the flag is rejected", async () => {
+    const { code } = await run(["slack", "auth", "test", "--workspace", "acme"]);
+    // clipanion rejects the unknown option before the command body runs.
+    expect(code).not.toBe(0);
   });
 
-  test("auth set reads a piped token (trailing newline) and stores it (Issue #383)", async () => {
+  test("auth set reads a piped token (trailing newline) and stores the pool (Issue #383)", async () => {
     const keychain = memoryKeychain();
     const { code, out } = await run(["slack", "auth", "set"], {
       stdin: pipe("xoxb-piped\n"),
       keychain,
     });
     expect(code).toBe(0);
-    expect(out).toContain("Stored Slack token");
-    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "token")}`)).toBe(
+    expect(out).toContain("Stored 1 Slack token(s)");
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "tokens")}`)).toBe(
       "xoxb-piped",
+    );
+  });
+
+  test("auth set stores a comma-separated pool newline-normalised (ADR-0042)", async () => {
+    const keychain = memoryKeychain();
+    const { code, out } = await run(["slack", "auth", "set", "--token", "xoxb-a, xoxp-b"], {
+      keychain,
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("Stored 2 Slack token(s)");
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "tokens")}`)).toBe(
+      "xoxb-a\nxoxp-b",
     );
   });
 
@@ -155,52 +163,16 @@ describe("suasor slack — wiring + arg validation (no network)", () => {
       keychain,
     });
     expect(code).toBe(0);
-    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "token")}`)).toBe(
+    expect(keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("slack", "tokens")}`)).toBe(
       "xoxb-no-newline",
     );
   });
 
-  test("the no-token guidance names the env override (Issue #371 theme 4)", async () => {
-    const { err } = await run(["slack", "auth", "test", "--workspace", "acme-eu"]);
-    // A `-` in the alias normalises to `_` in the env override name (#8).
-    expect(err).toContain("SUASOR_CONNECTOR_SLACK_ACME_EU_TOKEN");
+  test("the no-token guidance names the pool env override (ADR-0042)", async () => {
+    const { err } = await run(["slack", "auth", "test"]);
+    expect(err).toContain("SUASOR_CONNECTOR_SLACK_TOKENS");
     const flat = await run(["slack", "conversations"]);
-    expect(flat.err).toContain("SUASOR_CONNECTOR_SLACK_TOKEN");
-  });
-
-  test("a sole named workspace is auto-selected when --workspace is omitted (theme 1)", async () => {
-    writeConfig('[connectors.slack.workspaces.acme]\nteam = "T1"\nchannels = []\n');
-    const { code, err } = await run(["slack", "auth", "test"]);
-    // Resolves to the one configured alias (not a silent flat `token` lookup), so
-    // the token-missing error names that workspace + its env override.
-    expect(code).toBe(1);
-    expect(err).toContain("workspace 'acme'");
-    expect(err).toContain("SUASOR_CONNECTOR_SLACK_ACME_TOKEN");
-  });
-
-  test("multiple workspaces with no default error with the alias list (theme 1)", async () => {
-    writeConfig(
-      '[connectors.slack.workspaces.acme]\nteam = "T1"\nchannels = []\n' +
-        '[connectors.slack.workspaces.beta]\nteam = "T2"\nchannels = []\n',
-    );
-    const { code, err } = await run(["slack", "conversations"]);
-    expect(code).toBe(1);
-    expect(err).toContain("multiple Slack workspaces configured");
-    expect(err).toContain("acme");
-    expect(err).toContain("beta");
-    expect(err).toContain("--workspace");
-  });
-
-  test("multiple workspaces with a default alias fall back to it (theme 1)", async () => {
-    writeConfig(
-      '[connectors.slack.workspaces.default]\nteam = "T1"\nchannels = []\n' +
-        '[connectors.slack.workspaces.beta]\nteam = "T2"\nchannels = []\n',
-    );
-    const { code, err } = await run(["slack", "auth", "test"]);
-    // No ambiguity error: it resolves to `default` and fails only on the token.
-    expect(code).toBe(1);
-    expect(err).not.toContain("multiple Slack workspaces configured");
-    expect(err).toContain("no Slack token configured");
+    expect(flat.err).toContain("SUASOR_CONNECTOR_SLACK_TOKENS");
   });
 
   test("conversations rejects an invalid --sort before any token lookup (ADR-0013)", async () => {
@@ -254,35 +226,6 @@ describe("slack conversations — joined mark (ADR-0011, #165)", () => {
     );
     expect(row).toContain("(archived)");
     expect(row).toContain("last_self_post=2026-01-01");
-  });
-});
-
-describe("chooseWorkspaceAlias — --workspace resolution (Issue #371 theme 1)", () => {
-  test("an explicit --workspace always wins", () => {
-    expect(chooseWorkspaceAlias("acme", [])).toEqual({ ok: true, alias: "acme" });
-    expect(chooseWorkspaceAlias("acme", ["beta", "gamma"])).toEqual({ ok: true, alias: "acme" });
-  });
-
-  test("a flat config (no aliases) resolves to undefined (the `token` secret)", () => {
-    expect(chooseWorkspaceAlias(undefined, [])).toEqual({ ok: true, alias: undefined });
-  });
-
-  test("a sole named workspace is auto-selected", () => {
-    expect(chooseWorkspaceAlias(undefined, ["acme"])).toEqual({ ok: true, alias: "acme" });
-  });
-
-  test("2+ aliases with no default is ambiguous (lists the aliases)", () => {
-    expect(chooseWorkspaceAlias(undefined, ["acme", "beta"])).toEqual({
-      ok: false,
-      aliases: ["acme", "beta"],
-    });
-  });
-
-  test("2+ aliases with a default alias fall back to default", () => {
-    expect(chooseWorkspaceAlias(undefined, ["beta", "default"])).toEqual({
-      ok: true,
-      alias: "default",
-    });
   });
 });
 

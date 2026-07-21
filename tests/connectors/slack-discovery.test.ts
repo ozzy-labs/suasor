@@ -1,7 +1,7 @@
 /**
- * Sync-time discovery-drift sweep (ADR-0039 Layer 2). The connector sweeps
- * `users.conversations` (public + private) after resolving each workspace's
- * token, diffs against the configured `channels`, and warns about newly-joined
+ * Sync-time discovery-drift sweep (ADR-0039 Layer 2 / ADR-0042). The connector
+ * sweeps `users.conversations` (public + private) across the token pool, diffs
+ * the union against the configured `channels`, and warns about newly-joined
  * conversations — without ingesting them or advancing any cursor. Network-free:
  * both the message client and the `users.conversations` transport are injected.
  */
@@ -10,8 +10,8 @@ import type { SourceRecord, SyncContext } from "../../src/connectors/contract.ts
 import type { SlackConversationsTransport } from "../../src/connectors/slack/conversations.ts";
 import {
   createSlackConnector,
-  cursorToAliasMap,
-  readDiscoveryMarkers,
+  cursorToChannelMap,
+  readDiscoveryMarker,
   type SlackClientLike,
 } from "../../src/connectors/slack.ts";
 
@@ -50,7 +50,7 @@ const throwingSweep: SlackConversationsTransport = async () => {
 function ctx(overrides: Partial<SyncContext> = {}): SyncContext {
   return {
     cursor: null,
-    secret: async (name) => (name === "token" ? "xoxb-tok" : null),
+    secret: async (name) => (name === "tokens" ? "xoxb-tok" : null),
     ...overrides,
   };
 }
@@ -120,11 +120,10 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     await drain(connector.sync(ctx({ onWarn: () => {} })));
     saved = (await connector.finalize?.())?.cursor ?? null;
 
-    // The marker records the sweep time + new count, keyed by workspace alias.
-    const markers = readDiscoveryMarkers(saved);
-    expect(markers).toEqual([{ alias: "default", lastSweptMs: 5000, newCount: 1 }]);
+    // The marker records the sweep time + new count (pool-wide, ADR-0042).
+    expect(readDiscoveryMarker(saved)).toEqual({ lastSweptMs: 5000, newCount: 1 });
     // The drift marker is invisible to the channel-cursor view (status/reset).
-    expect(cursorToAliasMap(saved)).toEqual({});
+    expect(cursorToChannelMap(saved)).toEqual({});
   });
 
   test("cadence: a recent marker (<24h) skips the sweep; the marker is carried forward", async () => {
@@ -133,7 +132,7 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     });
     const warns: string[] = [];
     // Prior sweep at t=0; now = 1h later → within the 24h window, so no re-sweep.
-    const prior = JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "0:0" } });
+    const prior = JSON.stringify({ C1: "1.0", __discovery__: "0:0" });
     const connector = createSlackConnector(
       { channels: ["C1"] },
       { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 1 * HOUR },
@@ -143,16 +142,14 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(false);
     const saved = (await connector.finalize?.())?.cursor ?? null;
     // The old marker is preserved (still 0:0).
-    expect(readDiscoveryMarkers(saved)).toEqual([
-      { alias: "default", lastSweptMs: 0, newCount: 0 },
-    ]);
+    expect(readDiscoveryMarker(saved)).toEqual({ lastSweptMs: 0, newCount: 0 });
   });
 
   test("cadence: an old marker (>24h) re-sweeps", async () => {
     const { transport, calls } = fakeSweep({
       public_channel: [{ id: "C2", name: "random", is_member: true }],
     });
-    const prior = JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "0:0" } });
+    const prior = JSON.stringify({ C1: "1.0", __discovery__: "0:0" });
     const connector = createSlackConnector(
       { channels: ["C1"] },
       {
@@ -164,9 +161,7 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     await drain(connector.sync(ctx({ cursor: prior, onWarn: () => {} })));
     expect(calls.length).toBeGreaterThan(0);
     const saved = (await connector.finalize?.())?.cursor ?? null;
-    expect(readDiscoveryMarkers(saved)).toEqual([
-      { alias: "default", lastSweptMs: 25 * HOUR, newCount: 1 },
-    ]);
+    expect(readDiscoveryMarker(saved)).toEqual({ lastSweptMs: 25 * HOUR, newCount: 1 });
   });
 
   test("opt-out: discover_new = false skips the sweep entirely", async () => {
@@ -199,34 +194,18 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(false);
   });
 
-  test("per-workspace override wins over the connector-level default", async () => {
+  test("a legacy nested marker is dropped (the sweep just re-runs once)", async () => {
     const { transport, calls } = fakeSweep({
       public_channel: [{ id: "C2", name: "random", is_member: true }],
     });
-    const warns: string[] = [];
+    // Pre-ADR-0042 nested marker: no flat marker survives the parse → re-sweep.
+    const prior = JSON.stringify({ acme: { C1: "1.0" }, __discovery__: { acme: "0:0" } });
     const connector = createSlackConnector(
-      {
-        discover_new: true,
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"], discover_new: false },
-        },
-      },
-      {
-        clientFactory: () => quietSlack(),
-        conversationsTransport: transport,
-        now: () => 0,
-      },
+      { channels: ["C1"] },
+      { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 1 * HOUR },
     );
-    await drain(
-      connector.sync(
-        ctx({
-          secret: async (n) => (n === "acme:token" ? "xoxb" : null),
-          onWarn: (m) => warns.push(m),
-        }),
-      ),
-    );
-    expect(calls.length).toBe(0); // acme opted out
-    expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(false);
+    await drain(connector.sync(ctx({ cursor: prior, onWarn: () => {} })));
+    expect(calls.length).toBeGreaterThan(0);
   });
 
   test("best-effort: a sweep error warns and never fails the sync (marker preserved)", async () => {
@@ -262,7 +241,7 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     });
     const warns: string[] = [];
     // Prior sweep at t=0; now = 1h later → normally cadence-gated, but force wins.
-    const prior = JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "0:0" } });
+    const prior = JSON.stringify({ C1: "1.0", __discovery__: "0:0" });
     const connector = createSlackConnector(
       { channels: ["C1"] },
       { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 1 * HOUR },
@@ -274,9 +253,7 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     expect(warns.some((w) => w.includes("new conversation(s)"))).toBe(true);
     // The marker is refreshed with the forced-sweep time.
     const saved = (await connector.finalize?.())?.cursor ?? null;
-    expect(readDiscoveryMarkers(saved)).toEqual([
-      { alias: "default", lastSweptMs: 1 * HOUR, newCount: 1 },
-    ]);
+    expect(readDiscoveryMarker(saved)).toEqual({ lastSweptMs: 1 * HOUR, newCount: 1 });
   });
 
   test("override force: --discover sweeps even when discover_new = false", async () => {
@@ -298,7 +275,7 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
       public_channel: [{ id: "C2", name: "random", is_member: true }],
     });
     // Prior sweep at t=0; now = 1h → within cadence, so the default path skips it.
-    const prior = JSON.stringify({ default: { C1: "1.0" }, __discovery__: { default: "0:0" } });
+    const prior = JSON.stringify({ C1: "1.0", __discovery__: "0:0" });
     const connector = createSlackConnector(
       { channels: ["C1"] },
       { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 1 * HOUR },
@@ -307,24 +284,32 @@ describe("Slack connector — discovery drift sweep (ADR-0039 Layer 2)", () => {
     expect(calls.length).toBe(0);
   });
 
-  test("named workspace: the drift warn is scoped by alias", async () => {
-    const { transport } = fakeSweep({
-      public_channel: [{ id: "C2", name: "random", is_member: true }],
-    });
+  test("multi-token pool: the sweep unions every live token's drift", async () => {
+    // Two tokens see different new channels; the warn counts the union.
+    const transport: SlackConversationsTransport = async (token, params) => {
+      if (params.types !== "public_channel") return { ok: true, channels: [] };
+      return {
+        ok: true,
+        channels:
+          token === "tok-a"
+            ? [{ id: "C2", name: "a-new", is_member: true }]
+            : [{ id: "C3", name: "b-new", is_member: true }],
+      };
+    };
     const warns: string[] = [];
     const connector = createSlackConnector(
-      { workspaces: { acme: { team: "TA", channels: ["C1"] } } },
+      { channels: ["C1"] },
       { clientFactory: () => quietSlack(), conversationsTransport: transport, now: () => 0 },
     );
     await drain(
       connector.sync(
         ctx({
-          secret: async (n) => (n === "acme:token" ? "xoxb" : null),
+          secret: async (n) => (n === "tokens" ? "tok-a,tok-b" : null),
           onWarn: (m) => warns.push(m),
         }),
       ),
     );
     const driftWarn = warns.find((w) => w.includes("new conversation(s)"));
-    expect(driftWarn).toContain("workspace 'acme':");
+    expect(driftWarn).toContain("2 new conversation(s)");
   });
 });

@@ -462,8 +462,8 @@ export const SlackChannelObserved = z.object({
   ...Envelope,
   /** Slack conversation id (`C…` public/private, `G…` group DM, `D…` single DM). */
   channelId: z.string().min(1),
-  /** Team / workspace id this channel belongs to (id-prefix scope, ADR-0014). */
-  teamId: z.string().min(1),
+  /** Team / workspace id facet (display only, ADR-0042); absent when unknown. */
+  teamId: z.string().min(1).optional(),
   /** Resolved human-readable name; empty/absent when unresolved (degrade, §6). */
   displayName: z.string().optional(),
   /** Channel kind (public / private / group / dm), from id prefix + API. */

@@ -348,52 +348,37 @@ export class DoctorCommand extends Command {
     //    collapses a channel listed under multiple aliases at ingest, so a
     //    duplicated declaration is a redundant fetch, not a correctness issue.
     if (config !== null && config.connectors.slack !== undefined) {
-      const { SlackConnectorConfig, resolveWorkspaces, readDiscoveryMarkers } = await import(
+      const { SlackConnectorConfig, rejectLegacySlackConfig, readDiscoveryMarker } = await import(
         "../../connectors/slack.ts"
       );
-      const slack = SlackConnectorConfig.parse(config.connectors.slack);
-      const workspaces = resolveWorkspaces(slack);
+      // 5c. legacy config shape (ADR-0042 決定 9): surface the un-migrated
+      //    ADR-0014 multi-workspace shape as an error with the mechanical
+      //    migration (the same ConfigError sync raises). Skip the rest of the
+      //    slack checks — they parse the flat shape.
+      let slack: import("../../connectors/slack.ts").SlackConnectorConfig | null = null;
+      try {
+        rejectLegacySlackConfig(config.connectors.slack);
+        slack = SlackConnectorConfig.parse(config.connectors.slack);
+      } catch (error) {
+        checks.push({
+          name: "slack.config",
+          status: "error",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
 
-      // 5c. per-workspace slack credential / identity — the connector-credential
-      //    check above only probes the static primary secret (`connector:slack:token`,
-      //    the flat/default workspace), so a multi-workspace config
-      //    (`[connectors.slack.workspaces.<alias>]`) whose per-alias token
-      //    (`connector:slack:<alias>:token`) is missing reads as "ok" there and
-      //    then silently drops that workspace at sync time
-      //    (`workspace '<alias>' skipped: no token`, Issue #371). Surface each
-      //    named workspace's token presence (warn — sync skips it) and its
-      //    `self_user_id` presence (info — `demand.list` degrades to DM-only
-      //    without it, ADR-0012/ADR-0041). Only named workspaces are probed: the flat/default
-      //    workspace's `token` is already covered by the connector-credential check,
-      //    so the flat/single-workspace path is unchanged. Warn/info only — never
-      //    error (exit code unchanged, matching the shared-channel check above).
-      //    Presence only, never the value (NFR-PRV-4).
-      const isMultiWorkspace =
-        slack.workspaces !== undefined && Object.keys(slack.workspaces).length > 0;
-      if (isMultiWorkspace) {
-        for (const ws of workspaces) {
-          if ((await resolveSecret("slack", ws.secretName)) === null) {
-            checks.push({
-              name: "slack.token",
-              status: "warn",
-              detail:
-                `workspace '${ws.alias}' has no token (connector:slack:${ws.secretName}); ` +
-                `sync skips it (\`workspace '${ws.alias}' skipped: no token\`). ` +
-                `Run \`suasor slack auth set --workspace ${ws.alias}\`.`,
-            });
-          }
-          if (ws.selfUserId === undefined) {
-            checks.push({
-              name: "slack.demand",
-              status: "info",
-              detail:
-                `workspace '${ws.alias}' has no self_user_id; \`demand.list\` degrades to ` +
-                `DM-only (no \`<@you>\` mentions, ADR-0012/ADR-0041). Run ` +
-                `\`suasor slack auth test --workspace ${ws.alias} --json\` and copy the ` +
-                `\`userId\` into [connectors.slack.workspaces.${ws.alias}].self_user_id.`,
-            });
-          }
-        }
+      // 5c'. self ids (ADR-0012 / ADR-0042 決定 2): without `self_user_ids`,
+      //    `demand.list` degrades to DM-only. Info only — never an error.
+      //    Presence only, never a value (NFR-PRV-4).
+      if (slack && (slack.self_user_ids ?? []).length === 0 && slack.channels.length > 0) {
+        checks.push({
+          name: "slack.demand",
+          status: "info",
+          detail:
+            "no self_user_ids configured; `demand.list` degrades to DM-only (no `<@you>` " +
+            "mentions, ADR-0012/ADR-0041). Run `suasor slack auth test` and copy each user " +
+            "token's userId into [connectors.slack].self_user_ids.",
+        });
       }
 
       // 5d. slack discovery drift + freshness (ADR-0039 Layer 2, offline) —
@@ -408,42 +393,38 @@ export class DoctorCommand extends Command {
       //    #388 item 4 called out. Exit code unchanged (warn/info only). A marker
       //    that is enabled-and-settled (count 0) or absent stays quiet. Requires a
       //    migrated store (the cursor lives in the event log).
-      if (dbReady && dbPath !== null) {
+      if (slack && dbReady && dbPath !== null) {
         const [{ lastCursor }, { formatSlackTs }] = await Promise.all([
           import("../../connectors/sync.ts"),
           import("../slack-time.ts"),
         ]);
         const driftStore = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
         try {
-          const markers = readDiscoveryMarkers(lastCursor(driftStore.connection.sqlite, "slack"));
-          const enabledByAlias = new Map(workspaces.map((w) => [w.alias, w.discoverNew]));
-          for (const m of markers) {
-            const label = m.alias === "default" ? "" : `workspace '${m.alias}': `;
-            // Opted out (discover_new = false): show the disabled state instead of
-            // a now-frozen drift count, so it reads as a deliberate opt-out rather
-            // than a cadence skip. No freshness for the disabled case (the marker
-            // is stale — the sweep no longer runs here).
-            if (enabledByAlias.get(m.alias) === false) {
+          const marker = readDiscoveryMarker(lastCursor(driftStore.connection.sqlite, "slack"));
+          if (marker !== null) {
+            // Opted out (discover_new = false): show the disabled state instead
+            // of a now-frozen drift count, so it reads as a deliberate opt-out
+            // rather than a cadence skip.
+            if (slack.discover_new === false) {
               checks.push({
                 name: "slack.discovery",
                 status: "info",
-                detail: `${label}discovery disabled (discover_new = false)`,
+                detail: "discovery disabled (discover_new = false)",
               });
-              continue;
+            } else if (marker.newCount > 0) {
+              // Enabled + drift: the actionable warning, annotated with the last
+              // sweep's freshness. `lastSweptMs` is epoch ms; formatSlackTs takes
+              // a Slack `ts` (epoch seconds), so scale down by 1000 to reuse it.
+              checks.push({
+                name: "slack.discovery",
+                status: "warn",
+                detail:
+                  `${marker.newCount} new Slack conversation(s) visible but not in config — ` +
+                  "run `suasor slack conversations --new` to review (none ingested, ADR-0039); " +
+                  `last swept ${formatSlackTs(String(marker.lastSweptMs / 1000))}`,
+              });
             }
             // Enabled but nothing new: settled, stay quiet.
-            if (m.newCount <= 0) continue;
-            // Enabled + drift: the actionable warning, annotated with the last
-            // sweep's freshness. `lastSweptMs` is epoch ms; formatSlackTs takes a
-            // Slack `ts` (epoch seconds), so scale down by 1000 to reuse it.
-            checks.push({
-              name: "slack.discovery",
-              status: "warn",
-              detail:
-                `${label}${m.newCount} new Slack conversation(s) visible but not in config — ` +
-                "run `suasor slack conversations --new` to review (none ingested, ADR-0039); " +
-                `last swept ${formatSlackTs(String(m.lastSweptMs / 1000))}`,
-            });
           }
         } finally {
           driftStore.close();

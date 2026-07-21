@@ -141,7 +141,7 @@ describe("suasor config show", () => {
     const github = report.credentials.github?.find((c) => c.secret === "token");
     expect(github?.configured).toBe(true);
     // Slack has no token set → unconfigured.
-    const slack = report.credentials.slack?.find((c) => c.secret === "token");
+    const slack = report.credentials.slack?.find((c) => c.secret === "tokens");
     expect(slack?.configured).toBe(false);
     // The secret value itself is never disclosed (NFR-PRV-4).
     expect(out).not.toContain("ghp_secret_token");
@@ -152,7 +152,7 @@ describe("suasor config show", () => {
     const { code, out } = await run(["config", "show"]);
     expect(code).toBe(0);
     expect(out).toContain("connectors.github.token = set");
-    expect(out).toContain("connectors.slack.token = unset");
+    expect(out).toContain("connectors.slack.tokens = unset");
     expect(out).not.toContain("ghp_secret_token");
   });
 

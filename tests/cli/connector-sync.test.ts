@@ -204,26 +204,21 @@ describe("suasor github sync", () => {
   });
 });
 
-describe("suasor slack sync — tokenless exits 1 (#385)", () => {
-  // A named workspace alias that no real keychain / env can plausibly hold a
-  // token for (`connector:slack:e2e-tokenless:token`), so the test never
-  // depends on the developer's actual Slack credentials.
-  const ENV_NAME = "SUASOR_CONNECTOR_SLACK_E2E_TOKENLESS_TOKEN";
+describe("suasor slack sync — tokenless exits 1 (#385 / ADR-0042)", () => {
+  const ENV_NAME = "SUASOR_CONNECTOR_SLACK_TOKENS";
 
-  test("no token + no channels fails with exit 1 and records the failed run", async () => {
+  test("no token pool + no channels fails with exit 1 and records the failed run", async () => {
     await run(["init"]);
     const prev = process.env[ENV_NAME];
     delete process.env[ENV_NAME];
     try {
-      await writeConfig(
-        '[connectors.slack.workspaces.e2e-tokenless]\nteam = "T1"\nchannels = []\n',
-      );
+      await writeConfig("[connectors.slack]\nenabled = true\nchannels = []\n");
       const { code, err } = await run(["slack", "sync"]);
-      // Token resolution precedes the channels-empty no-op: the missing
-      // credential is an error even though the scope is empty (#385).
+      // Credential resolution precedes the channels-empty no-op: the missing
+      // pool is an error even though the scope is empty (#385).
       expect(code).toBe(1);
       expect(err).toContain("error: slack sync failed:");
-      expect(err).toContain("no token configured for any workspace");
+      expect(err).toContain("no token pool configured");
       // The failed run lands in the run history (ADR-0033), so the freshness
       // view no longer shows a misleading `slack: ok` for a tokenless config.
       const status = await run(["sync", "status"]);
@@ -238,12 +233,10 @@ describe("suasor slack sync — tokenless exits 1 (#385)", () => {
   test("token present + no channels still succeeds with the no-op advisory (regression)", async () => {
     await run(["init"]);
     const prev = process.env[ENV_NAME];
-    // Env override resolves the token without touching the real keychain.
+    // Env override resolves the pool without touching the real keychain.
     process.env[ENV_NAME] = "xoxb-test-token";
     try {
-      await writeConfig(
-        '[connectors.slack.workspaces.e2e-tokenless]\nteam = "T1"\nchannels = []\n',
-      );
+      await writeConfig("[connectors.slack]\nenabled = true\nchannels = []\n");
       const { code, out, err } = await run(["slack", "sync"]);
       expect(code).toBe(0);
       expect(out).toContain("0 observed");

@@ -169,6 +169,21 @@ async function validateConnectorSlices(
 ): Promise<void> {
   const issues: string[] = [];
   for (const [name, slice] of Object.entries(connectors)) {
+    // Slack's removed ADR-0014 multi-workspace shape gets the mechanical
+    // migration message instead of a bare strict-mode "Unrecognized key"
+    // (ADR-0042 決定 9 — the friendly error IS the migration path).
+    if (name === "slack") {
+      try {
+        const { rejectLegacySlackConfig } = await import("../connectors/slack.ts");
+        rejectLegacySlackConfig(slice);
+      } catch (error) {
+        if (error instanceof ConfigError) {
+          issues.push(...error.issues);
+          continue;
+        }
+        throw error;
+      }
+    }
     const schema = await loadConnectorConfigSchema(name);
     if (!schema) continue; // unknown / schema-less connector stays lenient
     // Merge the universal `enabled` gate, then `.strict()` so unrecognized keys

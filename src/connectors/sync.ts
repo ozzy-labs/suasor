@@ -410,7 +410,7 @@ async function runSyncPass(
           {
             type: "SlackChannelObserved",
             channelId: channel.channelId,
-            teamId: channel.teamId,
+            ...(channel.teamId ? { teamId: channel.teamId } : {}),
             kind: channel.kind,
             ...(channel.displayName ? { displayName: channel.displayName } : {}),
           },

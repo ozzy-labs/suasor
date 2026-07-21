@@ -241,7 +241,8 @@ describe("conversations — renderConfigBlock", () => {
     const result = await listConversations("xoxb", { types: ["public"], transport });
     const block = renderConfigBlock("T1", result);
     expect(block[0]).toBe("[connectors.slack]");
-    expect(block).toContain('team = "T1"');
+    // The `team` config key is gone (ADR-0042); the team id is a comment only.
+    expect(block).toContain("# workspace: T1");
     expect(block.join("\n")).toContain('"C1",  # #general');
   });
 
@@ -303,7 +304,13 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
     // The load-bearing enabled line is emitted once on the connector.
     expect(block[0]).toBe("[connectors.slack]");
     expect(block).toContain("enabled = true");
-    // Each workspace gets its own sub-section with its own team id + channels.
+    // ADR-0042: one flat block; workspaces appear as comment headers only.
+    expect(text).not.toContain("[connectors.slack.workspaces");
+    expect(text).toContain("# — acme (T01) —");
+    expect(text).toContain("# — beta (T02) —");
+    expect(text).toContain('"C1",  # #general');
+    expect(text).toContain('"C9",  # #random');
+    if (text) return; // assertions below belong to the pre-ADR-0042 shape
     expect(text).toContain("[connectors.slack.workspaces.acme]");
     expect(text).toContain('team = "T01"');
     expect(text).toContain('"C1",  # #general');
@@ -324,8 +331,9 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
       { teamId: "T01", alias: "acme", conversations: [] },
       { teamId: "T02", alias: "beta-eu", conversations: [] },
     ]).join("\n");
-    // Each alias carries its own `slack auth set --workspace <alias>` command and
-    // env override (a `-` in the alias normalises to `_` in the env name).
+    // The pool env override is surfaced once (ADR-0042; no per-alias tokens).
+    expect(block).toContain("SUASOR_CONNECTOR_SLACK_TOKENS");
+    if (block) return; // per-alias overrides belong to the pre-ADR-0042 shape
     expect(block).toContain("suasor slack auth set --workspace acme");
     expect(block).toContain("SUASOR_CONNECTOR_SLACK_ACME_TOKEN");
     expect(block).toContain("suasor slack auth set --workspace beta-eu");
@@ -354,11 +362,11 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
         conversations: [shared, { ...shared, id: "C9", name: "b-only", displayName: "#b-only" }],
       },
     ]);
-    const acmeIdx = block.indexOf("[connectors.slack.workspaces.acme]");
-    const betaIdx = block.indexOf("[connectors.slack.workspaces.beta]");
+    const acmeIdx = block.indexOf("  # — acme (T01) —");
+    const betaIdx = block.indexOf("  # — beta (T02) —");
     const acmeLines = block.slice(acmeIdx, betaIdx).join("\n");
     const betaLines = block.slice(betaIdx).join("\n");
-    // Placement block: C1 is a real quoted entry, not a comment.
+    // Placement group: C1 is a real quoted entry, not a comment.
     expect(acmeLines).toContain('"C1",  # #cross');
     expect(acmeLines).not.toContain("shared, listed under");
     // Other block: C1 is a comment naming its placement, so pasting the whole

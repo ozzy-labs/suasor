@@ -52,10 +52,10 @@ export interface RunDigestOptions {
   exportDir: string;
   /** `[connectors.local].roots` — the file channel must not write into any. */
   localRoots?: string[];
-  /** Resolve a workspace's Slack token from the keychain (slack-dm channel). */
-  resolveSlackToken?: (workspace?: string) => Promise<string | null>;
-  /** Resolve a workspace's Slack self user id from config (slack-dm channel). */
-  resolveSlackSelfId?: (workspace?: string) => string | null;
+  /** Resolve a Slack token from the pool (slack-dm channel, ADR-0042). */
+  resolveSlackToken?: () => Promise<string | null>;
+  /** Resolve the operator's Slack self user id from config (slack-dm channel). */
+  resolveSlackSelfId?: () => string | null;
   /** Slack API base override (tests). */
   slackApiBase?: string;
   /** Injectable channel side-effect deps (tests). */
@@ -75,8 +75,8 @@ async function resolveTarget(job: DigestJob, options: RunDigestOptions): Promise
     case "os-notification":
       return { kind: "os-notification" };
     case "slack-dm": {
-      const token = (await options.resolveSlackToken?.(job.workspace)) ?? "";
-      const selfUserId = options.resolveSlackSelfId?.(job.workspace) ?? "";
+      const token = (await options.resolveSlackToken?.()) ?? "";
+      const selfUserId = options.resolveSlackSelfId?.() ?? "";
       return {
         kind: "slack-dm",
         token,

@@ -26,7 +26,7 @@ afterEach(() => {
 describe("Slack: sync → projection → FTS", () => {
   test("ingested message is searchable and re-running is idempotent", async () => {
     const connector = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       {
         clientFactory: () => ({
           conversations: {
@@ -41,7 +41,7 @@ describe("Slack: sync → projection → FTS", () => {
       },
     );
     const out = await syncConnector(store, connector, {
-      secrets: { env: { SUASOR_CONNECTOR_SLACK_TOKEN: "tok" } },
+      secrets: { env: { SUASOR_CONNECTOR_SLACK_TOKENS: "tok" } },
     });
     expect(out.observed).toBe(1);
 
@@ -51,7 +51,7 @@ describe("Slack: sync → projection → FTS", () => {
 
     // Idempotent: same fingerprint → 0 observed, 0 updated on the second pass.
     const c2 = createSlackConnector(
-      { team: "T1", channels: ["C1"] },
+      { channels: ["C1"] },
       {
         clientFactory: () => ({
           conversations: {
@@ -66,23 +66,18 @@ describe("Slack: sync → projection → FTS", () => {
       },
     );
     const out2 = await syncConnector(store, c2, {
-      secrets: { env: { SUASOR_CONNECTOR_SLACK_TOKEN: "tok" } },
+      secrets: { env: { SUASOR_CONNECTOR_SLACK_TOKENS: "tok" } },
     });
     expect(out2).toMatchObject({ observed: 0, updated: 0, unchanged: 1 });
   });
 
-  test("a channel shared across two aliases collapses to one source (ADR-0042)", async () => {
-    // Both aliases list C1; the canonical externalId (`slack:C1:<ts>`) makes the
-    // second alias's fetch an unchanged re-observation, not a duplicate source —
+  test("a shared channel yields one source via a multi-token pool (ADR-0042)", async () => {
+    // A Grid-shared channel is one flat `channels` entry; whichever pool token
+    // fetches it, the canonical externalId (`slack:C1:<ts>`) keys one source —
     // the store-level invariant the owner-election removal rests on.
     const message = { ts: "1700000000.000100", text: "shared grid channel", user: "U1" };
     const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "TA", channels: ["C1"] },
-          beta: { team: "TB", channels: ["C1"] },
-        },
-      },
+      { channels: ["C1"] },
       {
         clientFactory: () => ({
           conversations: {
@@ -91,18 +86,17 @@ describe("Slack: sync → projection → FTS", () => {
           },
         }),
         usersTransport: async () => ({ ok: true, user: { name: "U1" } }),
+        // Keep the multi-token reachability sweep off the network in tests.
+        conversationsTransport: async () => {
+          throw new Error("offline");
+        },
       },
     );
     const out = await syncConnector(store, connector, {
-      secrets: {
-        env: {
-          SUASOR_CONNECTOR_SLACK_ACME_TOKEN: "tok-a",
-          SUASOR_CONNECTOR_SLACK_BETA_TOKEN: "tok-b",
-        },
-      },
+      secrets: { env: { SUASOR_CONNECTOR_SLACK_TOKENS: "tok-a,tok-b" } },
     });
-    // One source observed, the double fetch absorbed as unchanged.
-    expect(out).toMatchObject({ observed: 1, unchanged: 1 });
+    // One source observed (single fetch — the channel is listed once).
+    expect(out).toMatchObject({ observed: 1, unchanged: 0 });
     const hits = searchSources(store.connection.sqlite, "grid").hits;
     expect(hits).toHaveLength(1);
     expect(hits[0]?.externalId).toBe("slack:C1:1700000000.000100");

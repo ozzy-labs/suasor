@@ -91,15 +91,15 @@ describe("slack List ingestion (ADR-0036 §6 read-back)", () => {
     expect(records).toHaveLength(0);
   });
 
-  test("ingests lists from a named workspace using its own token", async () => {
+  test("ingests lists via a pool token (ADR-0042)", async () => {
     const seen: string[] = [];
-    const ctxMulti: SyncContext = {
+    const ctxPool: SyncContext = {
       cursor: null,
-      secret: async (name) => (name === "acme:token" ? "tok-acme" : null),
+      secret: async (name) => (name === "tokens" ? "tok-acme" : null),
       onWarn: () => {},
     };
     const connector = createSlackConnector(
-      { workspaces: { acme: { team: "T", channels: [], lists: ["LA"] } } },
+      { channels: [], lists: ["LA"] },
       {
         clientFactory: (token) => {
           seen.push(token);
@@ -109,33 +109,29 @@ describe("slack List ingestion (ADR-0036 §6 read-back)", () => {
         },
       },
     );
-    const records = await collect(connector.sync(ctxMulti));
-    // The List ingest used the named workspace's own token (only token resolvable).
+    const records = await collect(connector.sync(ctxPool));
     expect(seen.every((t) => t === "tok-acme")).toBe(true);
     expect(records.map((r) => r.externalId)).toEqual(["slack:list:LA:item:R1"]);
   });
 
-  test("a named workspace with no token has its lists skipped (warn, not abort)", async () => {
+  test("a list that fails on every attempted token warns, not aborts", async () => {
     const warnings: string[] = [];
-    // beta resolves a token, so the run proceeds (#385 throws only when NO
-    // workspace has one); acme's lists are skipped with the per-workspace warn.
-    const ctxNoTok: SyncContext = {
+    const ctxPool: SyncContext = {
       cursor: null,
-      secret: async (name) => (name === "beta:token" ? "tok-beta" : null),
+      secret: async (name) => (name === "tokens" ? "tok-a" : null),
       onWarn: (m) => warnings.push(m),
     };
+    const failing = fakeClient([]);
+    failing.slackListsItems = async () => {
+      throw new Error("list_not_found");
+    };
     const connector = createSlackConnector(
-      {
-        workspaces: {
-          acme: { team: "T", channels: [], lists: ["LA"] },
-          beta: { team: "TB", channels: [] },
-        },
-      },
-      { clientFactory: () => fakeClient([{ items: [{ id: "R1" }] }]) },
+      { channels: [], lists: ["LA"] },
+      { clientFactory: () => failing },
     );
-    const records = await collect(connector.sync(ctxNoTok));
+    const records = await collect(connector.sync(ctxPool));
     expect(records).toHaveLength(0);
-    expect(warnings.some((w) => /lists skipped: no token/.test(w))).toBe(true);
+    expect(warnings.some((w) => /slack list 'LA' failed/.test(w))).toBe(true);
   });
 
   // "no token for ANY workspace → throw" (including a lists-only config) is now

@@ -52,7 +52,7 @@ Aggregates the event log by `type` (`COUNT(*) GROUP BY type`, read-only) and pri
      ```
 
    - See the [connectors guide](connectors.md) for details. Hand-writing `owner/repo` and the like invites a typo that silently yields 0 items.
-   - **A missing Slack token does not fall under this section (exit 0 with 0 items)** — when no workspace has a token, `slack sync` errors with `no token configured for any workspace` and **exits 1** regardless of whether channels are set ([#385](https://github.com/ozzy-labs/suasor/issues/385)). Set a token with `suasor slack auth set` (or the env override `SUASOR_CONNECTOR_SLACK_TOKEN`), then fill in channel ids with `suasor slack conversations`.
+   - **A missing Slack token pool does not fall under this section (exit 0 with 0 items)** — when the pool is empty, `slack sync` errors with `no token pool configured` and **exits 1** regardless of whether channels are set ([#385](https://github.com/ozzy-labs/suasor/issues/385)). Set the pool with `suasor slack auth set` (or the env override `SUASOR_CONNECTOR_SLACK_TOKENS`, newline/comma separated), then fill in channel ids with `suasor slack conversations`.
 2. **cursor is already up to date** — incremental sync only ingests what is newer than the saved cursor. If there is nothing new, 0 items is normal. To rescan everything, use `--full`:
 
    ```bash
@@ -60,7 +60,7 @@ Aggregates the event log by `type` (`COUNT(*) GROUP BY type`, read-only) and pri
    ```
 
 3. **the connector is not enabled** — the `[connectors.<name>]` slice is missing or `enabled = false`. Check with `suasor doctor`'s connectors check (including the dangling-credential WARN) and `suasor connectors list`.
-4. **check whether a partial failure is hidden behind exit 0** — a connector with multiple ingest units inside it (multi-workspace Slack, etc.) reports a partial failure via `SyncOutcome.partialFailure` and **exits 1** ([ADR-0014](../adr/0014-slack-multi-workspace.md)). Check the per-workspace summary in the human-readable output (`workspaces: acme=ok, beta=failed ...`).
+4. **check whether a partial failure is hidden behind exit 0** — a connector with multiple ingest units inside it (Slack's token pool, etc.) reports a partial failure via `SyncOutcome.partialFailure` and **exits 1** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md)). Check the per-token summary in the human-readable output (`tokens: T0ACME "Acme"=ok, #2=dead ...`).
 
 ## Nothing in search (FTS is fine but recall is empty)
 
