@@ -62,6 +62,7 @@ import {
   SlackResolveNamesCommand,
   SlackStatusCommand,
 } from "./commands/slack.ts";
+import { SlackFollowCommand, SlackUnfollowCommand } from "./commands/slack-follow.ts";
 import {
   SourceForgetCommand,
   SourceListCommand,
@@ -112,6 +113,8 @@ export function registeredCommandClasses(): CommandClass[] {
     SlackAuthSetCommand,
     SlackAuthTestCommand,
     SlackConversationsCommand,
+    SlackFollowCommand,
+    SlackUnfollowCommand,
     SlackStatusCommand,
     SlackCursorResetCommand,
     SlackCursorBackfillCommand,
