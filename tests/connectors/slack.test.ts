@@ -73,7 +73,7 @@ describe("SlackConnectorConfig", () => {
 });
 
 describe("Slack connector — record mapping (ADR-0007 identity)", () => {
-  test("maps messages to slack_message with team+channel-prefixed ids", async () => {
+  test("maps messages to slack_message with canonical channel-prefixed ids (ADR-0042)", async () => {
     const { client } = fakeSlack([
       {
         messages: [
@@ -95,7 +95,7 @@ describe("Slack connector — record mapping (ADR-0007 identity)", () => {
     );
     const records = await collect(connector.sync(ctx()));
     expect(records).toHaveLength(1);
-    expect(records[0]?.externalId).toBe("slack:T1:C1:1700000000.000100");
+    expect(records[0]?.externalId).toBe("slack:C1:1700000000.000100");
     expect(records[0]?.sourceType).toBe("slack_message");
     expect(records[0]?.body).toBe("hello team");
     expect(records[0]?.meta).toMatchObject({ team: "T1", channel: "C1", user: "U1" });
@@ -355,7 +355,7 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
     expect(workspaceSecretName("acme")).toBe("acme:token");
   });
 
-  test("syncs each workspace with its own token and team-prefixed ids", async () => {
+  test("syncs each workspace with its own token (canonical channel ids, ADR-0042)", async () => {
     const tokens: string[] = [];
     const { client } = fakeSlack([
       { messages: [{ ts: "10.000000" }] }, // acme → C1
@@ -384,10 +384,7 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
       ),
     );
     expect(tokens).toEqual(["tok-a", "tok-b"]);
-    expect(records.map((r) => r.externalId)).toEqual([
-      "slack:TA:C1:10.000000",
-      "slack:TB:C2:20.000000",
-    ]);
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:10.000000", "slack:C2:20.000000"]);
     const result = await connector.finalize?.();
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
       acme: { C1: "10.000000" },
@@ -422,7 +419,7 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
       ),
     );
     expect(tokens).toEqual(["tok-b"]); // acme never built a client (isolation)
-    expect(records.map((r) => r.externalId)).toEqual(["slack:TB:C2:30.000000"]);
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C2:30.000000"]);
     expect(warns.some((w) => w.includes("acme") && w.includes("--workspace acme"))).toBe(true);
   });
 
@@ -505,7 +502,7 @@ describe("Slack connector — multi-workspace (ADR-0014)", () => {
         }),
       ),
     );
-    expect(records.map((r) => r.externalId)).toEqual(["slack:TA:C1:50.000000"]); // acme synced
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C1:50.000000"]); // acme synced
     expect(warns.some((w) => w.includes("beta") && w.includes("failed mid-sync"))).toBe(true);
     const result = await connector.finalize?.();
     // acme advanced; beta's prior cursor preserved (failure is not a reset).
@@ -674,7 +671,7 @@ describe("Slack connector — per-workspace summary + partial-failure flag (ADR-
   });
 });
 
-describe("Slack connector — shared-channel de-dup (ADR-0038 Layer 1)", () => {
+describe("Slack connector — shared-channel natural collapse (ADR-0042)", () => {
   /** A client that returns one message (keyed by `ts`) per channel from `byChannel`. */
   function byChannelClient(byChannel: Record<string, Msg[]>): {
     client: SlackClientLike;
@@ -695,7 +692,7 @@ describe("Slack connector — shared-channel de-dup (ADR-0038 Layer 1)", () => {
     return { client, historyChannels };
   }
 
-  test("a shared channel is ingested only under its owner alias (no duplicate source)", async () => {
+  test("a shared channel collapses to the same canonical externalId under every alias", async () => {
     const warns: string[] = [];
     // C1 is listed by both aliases (a shared Grid channel); C2 only by beta.
     const { client, historyChannels } = byChannelClient({
@@ -720,20 +717,19 @@ describe("Slack connector — shared-channel de-dup (ADR-0038 Layer 1)", () => {
         }),
       ),
     );
-    // C1 ingested once, under owner "acme" (lexicographically smallest); the
-    // non-owner "beta" never yields C1. C2 (non-shared) ingested under beta.
-    expect(records.map((r) => r.externalId).sort()).toEqual([
-      "slack:TA:C1:10.000000",
-      "slack:TB:C2:20.000000",
-    ]);
-    // The non-owner alias never even fetched the shared channel's history.
-    expect(historyChannels.filter((c) => c === "C1")).toEqual(["C1"]);
-    // One aggregated warn naming the shared channel and its owner.
-    const sharedWarn = warns.find((w) => w.includes("shared across"));
-    expect(sharedWarn).toContain("C1 shared across [acme, beta] → ingesting under 'acme'");
+    // No owner election (ADR-0042): both aliases fetch C1 (a redundant fetch is
+    // allowed) and both observations carry the SAME canonical externalId, so
+    // the store's fingerprint idempotency collapses them to one source.
+    expect(historyChannels.filter((c) => c === "C1")).toEqual(["C1", "C1"]);
+    const ids = records.map((r) => r.externalId);
+    expect(ids.filter((id) => id === "slack:C1:10.000000")).toHaveLength(2);
+    expect(ids).toContain("slack:C2:20.000000");
+    expect(new Set(ids)).toEqual(new Set(["slack:C1:10.000000", "slack:C2:20.000000"]));
+    // No shared-channel warn: the overlap is not a correctness issue any more.
+    expect(warns.some((w) => w.includes("shared across"))).toBe(false);
   });
 
-  test("cursor: only the owner alias holds the shared channel's cursor", async () => {
+  test("cursor: every alias listing a shared channel keeps its own cursor", async () => {
     const { client } = byChannelClient({
       C1: [{ ts: "10.000000" }],
       C2: [{ ts: "20.000000" }],
@@ -757,35 +753,12 @@ describe("Slack connector — shared-channel de-dup (ADR-0038 Layer 1)", () => {
       ),
     );
     const result = await connector.finalize?.();
-    // Owner "acme" holds C1's cursor; "beta" holds only its non-shared C2.
+    // Both aliases advance their own C1 cursor (no owner-only holding); a
+    // duplicated listing costs a redundant fetch, nothing more (ADR-0042).
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({
       acme: { C1: "10.000000" },
-      beta: { C2: "20.000000" },
+      beta: { C1: "10.000000", C2: "20.000000" },
     });
-  });
-
-  test("a non-owner alias listing only shared channels prunes to no cursor entry", async () => {
-    const { client } = byChannelClient({ C1: [{ ts: "10.000000" }] });
-    const connector = createSlackConnector(
-      {
-        workspaces: {
-          beta: { team: "TB", channels: ["C1"] }, // shared, non-owner → nothing
-          acme: { team: "TA", channels: ["C1"] }, // owner
-        },
-      },
-      { clientFactory: () => client },
-    );
-    await collect(
-      connector.sync(
-        ctx({
-          secret: async () => "tok",
-          onWarn: () => {},
-        }),
-      ),
-    );
-    const result = await connector.finalize?.();
-    // "beta" owns nothing → pruned from the cursor entirely (empty alias dropped).
-    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ acme: { C1: "10.000000" } });
   });
 
   test("no warn and unchanged ingest when channels are not shared", async () => {
@@ -812,8 +785,8 @@ describe("Slack connector — shared-channel de-dup (ADR-0038 Layer 1)", () => {
       ),
     );
     expect(records.map((r) => r.externalId).sort()).toEqual([
-      "slack:TA:C1:10.000000",
-      "slack:TB:C2:20.000000",
+      "slack:C1:10.000000",
+      "slack:C2:20.000000",
     ]);
     expect(warns.some((w) => w.includes("shared across"))).toBe(false);
   });
@@ -862,8 +835,8 @@ describe("Slack connector — not_in_channel per-channel warn (ADR-0011, #165)",
     const records = await collect(connector.sync(ctx({ onWarn: (m: string) => warns.push(m) })));
     // The two reachable channels ingested; the unreachable one is skipped.
     expect(records.map((r) => r.externalId)).toEqual([
-      "slack:T1:C1:100.000000",
-      "slack:T1:C3:200.000000",
+      "slack:C1:100.000000",
+      "slack:C3:200.000000",
     ]);
     // Exactly one aggregated warn naming C2 + the reason.
     const warn = warns.find((w) => w.includes("unreachable"));
@@ -1024,9 +997,9 @@ describe("Slack connector — thread replies (ADR-0015)", () => {
     );
     const records = await collect(connector.sync(ctx()));
     expect(records.map((r) => r.externalId)).toEqual([
-      "slack:T1:C1:100.000000", // parent, once (from history)
-      "slack:T1:C1:101.000000",
-      "slack:T1:C1:102.000000",
+      "slack:C1:100.000000", // parent, once (from history)
+      "slack:C1:101.000000",
+      "slack:C1:102.000000",
     ]);
     expect(records[1]?.meta).toMatchObject({ threadTs: "100.000000" });
     expect(replyCalls).toEqual([{ channel: "C1", ts: "100.000000", oldest: undefined }]);
@@ -1114,8 +1087,8 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
     );
     const rec1 = await collect(c1.sync(ctx()));
     expect(rec1.map((r) => r.externalId)).toEqual([
-      "slack:T1:C1:1799990000.000000",
-      "slack:T1:C1:1799990100.000000",
+      "slack:C1:1799990000.000000",
+      "slack:C1:1799990100.000000",
     ]);
     const cursor1 = JSON.parse((await c1.finalize?.())?.cursor ?? "{}");
     // Both the channel cursor and the per-thread `<channel>#<thread_ts>` mark.
@@ -1138,14 +1111,14 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
     const rec2 = await collect(c2.sync(ctx({ cursor: JSON.stringify(cursor1) })));
     // The later top-level message AND the re-polled reply are both ingested.
     expect(rec2.map((r) => r.externalId)).toEqual([
-      "slack:T1:C1:1799995000.000000",
-      "slack:T1:C1:1799996000.000000",
+      "slack:C1:1799995000.000000",
+      "slack:C1:1799996000.000000",
     ]);
     // The re-poll targets the thread with the saved mark as the exclusive floor.
     expect(run2.replyCalls).toEqual([{ channel: "C1", ts: P, oldest: R1 }]);
     // The captured reply carries its mention body + thread meta, so a `<@you>`
     // mention in a thread reply now reaches `slack.demand.list` (ADR-0012).
-    const reply = rec2.find((r) => r.externalId === "slack:T1:C1:1799996000.000000");
+    const reply = rec2.find((r) => r.externalId === "slack:C1:1799996000.000000");
     expect(reply?.body).toContain("<@U0SELF>");
     expect(reply?.meta).toMatchObject({ threadTs: P });
     // The thread mark advances to the newest reply for the next run.

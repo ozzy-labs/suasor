@@ -16,7 +16,46 @@
 
 import { secretEnvName } from "../secrets.ts";
 import { slackFetch } from "./_fetch.ts";
-import { channelOwnership } from "./dedup.ts";
+/**
+ * Collapse a multi-workspace sweep by global channel id (display hygiene).
+ *
+ * With the canonical externalId (`slack:<channel>:<ts>`, ADR-0042) a channel
+ * listed under several workspaces ingests identically wherever it is configured
+ * — there is no owner election. Discovery still lists each shared channel once
+ * so the operator is not shown (or does not paste) the same id twice: the row /
+ * config entry is **placed** under the lexicographically smallest alias purely
+ * for deterministic display, and the other aliases are annotated. Placement has
+ * no sync-side meaning.
+ */
+export function collapseByChannelId(
+  entries: readonly { alias: string; channels: readonly string[] }[],
+): {
+  /** channel id → the alias whose block displays it (smallest alias, stable). */
+  placement: Map<string, string>;
+  /** Only the ≥2-alias channels: channel id → every alias listing it, ascending. */
+  shared: Map<string, string[]>;
+} {
+  const aliasesByChannel = new Map<string, Set<string>>();
+  for (const e of entries) {
+    for (const channel of e.channels) {
+      let set = aliasesByChannel.get(channel);
+      if (!set) {
+        set = new Set<string>();
+        aliasesByChannel.set(channel, set);
+      }
+      set.add(e.alias);
+    }
+  }
+  const placement = new Map<string, string>();
+  const shared = new Map<string, string[]>();
+  for (const [channel, aliasSet] of aliasesByChannel) {
+    const aliases = [...aliasSet].sort(); // code-unit order → deterministic
+    placement.set(channel, aliases[0] as string);
+    if (aliases.length > 1) shared.set(channel, aliases);
+  }
+  return { placement, shared };
+}
+
 import { defaultUsersTransport, resolveUserName, type SlackUsersTransport } from "./resolve.ts";
 
 /**
@@ -385,26 +424,23 @@ export interface WorkspaceConfigInput {
  * connector once, then one `[connectors.slack.workspaces.<alias>]` sub-section
  * per workspace carrying that workspace's `team` id + discovered `channels`.
  *
- * This is the multi-workspace analogue of {@link renderConfigBlock}: the flat
- * form lumps every id under a single `team`, which mis-prefixes ids from other
- * workspaces at sync time (identity is `slack:<team>:<channel>:<ts>`). Grouping
- * by workspace keeps each id under its own team.
+ * This is the multi-workspace analogue of {@link renderConfigBlock}: grouping by
+ * workspace keeps each id under the workspace that can actually reach it (each
+ * alias has its own token). The `team` label is a display facet only — the
+ * canonical identity (`slack:<channel>:<ts>`, ADR-0042) carries no team prefix.
  *
  * A channel shared across several workspaces (one global channel id listed by
- * more than one alias) is de-duplicated so pasting the whole block does not
- * double-configure it (ADR-0038 Layer 2): it is emitted as a real `channels`
- * entry only under its **owner** — the lexicographically smallest alias, per the
- * shared {@link channelOwnership} rule sync uses — and shown as a
- * `# <id> shared, owned by <owner-alias>` comment under every non-owner block.
+ * more than one alias) is listed once so pasting the whole block does not
+ * configure the same id twice: it is emitted as a real `channels` entry only
+ * under its display placement (smallest alias, {@link collapseByChannelId}) and
+ * shown as a `# <id> shared, listed under '<alias>'` comment elsewhere. With the
+ * canonical externalId (ADR-0042) a duplicated entry would only cost a redundant
+ * fetch — this de-dup is paste hygiene, not correctness.
  */
 export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfigInput[]): string[] {
-  // Owner = lexicographically smallest alias listing the channel (ADR-0038 §2),
-  // reusing the same helper sync/config-doctor use so discovery marks the exact
-  // same owner sync would ingest under. `shared` names the ≥2-alias channels.
-  const { owner, shared } = channelOwnership(
+  const { placement, shared } = collapseByChannelId(
     workspaces.map((ws) => ({ alias: ws.alias, channels: ws.conversations.map((c) => c.id) })),
   );
-  const sharedOwner = new Map(shared.map((s) => [s.channel, s.owner]));
 
   const lines = ["[connectors.slack]", "enabled = true"];
   for (const ws of workspaces) {
@@ -424,12 +460,11 @@ export function renderWorkspacesConfigBlock(workspaces: readonly WorkspaceConfig
     lines.push("# channels are ids (C…/G…/D…), not names — the # comment is just a label");
     lines.push("channels = [");
     for (const c of ws.conversations) {
-      // A shared channel is owned by exactly one alias; under any other alias it
-      // is a comment, not an entry, so pasting every block ingests it once
-      // (owner-wins, ADR-0038 Layer 2). Non-shared channels are unaffected —
-      // their owner is their sole alias, so the `owner === ws.alias` test passes.
-      if (sharedOwner.has(c.id) && owner.get(c.id) !== ws.alias) {
-        lines.push(`  # ${c.id} shared, owned by ${owner.get(c.id)}  # ${c.displayName}`);
+      // A shared channel appears as a real entry only under its display
+      // placement; elsewhere it is a comment so the pasted block lists each id
+      // once (paste hygiene — ingest would collapse either way, ADR-0042).
+      if (shared.has(c.id) && placement.get(c.id) !== ws.alias) {
+        lines.push(`  # ${c.id} shared, listed under '${placement.get(c.id)}'  # ${c.displayName}`);
       } else {
         lines.push(`  "${c.id}",  # ${c.displayName}`);
       }

@@ -471,7 +471,7 @@ describe("suasor slack conversations — network seam", () => {
     expect(byId.C_B).toBe("T02");
   });
 
-  test("a channel shared across workspaces is de-duplicated + marked in the listing (ADR-0038)", async () => {
+  test("a channel shared across workspaces is collapsed + marked in the listing (ADR-0042)", async () => {
     installFetch((url, params) => {
       if (url.includes("auth.test"))
         return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };
@@ -518,13 +518,13 @@ describe("suasor slack conversations — network seam", () => {
     expect(out).toContain("(shared across [acme, beta])");
     // Owner = smallest alias = "acme": real entry there, comment under beta.
     expect(out).toContain('"C_SHARED",  # #cross');
-    expect(out).toContain("# C_SHARED shared, owned by acme");
+    expect(out).toContain("# C_SHARED shared, listed under 'acme'");
     // Both workspace-private channels still surface untouched.
     expect(out).toContain("C_A");
     expect(out).toContain("C_B");
   });
 
-  test("multi-workspace --json adds sharedAcross for shared channels, omits it otherwise (ADR-0038)", async () => {
+  test("multi-workspace --json adds sharedAcross for shared channels, omits it otherwise (ADR-0042)", async () => {
     installFetch((url, params) => {
       if (url.includes("auth.test"))
         return { headers: { "x-oauth-scopes": "channels:read" }, body: ORG_AUTH };

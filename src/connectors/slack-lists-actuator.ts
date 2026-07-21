@@ -10,7 +10,8 @@
  *
  * - **identity** — externalId is `slack:list:<listId>:item:<rowId>`. The literal
  *   `list` second segment keeps it distinct from the read connector's
- *   `slack:<team>:<channel>:<ts>` message ids.
+ *   `slack:<channel>:<ts>` message ids (canonical, ADR-0042; list ids `L…` and
+ *   channel ids `C…/G…/D…` never collide either).
  * - **idempotency** — primarily the suasor layer's `published_external_id`. When
  *   `slackMarkerColumnId` is configured, the marker is stamped there and scanned
  *   (best-effort, first page) to absorb publish RPC retries.

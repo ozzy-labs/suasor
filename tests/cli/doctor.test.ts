@@ -451,7 +451,7 @@ describe("suasor doctor", () => {
   // one workspace alias and warns which owner will ingest it (early detection,
   // without running a sync). The owner rule (lexicographically smallest alias)
   // is shared with sync via `channelOwnership`.
-  test("shared Slack channel across aliases is a warning naming the owner (ADR-0038)", async () => {
+  test("a channel duplicated across aliases emits no warning (ADR-0042 natural collapse)", async () => {
     await run(["init"]);
     await writeConfig(
       [
@@ -465,22 +465,13 @@ describe("suasor doctor", () => {
       ].join("\n"),
     );
     const { code, out } = await run(["doctor", "--json"]);
-    // Shared-channel config is a warning, not an error → still exits 0.
     expect(code).toBe(0);
     const report = JSON.parse(out) as DoctorReport;
+    // The owner-wins dedup layers were dropped (ADR-0042): the canonical
+    // externalId collapses a duplicated listing at ingest, so doctor no longer
+    // flags shared channels — a duplicate is a redundant fetch, not a defect.
     const shared = report.checks.filter((c) => c.name === "slack" && c.status === "warn");
-    // Exactly one shared channel (C123); the alias-exclusive channels are quiet.
-    expect(shared).toHaveLength(1);
-    expect(shared[0]?.detail).toContain("C123");
-    // Both aliases sharing it are named...
-    expect(shared[0]?.detail).toContain("bp");
-    expect(shared[0]?.detail).toContain("employees");
-    // ...and the owner is the lexicographically smallest alias ('bp').
-    expect(shared[0]?.detail).toContain("only owner 'bp'");
-    expect(shared[0]?.detail).toContain("ADR-0038");
-    // Non-shared channels never surface as a shared-channel warning.
-    expect(shared.some((c) => c.detail.includes("C_EMP_ONLY"))).toBe(false);
-    expect(shared.some((c) => c.detail.includes("C_BP_ONLY"))).toBe(false);
+    expect(shared).toHaveLength(0);
   });
 
   test("no shared Slack channel: no slack warning (ADR-0038)", async () => {

@@ -362,15 +362,13 @@ export class SlackConversationsCommand extends Command {
 
     const [
       { testToken },
-      { listConversations, renderConfigBlock, renderWorkspacesConfigBlock },
+      { listConversations, renderConfigBlock, renderWorkspacesConfigBlock, collapseByChannelId },
       { listTeams, workspaceAliases },
-      { channelOwnership },
       { createProgress },
     ] = await Promise.all([
       import("../../connectors/slack/auth.ts"),
       import("../../connectors/slack/conversations.ts"),
       import("../../connectors/slack/teams.ts"),
-      import("../../connectors/slack/dedup.ts"),
       import("../progress.ts"),
     ]);
 
@@ -462,17 +460,16 @@ export class SlackConversationsCommand extends Command {
       }
       progress.finish();
 
-      // Shared-channel de-dup / marking for the discovery listing (ADR-0038
-      // Layer 2). On a multi-workspace sweep the same global channel id can be
-      // listed under several workspaces; compute the deterministic owner (the
-      // lexicographically smallest alias, the same rule sync uses) so the listing
-      // shows each shared channel once (under its owner) and marks which aliases
-      // it spans. Single-workspace / --team-id sweeps have no cross-workspace
-      // duplication, so `displayed` stays the raw `conversations` there.
+      // Collapse the multi-workspace sweep by global channel id (display
+      // hygiene). With the canonical externalId (ADR-0042) a shared channel
+      // ingests identically wherever it is configured — the listing just shows
+      // it once (placed under the smallest alias, purely for stable display)
+      // and marks which aliases it spans. Single-workspace / --team-id sweeps
+      // have no cross-workspace duplication, so `displayed` stays raw there.
       const aliasOfRow = (c: SlackConversation): string =>
         (c.teamId && aliasByTeam.get(c.teamId)) || c.teamId || "";
-      const ownership = multi
-        ? channelOwnership(
+      const collapsed = multi
+        ? collapseByChannelId(
             teams.map((t) => ({
               alias: aliasByTeam.get(t.id) ?? t.id,
               channels: conversations.filter((c) => c.teamId === t.id).map((c) => c.id),
@@ -481,16 +478,13 @@ export class SlackConversationsCommand extends Command {
         : null;
       // channel id → the aliases it is shared across (ascending), only for the
       // ≥2-alias channels; drives the `sharedAcross` JSON field + text note.
-      const sharedAliases = new Map<string, string[]>(
-        ownership?.shared.map((s) => [s.channel, s.aliases]) ?? [],
-      );
-      // The de-duplicated listing: keep one row per channel id — the owner's.
-      // A non-shared channel's owner is its sole alias, so its row is always
-      // kept; a shared channel keeps only the owner alias's row (the others are
-      // dropped from the listing but still surface as owner-comments in the
-      // per-workspace config block below).
-      const displayed = ownership
-        ? conversations.filter((c) => ownership.owner.get(c.id) === aliasOfRow(c))
+      const sharedAliases = collapsed?.shared ?? new Map<string, string[]>();
+      // The collapsed listing: keep one row per channel id — its placement's.
+      // A non-shared channel is placed under its sole alias, so its row is
+      // always kept; a shared channel keeps one row (the others still surface
+      // as comments in the per-workspace config block below).
+      const displayed = collapsed
+        ? conversations.filter((c) => collapsed.placement.get(c.id) === aliasOfRow(c))
         : conversations;
 
       // --team-id is honoured by Slack only for org-level (org-wide app) tokens;
@@ -509,9 +503,9 @@ export class SlackConversationsCommand extends Command {
 
       if (this.json) {
         // Additive, back-compatible per-row fields: `lastSelfPost` (engagement
-        // sort) and `sharedAcross` (the aliases a shared channel spans, ADR-0038
-        // Layer 2). Both are omitted when absent so the single-workspace,
-        // non-shared shape is byte-for-byte unchanged for existing consumers.
+        // sort) and `sharedAcross` (the aliases a shared channel spans,
+        // ADR-0042 display collapse). Both are omitted when absent so the
+        // single-workspace, non-shared shape is byte-for-byte unchanged.
         const withEngagement = displayed.map((c) => {
           const sharedAcross = sharedAliases.get(c.id);
           if (!lastSelfPost && !sharedAcross) return c;
@@ -570,8 +564,8 @@ export class SlackConversationsCommand extends Command {
         // In a multi-workspace sweep, label each row with its workspace alias so
         // it is clear which Grid workspace a channel belongs to (Issue #350).
         const wsLabel = multi && c.teamId ? `  [${aliasByTeam.get(c.teamId) ?? c.teamId}]` : "";
-        // A shared channel is listed once (under its owner); mark the aliases it
-        // spans so the operator sees it is Grid-shared, not duplicated (ADR-0038).
+        // A shared channel is listed once; mark the aliases it spans so the
+        // operator sees it is Grid-shared, not duplicated (ADR-0042).
         const sharedAcross = sharedAliases.get(c.id);
         const sharedNote = sharedAcross ? `  (shared across [${sharedAcross.join(", ")}])` : "";
         this.context.stdout.write(
