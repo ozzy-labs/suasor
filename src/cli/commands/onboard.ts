@@ -839,7 +839,8 @@ export class OnboardCommand extends Command {
     const current = (await file.exists()) ? await file.text() : "";
 
     // Non-destructive: an existing [connectors.slack] (including enabled = false)
-    // is never rewritten (ADR-0029 §3).
+    // is never rewritten (ADR-0029 §3). Add channels later with
+    // `suasor slack follow --suggest`.
     if (configAppend.hasConnectorSlice(current, SLACK_CONNECTOR)) {
       report.configAppended = false;
       report.configSource = "skipped";
@@ -851,25 +852,48 @@ export class OnboardCommand extends Command {
       return;
     }
 
-    // Discovery leaf: enumerate the joined channels the token can see and render
-    // the paste-ready block. Needs the team id (the id prefix in the block).
+    // Discovery leaf: enumerate the joined channels the token can see. The
+    // apply is suggest-and-confirm (ADR-0042 決定 6 / #472): interactive runs
+    // show the list and take ONE confirmation; non-interactive / --json runs
+    // apply directly (the wizard invocation itself is the explicit consent —
+    // the --yes-equivalent). The write goes through the same surgical editor
+    // `slack follow` uses (`addSlackChannels`), one code path for both.
     const discovery = token && teamId ? await this.discoverSlackConfigBlock(token, teamId) : null;
-    if (discovery && "configBlock" in discovery) {
-      const result = configAppend.appendConnectorBlock(
-        current,
-        SLACK_CONNECTOR,
-        discovery.configBlock,
-      );
-      if (result.appended) await Bun.write(configPath, result.toml);
-      report.configAppended = result.appended;
-      report.configSource = "discovery";
-      report.discovered = discovery.count;
-      if (!this.json) {
+    if (discovery && "entries" in discovery) {
+      let apply = true;
+      if (isInteractive(this.context.stdin) && !this.json && discovery.entries.length > 0) {
         this.context.stdout.write(
-          `slack: discovered ${discovery.count} joined channel(s); appended [connectors.slack] to config.toml.\n`,
+          `slack: ${discovery.entries.length} joined channel(s) not yet configured:\n`,
         );
+        for (const e of discovery.entries) {
+          this.context.stdout.write(`  ${e.id}${e.label ? `  ${e.label}` : ""}\n`);
+        }
+        this.context.stderr.write("Add these to [connectors.slack].channels? [Y/n] ");
+        const { readPlainLine } = await import("../read-secret.ts");
+        const answer = (await readPlainLine(this.context.stdin, this.context.stderr))
+          .trim()
+          .toLowerCase();
+        this.context.stderr.write("\n");
+        apply = answer === "" || answer === "y" || answer === "yes";
       }
-      return;
+      if (apply) {
+        const { addSlackChannels } = await import("../slack-channels-edit.ts");
+        const result = addSlackChannels(current, discovery.entries);
+        if (result.added.length > 0) await Bun.write(configPath, result.toml);
+        report.configAppended = result.added.length > 0;
+        report.configSource = "discovery";
+        report.discovered = discovery.entries.length;
+        if (!this.json) {
+          this.context.stdout.write(
+            `slack: discovered ${discovery.entries.length} joined channel(s); appended [connectors.slack] to config.toml.\n`,
+          );
+        }
+        return;
+      }
+      // Declined: fall through to the placeholder template with a follow hint.
+      this.context.stderr.write(
+        "slack: channel selection skipped — add channels later with `suasor slack follow --suggest`.\n",
+      );
     }
 
     // No token / probe failed → minimal placeholder template + reason on stderr.
@@ -882,12 +906,17 @@ export class OnboardCommand extends Command {
         "slack: appended [connectors.slack] (enabled = true) to config.toml.\n",
       );
     }
-    const reason = discovery?.error ?? "no token resolved for slack";
-    this.context.stderr.write(
-      `slack: discovery skipped (${reason}); wrote the placeholder slice — ` +
-        "edit it by hand or re-run `suasor slack conversations`.\n",
-    );
-    discoverySkips.set(SLACK_CONNECTOR, "conversations");
+    const reason =
+      discovery && "error" in discovery ? discovery.error : "no token resolved for slack";
+    // A declined interactive confirmation also lands here; its own hint (`slack
+    // follow --suggest`) was already printed above.
+    if (!discovery || "error" in discovery) {
+      this.context.stderr.write(
+        `slack: discovery skipped (${reason}); wrote the placeholder slice — ` +
+          "edit it by hand or re-run `suasor slack conversations`.\n",
+      );
+      discoverySkips.set(SLACK_CONNECTOR, "conversations");
+    }
   }
 
   /**
@@ -902,19 +931,18 @@ export class OnboardCommand extends Command {
    */
   private async discoverSlackConfigBlock(
     token: string,
-    teamId: string,
-  ): Promise<{ configBlock: readonly string[]; count: number } | { error: string }> {
-    const { listConversations, renderConfigBlock } = await import(
-      "../../connectors/slack/conversations.ts"
-    );
+    _teamId: string,
+  ): Promise<{ entries: { id: string; label?: string }[] } | { error: string }> {
+    const { listConversations } = await import("../../connectors/slack/conversations.ts");
     try {
       const result = await listConversations(token, { types: ["public", "private"] });
       const joined = result.conversations.filter((c) => c.isMember);
-      const configBlock = renderConfigBlock(teamId, {
-        conversations: joined,
-        missingScopes: result.missingScopes,
-      });
-      return { configBlock, count: joined.length };
+      return {
+        entries: joined.map((c) => ({
+          id: c.id,
+          ...(c.displayName ? { label: c.displayName } : {}),
+        })),
+      };
     } catch (cause) {
       return { error: cause instanceof Error ? cause.message : String(cause) };
     }

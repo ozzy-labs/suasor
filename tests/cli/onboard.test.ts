@@ -537,8 +537,9 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
       const toml = await Bun.file(join(dir, "config.toml")).text();
       expect(toml).toContain("[connectors.slack]");
       expect(toml).toContain("enabled = true");
-      expect(toml).toContain("# workspace: T0ACME");
-      expect(toml).toContain('"C0JOIN"');
+      // The slice goes through the same surgical editor `slack follow` uses
+      // (#472): the id is the entry, the name rides as a comment label.
+      expect(toml).toContain('"C0JOIN",  # #general');
       // The unjoined channel is not auto-configured.
       expect(toml).not.toContain("C0NOPE");
     } finally {
@@ -588,6 +589,30 @@ describe("suasor onboard — slack bridge (Issue #384 Phase 2/3)", () => {
       expect(toml).toContain("enabled = false");
       expect(toml).not.toContain("enabled = true");
       // Discovery must not run / write channels when the slice already exists.
+      expect(toml).not.toContain("C0JOIN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an interactive decline writes the placeholder and points at follow --suggest (#472)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_SLACK_TOKENS = "xoxb-env";
+    stubSlackApi({
+      publicChannels: [{ id: "C0JOIN", name: "general", is_member: true }],
+    });
+    try {
+      const { code, out, err } = await run(
+        ["onboard", "--connector", "slack", "--skip-auth", "--skip-sync"],
+        { configDir: dir, stdin: ttyStdin("n") },
+      );
+      expect(code).toBe(0);
+      // The suggestion list was shown, the decline skipped the channels…
+      expect(out).toContain("1 joined channel(s) not yet configured:");
+      expect(err).toContain("slack follow --suggest");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      // …and the placeholder slice (no channels) was written instead.
+      expect(toml).toContain("[connectors.slack]");
       expect(toml).not.toContain("C0JOIN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
