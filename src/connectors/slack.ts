@@ -295,6 +295,36 @@ export function looksLikeSlackChannelId(channel: string): boolean {
   return SLACK_CHANNEL_ID_PREFIX.test(channel.trim());
 }
 
+/**
+ * The `users.conversations` types the reachability sweep needs for the given
+ * configured channels (#470): derived from the id prefixes so a pool sweep never
+ * pages types no configured channel can be. `C…` covers public AND private
+ * (modern private channels use the C prefix), `G…` covers legacy private groups
+ * and group-DMs, `D…` covers DMs. An unrecognised prefix (already warned as a
+ * likely misconfiguration) falls back to all four types — the sweep is advisory
+ * ordering, so over-sweeping is safe and under-sweeping never excludes (the
+ * candidates fall back to the pool, ADR-0042 決定 3).
+ */
+export function sweepTypesForChannels(channels: readonly string[]): ConversationType[] {
+  const ALL: ConversationType[] = ["public", "private", "im", "mpim"];
+  const out = new Set<ConversationType>();
+  for (const channel of channels) {
+    const head = channel.trim().charAt(0).toUpperCase();
+    if (head === "C") {
+      out.add("public");
+      out.add("private");
+    } else if (head === "G") {
+      out.add("private");
+      out.add("mpim");
+    } else if (head === "D") {
+      out.add("im");
+    } else {
+      return ALL; // unknown prefix — sweep everything (safe fallback)
+    }
+  }
+  return ALL.filter((t) => out.has(t));
+}
+
 /** Shape of the message items we read (subset of the Slack response). */
 interface SlackMessageItem {
   ts: string;
@@ -829,9 +859,14 @@ class SlackConnector implements Connector {
     // pool skips the sweep entirely (the only token is the only candidate).
     const reach = new Map<TokenIdentity, Set<string> | null>();
     if (identities.length > 1) {
+      // Sweep only the conversation types the configured channels can be
+      // (derived from their id prefixes, #470) — no wasted paging over types
+      // with nothing configured. Rate limits ride the shared retry (ADR-0019).
+      const sweepTypes = sweepTypesForChannels(channels);
       for (const id of identities) {
         try {
           const { conversations } = await listConversations(id.token, {
+            types: sweepTypes,
             ...(this.conversationsTransport ? { transport: this.conversationsTransport } : {}),
           });
           reach.set(id, new Set(conversations.filter((c) => c.isMember).map((c) => c.id)));

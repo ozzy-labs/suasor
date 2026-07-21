@@ -14,6 +14,7 @@ import {
   type SlackClientLike,
   SlackConnectorConfig,
   serializeCursor,
+  sweepTypesForChannels,
   validateSlackSince,
 } from "../../src/connectors/slack.ts";
 
@@ -381,6 +382,20 @@ describe("Slack connector — non-id channel warn (#158)", () => {
   });
 });
 
+describe("sweepTypesForChannels (#470)", () => {
+  test("derives the sweep types from the configured id prefixes", () => {
+    expect(sweepTypesForChannels(["C1"])).toEqual(["public", "private"]);
+    expect(sweepTypesForChannels(["G1"])).toEqual(["private", "mpim"]);
+    expect(sweepTypesForChannels(["D1"])).toEqual(["im"]);
+    expect(sweepTypesForChannels(["C1", "D1"])).toEqual(["public", "private", "im"]);
+    expect(sweepTypesForChannels([])).toEqual([]);
+  });
+
+  test("an unrecognised prefix falls back to all four types (safe over-sweep)", () => {
+    expect(sweepTypesForChannels(["C1", "#general"])).toEqual(["public", "private", "im", "mpim"]);
+  });
+});
+
 describe("Slack connector — token pool (ADR-0042)", () => {
   /** A per-token client whose history returns the given messages per channel. */
   function tokenClient(
@@ -521,6 +536,36 @@ describe("Slack connector — token pool (ADR-0042)", () => {
     const warn = warns.find((w) => w.includes("unreachable"));
     expect(warn).toContain("C1 (not_in_channel)");
     expect(warn).toContain("no configured token can");
+  });
+
+  test("the reachability sweep only requests the types the config needs (#470)", async () => {
+    const sweptTypes = new Set<string>();
+    const transport = async (_token: string, params: Record<string, string>) => {
+      sweptTypes.add(params.types as string);
+      return { ok: true, channels: [] };
+    };
+    const mk = (teamId: string): SlackClientLike => ({
+      conversations: {
+        async history() {
+          return { messages: [] };
+        },
+        async replies() {
+          return { messages: [] };
+        },
+      },
+      authTest: async () => ({ ok: true, team: teamId, team_id: teamId }),
+    });
+    const connector = createSlackConnector(
+      // DM only → only the im type is swept (discovery is disabled so its
+      // public+private sweep does not muddy the capture).
+      { channels: ["D123"], discover_new: false },
+      {
+        clientFactory: (t) => (t === "tok-a" ? mk("TA") : mk("TB")),
+        conversationsTransport: transport,
+      },
+    );
+    await collect(connector.sync(poolCtx(["tok-a", "tok-b"], { onWarn: () => {} })));
+    expect([...sweptTypes]).toEqual(["im"]);
   });
 
   test("reachability sweep orders candidates: the member token fetches the channel", async () => {
