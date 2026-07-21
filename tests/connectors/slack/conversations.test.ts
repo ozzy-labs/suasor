@@ -332,8 +332,8 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
     expect(block).toContain("SUASOR_CONNECTOR_SLACK_BETA_EU_TOKEN");
   });
 
-  test("a shared channel is a real entry only under its owner, a comment elsewhere (ADR-0038)", () => {
-    // C1 is shared by both aliases; owner = lexicographically smallest = "acme".
+  test("a shared channel is a real entry only under its placement, a comment elsewhere (ADR-0042)", () => {
+    // C1 is shared by both aliases; placed under the smallest alias = "acme".
     const shared = {
       id: "C1",
       type: "public" as const,
@@ -358,19 +358,19 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
     const betaIdx = block.indexOf("[connectors.slack.workspaces.beta]");
     const acmeLines = block.slice(acmeIdx, betaIdx).join("\n");
     const betaLines = block.slice(betaIdx).join("\n");
-    // Owner block: C1 is a real quoted entry (ingested there), not a comment.
+    // Placement block: C1 is a real quoted entry, not a comment.
     expect(acmeLines).toContain('"C1",  # #cross');
-    expect(acmeLines).not.toContain("shared, owned by");
-    // Non-owner block: C1 is a comment attributing it to the owner, so pasting
-    // the whole block does not double-configure it (owner-wins).
-    expect(betaLines).toContain("# C1 shared, owned by acme");
+    expect(acmeLines).not.toContain("shared, listed under");
+    // Other block: C1 is a comment naming its placement, so pasting the whole
+    // block lists each id once (paste hygiene; ingest collapses either way).
+    expect(betaLines).toContain("# C1 shared, listed under 'acme'");
     expect(betaLines).not.toContain('"C1",');
     // Each workspace's non-shared channel stays a normal entry in its own block.
     expect(acmeLines).toContain('"C2",  # #a-only');
     expect(betaLines).toContain('"C9",  # #b-only');
   });
 
-  test("owner is the lexicographically smallest alias regardless of workspace order (ADR-0038 §2)", () => {
+  test("placement is the lexicographically smallest alias regardless of workspace order (ADR-0042)", () => {
     const shared = {
       id: "C1",
       type: "public" as const,
@@ -379,12 +379,12 @@ describe("conversations — renderWorkspacesConfigBlock (#350)", () => {
       isArchived: false,
       isMember: true,
     };
-    // Declare "zed" before "acme"; owner must still be "acme" (parser-order-independent).
+    // Declare "zed" before "acme"; placement must still be "acme" (order-independent).
     const block = renderWorkspacesConfigBlock([
       { teamId: "T02", alias: "zed", conversations: [shared] },
       { teamId: "T01", alias: "acme", conversations: [shared] },
     ]).join("\n");
-    expect(block).toContain("# C1 shared, owned by acme");
+    expect(block).toContain("# C1 shared, listed under 'acme'");
     expect(block).toContain('"C1",  # #cross');
   });
 });

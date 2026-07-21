@@ -46,7 +46,7 @@ describe("Slack: sync → projection → FTS", () => {
     expect(out.observed).toBe(1);
 
     const hit = searchSources(store.connection.sqlite, "rocket").hits[0];
-    expect(hit?.externalId).toBe("slack:T1:C1:1700000000.000100");
+    expect(hit?.externalId).toBe("slack:C1:1700000000.000100");
     expect(hit?.sourceType).toBe("slack_message");
 
     // Idempotent: same fingerprint → 0 observed, 0 updated on the second pass.

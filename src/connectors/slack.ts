@@ -12,8 +12,9 @@
  *   raised to a busier channel's `ts` and silently skip its own newer messages
  *   (ADR-0011). A bare-`ts` cursor from before this change is read as a legacy
  *   floor applied to every channel on the first run after upgrade.
- * - **identity** — `slack:<team>:<channel>:<ts>` (cross-source-unique,
- *   team+channel-prefixed, ADR-0007). `source_type` is `slack_message`.
+ * - **identity** — `slack:<channel>:<ts>` (canonical, ADR-0042: channel ids are
+ *   globally unique across Slack, so no team prefix — a channel shared across
+ *   workspaces collapses to one source lineage). `source_type` is `slack_message`.
  * - **import-clean** — `@slack/web-api` is **lazy-imported inside `sync`**, so
  *   building the connector / registry never pulls the SDK (ADR-0007, NFR-PRF-1).
  *   This module's top-level imports are limited to `zod` + the contract types.
@@ -38,7 +39,6 @@ import {
   listConversations,
   type SlackConversationsTransport,
 } from "./slack/conversations.ts";
-import { channelOwnership, formatSharedChannelWarn } from "./slack/dedup.ts";
 import {
   defaultUsersTransport,
   resolveUserName,
@@ -413,7 +413,11 @@ function toRecord(
   teamName?: string | null,
 ): SourceRecord {
   return {
-    externalId: `slack:${team}:${channel}:${item.ts}`,
+    // Canonical identity (ADR-0042): channel ids are globally unique across
+    // Slack, so the externalId carries no team prefix — the same message
+    // observed via any workspace/token collapses to one source. `team` stays a
+    // display facet under `meta` (ADR-0037 revision note).
+    externalId: `slack:${channel}:${item.ts}`,
     sourceType: "slack_message",
     body: item.text ?? "",
     // Slack `ts` is `<unix-seconds>.<microseconds>`; expose it as ISO 8601.
@@ -827,17 +831,11 @@ class SlackConnector implements Connector {
     const workspaces = allWorkspaces.filter((w) => w.channels.length > 0 || w.lists.length > 0);
     if (workspaces.length === 0) return;
 
-    // Shared-channel de-dup (ADR-0038 Layer 1): an Enterprise Grid channel listed
-    // by multiple workspace aliases has one globally-unique channel id, so each
-    // alias would otherwise ingest the same message as a separate source. Assign
-    // one deterministic owner alias (lexicographically smallest) per channel id;
-    // sync ingests each shared channel only under its owner and skips it on the
-    // non-owner aliases. Single-workspace / non-shared channels are owned by their
-    // sole alias, so their behaviour is unchanged. One aggregated warn names the
-    // shared channels and their chosen owners.
-    const ownership = channelOwnership(workspaces);
-    if (ownership.shared.length > 0) ctx.onWarn?.(formatSharedChannelWarn(ownership.shared));
-
+    // No shared-channel owner election (ADR-0042, supersedes ADR-0038): the
+    // externalId is canonical (`slack:<channel>:<ts>`, no team prefix), so a
+    // channel listed by multiple workspace aliases collapses to the same source
+    // ids and the fingerprint idempotency absorbs the overlap. A duplicated
+    // listing costs a redundant fetch, nothing more.
     const { byAlias: previous, legacyFloor } = parseCursor(ctx.cursor);
     // Lift the reserved discovery-drift markers out of `previous` so it stays a
     // pure alias→channel→ts map for the ingest logic below (ADR-0039 Layer 2).
@@ -931,12 +929,6 @@ class SlackConnector implements Connector {
           ws.alias === DEFAULT_WORKSPACE_ALIAS ? (legacyFloor ?? undefined) : undefined;
 
         for (const channel of ws.channels) {
-          // Shared-channel de-dup (ADR-0038 Layer 1): skip a channel this alias
-          // does not own so a channel shared across aliases is ingested exactly
-          // once (under its owner). Non-shared channels are owned by their sole
-          // alias, so they are never skipped. Skipping before touching the cursor
-          // means the non-owner alias never grows a cursor entry for the channel.
-          if (ownership.owner.get(channel) !== ws.alias) continue;
           // Cold-start floor (ADR-0016 / #57): a per-channel `since` override
           // wins over the workspace `since`, combined with the legacy floor.
           // Applied only to channels with no saved cursor (a resumed channel
@@ -1052,11 +1044,7 @@ class SlackConnector implements Connector {
         lastError = error;
         const message = error instanceof Error ? error.message : String(error);
         ctx.onWarn?.(`workspace '${ws.alias}' failed mid-sync: ${message}`);
-        // Only the owner alias holds a shared channel's cursor (ADR-0038 Layer
-        // 1): don't re-preserve a channel this alias doesn't own.
-        const ownedChannels = new Set(
-          ws.channels.filter((channel) => ownership.owner.get(channel) === ws.alias),
-        );
+        const ownedChannels = new Set(ws.channels);
         const preserved: Record<string, string> = {};
         for (const [key, ts] of Object.entries(prevChannels)) {
           // Preserve both the plain `<channel>` cursor and its per-thread

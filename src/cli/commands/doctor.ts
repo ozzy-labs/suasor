@@ -343,37 +343,16 @@ export class DoctorCommand extends Command {
       }
     }
 
-    // 5b. slack shared channels — the same global Slack channel id listed under
-    //    multiple workspace aliases (ADR-0038 Layer 3, early detection). Sync
-    //    de-dups these owner-wins so nothing is double-ingested (Layer 1), but
-    //    surfacing the redundant declaration here lets the user notice it without
-    //    running a sync — and names the very owner that will ingest it, since the
-    //    owner rule (lexicographically smallest alias) is shared with sync via
-    //    `channelOwnership`. Warn, not error: the config still works (dedup
-    //    absorbs it); it is just redundant. Runs whenever a [connectors.slack]
-    //    slice exists (enabled or not — a duplicate is worth flagging while the
-    //    connector is still being set up). Quiet when nothing is shared, so the
-    //    common single-workspace / non-overlapping case adds no line.
+    // 5b. (removed) shared-channel warn — the owner-wins dedup layers were
+    //    dropped with ADR-0042: the canonical externalId (`slack:<channel>:<ts>`)
+    //    collapses a channel listed under multiple aliases at ingest, so a
+    //    duplicated declaration is a redundant fetch, not a correctness issue.
     if (config !== null && config.connectors.slack !== undefined) {
-      const [
-        { SlackConnectorConfig, resolveWorkspaces, readDiscoveryMarkers },
-        { channelOwnership },
-      ] = await Promise.all([
-        import("../../connectors/slack.ts"),
-        import("../../connectors/slack/dedup.ts"),
-      ]);
+      const { SlackConnectorConfig, resolveWorkspaces, readDiscoveryMarkers } = await import(
+        "../../connectors/slack.ts"
+      );
       const slack = SlackConnectorConfig.parse(config.connectors.slack);
       const workspaces = resolveWorkspaces(slack);
-      const { shared } = channelOwnership(workspaces);
-      for (const s of shared) {
-        checks.push({
-          name: "slack",
-          status: "warn",
-          detail:
-            `channel ${s.channel} configured under [${s.aliases.join(", ")}]; ` +
-            `only owner '${s.owner}' will ingest it (shared-channel de-dup, ADR-0038)`,
-        });
-      }
 
       // 5c. per-workspace slack credential / identity — the connector-credential
       //    check above only probes the static primary secret (`connector:slack:token`,

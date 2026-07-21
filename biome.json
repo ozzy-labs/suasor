@@ -9,7 +9,8 @@
       "*.json",
       "*.jsonc",
       "!**/node_modules",
-      "!**/dist"
+      "!**/dist",
+      "!.claude/worktrees"
     ],
     "ignoreUnknown": true
   },
