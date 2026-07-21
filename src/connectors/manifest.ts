@@ -128,6 +128,15 @@ export interface ConnectorManifest {
    */
   readonly surfacesTeams: boolean;
   /**
+   * Whether the connector has a **connector-specific onboarding bridge** in the
+   * wizard (#458): `suasor onboard` drives its token store + probe + config
+   * slice through a dedicated bridge instead of the generic AUTH_SPECS path.
+   * Declared here, behaviour lives in the CLI registry
+   * (`src/cli/onboard/bridges.ts` — connectors never depend on the cli layer);
+   * the completeness test cross-checks the two. Default `false`.
+   */
+  readonly connectorSpecificOnboard?: boolean;
+  /**
    * Human-readable reasons a connector opts out of a generic surface it might be
    * expected to have (keyed by surface: `genericAuth` / `genericDiscovery`). Used
    * by the completeness test to accept a documented opt-out, and as living docs

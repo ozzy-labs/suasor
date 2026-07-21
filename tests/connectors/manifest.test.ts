@@ -98,6 +98,13 @@ describe("connector manifest — completeness (parametrized over connectorNames(
         }
       });
 
+      test("connectorSpecificOnboard ⟺ a registered onboard bridge (#458)", async () => {
+        const { onboardBridgeNames } = await import("../../src/cli/onboard/bridges.ts");
+        expect(manifest?.connectorSpecificOnboard ?? false).toBe(
+          onboardBridgeNames().includes(name),
+        );
+      });
+
       test("genericDiscovery ⟺ DISCOVERY_SPECS entry, with a documented opt-out otherwise", () => {
         expect(manifest?.genericDiscovery).toBe(discoveryConnectorNames().includes(name));
         if (manifest?.needsAuth && !manifest.genericDiscovery) {

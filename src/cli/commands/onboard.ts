@@ -26,6 +26,7 @@ import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { docsUrl } from "../doc-ref.ts";
+import { loadOnboardBridge, onboardBridgeNames } from "../onboard/bridges.ts";
 import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
 import {
   mcpInvocationNote,
@@ -95,15 +96,6 @@ interface OnboardReport {
   /** Names of configured [digest.jobs] surfaced in the scheduler step (ADR-0040). */
   digestJobs: string[];
 }
-
-/**
- * Slack keeps its own auth flow (`slack auth set` / `auth test` /
- * `conversations`, ADR-0011/0014) rather than the generic AUTH_SPECS verbs, so
- * the wizard special-cases it (Issue #384). Kept as a literal so the top-level
- * imports stay light (NFR-PRF-1); the connector module is lazy-imported inside
- * the bridge.
- */
-const SLACK_CONNECTOR = "slack";
 
 export class OnboardCommand extends Command {
   static override paths = [["onboard"]];
@@ -200,19 +192,31 @@ export class OnboardCommand extends Command {
     for (const connector of connectors) {
       const report: ConnectorReport = {
         connector,
-        authFlow: isConnectorSpecific(connector) ? "connector-specific" : "generic",
+        authFlow: onboardBridgeNames().includes(connector) ? "connector-specific" : "generic",
         authStored: false,
         authTest: "skipped",
         configAppended: false,
         configSource: "skipped",
       };
 
-      // Slack keeps its own auth flow (ADR-0011/0014); onboard bridges it inline
-      // for the flat/single-workspace shape and falls back to the manual
-      // per-workspace導線 for a multi-workspace config (Issue #384). The bridge
-      // owns slack's token store + auth test + config append end to end.
-      if (connector === SLACK_CONNECTOR) {
-        const abort = await this.bridgeSlack(report, interactive, discoverySkips, manualSteps);
+      // A connector with its own auth flow (the manifest declares
+      // `connectorSpecificOnboard`; slack, ADR-0011/0042) is driven by its
+      // registered bridge (#458), which owns the token store + auth test +
+      // config append end to end.
+      const bridge = await loadOnboardBridge(connector);
+      if (bridge) {
+        const abort = await bridge.run({
+          stdin: this.context.stdin,
+          stdout,
+          stderr,
+          interactive,
+          json: this.json,
+          skipAuth: this.skipAuth,
+          keychain: (this.context as { keychain?: KeychainBackend }).keychain,
+          report,
+          discoverySkips,
+          manualSteps,
+        });
         reports.push(report);
         if (abort !== undefined) return abort;
         continue;
@@ -221,21 +225,12 @@ export class OnboardCommand extends Command {
       if (!this.skipAuth) {
         const stored = await this.storeTokenFor(connector, interactive);
         if (stored === "no-spec") {
-          // No generic `auth set` verb and no dedicated bridge — a connector with
-          // no token at all (web / local). Slack has its own auth flow but is
-          // handled by bridgeSlack above (it never reaches here), so a connector
-          // that still reaches this branch has connector-specific steps only when
-          // one is defined; otherwise fall back to the mild "set credentials per
-          // docs" hint (Issue #384).
+          // No generic `auth set` verb and no dedicated bridge — a connector
+          // with no token at all (web / local). Bridge connectors (slack) are
+          // dispatched above and never reach this branch (#458).
           if (!this.json) {
-            const steps = renderConnectorSteps(
-              connector,
-              "uses its own auth flow — finish setup with:",
-            );
             stdout.write(
-              steps
-                ? `${steps}\n`
-                : `${connector}: no generic auth verb — set credentials per ${docsUrl("guide/connectors.md")}.\n`,
+              `${connector}: no generic auth verb — set credentials per ${docsUrl("guide/connectors.md")}.\n`,
             );
           }
         } else if (stored === "no-token") {
@@ -683,355 +678,6 @@ export class OnboardCommand extends Command {
       return false;
     }
   }
-
-  /**
-   * Bridge slack's own auth flow (ADR-0011/0014) into the wizard for the
-   * flat/single-workspace shape (Issue #384): read + store the bot token under the
-   * flat `token` secret, run the `auth test` probe **as a function** (never a CLI
-   * exec — the wizard stays an orchestrator, ADR-0029 §1), and append a
-   * `[connectors.slack]` slice carrying the joined channels discovered via the
-   * same listing leaf `slack conversations` uses.
-   *
-   * A multi-workspace config (`[connectors.slack.workspaces.<alias>]`) is out of
-   * scope: onboard's single stdin cannot drive N per-workspace tokens, so it falls
-   * back to the manual per-workspace導線 (recorded in `manualSteps` for the closing
-   * re-surface and the recap's manual-pending verdict).
-   *
-   * Returns an exit code to abort the wizard (a missing token on a non-TTY), or
-   * `undefined` to continue. `report` is mutated in place; the token is never
-   * echoed.
-   */
-  private async bridgeSlack(
-    report: ConnectorReport,
-    interactive: boolean,
-    discoverySkips: Map<string, string>,
-    manualSteps: Map<string, readonly string[]>,
-  ): Promise<number | undefined> {
-    const stdout = this.context.stdout;
-    const stderr = this.context.stderr;
-    const [{ SLACK_TOKENS_SECRET }, { resolveSecret, storeSecret }] = await Promise.all([
-      import("../../connectors/slack.ts"),
-      import("../../connectors/secrets.ts"),
-    ]);
-    const secretName = SLACK_TOKENS_SECRET; // the unnamed token pool (ADR-0042)
-
-    // A legacy ADR-0014 multi-workspace config cannot be driven (or synced) —
-    // point at the ADR-0042 migration and leave the config untouched.
-    const aliases = await this.slackWorkspaceAliases();
-    if (aliases.length > 0) {
-      manualSteps.set(SLACK_CONNECTOR, SLACK_LEGACY_CONFIG_STEPS);
-      if (!this.json) {
-        stdout.write(
-          `slack: legacy multi-workspace config detected (${aliases.join(", ")}) — migrate to ` +
-            "the flat ADR-0042 shape first (checklist below).\n",
-        );
-      }
-      return undefined;
-    }
-
-    // (a) token → flat `token` secret (unless --skip-auth, where it comes from the
-    // env override / binary). Line-based, echo-suppressed read (Issue #383, reused
-    // #383 `readSecretLine`): resolves on Enter on a TTY and never echoes the token.
-    if (!this.skipAuth) {
-      if (interactive) {
-        stdout.write(
-          "Paste the slack token(s) and press Enter — multiple tokens comma-separated " +
-            "(the pool is replaced as a whole):\n",
-        );
-      }
-      const token = (await readSecretLine(this.context.stdin, stderr, { mask: true })).trim();
-      if (!token) {
-        stderr.write(
-          "error: no token provided for slack " +
-            "(pipe it on stdin, or use --skip-auth with SUASOR_CONNECTOR_SLACK_TOKENS)\n",
-        );
-        return 1;
-      }
-      await storeSecret(SLACK_CONNECTOR, secretName, token, this.keychainOptions());
-      report.authStored = true;
-      if (!this.json) stdout.write("slack: token stored in the OS keychain.\n");
-    }
-
-    // Resolve the effective token for the probes (env override wins, then the
-    // keychain). Used for both the auth-test readiness display and the discovery
-    // leaf below; never printed.
-    const token = await resolveSecret(SLACK_CONNECTOR, secretName);
-
-    // (b) auth test probe — verify + per-feature scope readiness. Also yields the
-    // team id the config block needs (`renderConfigBlock`).
-    const teamId = await this.slackAuthTest(report, token);
-
-    // (c) config slice — the joined channels from the conversations listing leaf,
-    // or the placeholder template when discovery is unavailable / fails.
-    await this.appendSlackConfigSlice(report, token, teamId, discoverySkips);
-    return undefined;
-  }
-
-  /**
-   * Run slack's `auth test` probe (`testToken`, the same round-trip `slack auth
-   * test` uses) and render the per-feature scope readiness. Returns the resolved
-   * team id (needed by the config block), or `undefined` when there is no token or
-   * the probe fails. Under `--skip-auth` the probe is still run for the team id but
-   * its outcome is not reported (parity with the generic `--skip-auth` path, which
-   * skips the auth-test verdict but still runs discovery).
-   */
-  private async slackAuthTest(
-    report: ConnectorReport,
-    token: string | null,
-  ): Promise<string | undefined> {
-    if (!token) return undefined;
-    const { testToken } = await import("../../connectors/slack/auth.ts");
-    try {
-      const result = await testToken(token);
-      if (!this.skipAuth) {
-        report.authTest = "ok";
-        report.authTestDetail = `${result.principal} @ ${result.team} (${result.teamId})`;
-        if (!this.json) {
-          const { renderFeaturesBlock } = await import("../../connectors/slack/scopes.ts");
-          this.context.stdout.write(
-            `slack: auth test ok — ${result.principal} token for ${result.user} @ ${result.team} (${result.teamId}).\n`,
-          );
-          this.context.stdout.write("slack: scope readiness —\n");
-          for (const line of renderFeaturesBlock(result.scopes, result.principal)) {
-            this.context.stdout.write(`${line}\n`);
-          }
-        }
-      }
-      return result.teamId;
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      if (!this.skipAuth) {
-        report.authTest = "failed";
-        report.authTestDetail = message;
-        if (!this.json) {
-          this.context.stdout.write(
-            `slack: auth test FAILED — ${message} (token saved; fix and re-run \`suasor slack auth test\`).\n`,
-          );
-        }
-      }
-      return undefined;
-    }
-  }
-
-  /**
-   * Append the `[connectors.slack]` slice (non-destructive). When the token + team
-   * id resolved, enumerate the joined channels via the `slack conversations`
-   * listing leaf and append a paste-ready block carrying their ids; otherwise (or
-   * on a probe failure) append the minimal placeholder template and surface the
-   * reason on stderr. The listing leaf is called directly here rather than
-   * registered in `DISCOVERY_SPECS` — the data-driven verb surface and
-   * `slack conversations` would otherwise double up (Issue #384), so it stays an
-   * onboard special-case.
-   */
-  private async appendSlackConfigSlice(
-    report: ConnectorReport,
-    token: string | null,
-    teamId: string | undefined,
-    discoverySkips: Map<string, string>,
-  ): Promise<void> {
-    const [{ resolveConfigDir }, configAppend, { join }] = await Promise.all([
-      import("../../config/index.ts"),
-      import("../onboard/config-append.ts"),
-      import("node:path"),
-    ]);
-    const configPath = join(resolveConfigDir(process.env), "config.toml");
-    const file = Bun.file(configPath);
-    const current = (await file.exists()) ? await file.text() : "";
-
-    // Non-destructive: an existing [connectors.slack] (including enabled = false)
-    // is never rewritten (ADR-0029 §3). Add channels later with
-    // `suasor slack follow --suggest`.
-    if (configAppend.hasConnectorSlice(current, SLACK_CONNECTOR)) {
-      report.configAppended = false;
-      report.configSource = "skipped";
-      if (!this.json) {
-        this.context.stdout.write(
-          "slack: [connectors.slack] already in config.toml (left untouched).\n",
-        );
-      }
-      return;
-    }
-
-    // Discovery leaf: enumerate the joined channels the token can see. The
-    // apply is suggest-and-confirm (ADR-0042 決定 6 / #472): interactive runs
-    // show the list and take ONE confirmation; non-interactive / --json runs
-    // apply directly (the wizard invocation itself is the explicit consent —
-    // the --yes-equivalent). The write goes through the same surgical editor
-    // `slack follow` uses (`addSlackChannels`), one code path for both.
-    const discovery = token && teamId ? await this.discoverSlackConfigBlock(token, teamId) : null;
-    if (discovery && "entries" in discovery) {
-      let apply = true;
-      if (isInteractive(this.context.stdin) && !this.json && discovery.entries.length > 0) {
-        this.context.stdout.write(
-          `slack: ${discovery.entries.length} joined channel(s) not yet configured:\n`,
-        );
-        for (const e of discovery.entries) {
-          this.context.stdout.write(`  ${e.id}${e.label ? `  ${e.label}` : ""}\n`);
-        }
-        this.context.stderr.write("Add these to [connectors.slack].channels? [Y/n] ");
-        const { readPlainLine } = await import("../read-secret.ts");
-        const answer = (await readPlainLine(this.context.stdin, this.context.stderr))
-          .trim()
-          .toLowerCase();
-        this.context.stderr.write("\n");
-        apply = answer === "" || answer === "y" || answer === "yes";
-      }
-      if (apply) {
-        const { addSlackChannels } = await import("../slack-channels-edit.ts");
-        const result = addSlackChannels(current, discovery.entries);
-        if (result.added.length > 0) await Bun.write(configPath, result.toml);
-        report.configAppended = result.added.length > 0;
-        report.configSource = "discovery";
-        report.discovered = discovery.entries.length;
-        if (!this.json) {
-          this.context.stdout.write(
-            `slack: discovered ${discovery.entries.length} joined channel(s); appended [connectors.slack] to config.toml.\n`,
-          );
-        }
-        return;
-      }
-      // Declined: fall through to the placeholder template with a follow hint.
-      this.context.stderr.write(
-        "slack: channel selection skipped — add channels later with `suasor slack follow --suggest`.\n",
-      );
-    }
-
-    // No token / probe failed → minimal placeholder template + reason on stderr.
-    const result = configAppend.appendConnectorSlice(current, SLACK_CONNECTOR);
-    if (result.appended) await Bun.write(configPath, result.toml);
-    report.configAppended = result.appended;
-    report.configSource = "template";
-    if (!this.json) {
-      this.context.stdout.write(
-        "slack: appended [connectors.slack] (enabled = true) to config.toml.\n",
-      );
-    }
-    const reason =
-      discovery && "error" in discovery ? discovery.error : "no token resolved for slack";
-    // A declined interactive confirmation also lands here; its own hint (`slack
-    // follow --suggest`) was already printed above.
-    if (!discovery || "error" in discovery) {
-      this.context.stderr.write(
-        `slack: discovery skipped (${reason}); wrote the placeholder slice — ` +
-          "edit it by hand or re-run `suasor slack conversations`.\n",
-      );
-      discoverySkips.set(SLACK_CONNECTOR, "conversations");
-    }
-  }
-
-  /**
-   * Enumerate the joined channels the slack token can see (`listConversations`, the
-   * same leaf `slack conversations` uses) and render the paste-ready
-   * `[connectors.slack]` block. Best-effort + read-only; the token is never echoed.
-   * Restricted to public + private channels the principal is a member of — the
-   * "what belongs in `channels`" convention the sync-time discovery sweep uses
-   * (ADR-0039); unjoined channels return `not_in_channel` and DMs / group-DMs are
-   * added by hand. Returns `{ error }` on a probe failure so the caller falls back
-   * to the placeholder template.
-   */
-  private async discoverSlackConfigBlock(
-    token: string,
-    _teamId: string,
-  ): Promise<{ entries: { id: string; label?: string }[] } | { error: string }> {
-    const { listConversations } = await import("../../connectors/slack/conversations.ts");
-    try {
-      const result = await listConversations(token, { types: ["public", "private"] });
-      const joined = result.conversations.filter((c) => c.isMember);
-      return {
-        entries: joined.map((c) => ({
-          id: c.id,
-          ...(c.displayName ? { label: c.displayName } : {}),
-        })),
-      };
-    } catch (cause) {
-      return { error: cause instanceof Error ? cause.message : String(cause) };
-    }
-  }
-
-  /**
-   * The configured `[connectors.slack.workspaces.<alias>]` aliases (Issue #384).
-   * Non-empty → a multi-workspace config the inline bridge cannot drive. Reads the
-   * raw `workspaces` keys (not a per-slice Zod parse — `SlackConnectorConfig` is
-   * never applied here), mirroring the resolution `slack.ts`'s operational verbs
-   * use.
-   *
-   * `loadConfig` strictly re-validates every connector slice (loader
-   * `validateConnectorSlices`), so a pre-existing invalid config anywhere in
-   * `[connectors.*]` would otherwise throw and hard-fail `onboard --connector
-   * slack` before it can do anything useful. Detection degrades to `[]` (treat as
-   * flat) on that throw so the flat bridge still runs — its config append reads the
-   * file directly and is non-destructive; a still-invalid config surfaces later at
-   * the first `sync` (as it does for every other connector), not from this probe.
-   */
-  private async slackWorkspaceAliases(): Promise<string[]> {
-    // Read the RAW config file (not `loadConfig`): the loader itself now rejects
-    // the legacy ADR-0014 shape, so a legacy config would throw before this
-    // detector could route to the migration checklist. Raw-TOML inspection keeps
-    // the detection working exactly when it matters. Any read/parse failure
-    // degrades to `[]` (treat as flat) — the flat bridge is non-destructive.
-    try {
-      const [{ resolveConfigDir }, { join }] = await Promise.all([
-        import("../../config/index.ts"),
-        import("node:path"),
-      ]);
-      const file = Bun.file(join(resolveConfigDir(process.env), "config.toml"));
-      if (!(await file.exists())) return [];
-      const parsed = Bun.TOML.parse(await file.text()) as {
-        connectors?: { slack?: { workspaces?: Record<string, unknown> } };
-      };
-      return Object.keys(parsed.connectors?.slack?.workspaces ?? {});
-    } catch {
-      return [];
-    }
-  }
-}
-
-/**
- * Ordered CLI steps for connectors that keep their own auth flow instead of the
- * generic AUTH_SPECS verbs (Issue #384). Only connectors *not* in AUTH_SPECS that
- * orchestrate setup through their own commands appear here — currently slack,
- * whose `slack auth set` / `slack conversations` path onboard cannot drive for
- * the user (ADR-0011/0014). Each entry is `<command>   # <hint>`.
- */
-const CONNECTOR_SPECIFIC_STEPS: Record<string, readonly string[]> = {
-  slack: [
-    `suasor slack auth set        # store the bot token (app manifest: ${docsUrl("guide/connectors.md")})`,
-    "suasor slack auth test       # verify scopes + feature readiness",
-    "suasor slack conversations   # list channels; paste the config block into config.toml",
-    "suasor slack sync",
-  ],
-};
-
-/**
- * Migration checklist surfaced when a legacy ADR-0014 multi-workspace Slack
- * config (`[connectors.slack.workspaces.<alias>]`) is detected. The shape was
- * removed by ADR-0042 (flat channels + unnamed token pool); sync fails loudly on
- * it, so onboard points at the mechanical migration instead of bridging it.
- */
-const SLACK_LEGACY_CONFIG_STEPS: readonly string[] = [
-  "# migrate config.toml: merge every workspace's channel ids into one flat [connectors.slack] channels list",
-  "#   (drop 'workspaces' tables, 'team', 'self_user_id'; per-alias since → [connectors.slack.channel_since])",
-  "suasor slack auth set          # store every workspace's token as one pool (comma/newline separated)",
-  "suasor slack auth test         # verify each pool token + scope readiness",
-  "suasor slack conversations     # list channels across the pool; paste the block",
-  "suasor slack sync",
-];
-
-/** Whether a connector maintains its own auth flow (vs. the generic verbs). */
-function isConnectorSpecific(connector: string): boolean {
-  return Object.hasOwn(CONNECTOR_SPECIFIC_STEPS, connector);
-}
-
-/**
- * Render a numbered connector-specific setup checklist under a lead line, e.g.
- * `slack: <lead>\n  1. suasor slack auth set ...`. Returns `""` for a connector
- * with no connector-specific steps so callers can fall back.
- */
-function renderConnectorSteps(connector: string, lead: string): string {
-  const steps = CONNECTOR_SPECIFIC_STEPS[connector];
-  if (!steps) return "";
-  const numbered = steps.map((step, i) => `  ${i + 1}. ${step}`).join("\n");
-  return `${connector}: ${lead}\n${numbered}`;
 }
 
 /** Whether stdin is an interactive TTY (so prompts are safe to show). */
