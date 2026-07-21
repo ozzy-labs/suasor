@@ -112,3 +112,14 @@ user 名側（決定 2）は `PersonIdentityObserved.displayName` の再利用�
 - **(a) 表示時 live fetch（query のたびに `users.info` / `conversations.info`）** — 却下。[ADR-0012](0012-slack-demand-digest.md) の no-fetch-at-query 不変条件・[ADR-0005](0005-fts-first-retrieval-embedding-sidecar.md) FTS-first・[ADR-0003](0003-local-first-and-content-minimization.md) local-first を破る。read tool が外部 I/O に依存し、offline / rate-limit 時に degrade する。
 - **(b) channel 名を `sources.meta` に非正規化（source ごとに channel 名を焼く）** — 却下。改名追従が難しく（過去 source の meta は古い名前のまま）、同一 channel が N source ぶん重複保持され、backfill も source 単位で重くなる。1 行 / channel の projection（決定 3）の方が改名追従・重複排除・backfill いずれの観点でも優る。
 - **(c) bulk 解決（`users.list` / `conversations.list` で全件先読み）** — 却下。大規模 workspace で重く、実際には出現しない id まで取得する。on-demand + per-run キャッシュ（決定 5）で必要な id のみ解決する方が軽量で、[ADR-0011](0011-slack-operational-verbs-and-readiness.md) の membership 前提（未参加 channel は解決対象外）とも整合する。
+
+## 追補（ADR-0042）: team は表示 facet（identity から除外）
+
+- Date: 2026-07-21
+- Related: [ADR-0042](0042-slack-workspace-less-connector.md)（workspace-less connector・[#464](https://github.com/ozzy-labs/suasor/issues/464)）
+
+[ADR-0042](0042-slack-workspace-less-connector.md) で message externalId が `slack:<channel>:<ts>`（team prefix 除去）へ canonical 化されるのに伴い、本 ADR の team 関連の位置づけを明確化する:
+
+- **`slack_channels.team_id` / team 名は表示 facet であり identity ではない**。検索・brief・status で「どの workspace の話か」を示す用途に限る。
+- 共有チャンネルでは `team_id` が「取得に使った token の team」になり、取得 token の選択（ADR-0042 決定 3 の到達性ベース）で揺れ得るが、identity（externalId）は不変なので実害は表示のみ（last-write-wins で収束。[ADR-0038](0038-multi-workspace-shared-channel-dedup.md) §4 で扱った flip と同性質・許容）。
+- 名前解決の方式（sync 時解決 + projection join・決定 1〜11）は不変。解決に使う token はプールから到達性で選ぶ。
