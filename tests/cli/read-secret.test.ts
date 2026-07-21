@@ -116,6 +116,20 @@ describe("editRawSecret — pure raw-mode line editor (no real TTY)", () => {
     expect(out).toEqual({ kind: "continue", buffer: "abc", echo: "" });
   });
 
+  test("plain mode echoes the typed chars themselves (#472 Y/n confirm)", () => {
+    const step = editRawSecret("", "yes", { plain: true });
+    expect(step).toEqual({ kind: "continue", buffer: "yes", echo: "yes" });
+    // Backspace erases the echoed glyph like the mask path.
+    const back = editRawSecret("yes", "\u0008", { plain: true });
+    expect(back).toEqual({ kind: "continue", buffer: "ye", echo: "\b \b" });
+    // mask wins when both are set (no cleartext by accident).
+    expect(editRawSecret("", "a", { mask: true, plain: true })).toEqual({
+      kind: "continue",
+      buffer: "a",
+      echo: "*",
+    });
+  });
+
   test("masks each printable char with a single '*' when mask is set", () => {
     const out = editRawSecret("", "abc", { mask: true });
     expect(out).toEqual({ kind: "continue", buffer: "abc", echo: "***" });

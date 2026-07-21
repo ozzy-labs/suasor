@@ -250,8 +250,8 @@ export class SlackFollowCommand extends Command {
           // a non-TTY pipe of "y" both work headless; anything else aborts.
           if (!this.yes) {
             stderr.write("Add these to [connectors.slack].channels? [Y/n] ");
-            const { readSecretLine } = await import("../read-secret.ts");
-            const answer = (await readSecretLine(this.context.stdin, stderr)).trim().toLowerCase();
+            const { readPlainLine } = await import("../read-secret.ts");
+            const answer = (await readPlainLine(this.context.stdin, stderr)).trim().toLowerCase();
             if (answer !== "" && answer !== "y" && answer !== "yes") {
               stdout.write("aborted — nothing changed.\n");
               return 0;

@@ -30,6 +30,13 @@ export interface ReadSecretOptions {
    * ignored on the non-TTY path (a pipe never echoes).
    */
   mask?: boolean;
+  /**
+   * Echo the typed characters themselves on a TTY (#472) — for NON-secret
+   * prompts (Y/n confirmations) that reuse this raw-mode line reader. Mutually
+   * exclusive with `mask` (`mask` wins when both are set); ignored on the
+   * non-TTY path.
+   */
+  plain?: boolean;
 }
 
 /** Minimal stderr surface used for the TTY mask echo. */
@@ -72,6 +79,7 @@ export function editRawSecret(
   options: ReadSecretOptions = {},
 ): RawKeyOutcome {
   const mask = options.mask ?? false;
+  const plain = !mask && (options.plain ?? false);
   let buf = buffer;
   let echo = "";
   for (const ch of chunk) {
@@ -82,8 +90,8 @@ export function editRawSecret(
     if (code === BACKSPACE || code === DEL) {
       if (buf.length > 0) {
         buf = buf.slice(0, -1);
-        // Erase the last mask glyph: backspace, overwrite with a space, back.
-        if (mask) echo += "\b \b";
+        // Erase the last echoed glyph: backspace, overwrite with a space, back.
+        if (mask || plain) echo += "\b \b";
       }
       continue;
     }
@@ -94,6 +102,7 @@ export function editRawSecret(
     if (code < 0x20) continue; // other C0 controls: ignore
     buf += ch;
     if (mask) echo += "*";
+    else if (plain) echo += ch;
   }
   return { kind: "continue", buffer: buf, echo };
 }
@@ -238,4 +247,13 @@ function readSecretLineFromTTY(
     input.on("error", onError);
     input.resume();
   });
+}
+
+/**
+ * Read one **non-secret** line (a Y/n confirmation etc.) with normal keystroke
+ * echo on a TTY (#472). Same line semantics as {@link readSecretLine} — raw-mode
+ * single line on a TTY, first-line read on a pipe — just visible while typing.
+ */
+export function readPlainLine(stdin: unknown, stderr: Writable): Promise<string> {
+  return readSecretLine(stdin as Parameters<typeof readSecretLine>[0], stderr, { plain: true });
 }
