@@ -63,7 +63,10 @@
     "zod": "^4.4.3"
   },
   "overrides": {
+    "@hono/node-server": "^2.0.5",
     "axios": "^1.18.1",
+    "body-parser": "^2.3.0",
+    "hono": "^4.12.27",
     "uuid": "^14.0.0"
   }
 }
