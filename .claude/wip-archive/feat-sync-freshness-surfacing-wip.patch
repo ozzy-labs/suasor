@@ -1,0 +1,2058 @@
+diff --git a/README.ja.md b/README.ja.md
+index f8dc925..4355867 100644
+--- a/README.ja.md
++++ b/README.ja.md
+@@ -149,6 +149,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
+ - `propose.list` — List proposal candidates by state (pending/applied/rejected).
+ - `commitment.list` — List commitments by state (open/resolved/dismissed) and direction.
+ - `person.list` — List resolved persons with their connector author identities (ADR-0022).
++- `sync.status` — Per-connector sync freshness: latest run + staleness vs the expected cadence (ADR-0033).
+ 
+ **Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
+ 
+diff --git a/README.md b/README.md
+index 3eb36de..7ad3bf6 100644
+--- a/README.md
++++ b/README.md
+@@ -158,6 +158,7 @@ Suasor exposes its memory to AI agents over the [Model Context Protocol](https:/
+ - `propose.list` — List proposal candidates by state (pending/applied/rejected).
+ - `commitment.list` — List commitments by state (open/resolved/dismissed) and direction.
+ - `person.list` — List resolved persons with their connector author identities (ADR-0022).
++- `sync.status` — Per-connector sync freshness: latest run + staleness vs the expected cadence (ADR-0033).
+ 
+ **Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
+ 
+diff --git a/docs/design/cli.md b/docs/design/cli.md
+index b465606..b0a82c3 100644
+--- a/docs/design/cli.md
++++ b/docs/design/cli.md
+@@ -6,7 +6,7 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
+ 
+ ```bash
+ suasor init [--force]                  # 設定 + DB 初期化 + ネクストステップ案内（skills install は別コマンド）
+-suasor onboard [--connector a,b] [--skip-auth] [--skip-sync] [--write-cron] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]。slack は独自経路（auth set/test・conversations）を関数として bridge・flat/単一 workspace 限定・[#384]）
++suasor onboard [--connector a,b] [--skip-auth] [--skip-sync] [--write-cron] [--write-launchd] [--write-systemd] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]。slack は独自経路（auth set/test・conversations）を関数として bridge・flat/単一 workspace 限定・[#384]。--write-launchd / --write-systemd は --write-cron と同じ opt-in で OS 適合の sync unit（LaunchAgents plist / systemd user units）を書いて有効化する（非破壊・platform 不一致は warn + skip・#442）
+ suasor db migrate [--vec]              # projection schema 適用（idempotent）
+ suasor projections rebuild [--no-progress]  # event replay で projection 再構築
+ suasor <connector> sync [--full] [--json] [--discover | --no-discover]  # 取り込み（github / slack / ms-graph / google / box / web / local / notion / jira）。--discover/--no-discover は Slack の discovery sweep 単発トグル（ADR-0039）
+@@ -20,7 +20,7 @@ suasor box folders [--root id] [--filter S] [--json] [--no-progress]  # 可視 f
+ suasor notion databases [--filter S] [--json] [--no-progress]  # 可視 database の列挙 + 設定ブロック出力（discovery・ADR-0030）
+ suasor jira projects [--filter S] [--json] [--no-progress]  # 可視 project の列挙 + 設定ブロック出力（discovery・ADR-0030）
+ suasor connectors list [--json]        # 登録 connector の enabled / token 設定有無を一覧（introspection）
+-suasor doctor [--json]                 # config/DB/embedding/connector + 保守ヒントを一括ヘルスチェック（error 検出で exit 1）
++suasor doctor [--json]                 # config/DB/embedding/connector + 保守ヒント + sync 鮮度（期待 cadence × 係数超過 / never synced は warn・[sync] で調整・ADR-0033/#442）を一括ヘルスチェック（error 検出で exit 1）
+ suasor config show [--effective] [--json]  # 実効 config（env > file > defaults の合成値）を表示。secret は常にマスク
+ suasor config edit [--editor <cmd>]    # $EDITOR で config.toml を開き、保存後に schema 検証。不正なら差し戻し（rollback）
+ suasor validate-config [--fix]         # config.toml の構造検証（必須欠落 / invalid / dangling / typo）。--fix で安全な除去のみ自動修正
+diff --git a/docs/design/config.md b/docs/design/config.md
+index 726ac2a..2813370 100644
+--- a/docs/design/config.md
++++ b/docs/design/config.md
+@@ -150,6 +150,21 @@ limit = 10                 # priority scorer 上位 N（既定 10・ADR-0041）
+ - **チャネル**: `file` は `[export].dir` sandbox 配下へ書く（[ADR-0025](../adr/0025-local-draft-export.md)・basename・local root 直下不可）/ `os-notification` は OS 通知（osascript / notify-send / PowerShell）/ `slack-dm` は actuator 経路で自分宛て DM（[ADR-0036](../adr/0036-task-external-home.md)・token は keychain・失敗は構造化エラー）
+ - **cadence** は OS scheduler（cron / launchd / systemd）が持つ（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)・no daemon）。導線は [scheduling guide](../guide/scheduling.md)
+ 
++### `[sync]`（確定・Issue #442）
++
++```toml
++[sync]
++# expectedCadenceMinutes = 60   # scheduler に期待する sync 間隔（分）。既定 60 = 同梱テンプレの hourly
++# staleFactor = 4               # 最終 run が cadence × factor より古ければ stale（既定 4 → 60m × 4 = 4h）
++
++# [sync.cadenceMinutes]         # connector 別 cadence override（分）。キーは登録済み connector 名限定
++# github = 1440                 # 例: github は日次で回す運用なら 1440m × factor が閾値になる
++```
++
++- **sync 鮮度の期待値**（Issue #442）。Suasor 自身は sync をスケジュールしない（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)・OS scheduler 委譲）ため、ここに書くのは「scheduler がこの間隔で回っているはず」という運用側の期待。`doctor` / `brief` の `sync_stale` warning / MCP `sync.status` が `sync_runs` 履歴（[ADR-0033](../adr/0033-sync-run-history.md)）と突合して **read 時に** staleness を導出する（projection には焼かない・ADR-0033 §2）
++- `[sync.cadenceMinutes]` のキーは**登録済み connector 名限定**で、未知の名前は load 時に `ConfigError`（typo の override が黙って既定閾値のまま評価されるのを防ぐ・fail-fast）
++- 評価対象は **enabled な connector のみ**（意図的に無効化した connector の沈黙は staleness ではない）。enabled で run 履歴が無いものは `never_synced` として扱う
++
+ ### 他セクション（後続 Issue が拡張）
+ 
+ ```toml
+diff --git a/docs/design/mcp-surface.md b/docs/design/mcp-surface.md
+index dd574f5..efcf0f4 100644
+--- a/docs/design/mcp-surface.md
++++ b/docs/design/mcp-surface.md
+@@ -23,6 +23,7 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` =
+ | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
+ | `activity.timeline` | entity 軸の時系列ビュー（person/project/source 等を起点に provenance 接続された source/task/decision をマージし新しい順に返す。`brief` の期間軸と対をなす entity 軸、#279） | 実装済み（#279。下記参照） |
+ | `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)）。`graph.expand` の `direction` で後方トレース（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)、下記参照） | 実装済み（#71・#90 / #97） |
++| `sync.status` | connector 別 sync 鮮度: 最新 run（時刻 / 件数 / 成否・`sync_runs` projection、[ADR-0033](../adr/0033-sync-run-history.md)）+ 期待 cadence（`[sync]` 設定）に対する read 時 staleness 判定（fresh / stale / never_synced）。secretary が自分のデータ鮮度を注記できる（#442、下記参照） | 実装済（#442） |
+ 
+ 戻り値はすべて 1 個の `text` content（JSON 文字列）。時間フィルタは各 projection の自然な timestamp 列を対象にし、**下限 inclusive (`>=`) / 上限 exclusive (`<`)**（隣接レンジの二重計上を避ける）。`iso` は ISO 8601（offset 付き）datetime。`limit` は正整数で上限 500。
+ 
+@@ -221,6 +222,7 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
+ 
+ - `slack_not_configured`: `[connectors.slack]` が未設定（`self_user_id` の有無とは独立）。`demand` が常に空になる。
+ - `embedding_disabled`: `[embedding].backend = "disabled"`。recall 由来の素材が FTS-only に劣化する。
++- `sync_stale`（#442）: enabled な connector の最終 sync が期待 cadence × 係数（`[sync]`・既定 60m × 4）より古い、または一度も sync していない。message に connector 別の経過（`slack last synced 9d ago (expected ≤ 4h)` / `github never synced`）を列挙する。**データが「無い」のではなく「古い」**ことを示す唯一の signal で、`sync_runs` 履歴（[ADR-0033](../adr/0033-sync-run-history.md)）から read 時に導出する（staleness 評価は `evaluateSyncStaleness`・`sync.status` tool / doctor と同一判定）。
+ 
+ CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json` では同じ `warnings` 配列をバンドルに含める。
+ 
+@@ -234,6 +236,36 @@ entity 軸の時系列ビューを返す read tool（実体は `src/mcp/queries.
+ 
+ **完全性の境界**: graph walk は `depth` と内部の graphLimit（既定 `max(limit*4, 50)`）で打ち切る。打ち切りは BFS（hop 距離）順で newest-first sort の**前**に起こるため、到達ノード数が graphLimit を超える dense な entity では「より新しいが遠い（hop が多い）」item が落ちうる。newest-first 保証は graph 到達可能な部分集合内でのみ成り立つ。疎で遠い provenance を網羅したい場合は `depth` を上げる。
+ 
++### `sync.status`（確定・read・#442）
++
++connector 別の sync 鮮度を返す read tool（実体は `src/mcp/queries.ts` の `buildSyncStatus`、`readOnlyHint: true`）。`sync_runs` projection（[ADR-0033](../adr/0033-sync-run-history.md)・connector 別最新 run）を読み、期待 cadence（`[sync].expectedCadenceMinutes` × `staleFactor`・connector 別 override は `[sync.cadenceMinutes]`）に対する staleness を **read 時に**判定して添える（projection には焼かない・ADR-0033 §2）。CLI `suasor sync status` は pull 型で「scheduler を信頼している利用者は叩かない」ため、secretary（host LLM）が自分のデータ鮮度を自律確認して回答に注記できるよう MCP に公開する（#442・connectors/connector-3）。
++
++引数: なし。
++
++戻り値:
++
++```jsonc
++{
++  "connectors": [
++    {
++      "connector": "slack",
++      "enabled": true,               // 現在 config で有効か
++      "status": "ok",                // running | ok | partial | error | never_synced（履歴なし）
++      "startedAt": "...", "endedAt": "...",
++      "observed": 3, "updated": 1, "unchanged": 2,
++      "durationMs": 42, "lastError": null,
++      "freshness": {                  // read 時の staleness 判定。disabled connector は null（評価対象外）
++        "state": "fresh",            // fresh | stale | never_synced
++        "ageMinutes": 59,            // 最終 run（ended_at ?? started_at）からの経過分。never_synced は null
++        "thresholdMinutes": 240      // 実効閾値 = (override ?? expectedCadenceMinutes) × staleFactor
++      }
++    }
++  ]
++}
++```
++
++enabled で履歴なしの connector は `never_synced` として列挙し（沈黙させない）、無効化済み connector の最終 run は可視のまま `freshness: null`（意図的停止は staleness ではない）。判定関数（`evaluateSyncStaleness`）は doctor の `sync.staleness` check・brief の `sync_stale` warning と共有され、3 面が同一 verdict を返す。
++
+ ### `catchup` skill のバックエンド方針（レビュー D1 確定）
+ 
+ assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）のうち、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
+diff --git a/src/cli/commands/brief.ts b/src/cli/commands/brief.ts
+index 0b4d330..609ecb5 100644
+--- a/src/cli/commands/brief.ts
++++ b/src/cli/commands/brief.ts
+@@ -71,15 +71,19 @@ export class BriefCommand extends Command {
+     const [
+       { loadConfig },
+       { Store },
+-      { buildBrief, deriveBriefWarnings },
++      { buildBrief, deriveBriefWarnings, evaluateSyncStaleness, listSyncRuns },
+       { resolveSelfUserIds },
+       { emitEmbeddingDisabledHint },
++      { connectorNames },
++      { selectEnabledConnectors },
+     ] = await Promise.all([
+       import("../../config/index.ts"),
+       import("../../db/index.ts"),
+       import("../../mcp/queries.ts"),
+       import("../../connectors/slack.ts"),
+       import("../embedding-hint.ts"),
++      import("../../connectors/registry.ts"),
++      import("../../connectors/sync-all.ts"),
+     ]);
+ 
+     const now = Date.now();
+@@ -121,17 +125,26 @@ export class BriefCommand extends Command {
+     // a piped bundle stays clean.
+     emitEmbeddingDisabledHint(this.context.stderr, config.embedding.backend, this.json);
+ 
+-    // Completeness signals (Issue #189): mark categories empty because they are
+-    // unconfigured, not because the window is quiet, so a consumer can tell
+-    // "Slack not connected" from "genuinely nothing". `slackConfigured` keys off
+-    // `[connectors.slack]` presence, independent of whether a self_user_id is set.
+-    const warnings = deriveBriefWarnings({
+-      slackConfigured: config.connectors.slack !== undefined,
+-      embeddingBackend: config.embedding.backend,
+-    });
+-
+     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+     try {
++      // Completeness signals (Issue #189): mark categories empty because they are
++      // unconfigured, not because the window is quiet, so a consumer can tell
++      // "Slack not connected" from "genuinely nothing". `slackConfigured` keys off
++      // `[connectors.slack]` presence, independent of whether a self_user_id is
++      // set. `sync_stale` (Issue #442) additionally flags data that is present
++      // but older than the expected scheduler cadence (from `sync_runs`,
++      // ADR-0033) — derived here since it needs the open store.
++      const warnings = deriveBriefWarnings({
++        slackConfigured: config.connectors.slack !== undefined,
++        embeddingBackend: config.embedding.backend,
++        syncStaleness: evaluateSyncStaleness(listSyncRuns(store.connection.sqlite), {
++          enabledConnectors: selectEnabledConnectors(connectorNames(), config.connectors),
++          expectedCadenceMinutes: config.sync.expectedCadenceMinutes,
++          staleFactor: config.sync.staleFactor,
++          cadenceMinutes: config.sync.cadenceMinutes,
++        }),
++      });
++
+       const brief = buildBrief(store.connection.sqlite, {
+         since,
+         until,
+diff --git a/src/cli/commands/digest.ts b/src/cli/commands/digest.ts
+index 2f92bef..0ee061d 100644
+--- a/src/cli/commands/digest.ts
++++ b/src/cli/commands/digest.ts
+@@ -50,10 +50,12 @@ export class DigestCommand extends Command {
+     const [
+       { loadConfig },
+       { Store },
+-      { deriveBriefWarnings },
++      { deriveBriefWarnings, evaluateSyncStaleness, listSyncRuns },
+       { resolveSelfUserIds, workspaceSecretName },
+       { resolveSecret },
+       { runDigest },
++      { connectorNames },
++      { selectEnabledConnectors },
+     ] = await Promise.all([
+       import("../../config/index.ts"),
+       import("../../db/index.ts"),
+@@ -61,6 +63,8 @@ export class DigestCommand extends Command {
+       import("../../connectors/slack.ts"),
+       import("../../connectors/secrets.ts"),
+       import("../../digest/run.ts"),
++      import("../../connectors/registry.ts"),
++      import("../../connectors/sync-all.ts"),
+     ]);
+ 
+     const config = await loadConfig();
+@@ -105,14 +109,23 @@ export class DigestCommand extends Command {
+       return selfUserIds[0] ?? null;
+     };
+ 
+-    const warnings = deriveBriefWarnings({
+-      slackConfigured: config.connectors.slack !== undefined,
+-      embeddingBackend: config.embedding.backend,
+-    });
+     const localRoots = (config.connectors.local?.roots as string[] | undefined) ?? [];
+ 
+     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+     try {
++      // Completeness signals (Issue #189) + sync staleness (Issue #442): a
++      // scheduled digest built from weeks-stale data must say so — derived here
++      // since the staleness verdict reads the sync_runs projection (ADR-0033).
++      const warnings = deriveBriefWarnings({
++        slackConfigured: config.connectors.slack !== undefined,
++        embeddingBackend: config.embedding.backend,
++        syncStaleness: evaluateSyncStaleness(listSyncRuns(store.connection.sqlite), {
++          enabledConnectors: selectEnabledConnectors(connectorNames(), config.connectors),
++          expectedCadenceMinutes: config.sync.expectedCadenceMinutes,
++          staleFactor: config.sync.staleFactor,
++          cadenceMinutes: config.sync.cadenceMinutes,
++        }),
++      });
+       const results = await runDigest(store.connection.sqlite, jobs, {
+         ...(this.job !== undefined ? { jobName: this.job } : {}),
+         dryRun: this.dryRun,
+diff --git a/src/cli/commands/doctor.ts b/src/cli/commands/doctor.ts
+index 0f82a42..2b6e7e6 100644
+--- a/src/cli/commands/doctor.ts
++++ b/src/cli/commands/doctor.ts
+@@ -56,6 +56,12 @@ export class DoctorCommand extends Command {
+     details: `
+       Aggregates config / database / embedding-backend / connector-credential
+       checks into one report so you can see what is wired and what is missing.
++      Also evaluates sync freshness (ADR-0033): an enabled connector whose last
++      recorded run is older than the expected scheduler cadence
++      ([sync].expectedCadenceMinutes × staleFactor, per-connector override via
++      [sync.cadenceMinutes]) — or that never synced — is a warning, so a
++      silently dead cron/launchd/systemd entry surfaces here instead of
++      degrading answers to stale data.
+       Also warns when the same Slack channel id is listed under multiple
+       workspace aliases: sync de-duplicates it (owner-wins, ADR-0038) but the
+       redundant declaration is surfaced here so you can spot it without a sync.
+@@ -576,6 +582,56 @@ export class DoctorCommand extends Command {
+       }
+     }
+ 
++    // 7. sync freshness (ADR-0033, Issue #442) — an enabled connector whose last
++    //    recorded run is older than the expected scheduler cadence × safety
++    //    factor, or that never synced, is surfaced here. Suasor delegates the
++    //    cadence to the OS scheduler (ADR-0027), so a PATH-broken cron line — a
++    //    failure mode `onboard --write-cron` itself predicts — otherwise degrades
++    //    the secretary to weeks-stale answers with no signal anywhere. Warn only
++    //    (never error): staleness is ambient degradation, not a broken install.
++    //    Quiet when every enabled connector is fresh.
++    if (config !== null && dbReady && dbPath !== null) {
++      const [{ listSyncRuns, evaluateSyncStaleness, formatMinutes }, { selectEnabledConnectors }] =
++        await Promise.all([
++          import("../../mcp/queries.ts"),
++          import("../../connectors/sync-all.ts"),
++        ]);
++      const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
++      try {
++        const entries = evaluateSyncStaleness(listSyncRuns(store.connection.sqlite), {
++          enabledConnectors: selectEnabledConnectors(connectorNames(), config.connectors),
++          expectedCadenceMinutes: config.sync.expectedCadenceMinutes,
++          staleFactor: config.sync.staleFactor,
++          cadenceMinutes: config.sync.cadenceMinutes,
++        });
++        for (const e of entries) {
++          if (e.state === "stale") {
++            checks.push({
++              name: "sync.staleness",
++              status: "warn",
++              detail:
++                `${e.connector}: last sync ${formatMinutes(e.ageMinutes ?? 0)} ago ` +
++                `(status ${e.lastStatus}) exceeds the expected cadence ` +
++                `(threshold ${formatMinutes(e.thresholdMinutes)}) — the scheduler may not be ` +
++                "running. Check `suasor sync status` and your cron/launchd/systemd entry " +
++                `(see ${docsUrl("guide/scheduling.md")}).`,
++            });
++          } else if (e.state === "never_synced") {
++            checks.push({
++              name: "sync.staleness",
++              status: "warn",
++              detail:
++                `${e.connector}: never synced — run \`suasor ${e.connector} sync\` ` +
++                "(or `suasor sync`), then schedule it (see " +
++                `${docsUrl("guide/scheduling.md")}).`,
++            });
++          }
++        }
++      } finally {
++        store.close();
++      }
++    }
++
+     const hasError = checks.some((c) => c.status === "error");
+ 
+     if (this.json) {
+diff --git a/src/cli/commands/onboard.ts b/src/cli/commands/onboard.ts
+index e745312..4414039 100644
+--- a/src/cli/commands/onboard.ts
++++ b/src/cli/commands/onboard.ts
+@@ -21,6 +21,7 @@
+  * override, and `--skip-auth` lets env-override (or binary) installs skip the
+  * keychain step. `--json` emits a machine-readable step summary.
+  */
++import { homedir } from "node:os";
+ import { Command, Option } from "clipanion";
+ import { authConnectorNames } from "../../connectors/auth-specs.ts";
+ import { connectorNames } from "../../connectors/registry.ts";
+@@ -35,8 +36,10 @@ import {
+ import { type RecapConnector, recapHasFailure, renderRecap } from "../onboard/recap.ts";
+ import {
+   type DigestJobRef,
++  planSchedulerInstall,
+   renderDigestSchedulerLines,
+   renderSchedulerSnippet,
++  schedulerKindForPlatform,
+ } from "../onboard/scheduler.ts";
+ import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
+ import { readSecretLine } from "../read-secret.ts";
+@@ -94,6 +97,12 @@ interface OnboardReport {
+   scheduler: string;
+   /** Names of configured [digest.jobs] surfaced in the scheduler step (ADR-0040). */
+   digestJobs: string[];
++  /**
++   * Scheduler unit files written by `--write-launchd` / `--write-systemd`
++   * (Issue #442). Empty when neither flag was passed, the platform did not
++   * match, or every target file already existed (non-destructive skip).
++   */
++  schedulerWrites: string[];
+ }
+ 
+ /**
+@@ -120,7 +129,11 @@ export class OnboardCommand extends Command {
+       'suasor sync', then print an OS scheduler template (cron / launchd /
+       systemd) — including ready-to-paste digest lines for any configured
+       [digest.jobs] (standing consent, ADR-0040) — and the MCP registration
+-      block.
++      block. --write-cron / --write-launchd / --write-systemd opt in to
++      installing the printed sync template (crontab line / LaunchAgents plist /
++      systemd user units) instead of only printing it; each writer is
++      non-destructive and matches its OS (a mismatched flag is skipped with a
++      warning).
+ 
+       The config append is non-destructive: an existing [connectors.X] section
+       (including one you set enabled = false) is never rewritten.
+@@ -153,6 +166,16 @@ export class OnboardCommand extends Command {
+     description: "Append the cron line to your crontab (otherwise the template is only printed).",
+   });
+ 
++  writeLaunchd = Option.Boolean("--write-launchd", false, {
++    description:
++      "Write the launchd sync plist to ~/Library/LaunchAgents and `launchctl load` it (macOS).",
++  });
++
++  writeSystemd = Option.Boolean("--write-systemd", false, {
++    description:
++      "Write the systemd user service+timer to ~/.config/systemd/user and enable the timer (Linux).",
++  });
++
+   json = Option.Boolean("--json", false, {
+     description: "Emit a machine-readable per-step summary instead of human-readable output.",
+   });
+@@ -311,10 +334,14 @@ export class OnboardCommand extends Command {
+     // 6. Scheduler template. The printed cron / launchd / systemd entries assume
+     // a global `suasor` on PATH; from source / bunx no such binary exists, so we
+     // detect the likely invocation channel and append a substitution note (and,
+-    // when --write-cron resolves to a non-PATH channel, a louder warning).
++    // when a --write-* flag resolves to a non-PATH channel, a louder warning).
++    // The platform is context-injectable (tests) like the keychain.
+     const command = invocationCommand();
+     const channel = detectInvocationChannel(process.argv, process.execPath);
+-    const scheduler = renderSchedulerSnippet(process.platform, command);
++    const platform =
++      (this.context as { schedulerPlatform?: NodeJS.Platform }).schedulerPlatform ??
++      process.platform;
++    const scheduler = renderSchedulerSnippet(platform, command);
+     if (this.writeCron) {
+       if (channel !== "global") {
+         stderr.write(
+@@ -328,6 +355,36 @@ export class OnboardCommand extends Command {
+         stdout.write(wrote ? "Appended the cron line to your crontab.\n" : "");
+       }
+     }
++
++    // 6a. OS-native scheduler writers (Issue #442): --write-launchd /
++    // --write-systemd install exactly the template the wizard prints, behind the
++    // same explicit opt-in as --write-cron — so the auto-install path finally
++    // matches the OS-appropriate snippet the wizard renders (the digest lines
++    // below say "duplicate the sync plist/unit"; after a write that file really
++    // exists). A flag that does not match the detected platform is skipped with
++    // a warning rather than writing a unit the OS cannot run.
++    const schedulerWrites: string[] = [];
++    for (const { flag, kind, name } of [
++      { flag: this.writeLaunchd, kind: "launchd" as const, name: "--write-launchd" },
++      { flag: this.writeSystemd, kind: "systemd" as const, name: "--write-systemd" },
++    ]) {
++      if (!flag) continue;
++      if (schedulerKindForPlatform(platform) !== kind) {
++        stderr.write(
++          `warning: ${name} skipped — ${kind} is not the scheduler for this platform ` +
++            `('${platform}'; use ${kind === "launchd" ? "macOS" : "Linux"} or --write-cron).\n`,
++        );
++        continue;
++      }
++      if (channel !== "global") {
++        stderr.write(
++          `warning: ${name} writes a literal \`${command}\` invocation, but you appear to be ` +
++            `running via ${channel} — \`${command}\` is likely not on PATH for the scheduler. ` +
++            "Edit the written unit to use your real invocation.\n",
++        );
++      }
++      schedulerWrites.push(...(await this.writeSchedulerUnits(kind, command)));
++    }
+     if (!this.json) {
+       stdout.write(`\nPeriodic sync — ${scheduler.label} (Suasor runs no daemon, ADR-0027):\n`);
+       stdout.write(`${scheduler.snippet}\n`);
+@@ -420,6 +477,7 @@ export class OnboardCommand extends Command {
+         syncExitCode,
+         scheduler: scheduler.kind,
+         digestJobs: digestJobs.map((j) => j.name),
++        schedulerWrites,
+       };
+       stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+     }
+@@ -664,6 +722,53 @@ export class OnboardCommand extends Command {
+     }
+   }
+ 
++  /**
++   * Write the launchd plist / systemd user units for periodic sync and activate
++   * them (`--write-launchd` / `--write-systemd`, Issue #442). Non-destructive:
++   * an existing unit file is never overwritten (idempotent re-runs, matching
++   * `appendCron`'s already-scheduled skip), and activation runs only when
++   * something was written. An activation failure warns with the manual command
++   * (the unit file is in place either way). Returns the paths written.
++   * `schedulerHome` / `schedulerExec` are test seams injected via the CLI
++   * context (like `keychain`), so tests never touch the real home directory or
++   * spawn `launchctl` / `systemctl`.
++   */
++  private async writeSchedulerUnits(
++    kind: "launchd" | "systemd",
++    command: string,
++  ): Promise<string[]> {
++    const ctx = this.context as {
++      schedulerHome?: string;
++      schedulerExec?: (argv: string[]) => Promise<number>;
++    };
++    const home = ctx.schedulerHome ?? homedir();
++    const exec = ctx.schedulerExec ?? runQuiet;
++    const plan = planSchedulerInstall(kind, command, home);
++    const written: string[] = [];
++    for (const file of plan.files) {
++      if (await Bun.file(file.path).exists()) {
++        if (!this.json) {
++          this.context.stdout.write(`${file.path} already exists (left untouched).\n`);
++        }
++        continue;
++      }
++      await Bun.write(file.path, file.content);
++      written.push(file.path);
++      if (!this.json) this.context.stdout.write(`Wrote ${file.path}\n`);
++    }
++    if (written.length === 0) return written;
++    for (const argv of plan.activate) {
++      const code = await exec(argv);
++      if (code !== 0) {
++        this.context.stderr.write(
++          `warning: \`${argv.join(" ")}\` failed (exit ${code}) — ` +
++            `run it manually to activate the ${kind} entry.\n`,
++        );
++      }
++    }
++    return written;
++  }
++
+   /** Append the cron line to the user's crontab (best-effort). Returns success. */
+   private async appendCron(command: string): Promise<boolean> {
+     try {
+@@ -996,6 +1101,17 @@ function renderConnectorSteps(connector: string, lead: string): string {
+   return `${connector}: ${lead}\n${numbered}`;
+ }
+ 
++/** Run a command discarding output; returns the exit code (1 on spawn failure). */
++async function runQuiet(argv: string[]): Promise<number> {
++  try {
++    const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
++    await proc.exited;
++    return proc.exitCode ?? 1;
++  } catch {
++    return 1;
++  }
++}
++
+ /** Whether stdin is an interactive TTY (so prompts are safe to show). */
+ function isInteractive(stdin: unknown): boolean {
+   // clipanion's context.stdin is the real process.stdin in production; tests
+diff --git a/src/cli/onboard/scheduler.ts b/src/cli/onboard/scheduler.ts
+index 9b6eafc..5ae17a5 100644
+--- a/src/cli/onboard/scheduler.ts
++++ b/src/cli/onboard/scheduler.ts
+@@ -63,27 +63,44 @@ function renderLaunchd(command: string): string {
+   ].join("\n");
+ }
+ 
++/**
++ * The systemd oneshot service + timer unit bodies (Linux user units), split per
++ * file so `--write-systemd` can write each unit where systemd expects it while
++ * the printed snippet keeps showing both under path-comment headers.
++ */
++export function systemdUnitBodies(command: string): { service: string; timer: string } {
++  return {
++    service: [
++      "[Unit]",
++      "Description=Suasor bulk connector sync (one-shot)",
++      "",
++      "[Service]",
++      "Type=oneshot",
++      `ExecStart=${command} sync --json`,
++    ].join("\n"),
++    timer: [
++      "[Unit]",
++      "Description=Run Suasor sync hourly",
++      "",
++      "[Timer]",
++      "OnCalendar=hourly",
++      "Persistent=true",
++      "",
++      "[Install]",
++      "WantedBy=timers.target",
++    ].join("\n"),
++  };
++}
++
+ /** Render a systemd oneshot service + timer (Linux user units). */
+ function renderSystemd(command: string): string {
++  const units = systemdUnitBodies(command);
+   return [
+     "# ~/.config/systemd/user/suasor-sync.service",
+-    "[Unit]",
+-    "Description=Suasor bulk connector sync (one-shot)",
+-    "",
+-    "[Service]",
+-    "Type=oneshot",
+-    `ExecStart=${command} sync --json`,
++    units.service,
+     "",
+     "# ~/.config/systemd/user/suasor-sync.timer",
+-    "[Unit]",
+-    "Description=Run Suasor sync hourly",
+-    "",
+-    "[Timer]",
+-    "OnCalendar=hourly",
+-    "Persistent=true",
+-    "",
+-    "[Install]",
+-    "WantedBy=timers.target",
++    units.timer,
+   ].join("\n");
+ }
+ 
+@@ -115,6 +132,63 @@ export function renderSchedulerSnippet(
+   return { kind, label: LABELS[kind], snippet };
+ }
+ 
++/** One file the scheduler-install plan writes (absolute path + full content). */
++export interface SchedulerInstallFile {
++  readonly path: string;
++  readonly content: string;
++}
++
++/** A deterministic install plan for `--write-launchd` / `--write-systemd`. */
++export interface SchedulerInstallPlan {
++  readonly kind: "launchd" | "systemd";
++  /** Unit file(s) to write (launchd: one plist; systemd: service + timer). */
++  readonly files: readonly SchedulerInstallFile[];
++  /** Activation commands (argv form) to run after writing, in order. */
++  readonly activate: readonly string[][];
++}
++
++/**
++ * Plan the file writes + activation commands for installing the periodic-sync
++ * scheduler entry (`onboard --write-launchd` / `--write-systemd`, Issue #442 —
++ * the OS-appropriate siblings of `--write-cron`). Pure: the OS-specific
++ * knowledge (paths, unit split, activation verbs) lives here and is
++ * unit-testable; the wizard performs the IO. The written content is exactly
++ * what the printed template shows (`renderLaunchd` / `systemdUnitBodies`), so
++ * the sync-unit duplication guidance the digest lines print (ADR-0040 /
++ * `renderDigestSchedulerLines`) refers to a file that really exists.
++ *
++ * @param kind    - `launchd` (macOS) or `systemd` (Linux user units).
++ * @param command - The `suasor` binary invocation (without the `sync` verb).
++ * @param home    - The user's home directory (injected for testability).
++ */
++export function planSchedulerInstall(
++  kind: "launchd" | "systemd",
++  command: string,
++  home: string,
++): SchedulerInstallPlan {
++  if (kind === "launchd") {
++    const path = `${home}/Library/LaunchAgents/com.suasor.sync.plist`;
++    return {
++      kind,
++      files: [{ path, content: `${renderLaunchd(command)}\n` }],
++      activate: [["launchctl", "load", path]],
++    };
++  }
++  const dir = `${home}/.config/systemd/user`;
++  const units = systemdUnitBodies(command);
++  return {
++    kind,
++    files: [
++      { path: `${dir}/suasor-sync.service`, content: `${units.service}\n` },
++      { path: `${dir}/suasor-sync.timer`, content: `${units.timer}\n` },
++    ],
++    activate: [
++      ["systemctl", "--user", "daemon-reload"],
++      ["systemctl", "--user", "enable", "--now", "suasor-sync.timer"],
++    ],
++  };
++}
++
+ /**
+  * The slice of a `[digest.jobs]` entry the scheduler step needs (ADR-0040).
+  * `schedule` is the job's informational cron expression — the OS scheduler owns
+diff --git a/src/config/loader.ts b/src/config/loader.ts
+index 1c30d09..b4a0271 100644
+--- a/src/config/loader.ts
++++ b/src/config/loader.ts
+@@ -17,7 +17,7 @@
+  */
+ import { join } from "node:path";
+ import { z } from "zod";
+-import { loadConnectorConfigSchema } from "../connectors/registry.ts";
++import { connectorNames, loadConnectorConfigSchema } from "../connectors/registry.ts";
+ import { ConfigError } from "./error.ts";
+ import { Config } from "./schema.ts";
+ import { collectSidecarEndpoints, SIDECAR_LOOPBACK_ALLOWLIST } from "./sidecar-egress.ts";
+@@ -214,6 +214,26 @@ function validateSidecarEgress(config: Config): void {
+   }
+ }
+ 
++/**
++ * Reject `[sync.cadenceMinutes]` keys that are not registered connector names
++ * (Issue #442). The record is open (any string key parses), so a typo
++ * (`gihub = 1440`) would otherwise silently keep the default cadence for the
++ * real connector — the staleness check would fire (or stay quiet) on the wrong
++ * threshold with no signal. Fail-fast like `validateConnectorSlices`.
++ */
++function validateSyncCadenceOverrides(config: Config): void {
++  const known = new Set(connectorNames());
++  const issues = Object.keys(config.sync.cadenceMinutes)
++    .filter((name) => !known.has(name))
++    .map(
++      (name) =>
++        `sync.cadenceMinutes.${name}: unknown connector (known: ${[...known].join(", ")})`,
++    );
++  if (issues.length > 0) {
++    throw new ConfigError("invalid sync cadence override", issues);
++  }
++}
++
+ /**
+  * Load and validate the effective configuration.
+  *
+@@ -252,6 +272,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Confi
+   // Content-egressing sidecars (pandoc/markitdown/ollama) must be loopback unless
+   // the operator opts into a remote host via `<section>.allowRemote` (Issue #436).
+   validateSidecarEgress(config);
++  // `[sync.cadenceMinutes]` keys must name registered connectors (Issue #442).
++  validateSyncCadenceOverrides(config);
+   if (config.storage.dbPath === null) {
+     config.storage.dbPath = join(configDir, "suasor.db");
+   }
+diff --git a/src/config/schema.ts b/src/config/schema.ts
+index 243c380..cccef49 100644
+--- a/src/config/schema.ts
++++ b/src/config/schema.ts
+@@ -415,6 +415,50 @@ export const DigestConfig = z
+   .passthrough();
+ export type DigestConfig = z.infer<typeof DigestConfig>;
+ 
++/**
++ * Default expected minutes between scheduled sync runs (Issue #442). Matches the
++ * hourly cadence every shipped scheduler template uses (cron `15 * * * *`,
++ * launchd `StartInterval` 3600, systemd `OnCalendar=hourly` — ADR-0027 /
++ * `src/cli/onboard/scheduler.ts`).
++ */
++export const DEFAULT_SYNC_EXPECTED_CADENCE_MINUTES = 60;
++/**
++ * Default staleness safety factor (Issue #442). A connector is flagged stale
++ * when its last recorded run is older than `cadence × factor` (60m × 4 = 4h by
++ * default) — loose enough to tolerate a few missed runs / laptop sleep, tight
++ * enough that a dead scheduler surfaces the same day.
++ */
++export const DEFAULT_SYNC_STALE_FACTOR = 4;
++
++/**
++ * `[sync]` — sync-freshness expectations (Issue #442). Suasor never schedules
++ * syncs itself (ADR-0027 delegates cadence to the OS scheduler), so these values
++ * describe what the operator *expects* the scheduler to do. doctor / brief /
++ * the `sync.status` MCP tool compare the `sync_runs` history (ADR-0033) against
++ * `expectedCadenceMinutes × staleFactor` at read time (never persisted —
++ * ADR-0033 §2 keeps now-dependent derivations out of projections) so a silently
++ * broken scheduler is surfaced instead of degrading answers to stale data.
++ */
++export const SyncConfig = z
++  .object({
++    /** Expected minutes between scheduled sync runs (shipped templates: hourly). */
++    expectedCadenceMinutes: z
++      .number()
++      .int()
++      .positive()
++      .default(DEFAULT_SYNC_EXPECTED_CADENCE_MINUTES),
++    /** Stale when the last run is older than `cadence × staleFactor`. */
++    staleFactor: z.number().positive().default(DEFAULT_SYNC_STALE_FACTOR),
++    /**
++     * Per-connector expected-cadence override (minutes), e.g. `github = 1440`
++     * for a connector you deliberately sync daily. Keys must be registered
++     * connector names (validated at load — a typo fails fast, ADR-0007).
++     */
++    cadenceMinutes: z.record(z.string(), z.number().int().positive()).default({}),
++  })
++  .passthrough();
++export type SyncConfig = z.infer<typeof SyncConfig>;
++
+ /**
+  * Root config. `connectors` is an open record extended per-connector by
+  * #7–#12; values are left lenient at the foundation layer.
+@@ -432,6 +476,7 @@ export const Config = z.object({
+   export: ExportConfig.default(() => ExportConfig.parse({})),
+   tasks: TasksConfig.default(() => TasksConfig.parse({})),
+   digest: DigestConfig.default(() => DigestConfig.parse({})),
++  sync: SyncConfig.default(() => SyncConfig.parse({})),
+   connectors: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
+ });
+ export type Config = z.infer<typeof Config>;
+diff --git a/src/mcp/queries.ts b/src/mcp/queries.ts
+index 3a39f79..1fddb05 100644
+--- a/src/mcp/queries.ts
++++ b/src/mcp/queries.ts
+@@ -21,6 +21,10 @@
+  * lexicographically (valid because the stored timestamps are zero-padded UTC).
+  */
+ import type { Database } from "bun:sqlite";
++import {
++  DEFAULT_SYNC_EXPECTED_CADENCE_MINUTES,
++  DEFAULT_SYNC_STALE_FACTOR,
++} from "../config/schema.ts";
+ import { docsUrl } from "../shared/doc-ref.ts";
+ 
+ /** Default page size for the list queries (matches retrieval's default). */
+@@ -284,6 +288,166 @@ export function listSyncRuns(sqlite: Database): SyncRunRecord[] {
+   }));
+ }
+ 
++// --- Sync staleness (read-time derivation over sync_runs, Issue #442) ---------
++
++/**
++ * Freshness verdict for one enabled connector (Issue #442):
++ *   - `fresh`        — last run is within the expected cadence × safety factor
++ *   - `stale`        — last run is older than the threshold (scheduler likely dead)
++ *   - `never_synced` — enabled but no run history at all
++ */
++export type SyncFreshnessState = "fresh" | "stale" | "never_synced";
++
++/** One enabled connector's staleness evaluation (Issue #442, ADR-0033). */
++export interface SyncStalenessEntry {
++  connector: string;
++  state: SyncFreshnessState;
++  /** Last run activity (`ended_at`, or `started_at` for a stuck running row); null when never synced. */
++  lastRunAt: string | null;
++  /** Latest run's status (`running` / `ok` / `partial` / `error`); null when never synced. */
++  lastStatus: string | null;
++  /** Whole minutes since {@link lastRunAt}; null when never synced. */
++  ageMinutes: number | null;
++  /** Effective stale threshold for this connector (cadence × factor, minutes). */
++  thresholdMinutes: number;
++}
++
++/** Config facts + clock for {@link evaluateSyncStaleness} (all injectable). */
++export interface SyncStalenessOptions {
++  /** Enabled connector names (config ∩ registry) — drives never-synced detection. */
++  enabledConnectors: readonly string[];
++  /** Expected minutes between scheduled runs (default 60 — the hourly templates). */
++  expectedCadenceMinutes?: number;
++  /** Stale when older than `cadence × staleFactor` (default 4). */
++  staleFactor?: number;
++  /** Per-connector cadence override (minutes), keyed by connector name. */
++  cadenceMinutes?: Record<string, number>;
++  /** Clock injection for tests (default: `new Date()`). */
++  now?: Date;
++}
++
++/**
++ * Evaluate per-connector sync staleness from the `sync_runs` history (ADR-0033)
++ * against the expected scheduler cadence (Issue #442). Pure and read-time only
++ * (the now-dependent verdict is never persisted — ADR-0033 §2, same policy as
++ * the ADR-0028 overdue derivation). Only *enabled* connectors are evaluated: a
++ * deliberately disabled connector going quiet is not a staleness signal. Shared
++ * by `doctor`, the brief `sync_stale` completeness warning, and the
++ * `sync.status` MCP tool so all three agree on one verdict.
++ */
++export function evaluateSyncStaleness(
++  runs: SyncRunRecord[],
++  options: SyncStalenessOptions,
++): SyncStalenessEntry[] {
++  const cadence = options.expectedCadenceMinutes ?? DEFAULT_SYNC_EXPECTED_CADENCE_MINUTES;
++  const factor = options.staleFactor ?? DEFAULT_SYNC_STALE_FACTOR;
++  const overrides = options.cadenceMinutes ?? {};
++  const nowMs = (options.now ?? new Date()).getTime();
++  const byConnector = new Map(runs.map((r) => [r.connector, r]));
++  return options.enabledConnectors.map((connector) => {
++    const thresholdMinutes = (overrides[connector] ?? cadence) * factor;
++    const run = byConnector.get(connector);
++    if (run === undefined) {
++      return {
++        connector,
++        state: "never_synced" as const,
++        lastRunAt: null,
++        lastStatus: null,
++        ageMinutes: null,
++        thresholdMinutes,
++      };
++    }
++    // A stuck `running` row (crashed before SyncRunEnded) ages from started_at,
++    // so it cannot read as eternally fresh.
++    const lastRunAt = run.endedAt ?? run.startedAt;
++    const ageMinutes = Math.max(0, Math.floor((nowMs - Date.parse(lastRunAt)) / 60_000));
++    return {
++      connector,
++      state: ageMinutes > thresholdMinutes ? ("stale" as const) : ("fresh" as const),
++      lastRunAt,
++      lastStatus: run.status,
++      ageMinutes,
++      thresholdMinutes,
++    };
++  });
++}
++
++/**
++ * Render whole minutes as a compact human duration (`45m` / `9h` / `12d`) for
++ * the staleness messages. Deterministic (floor), so tests can pin output.
++ */
++export function formatMinutes(minutes: number): string {
++  if (minutes < 120) return `${minutes}m`;
++  const hours = Math.floor(minutes / 60);
++  if (hours < 48) return `${hours}h`;
++  return `${Math.floor(hours / 24)}d`;
++}
++
++/** One `sync.status` row: the latest run (when any) + the freshness verdict. */
++export interface SyncStatusRow {
++  connector: string;
++  /** Whether the connector is currently enabled in config. */
++  enabled: boolean;
++  /** `running` / `ok` / `partial` / `error`, or `never_synced` (no history). */
++  status: string;
++  startedAt: string | null;
++  endedAt: string | null;
++  observed: number | null;
++  updated: number | null;
++  unchanged: number | null;
++  durationMs: number | null;
++  lastError: string | null;
++  /** Staleness verdict; null for a since-disabled connector (not evaluated). */
++  freshness: {
++    state: SyncFreshnessState;
++    ageMinutes: number | null;
++    thresholdMinutes: number;
++  } | null;
++}
++
++/**
++ * Compose the `sync.status` MCP read view (Issue #442): the latest run per
++ * connector (ADR-0033) annotated with the read-time staleness verdict. Enabled
++ * connectors that never synced are included as `never_synced` (union semantics
++ * matching `suasor sync status`); a since-disabled connector's last run stays
++ * visible but is not staleness-evaluated (`freshness: null`).
++ */
++export function buildSyncStatus(sqlite: Database, options: SyncStalenessOptions): SyncStatusRow[] {
++  const runs = listSyncRuns(sqlite);
++  const byConnector = new Map(runs.map((r) => [r.connector, r]));
++  const freshness = new Map(
++    evaluateSyncStaleness(runs, options).map((e) => [e.connector, e] as const),
++  );
++  const enabled = new Set(options.enabledConnectors);
++  const names = [
++    ...options.enabledConnectors,
++    ...runs.map((r) => r.connector).filter((c) => !enabled.has(c)),
++  ];
++  return names.map((connector) => {
++    const run = byConnector.get(connector);
++    const entry = freshness.get(connector);
++    return {
++      connector,
++      enabled: enabled.has(connector),
++      status: run?.status ?? "never_synced",
++      startedAt: run?.startedAt ?? null,
++      endedAt: run?.endedAt ?? null,
++      observed: run?.observed ?? null,
++      updated: run?.updated ?? null,
++      unchanged: run?.unchanged ?? null,
++      durationMs: run?.durationMs ?? null,
++      lastError: run?.lastError ?? null,
++      freshness: entry
++        ? {
++            state: entry.state,
++            ageMinutes: entry.ageMinutes,
++            thresholdMinutes: entry.thresholdMinutes,
++          }
++        : null,
++    };
++  });
++}
++
+ /** One version of a source's body, reconstructed from the event log. */
+ export interface SourceVersion {
+   /** When the source was observed at its origin (ISO 8601). */
+@@ -1108,7 +1272,7 @@ export function listPersons(sqlite: Database, options: ListPersonsOptions = {}):
+  * window is genuinely quiet — so the host can tell "Slack not connected" from
+  * "nothing happened".
+  */
+-export type BriefWarningKey = "slack_not_configured" | "embedding_disabled";
++export type BriefWarningKey = "slack_not_configured" | "embedding_disabled" | "sync_stale";
+ 
+ /** A single completeness signal: a stable {@link BriefWarningKey} + a human note. */
+ export interface BriefWarning {
+@@ -1118,7 +1282,7 @@ export interface BriefWarning {
+   message: string;
+ }
+ 
+-const BRIEF_WARNING_MESSAGE: Record<BriefWarningKey, string> = {
++const BRIEF_WARNING_MESSAGE: Record<Exclude<BriefWarningKey, "sync_stale">, string> = {
+   slack_not_configured: "Slack connector not configured — demand (@mention / DM) is always empty",
+   embedding_disabled: `embedding backend off — recall-backed material degrades to FTS-only (${docsUrl(
+     "guide/embedding.md",
+@@ -1131,6 +1295,14 @@ export interface BriefCompleteness {
+   slackConfigured: boolean;
+   /** The effective embedding backend (`"disabled"` ⇒ recall degrades to FTS). */
+   embeddingBackend: string;
++  /**
++   * Per-connector staleness evaluation ({@link evaluateSyncStaleness}, Issue
++   * #442). Any non-`fresh` entry raises one `sync_stale` warning naming the
++   * stale / never-synced connectors, so the host can caveat "my Slack data is
++   * 9d old" instead of silently answering from stale data. Omitted (older
++   * callers) ⇒ the signal is not derived.
++   */
++  syncStaleness?: SyncStalenessEntry[];
+ }
+ 
+ /**
+@@ -1149,6 +1321,20 @@ export function deriveBriefWarnings(completeness: BriefCompleteness): BriefWarni
+   if (completeness.embeddingBackend === "disabled") {
+     warnings.push({ key: "embedding_disabled", message: BRIEF_WARNING_MESSAGE.embedding_disabled });
+   }
++  // Ambient freshness (Issue #442): the bundle otherwise looks identical whether
++  // the data is current or weeks old (a PATH-broken cron sync fails silently).
++  const notFresh = (completeness.syncStaleness ?? []).filter((e) => e.state !== "fresh");
++  if (notFresh.length > 0) {
++    const parts = notFresh.map((e) =>
++      e.state === "never_synced"
++        ? `${e.connector} never synced`
++        : `${e.connector} last synced ${formatMinutes(e.ageMinutes ?? 0)} ago (expected ≤ ${formatMinutes(e.thresholdMinutes)})`,
++    );
++    warnings.push({
++      key: "sync_stale",
++      message: `sync data may be stale: ${parts.join(", ")} — check your scheduler (\`suasor sync status\`)`,
++    });
++  }
+   return warnings;
+ }
+ 
+diff --git a/src/mcp/serve.ts b/src/mcp/serve.ts
+index 1e4dca0..836caf1 100644
+--- a/src/mcp/serve.ts
++++ b/src/mcp/serve.ts
+@@ -9,8 +9,10 @@
+ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+ import { type Config, collectConfigWarnings, loadConfig } from "../config/index.ts";
++import { connectorNames } from "../connectors/registry.ts";
+ import type { SecretStoreOptions } from "../connectors/secrets.ts";
+ import { resolveSelfUserIds } from "../connectors/slack.ts";
++import { selectEnabledConnectors } from "../connectors/sync-all.ts";
+ import { Store } from "../db/index.ts";
+ import {
+   createEmbedderResolved,
+@@ -101,6 +103,15 @@ function defaultBuildServer({
+     // `slack_not_configured` completeness signal (Issue #189), independent of
+     // whether a self_user_id is set.
+     slackConfigured: config.connectors.slack !== undefined,
++    // Sync-freshness facts (Issue #442): the enabled connector set + [sync]
++    // cadence expectations drive the `sync.status` read tool and the brief
++    // `sync_stale` completeness signal.
++    sync: {
++      enabledConnectors: selectEnabledConnectors(connectorNames(), config.connectors),
++      expectedCadenceMinutes: config.sync.expectedCadenceMinutes,
++      staleFactor: config.sync.staleFactor,
++      cadenceMinutes: config.sync.cadenceMinutes,
++    },
+     // Enable the `connector.sync` write tool (HITL) over the same store
+     // (ADR-0007 / Issue #10 D5). The `[embedding]` config in `config` also lets
+     // ingest (re)populate vec0. Hosts gate the write via `readOnlyHint: false`.
+diff --git a/src/mcp/server-read.ts b/src/mcp/server-read.ts
+index 6e05b23..2387b59 100644
+--- a/src/mcp/server-read.ts
++++ b/src/mcp/server-read.ts
+@@ -30,8 +30,10 @@ import {
+   buildActivityTimeline,
+   buildBrief,
+   buildPriorities,
++  buildSyncStatus,
+   DEFAULT_LIST_LIMIT,
+   deriveBriefWarnings,
++  evaluateSyncStaleness,
+   expandGraph,
+   getSource,
+   getSourceFull,
+@@ -44,6 +46,7 @@ import {
+   listProposals,
+   listSourceHistory,
+   listSources,
++  listSyncRuns,
+   listTasks,
+   listWithTruncation,
+ } from "./queries.ts";
+@@ -553,10 +556,16 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
+         selfUserIds: deps.slackSelfUserIds ?? [],
+         // Completeness signals (Issue #189): mark categories empty because they
+         // are unconfigured (Slack not wired / embedding disabled) so the host
+-        // can distinguish "not connected" from "genuinely quiet".
++        // can distinguish "not connected" from "genuinely quiet". `sync_stale`
++        // (Issue #442) additionally flags data that is *present but old* —
++        // evaluated per call (now-dependent), only when the caller supplied the
++        // sync-freshness facts.
+         warnings: deriveBriefWarnings({
+           slackConfigured: deps.slackConfigured ?? (deps.slackSelfUserIds ?? []).length > 0,
+           embeddingBackend: embeddingConfig.backend,
++          ...(deps.sync
++            ? { syncStaleness: evaluateSyncStaleness(listSyncRuns(sqlite), { ...deps.sync, now }) }
++            : {}),
+         }),
+       });
+       return jsonResult(brief);
+@@ -842,4 +851,43 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
+       return jsonResult({ persons, truncated });
+     },
+   );
++
++  // --- sync.status: per-connector sync freshness (ADR-0033, Issue #442). ---
++  // Read tool (readOnlyHint: true): the latest ingest run per connector (folded
++  // from SyncRunStarted / SyncRunEnded) annotated with a read-time staleness
++  // verdict against the expected scheduler cadence. This is how the host LLM
++  // learns its own data freshness — a PATH-broken cron otherwise degrades every
++  // answer to weeks-stale data with no signal anywhere in ambient use.
++  server.registerTool(
++    "sync.status",
++    {
++      title: "Sync freshness",
++      description:
++        "Per-connector sync freshness (ADR-0033): each connector's latest ingest run " +
++        "(started/ended, observed/updated/unchanged counts, outcome, last error) plus a " +
++        "read-time `freshness` verdict — fresh / stale / never_synced — computed against " +
++        "the expected scheduler cadence ([sync].expectedCadenceMinutes × staleFactor, " +
++        "per-connector override via [sync.cadenceMinutes]). Use it to caveat answers with " +
++        "data age ('Slack data is 9d old — the scheduler may be broken') instead of " +
++        "silently answering from stale data. Enabled connectors that never synced are " +
++        "included as never_synced; a since-disabled connector's last run stays visible " +
++        "with freshness: null. Suasor runs no scheduler itself (ADR-0027), so a stale " +
++        "verdict means the OS cron/launchd/systemd entry is not running. Read-only.",
++      inputSchema: {},
++      annotations: { readOnlyHint: true, openWorldHint: false },
++    },
++    async () => {
++      const connectors = buildSyncStatus(sqlite, {
++        enabledConnectors: deps.sync?.enabledConnectors ?? [],
++        ...(deps.sync?.expectedCadenceMinutes !== undefined
++          ? { expectedCadenceMinutes: deps.sync.expectedCadenceMinutes }
++          : {}),
++        ...(deps.sync?.staleFactor !== undefined ? { staleFactor: deps.sync.staleFactor } : {}),
++        ...(deps.sync?.cadenceMinutes !== undefined
++          ? { cadenceMinutes: deps.sync.cadenceMinutes }
++          : {}),
++      });
++      return jsonResult({ connectors });
++    },
++  );
+ }
+diff --git a/src/mcp/server-shared.ts b/src/mcp/server-shared.ts
+index 00019bb..844f6e4 100644
+--- a/src/mcp/server-shared.ts
++++ b/src/mcp/server-shared.ts
+@@ -77,6 +77,23 @@ export interface McpServerDeps {
+    * defaults to `slackSelfUserIds.length > 0` for back-compat.
+    */
+   slackConfigured?: boolean;
++  /**
++   * Sync-freshness facts for the `sync.status` read tool and the brief
++   * `sync_stale` completeness signal (Issue #442, ADR-0033): the enabled
++   * connector set plus the `[sync]` cadence expectations. Omitted (older
++   * callers / tests) ⇒ `sync.status` reports run history only (no
++   * enabled-connector union) and the brief never derives `sync_stale`.
++   */
++  sync?: {
++    /** Enabled connector names (config ∩ registry). */
++    enabledConnectors: string[];
++    /** Expected minutes between scheduled runs (default 60). */
++    expectedCadenceMinutes?: number;
++    /** Stale when older than `cadence × staleFactor` (default 4). */
++    staleFactor?: number;
++    /** Per-connector cadence override (minutes). */
++    cadenceMinutes?: Record<string, number>;
++  };
+   /**
+    * Writable store + connector config for the `connector.sync` write tool
+    * (ADR-0007 / Issue #10). When omitted, the server exposes read tools only
+diff --git a/src/mcp/tool-catalog.ts b/src/mcp/tool-catalog.ts
+index 6dce654..ee23980 100644
+--- a/src/mcp/tool-catalog.ts
++++ b/src/mcp/tool-catalog.ts
+@@ -110,6 +110,12 @@ const READ_TOOLS: readonly McpToolInfo[] = [
+     readOnlyHint: true,
+     summary: "List resolved persons with their connector author identities (ADR-0022).",
+   },
++  {
++    name: "sync.status",
++    readOnlyHint: true,
++    summary:
++      "Per-connector sync freshness: latest run + staleness vs the expected cadence (ADR-0033).",
++  },
+ ];
+ 
+ /**
+diff --git a/tests/cli/brief.test.ts b/tests/cli/brief.test.ts
+index 4618479..6b44e94 100644
+--- a/tests/cli/brief.test.ts
++++ b/tests/cli/brief.test.ts
+@@ -75,6 +75,29 @@ async function seed(): Promise<void> {
+   store.close();
+ }
+ 
++/** Record a completed sync run so the sync_stale signal (#442) can be steered. */
++async function seedSyncRun(connector: string, endedAt: string): Promise<void> {
++  const { Store } = await import("../../src/db/index.ts");
++  const store = Store.open({ path: join(dir, "suasor.db") });
++  const startedAt = new Date(Date.parse(endedAt) - 1000).toISOString();
++  const runId = `${connector}:${startedAt}`;
++  store.record({ type: "SyncRunStarted", connector, runId, startedAt }, new Date(startedAt));
++  store.record(
++    {
++      type: "SyncRunEnded",
++      connector,
++      runId,
++      status: "ok",
++      observed: 1,
++      updated: 1,
++      unchanged: 0,
++      durationMs: 10,
++    },
++    new Date(endedAt),
++  );
++  store.close();
++}
++
+ describe("resolveSince", () => {
+   const now = Date.parse("2026-06-20T12:00:00.000Z");
+ 
+@@ -237,9 +260,38 @@ describe("suasor brief", () => {
+       '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_id = "U1"\n',
+     );
+     await seed();
++    // The enabled connector has synced recently → no sync_stale either (#442).
++    await seedSyncRun("slack", new Date(Date.now() - 60_000).toISOString());
+     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
+     expect(code).toBe(0);
+     expect(JSON.parse(out).warnings).toEqual([]);
+     expect(out).not.toContain("[⚠");
+   });
++
++  test("flags sync_stale when an enabled connector's data is old (Issue #442)", async () => {
++    await Bun.write(
++      join(dir, "config.toml"),
++      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_id = "U1"\n',
++    );
++    await seed();
++    // Last slack sync 9+ days ago — far over the 60m × 4 default threshold.
++    await seedSyncRun("slack", new Date(Date.now() - 9 * 86_400_000).toISOString());
++    const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
++    expect(code).toBe(0);
++    const warnings = JSON.parse(out).warnings as { key: string; message: string }[];
++    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
++    expect(warnings[0]?.message).toContain("slack last synced");
++  });
++
++  test("flags sync_stale for an enabled connector that never synced (Issue #442)", async () => {
++    await Bun.write(
++      join(dir, "config.toml"),
++      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_id = "U1"\n',
++    );
++    await seed();
++    const { out } = await run(["brief", "--since", "2020-01-01", "--json"]);
++    const warnings = JSON.parse(out).warnings as { key: string; message: string }[];
++    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
++    expect(warnings[0]?.message).toContain("slack never synced");
++  });
+ });
+diff --git a/tests/cli/digest.test.ts b/tests/cli/digest.test.ts
+index f4f8792..8f421a2 100644
+--- a/tests/cli/digest.test.ts
++++ b/tests/cli/digest.test.ts
+@@ -127,4 +127,24 @@ describe("suasor digest", () => {
+     expect(code).toBe(1);
+     expect(err).toContain("no digest job named 'evening'");
+   });
++
++  test("a stale enabled connector's sync_stale warning lands in the digest (#442)", async () => {
++    // A github slice that never synced → the scheduled digest must disclose that
++    // its content may be built from stale data (ADR-0033 / Issue #442).
++    await Bun.write(
++      join(dir, "config.toml"),
++      `${FILE_JOB_CONFIG}\n[connectors.github]\nrepos = []\n`,
++    );
++    await seed();
++    const { code, out } = await run(["digest", "--json"]);
++    expect(code).toBe(0);
++    const parsed = JSON.parse(out) as {
++      results: { digest: { warnings: { key: string; message: string }[] } }[];
++    };
++    const warnings = parsed.results[0]?.digest.warnings ?? [];
++    expect(warnings.map((w) => w.key)).toContain("sync_stale");
++    expect(warnings.find((w) => w.key === "sync_stale")?.message).toContain(
++      "github never synced",
++    );
++  });
+ });
+diff --git a/tests/cli/doctor.test.ts b/tests/cli/doctor.test.ts
+index 81ce5ad..2ac2623 100644
+--- a/tests/cli/doctor.test.ts
++++ b/tests/cli/doctor.test.ts
+@@ -101,6 +101,36 @@ async function seedSlackCursor(cursor: string): Promise<void> {
+   store.close();
+ }
+ 
++/**
++ * Record a completed sync run (SyncRunStarted / SyncRunEnded) so the doctor
++ * sync-staleness check (ADR-0033 / Issue #442) has run history to evaluate.
++ */
++async function seedSyncRun(
++  connector: string,
++  startedAt: string,
++  endedAt: string,
++  status: "ok" | "partial" | "error" = "ok",
++): Promise<void> {
++  const { Store } = await import("../../src/db/index.ts");
++  const store = Store.open({ path: join(dir, "suasor.db") });
++  const runId = `${connector}:${startedAt}`;
++  store.record({ type: "SyncRunStarted", connector, runId, startedAt }, new Date(startedAt));
++  store.record(
++    {
++      type: "SyncRunEnded",
++      connector,
++      runId,
++      status,
++      observed: 1,
++      updated: 1,
++      unchanged: 0,
++      durationMs: 10,
++    },
++    new Date(endedAt),
++  );
++  store.close();
++}
++
+ /** Insert an `extraction_meta` row directly to simulate version drift. */
+ async function seedExtractionMeta(externalId: string, version: string): Promise<void> {
+   const { Store } = await import("../../src/db/index.ts");
+@@ -723,4 +753,72 @@ describe("suasor doctor", () => {
+     // Column == prefix + widest-name-width (`connectors.noop`, 15) + 1 separator.
+     expect(detailCols[0]).toBe(PREFIX + 15 + 1);
+   });
++
++  // Issue #442 / ADR-0033: sync freshness — an enabled connector whose last run
++  // is older than the expected cadence × safety factor (or that never synced)
++  // warns, so a dead scheduler surfaces at diagnosis time. Fresh stays quiet.
++  test("a stale enabled connector warns with the age and threshold (#442)", async () => {
++    await run(["init"]);
++    await writeConfig("[connectors.github]\nrepos = []\n");
++    // Last run ended 9 days + 1h before "now" — far over the 60m × 4 default
++    // (the 1h margin keeps the floored age at "9d" while the test itself runs).
++    const started = new Date(Date.now() - (9 * 86_400_000 + 3_600_000)).toISOString();
++    const ended = new Date(Date.now() - (9 * 86_400_000 + 3_599_000)).toISOString();
++    await seedSyncRun("github", started, ended);
++    const { code, out } = await run(["doctor", "--json"]);
++    expect(code).toBe(0); // warn only — staleness is degradation, not breakage.
++    const report = JSON.parse(out) as DoctorReport;
++    const stale = report.checks.find((c) => c.name === "sync.staleness");
++    expect(stale?.status).toBe("warn");
++    expect(stale?.detail).toContain("github: last sync 9d ago");
++    expect(stale?.detail).toContain("threshold 4h");
++    expect(stale?.detail).toContain("suasor sync status");
++  });
++
++  test("a fresh sync stays quiet (#442)", async () => {
++    await run(["init"]);
++    await writeConfig("[connectors.github]\nrepos = []\n");
++    const started = new Date(Date.now() - 60_000).toISOString();
++    const ended = new Date(Date.now() - 59_000).toISOString();
++    await seedSyncRun("github", started, ended);
++    const { out } = await run(["doctor", "--json"]);
++    const report = JSON.parse(out) as DoctorReport;
++    expect(report.checks.some((c) => c.name === "sync.staleness")).toBe(false);
++  });
++
++  test("an enabled connector that never synced warns (#442)", async () => {
++    await run(["init"]);
++    await writeConfig("[connectors.github]\nrepos = []\n");
++    const { out } = await run(["doctor", "--json"]);
++    const report = JSON.parse(out) as DoctorReport;
++    const stale = report.checks.find((c) => c.name === "sync.staleness");
++    expect(stale?.status).toBe("warn");
++    expect(stale?.detail).toContain("github: never synced");
++    expect(stale?.detail).toContain("suasor github sync");
++  });
++
++  test("a per-connector cadence override lifts the threshold (#442)", async () => {
++    await run(["init"]);
++    // Daily cadence for github (1440m × 4 = 4d threshold) — a 2-day-old run is fresh.
++    await writeConfig(
++      ["[connectors.github]", "repos = []", "", "[sync.cadenceMinutes]", "github = 1440"].join(
++        "\n",
++      ),
++    );
++    const started = new Date(Date.now() - 2 * 86_400_000).toISOString();
++    const ended = new Date(Date.now() - 2 * 86_400_000 + 1000).toISOString();
++    await seedSyncRun("github", started, ended);
++    const { out } = await run(["doctor", "--json"]);
++    const report = JSON.parse(out) as DoctorReport;
++    expect(report.checks.some((c) => c.name === "sync.staleness")).toBe(false);
++  });
++
++  test("a disabled connector's old history stays quiet (#442)", async () => {
++    await run(["init"]);
++    await writeConfig("[connectors.github]\nenabled = false\nrepos = []\n");
++    await seedSyncRun("github", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:01.000Z");
++    const { out } = await run(["doctor", "--json"]);
++    const report = JSON.parse(out) as DoctorReport;
++    expect(report.checks.some((c) => c.name === "sync.staleness")).toBe(false);
++  });
+ });
+diff --git a/tests/cli/onboard-scheduler.test.ts b/tests/cli/onboard-scheduler.test.ts
+index d43e9af..4b63b03 100644
+--- a/tests/cli/onboard-scheduler.test.ts
++++ b/tests/cli/onboard-scheduler.test.ts
+@@ -5,9 +5,11 @@
+ import { describe, expect, test } from "bun:test";
+ import { renderMcpSnippet } from "../../src/cli/onboard/mcp-snippet.ts";
+ import {
++  planSchedulerInstall,
+   renderDigestSchedulerLines,
+   renderSchedulerSnippet,
+   schedulerKindForPlatform,
++  systemdUnitBodies,
+ } from "../../src/cli/onboard/scheduler.ts";
+ 
+ describe("schedulerKindForPlatform", () => {
+@@ -59,6 +61,49 @@ describe("renderSchedulerSnippet — per OS", () => {
+   });
+ });
+ 
++describe("planSchedulerInstall — --write-launchd / --write-systemd (Issue #442)", () => {
++  test("launchd plans one LaunchAgents plist + launchctl load", () => {
++    const plan = planSchedulerInstall("launchd", "/usr/local/bin/suasor", "/home/u");
++    expect(plan.kind).toBe("launchd");
++    expect(plan.files).toHaveLength(1);
++    expect(plan.files[0]?.path).toBe("/home/u/Library/LaunchAgents/com.suasor.sync.plist");
++    // Written content is exactly the printed template (plus a trailing newline).
++    expect(plan.files[0]?.content).toBe(
++      `${renderSchedulerSnippet("darwin", "/usr/local/bin/suasor").snippet}\n`,
++    );
++    expect(plan.activate).toEqual([
++      ["launchctl", "load", "/home/u/Library/LaunchAgents/com.suasor.sync.plist"],
++    ]);
++  });
++
++  test("systemd plans the user service + timer and enables the timer", () => {
++    const plan = planSchedulerInstall("systemd", "suasor", "/home/u");
++    expect(plan.kind).toBe("systemd");
++    expect(plan.files.map((f) => f.path)).toEqual([
++      "/home/u/.config/systemd/user/suasor-sync.service",
++      "/home/u/.config/systemd/user/suasor-sync.timer",
++    ]);
++    const units = systemdUnitBodies("suasor");
++    expect(plan.files[0]?.content).toBe(`${units.service}\n`);
++    expect(plan.files[1]?.content).toBe(`${units.timer}\n`);
++    expect(plan.files[0]?.content).toContain("ExecStart=suasor sync --json");
++    expect(plan.files[1]?.content).toContain("OnCalendar=hourly");
++    expect(plan.activate).toEqual([
++      ["systemctl", "--user", "daemon-reload"],
++      ["systemctl", "--user", "enable", "--now", "suasor-sync.timer"],
++    ]);
++  });
++
++  test("systemd unit bodies compose the printed snippet unchanged", () => {
++    // The split (per-file bodies) must not drift from the rendered template the
++    // wizard prints — same content, only the path-comment headers differ.
++    const units = systemdUnitBodies("suasor");
++    const { snippet } = renderSchedulerSnippet("linux", "suasor");
++    expect(snippet).toContain(units.service);
++    expect(snippet).toContain(units.timer);
++  });
++});
++
+ describe("renderMcpSnippet", () => {
+   test("renders a claude_desktop_config.json mcpServers block (global invocation)", () => {
+     const snippet = renderMcpSnippet({ command: "suasor", args: ["mcp", "serve"] });
+diff --git a/tests/cli/onboard.test.ts b/tests/cli/onboard.test.ts
+index 708d0c6..2ce7b28 100644
+--- a/tests/cli/onboard.test.ts
++++ b/tests/cli/onboard.test.ts
+@@ -25,6 +25,12 @@ async function run(
+     stdin?: AsyncIterable<Buffer | string>;
+     /** In-memory keychain injected via context so token storage skips the OS keyring. */
+     keychain?: KeychainBackend;
++    /** Platform override for the scheduler step (Issue #442). */
++    schedulerPlatform?: NodeJS.Platform;
++    /** Home-dir override so --write-launchd/--write-systemd never touch the real home. */
++    schedulerHome?: string;
++    /** Activation-command runner override (records argv, never spawns). */
++    schedulerExec?: (argv: string[]) => Promise<number>;
+   } = {},
+ ): Promise<{ code: number; out: string; err: string }> {
+   const prevDir = process.env.SUASOR_CONFIG_DIR;
+@@ -53,6 +59,9 @@ async function run(
+     env: process.env,
+     colorDepth: 1,
+     ...(opts.keychain ? { keychain: opts.keychain } : {}),
++    ...(opts.schedulerPlatform ? { schedulerPlatform: opts.schedulerPlatform } : {}),
++    ...(opts.schedulerHome ? { schedulerHome: opts.schedulerHome } : {}),
++    ...(opts.schedulerExec ? { schedulerExec: opts.schedulerExec } : {}),
+   };
+   try {
+     const code = await cli.run(args, context);
+@@ -833,3 +842,151 @@ describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", ()
+     }
+   });
+ });
++
++describe("suasor onboard — --write-launchd / --write-systemd (Issue #442)", () => {
++  /** A recording activation runner (never spawns launchctl / systemctl). */
++  function recordingExec(exitCode = 0): {
++    calls: string[][];
++    exec: (argv: string[]) => Promise<number>;
++  } {
++    const calls: string[][] = [];
++    return {
++      calls,
++      exec: (argv: string[]) => {
++        calls.push(argv);
++        return Promise.resolve(exitCode);
++      },
++    };
++  }
++
++  test("--write-systemd on linux writes the user units and enables the timer", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
++    const home = mkdtempSync(join(tmpdir(), "suasor-home-"));
++    const { calls, exec } = recordingExec();
++    try {
++      const { code, out } = await run(
++        ["onboard", "--connector", "web", "--skip-auth", "--skip-sync", "--write-systemd"],
++        { configDir: dir, schedulerPlatform: "linux", schedulerHome: home, schedulerExec: exec },
++      );
++      expect(code).toBe(0);
++      const service = join(home, ".config/systemd/user/suasor-sync.service");
++      const timer = join(home, ".config/systemd/user/suasor-sync.timer");
++      expect(out).toContain(`Wrote ${service}`);
++      expect(out).toContain(`Wrote ${timer}`);
++      expect(await Bun.file(service).text()).toContain("ExecStart=suasor sync --json");
++      expect(await Bun.file(timer).text()).toContain("OnCalendar=hourly");
++      expect(calls).toEqual([
++        ["systemctl", "--user", "daemon-reload"],
++        ["systemctl", "--user", "enable", "--now", "suasor-sync.timer"],
++      ]);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++
++  test("--write-launchd on darwin writes the plist and loads it", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
++    const home = mkdtempSync(join(tmpdir(), "suasor-home-"));
++    const { calls, exec } = recordingExec();
++    try {
++      const { code, out } = await run(
++        [
++          "onboard",
++          "--connector",
++          "web",
++          "--skip-auth",
++          "--skip-sync",
++          "--write-launchd",
++          "--json",
++        ],
++        { configDir: dir, schedulerPlatform: "darwin", schedulerHome: home, schedulerExec: exec },
++      );
++      expect(code).toBe(0);
++      const plist = join(home, "Library/LaunchAgents/com.suasor.sync.plist");
++      expect(await Bun.file(plist).text()).toContain("com.suasor.sync");
++      expect(calls).toEqual([["launchctl", "load", plist]]);
++      // --json reports the written unit paths.
++      const report = JSON.parse(out) as { scheduler: string; schedulerWrites: string[] };
++      expect(report.scheduler).toBe("launchd");
++      expect(report.schedulerWrites).toEqual([plist]);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++
++  test("a platform-mismatched flag is skipped with a warning (nothing written)", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
++    const home = mkdtempSync(join(tmpdir(), "suasor-home-"));
++    const { calls, exec } = recordingExec();
++    try {
++      const { code, err, out } = await run(
++        [
++          "onboard",
++          "--connector",
++          "web",
++          "--skip-auth",
++          "--skip-sync",
++          "--write-launchd",
++          "--json",
++        ],
++        { configDir: dir, schedulerPlatform: "linux", schedulerHome: home, schedulerExec: exec },
++      );
++      expect(code).toBe(0); // guidance still completes
++      expect(err).toContain("--write-launchd skipped");
++      expect(calls).toEqual([]);
++      const report = JSON.parse(out) as { schedulerWrites: string[] };
++      expect(report.schedulerWrites).toEqual([]);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++
++  test("existing unit files are left untouched (non-destructive re-run)", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
++    const home = mkdtempSync(join(tmpdir(), "suasor-home-"));
++    const { calls, exec } = recordingExec();
++    const service = join(home, ".config/systemd/user/suasor-sync.service");
++    const timer = join(home, ".config/systemd/user/suasor-sync.timer");
++    try {
++      await Bun.write(service, "# hand-edited\n");
++      await Bun.write(timer, "# hand-edited\n");
++      const { code, out } = await run(
++        ["onboard", "--connector", "web", "--skip-auth", "--skip-sync", "--write-systemd"],
++        { configDir: dir, schedulerPlatform: "linux", schedulerHome: home, schedulerExec: exec },
++      );
++      expect(code).toBe(0);
++      expect(out).toContain(`${service} already exists (left untouched).`);
++      expect(await Bun.file(service).text()).toBe("# hand-edited\n");
++      expect(await Bun.file(timer).text()).toBe("# hand-edited\n");
++      // Nothing written → no activation attempted.
++      expect(calls).toEqual([]);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++
++  test("an activation failure warns with the manual command (file stays in place)", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
++    const home = mkdtempSync(join(tmpdir(), "suasor-home-"));
++    const { exec } = recordingExec(1);
++    try {
++      const { code, err } = await run(
++        ["onboard", "--connector", "web", "--skip-auth", "--skip-sync", "--write-systemd"],
++        { configDir: dir, schedulerPlatform: "linux", schedulerHome: home, schedulerExec: exec },
++      );
++      expect(code).toBe(0);
++      expect(err).toContain("`systemctl --user daemon-reload` failed");
++      expect(err).toContain("run it manually");
++      expect(
++        await Bun.file(join(home, ".config/systemd/user/suasor-sync.service")).exists(),
++      ).toBe(true);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++});
+diff --git a/tests/config/loader.test.ts b/tests/config/loader.test.ts
+index 6e1d827..ce420e7 100644
+--- a/tests/config/loader.test.ts
++++ b/tests/config/loader.test.ts
+@@ -129,6 +129,33 @@ describe("loadConfig fail-fast", () => {
+       expect(err.issues.some((i) => i.includes("embedding.backend"))).toBe(true);
+     }
+   });
++
++  test("rejects an unknown connector name in [sync.cadenceMinutes] (#442)", async () => {
++    // A typo'd override would otherwise silently keep the default cadence for
++    // the real connector — the staleness verdict would be computed against the
++    // wrong threshold with no signal.
++    try {
++      await loadConfig({
++        env: {},
++        configDir: "/cfg",
++        fileLayer: { sync: { cadenceMinutes: { gihub: 1440 } } },
++      });
++      throw new Error("expected ConfigError");
++    } catch (e) {
++      expect(e).toBeInstanceOf(ConfigError);
++      const err = e as ConfigError;
++      expect(err.issues.some((i) => i.includes("sync.cadenceMinutes.gihub"))).toBe(true);
++    }
++  });
++
++  test("accepts a registered connector name in [sync.cadenceMinutes] (#442)", async () => {
++    const cfg = await loadConfig({
++      env: {},
++      configDir: "/cfg",
++      fileLayer: { sync: { cadenceMinutes: { github: 1440 } } },
++    });
++    expect(cfg.sync.cadenceMinutes).toEqual({ github: 1440 });
++  });
+ });
+ 
+ describe("Config schema", () => {
+@@ -138,6 +165,13 @@ describe("Config schema", () => {
+     expect(cfg.embedding.backend).toBe("disabled");
+   });
+ 
++  test("[sync] defaults to the hourly cadence × factor 4 with no overrides (#442)", () => {
++    const cfg = Config.parse({});
++    expect(cfg.sync.expectedCadenceMinutes).toBe(60);
++    expect(cfg.sync.staleFactor).toBe(4);
++    expect(cfg.sync.cadenceMinutes).toEqual({});
++  });
++
+   test("[embedding] defaults the Ollama baseUrl and model (one vector space)", () => {
+     const cfg = Config.parse({});
+     expect(cfg.embedding.baseUrl).toBe(DEFAULT_OLLAMA_BASE_URL);
+diff --git a/tests/mcp/queries.test.ts b/tests/mcp/queries.test.ts
+index 4aa2147..17d6d2d 100644
+--- a/tests/mcp/queries.test.ts
++++ b/tests/mcp/queries.test.ts
+@@ -3,8 +3,11 @@ import { Store } from "../../src/db/index.ts";
+ import {
+   buildBrief,
+   buildPriorities,
++  buildSyncStatus,
+   deriveBriefWarnings,
++  evaluateSyncStaleness,
+   expandGraph,
++  formatMinutes,
+   getSource,
+   listCommitments,
+   listDecisions,
+@@ -865,6 +868,225 @@ describe("deriveBriefWarnings (Issue #189)", () => {
+     const w = deriveBriefWarnings({ slackConfigured: false, embeddingBackend: "disabled" });
+     expect(w.map((x) => x.key)).toEqual(["slack_not_configured", "embedding_disabled"]);
+   });
++
++  test("flags sync_stale when a connector is stale or never synced (Issue #442)", () => {
++    const w = deriveBriefWarnings({
++      slackConfigured: true,
++      embeddingBackend: "ollama",
++      syncStaleness: [
++        {
++          connector: "slack",
++          state: "stale",
++          lastRunAt: "2026-06-05T00:00:00.000Z",
++          lastStatus: "ok",
++          ageMinutes: 12_960, // 9 days
++          thresholdMinutes: 240,
++        },
++        {
++          connector: "github",
++          state: "never_synced",
++          lastRunAt: null,
++          lastStatus: null,
++          ageMinutes: null,
++          thresholdMinutes: 240,
++        },
++      ],
++    });
++    expect(w.map((x) => x.key)).toEqual(["sync_stale"]);
++    expect(w[0]?.message).toContain("slack last synced 9d ago");
++    expect(w[0]?.message).toContain("expected ≤ 4h");
++    expect(w[0]?.message).toContain("github never synced");
++    expect(w[0]?.message).toContain("suasor sync status");
++  });
++
++  test("all-fresh staleness entries derive no sync_stale warning (Issue #442)", () => {
++    const w = deriveBriefWarnings({
++      slackConfigured: true,
++      embeddingBackend: "ollama",
++      syncStaleness: [
++        {
++          connector: "slack",
++          state: "fresh",
++          lastRunAt: "2026-06-14T00:00:00.000Z",
++          lastStatus: "ok",
++          ageMinutes: 5,
++          thresholdMinutes: 240,
++        },
++      ],
++    });
++    expect(w).toEqual([]);
++  });
++
++  test("omitting syncStaleness never derives sync_stale (back-compat)", () => {
++    const w = deriveBriefWarnings({ slackConfigured: true, embeddingBackend: "ollama" });
++    expect(w).toEqual([]);
++  });
++});
++
++describe("evaluateSyncStaleness (Issue #442, ADR-0033)", () => {
++  const NOW = new Date("2026-06-14T12:00:00.000Z");
++
++  /** A SyncRunRecord-shaped row (only the fields the evaluator reads matter). */
++  function run(connector: string, endedAt: string | null, status = "ok", startedAt?: string) {
++    return {
++      connector,
++      runId: `${connector}:r1`,
++      startedAt: startedAt ?? "2026-06-14T00:00:00.000Z",
++      endedAt,
++      status,
++      observed: 0,
++      updated: 0,
++      unchanged: 0,
++      durationMs: endedAt === null ? null : 1000,
++      lastError: null,
++    };
++  }
++
++  test("a run within cadence × factor is fresh", () => {
++    // 3h old < 60m × 4 = 4h threshold.
++    const [e] = evaluateSyncStaleness([run("github", "2026-06-14T09:00:00.000Z")], {
++      enabledConnectors: ["github"],
++      now: NOW,
++    });
++    expect(e).toEqual({
++      connector: "github",
++      state: "fresh",
++      lastRunAt: "2026-06-14T09:00:00.000Z",
++      lastStatus: "ok",
++      ageMinutes: 180,
++      thresholdMinutes: 240,
++    });
++  });
++
++  test("a run older than cadence × factor is stale (failed runs count too)", () => {
++    // 5h old > 4h threshold; an errored run still dates the last attempt.
++    const [e] = evaluateSyncStaleness([run("github", "2026-06-14T07:00:00.000Z", "error")], {
++      enabledConnectors: ["github"],
++      now: NOW,
++    });
++    expect(e?.state).toBe("stale");
++    expect(e?.lastStatus).toBe("error");
++    expect(e?.ageMinutes).toBe(300);
++  });
++
++  test("an enabled connector with no run history is never_synced", () => {
++    const [e] = evaluateSyncStaleness([], { enabledConnectors: ["slack"], now: NOW });
++    expect(e).toEqual({
++      connector: "slack",
++      state: "never_synced",
++      lastRunAt: null,
++      lastStatus: null,
++      ageMinutes: null,
++      thresholdMinutes: 240,
++    });
++  });
++
++  test("a disabled connector is not evaluated", () => {
++    const entries = evaluateSyncStaleness([run("github", "2026-06-01T00:00:00.000Z")], {
++      enabledConnectors: [],
++      now: NOW,
++    });
++    expect(entries).toEqual([]);
++  });
++
++  test("a per-connector cadence override changes only that connector's threshold", () => {
++    // Both last synced 10h ago; github is expected daily (1440m × 4), slack hourly.
++    const runs = [
++      run("github", "2026-06-14T02:00:00.000Z"),
++      run("slack", "2026-06-14T02:00:00.000Z"),
++    ];
++    const entries = evaluateSyncStaleness(runs, {
++      enabledConnectors: ["github", "slack"],
++      cadenceMinutes: { github: 1440 },
++      now: NOW,
++    });
++    expect(entries.find((e) => e.connector === "github")?.state).toBe("fresh");
++    expect(entries.find((e) => e.connector === "github")?.thresholdMinutes).toBe(5760);
++    expect(entries.find((e) => e.connector === "slack")?.state).toBe("stale");
++  });
++
++  test("a stuck running row (no SyncRunEnded) ages from started_at", () => {
++    const [e] = evaluateSyncStaleness(
++      [run("box", null, "running", "2026-06-14T01:00:00.000Z")],
++      { enabledConnectors: ["box"], now: NOW },
++    );
++    expect(e?.state).toBe("stale"); // 11h > 4h
++    expect(e?.lastRunAt).toBe("2026-06-14T01:00:00.000Z");
++    expect(e?.lastStatus).toBe("running");
++  });
++
++  test("expectedCadenceMinutes / staleFactor tune the global threshold", () => {
++    // 3h old; cadence 30m × factor 2 = 1h threshold → stale.
++    const [e] = evaluateSyncStaleness([run("github", "2026-06-14T09:00:00.000Z")], {
++      enabledConnectors: ["github"],
++      expectedCadenceMinutes: 30,
++      staleFactor: 2,
++      now: NOW,
++    });
++    expect(e?.state).toBe("stale");
++    expect(e?.thresholdMinutes).toBe(60);
++  });
++});
++
++describe("formatMinutes (Issue #442)", () => {
++  test("renders minutes / hours / days compactly", () => {
++    expect(formatMinutes(45)).toBe("45m");
++    expect(formatMinutes(119)).toBe("119m");
++    expect(formatMinutes(120)).toBe("2h");
++    expect(formatMinutes(240)).toBe("4h");
++    expect(formatMinutes(47 * 60)).toBe("47h");
++    expect(formatMinutes(48 * 60)).toBe("2d");
++    expect(formatMinutes(12_960)).toBe("9d");
++  });
++});
++
++describe("buildSyncStatus (Issue #442)", () => {
++  const NOW = new Date("2026-06-14T12:00:00.000Z");
++
++  function seedRun(connector: string, startedAt: string, endedAt: string, status = "ok") {
++    const runId = `${connector}:${startedAt}`;
++    store.record({ type: "SyncRunStarted", connector, runId, startedAt }, new Date(startedAt));
++    store.record(
++      {
++        type: "SyncRunEnded",
++        connector,
++        runId,
++        status: status as "ok",
++        observed: 2,
++        updated: 1,
++        unchanged: 3,
++        durationMs: 500,
++      },
++      new Date(endedAt),
++    );
++  }
++
++  test("annotates each enabled connector's latest run with a freshness verdict", () => {
++    seedRun("github", "2026-06-14T11:00:00.000Z", "2026-06-14T11:00:01.000Z");
++    const rows = buildSyncStatus(sqlite(), { enabledConnectors: ["github"], now: NOW });
++    expect(rows).toHaveLength(1);
++    expect(rows[0]?.connector).toBe("github");
++    expect(rows[0]?.enabled).toBe(true);
++    expect(rows[0]?.status).toBe("ok");
++    expect(rows[0]?.observed).toBe(2);
++    expect(rows[0]?.freshness).toEqual({ state: "fresh", ageMinutes: 59, thresholdMinutes: 240 });
++  });
++
++  test("an enabled connector with no history reads never_synced", () => {
++    const rows = buildSyncStatus(sqlite(), { enabledConnectors: ["slack"], now: NOW });
++    expect(rows[0]?.status).toBe("never_synced");
++    expect(rows[0]?.startedAt).toBeNull();
++    expect(rows[0]?.freshness?.state).toBe("never_synced");
++  });
++
++  test("a since-disabled connector's last run stays visible with freshness: null", () => {
++    seedRun("notion", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:01.000Z");
++    const rows = buildSyncStatus(sqlite(), { enabledConnectors: ["github"], now: NOW });
++    const notion = rows.find((r) => r.connector === "notion");
++    expect(notion?.enabled).toBe(false);
++    expect(notion?.status).toBe("ok");
++    expect(notion?.freshness).toBeNull();
++  });
+ });
+ 
+ describe("graph traversal: listLinks / expandGraph (ADR-0018)", () => {
+diff --git a/tests/mcp/server.test.ts b/tests/mcp/server.test.ts
+index 248ebe0..9637b9d 100644
+--- a/tests/mcp/server.test.ts
++++ b/tests/mcp/server.test.ts
+@@ -85,6 +85,7 @@ describe("MCP read surface", () => {
+         "source.get.full",
+         "source.history",
+         "source.list",
++        "sync.status",
+         "task.list",
+       ].sort(),
+     );
+@@ -333,6 +334,49 @@ describe("MCP read surface", () => {
+     expect(warnings).toEqual([]);
+   });
+ 
++  test("brief flags sync_stale when an enabled connector's data is old (Issue #442)", async () => {
++    // A run that ended far in the past (well over 60m × 4) + the sync dep wired.
++    const startedAt = "2026-06-01T00:00:00.000Z";
++    store.record(
++      { type: "SyncRunStarted", connector: "github", runId: "github:r1", startedAt },
++      new Date(startedAt),
++    );
++    store.record(
++      {
++        type: "SyncRunEnded",
++        connector: "github",
++        runId: "github:r1",
++        status: "ok",
++        observed: 1,
++        updated: 1,
++        unchanged: 0,
++        durationMs: 10,
++      },
++      new Date("2026-06-01T00:00:01.000Z"),
++    );
++    const server = buildMcpServer({
++      sqlite: store.connection.sqlite,
++      embedding: "ollama",
++      slackConfigured: true,
++      slackSelfUserIds: ["U1"],
++      sync: { enabledConnectors: ["github"] },
++    });
++    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
++    const client = new Client({ name: "test", version: "0.0.0" });
++    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
++    const res = await client.callTool({ name: "brief", arguments: {} });
++    const { warnings } = parseResult(res as never) as { warnings: { key: string }[] };
++    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
++  });
++
++  test("brief derives no sync_stale without the sync dep (back-compat)", async () => {
++    // Same stale history but an older caller that never passes `sync`.
++    const client = await connect();
++    const res = await client.callTool({ name: "brief", arguments: {} });
++    const { warnings } = parseResult(res as never) as { warnings: { key: string }[] };
++    expect(warnings.map((w) => w.key)).not.toContain("sync_stale");
++  });
++
+   test("graph.related / graph.expand traverse the links projection (ADR-0018)", async () => {
+     // task t1 --derived_from--> source s1 (materialised by the reducer).
+     store.record({ type: "TaskProposed", taskId: "t1", title: "t", sourceExternalIds: ["s1"] });
+@@ -958,6 +1002,76 @@ describe("MCP read surface", () => {
+   });
+ });
+ 
++describe("sync.status read tool (Issue #442, ADR-0033)", () => {
++  function seedRun(connector: string, startedAt: string, endedAt: string) {
++    const runId = `${connector}:${startedAt}`;
++    store.record({ type: "SyncRunStarted", connector, runId, startedAt }, new Date(startedAt));
++    store.record(
++      {
++        type: "SyncRunEnded",
++        connector,
++        runId,
++        status: "ok",
++        observed: 3,
++        updated: 1,
++        unchanged: 2,
++        durationMs: 42,
++      },
++      new Date(endedAt),
++    );
++  }
++
++  async function connectWithSync(enabledConnectors: string[]): Promise<Client> {
++    const server = buildMcpServer({
++      sqlite: store.connection.sqlite,
++      embedding: "disabled",
++      sync: { enabledConnectors },
++    });
++    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
++    const client = new Client({ name: "test", version: "0.0.0" });
++    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
++    return client;
++  }
++
++  test("returns the latest run per connector with a freshness verdict", async () => {
++    seedRun("github", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:01.000Z"); // long stale
++    const client = await connectWithSync(["github", "slack"]);
++    const res = await client.callTool({ name: "sync.status", arguments: {} });
++    const { connectors } = parseResult(res as never) as {
++      connectors: {
++        connector: string;
++        enabled: boolean;
++        status: string;
++        observed: number | null;
++        freshness: { state: string; thresholdMinutes: number } | null;
++      }[];
++    };
++    expect(connectors.map((c) => c.connector)).toEqual(["github", "slack"]);
++    const github = connectors[0];
++    expect(github?.status).toBe("ok");
++    expect(github?.observed).toBe(3);
++    expect(github?.freshness?.state).toBe("stale");
++    expect(github?.freshness?.thresholdMinutes).toBe(240); // 60m × 4 defaults
++    // Enabled but never synced → included with a never_synced verdict.
++    const slack = connectors[1];
++    expect(slack?.status).toBe("never_synced");
++    expect(slack?.freshness?.state).toBe("never_synced");
++  });
++
++  test("degrades to run history only when the sync dep is absent (back-compat)", async () => {
++    seedRun("github", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:01.000Z");
++    const client = await connect();
++    const res = await client.callTool({ name: "sync.status", arguments: {} });
++    const { connectors } = parseResult(res as never) as {
++      connectors: { connector: string; enabled: boolean; freshness: unknown }[];
++    };
++    // No enabled set supplied → the run is listed as a non-enabled row.
++    expect(connectors.map((c) => c.connector)).toEqual(["github"]);
++    expect(connectors[0]?.enabled).toBe(false);
++    expect(connectors[0]?.freshness).toBeNull();
++  });
++});
++
+ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
+   /** Connect a client to a server built WITH the write tool enabled. */
+   async function connectWrite(connectors: Record<string, Record<string, unknown>> = {}) {
+@@ -1004,6 +1118,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
+         "source.get.full",
+         "source.history",
+         "source.list",
++        "sync.status",
+         "task.list",
+         // write (HITL)
+         "connector.sync",

@@ -1,0 +1,1278 @@
+diff --git a/src/cli/commands/connector-auth.ts b/src/cli/commands/connector-auth.ts
+index 6a99bca..b4aec7d 100644
+--- a/src/cli/commands/connector-auth.ts
++++ b/src/cli/commands/connector-auth.ts
+@@ -12,14 +12,23 @@
+  * verbs are connector-specific CLI commands (the generic connector contract stays
+  * `sync`-only, ADR-0007); Slack keeps its own richer `slack auth set/test`.
+  *
++ * Multi-account connectors (google / ms-graph, Issue #441) accept `--account
++ * <alias>` to store / verify a **named account's** secret
++ * (`connector:<name>:<alias>:<secret>`, the generic form of Slack's
++ * `--workspace`, ADR-0014). Omission resolves like Slack's (Issue #371): flat
++ * config → default secret; a single named account is adopted automatically; two
++ * or more without a `default` alias error, listing the aliases. A connector
++ * without the multi-account capability rejects `--account`.
++ *
+  * Lazy-import discipline (NFR-PRF-1): top-level imports are clipanion + the auth
+- * spec **names** + the import-clean secret-entry helper (`read-secret.ts`, no
+- * SDK) only — all cheap, loading no native binding. The keychain (`secrets.ts`,
+- * which lazy-loads the native keyring), the config loader, and the per-connector
+- * `fetch`-only auth probes are imported inside `execute`. No connector SDK is
+- * pulled by any of these verbs.
++ * spec **names** + import-clean pure helpers (`read-secret.ts`, `accounts.ts` —
++ * no SDK) only — all cheap, loading no native binding. The keychain
++ * (`secrets.ts`, which lazy-loads the native keyring), the config loader, the
++ * manifest aggregate, and the per-connector `fetch`-only auth probes are
++ * imported inside `execute`. No connector SDK is pulled by any of these verbs.
+  */
+ import { Command, type CommandClass, Option } from "clipanion";
++import { accountSecretName, chooseAccountAlias } from "../../connectors/accounts.ts";
+ import { authConnectorNames } from "../../connectors/auth-specs.ts";
+ import { connectorBundledInBinary } from "../../connectors/registry.ts";
+ import type { KeychainBackend } from "../../connectors/secrets.ts";
+@@ -27,12 +36,85 @@ import { secretEnvName } from "../../connectors/secrets.ts";
+ import { standaloneGate } from "../build-target.ts";
+ import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
+ 
++/**
++ * Resolve which account alias an auth verb targets (Issue #441). Reads the
++ * connector's manifest for the multi-account capability and the config slice
++ * for the configured aliases, then applies the Slack omission semantics
++ * (`chooseAccountAlias`). Returns:
++ *
++ * - `{ alias }` — the target (`undefined` ⇒ the flat/default secret),
++ * - `{ error }` — `--account` on a single-account connector, an ambiguous
++ *   omission, or (when `requireConfigured` is set, for `auth test`) an alias
++ *   with no config table to read clientId/tenantId from.
++ *
++ * Config-load failures degrade to "no named accounts" so `auth set` keeps
++ * working before a config exists (secrets may be stored ahead of config, the
++ * same as `slack auth set --workspace`).
++ */
++async function resolveAccountTarget(
++  connector: string,
++  explicit: string | undefined,
++  requireConfigured: boolean,
++): Promise<{ alias?: string; slice?: Record<string, unknown>; error?: string }> {
++  const { connectorManifest } = await import("../../connectors/manifest.ts");
++  const capability = connectorManifest(connector)?.multiAccount ?? null;
++  if (capability === null) {
++    if (explicit !== undefined) {
++      return { error: `connector '${connector}' does not support multiple accounts (--account)` };
++    }
++    return {};
++  }
++
++  // The configured named-account aliases (raw keys — the slice may be absent or
++  // half-written; `auth set` must not fail on that).
++  let aliases: string[] = [];
++  let raw: Record<string, unknown> | undefined;
++  try {
++    const { loadConfig } = await import("../../config/index.ts");
++    const config = await loadConfig();
++    raw = (config.connectors[connector] ?? undefined) as Record<string, unknown> | undefined;
++    const table = raw?.[capability.configKey];
++    aliases = table && typeof table === "object" ? Object.keys(table) : [];
++  } catch {
++    aliases = [];
++  }
++
++  const chosen = chooseAccountAlias(explicit, aliases);
++  if (!chosen.ok) {
++    return {
++      error:
++        `multiple ${connector} accounts configured (${chosen.aliases.join(", ")}); ` +
++        "pass --account <alias> to choose one",
++    };
++  }
++  if (chosen.alias === undefined) return {};
++
++  // `auth test` reads per-account config fields (clientId / tenantId / …), so
++  // the alias must exist in config; `auth set` stores ahead of config freely.
++  const table = raw?.[capability.configKey] as Record<string, unknown> | undefined;
++  const accountSlice = table?.[chosen.alias] as Record<string, unknown> | undefined;
++  if (requireConfigured && accountSlice === undefined) {
++    const known = aliases.length > 0 ? aliases.join(", ") : "none";
++    return {
++      error:
++        `no [connectors.${connector}.${capability.configKey}.${chosen.alias}] configured ` +
++        `(known aliases: ${known})`,
++    };
++  }
++  return { alias: chosen.alias, ...(accountSlice !== undefined ? { slice: accountSlice } : {}) };
++}
++
+ /** Base class for `<connector> auth set` — stores the connector secret in the keychain. */
+ class ConnectorAuthSetCommand extends Command {
+   static connectorName = "";
+ 
+   token = Option.String("--token", { description: "Secret value (omit to read from stdin)." });
+ 
++  account = Option.String("--account", {
++    description:
++      "Named account alias to store the secret for (multi-account connectors, Issue #441).",
++  });
++
+   override async execute(): Promise<number> {
+     const connector = (this.constructor as typeof ConnectorAuthSetCommand).connectorName;
+     const { AUTH_SPECS } = await import("../../connectors/auth-specs.ts");
+@@ -42,6 +124,16 @@ class ConnectorAuthSetCommand extends Command {
+       return 1;
+     }
+ 
++    // Multi-account target (Issue #441): a named alias stores under
++    // `connector:<name>:<alias>:<secret>`; omission resolves like Slack's
++    // `--workspace` (flat → plain secret; 1 named → adopt; ambiguous → error).
++    const target = await resolveAccountTarget(connector, this.account, false);
++    if (target.error) {
++      this.context.stderr.write(`error: ${target.error}\n`);
++      return 1;
++    }
++    const secretName = accountSecretName(spec.secretName, target.alias);
++
+     // `auth set` writes to the OS keychain (@napi-rs/keyring), which is external
+     // to the standalone binary (ADR-0010). In the binary, secrets must come from
+     // the env override instead — so gate keychain writes and point there.
+@@ -50,7 +142,7 @@ class ConnectorAuthSetCommand extends Command {
+       {
+         hint:
+           `set the secret via the env override instead: ` +
+-          `${secretEnvName(connector, spec.secretName)}=<value>`,
++          `${secretEnvName(connector, secretName)}=<value>`,
+       },
+     );
+     if (!setGate.ok) {
+@@ -81,12 +173,16 @@ class ConnectorAuthSetCommand extends Command {
+ 
+     const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
+     const { storeSecret } = await import("../../connectors/secrets.ts");
+-    await storeSecret(connector, spec.secretName, value, keychain ? { keychain } : {});
++    await storeSecret(connector, secretName, value, keychain ? { keychain } : {});
++    const forAccount = target.alias !== undefined ? ` for account '${target.alias}'` : "";
+     this.context.stdout.write(
+-      `Stored ${connector} ${spec.secretLabel} in the OS keychain ` +
+-        `(service 'suasor', account 'connector:${connector}:${spec.secretName}').\n`,
++      `Stored ${connector} ${spec.secretLabel}${forAccount} in the OS keychain ` +
++        `(service 'suasor', account 'connector:${connector}:${secretName}').\n`,
++    );
++    const testHint = target.alias !== undefined ? ` --account ${target.alias}` : "";
++    this.context.stdout.write(
++      `next: verify it with \`suasor ${connector} auth test${testHint}\`.\n`,
+     );
+-    this.context.stdout.write(`next: verify it with \`suasor ${connector} auth test\`.\n`);
+     return 0;
+   }
+ }
+@@ -97,6 +193,11 @@ class ConnectorAuthTestCommand extends Command {
+ 
+   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
+ 
++  account = Option.String("--account", {
++    description:
++      "Named account alias to verify (multi-account connectors, Issue #441).",
++  });
++
+   override async execute(): Promise<number> {
+     const connector = (this.constructor as typeof ConnectorAuthTestCommand).connectorName;
+     const { AUTH_SPECS } = await import("../../connectors/auth-specs.ts");
+@@ -121,21 +222,41 @@ class ConnectorAuthTestCommand extends Command {
+       }
+     }
+ 
++    // Multi-account target (Issue #441): a named alias probes that account's
++    // config table (`[connectors.<name>.accounts.<alias>]`, which must exist —
++    // the probe needs its clientId/tenantId) and resolves secrets under the
++    // per-alias names (`<alias>:<secret>`), so e.g. google's optional
++    // `clientSecret` also resolves per account.
++    const target = await resolveAccountTarget(connector, this.account, true);
++    if (target.error) {
++      this.context.stderr.write(`error: ${target.error}\n`);
++      return 1;
++    }
++
+     const [{ loadConfig }, { makeSecretResolver }] = await Promise.all([
+       import("../../config/index.ts"),
+       import("../../connectors/secrets.ts"),
+     ]);
+-    const config = await loadConfig();
+-    const slice = (config.connectors[connector] ?? {}) as Record<string, unknown>;
+-    const secret = makeSecretResolver(connector);
++    const alias = target.alias;
++    const slice =
++      alias !== undefined
++        ? (target.slice ?? {})
++        : ((await loadConfig()).connectors[connector] ?? {});
++    const base = makeSecretResolver(connector);
++    const secret =
++      alias !== undefined
++        ? (name: string) => base(accountSecretName(name, alias))
++        : base;
+ 
+     let report: Awaited<ReturnType<typeof spec.test>>;
+     try {
+-      report = await spec.test({ secret, config: slice });
++      report = await spec.test({ secret, config: slice as Record<string, unknown> });
+     } catch (cause) {
+       const message = cause instanceof Error ? cause.message : String(cause);
++      const setHint =
++        alias !== undefined ? `suasor ${connector} auth set --account ${alias}` : `suasor ${connector} auth set`;
+       const hint = message.startsWith(`no ${connector} `)
+-        ? ` (run \`suasor ${connector} auth set\` or set the env override)`
++        ? ` (run \`${setHint}\` or set the env override)`
+         : "";
+       this.context.stderr.write(`error: ${message}${hint}\n`);
+       return 1;
+@@ -146,7 +267,10 @@ class ConnectorAuthTestCommand extends Command {
+       return 0;
+     }
+ 
+-    this.context.stdout.write(`ok: ${connector} credential for ${report.principal}\n`);
++    const forAccount = alias !== undefined ? ` (account '${alias}')` : "";
++    this.context.stdout.write(
++      `ok: ${connector} credential${forAccount} for ${report.principal}\n`,
++    );
+     this.context.stdout.write(`scopes: ${report.scopes ?? "(none reported)"}\n`);
+     if (report.features.length > 0) {
+       this.context.stdout.write("features:\n");
+@@ -169,7 +293,9 @@ function makeAuthSetCommand(name: string): CommandClass {
+       details: `
+         Persists the credential so '${name} auth test' and '${name} sync' resolve
+         it without it ever touching config.toml (NFR-PRV-4). Pass --token, or omit
+-        it to read the value from stdin (e.g. a pipe).
++        it to read the value from stdin (e.g. a pipe). Multi-account connectors
++        take --account <alias> to store a named account's secret
++        (connector:${name}:<alias>:<secret>, Issue #441).
+       `,
+       examples: [
+         [`Store from stdin`, `echo <secret> | suasor ${name} auth set`],
+@@ -194,6 +320,8 @@ function makeAuthTestCommand(name: string): CommandClass {
+         live, then prints the resolved identity, granted scopes (when the API
+         reports them), and a 'features:' readiness block (READY / MISSING / N/A).
+         The credential never touches stderr; only the API's error code is shown.
++        Multi-account connectors take --account <alias> to verify a named
++        account's secret + config table (Issue #441).
+       `,
+       examples: [
+         [`Test the stored credential`, `suasor ${name} auth test`],
+diff --git a/src/cli/commands/doctor.ts b/src/cli/commands/doctor.ts
+index 0f82a42..dc3249c 100644
+--- a/src/cli/commands/doctor.ts
++++ b/src/cli/commands/doctor.ts
+@@ -341,6 +341,42 @@ export class DoctorCommand extends Command {
+       for (const { name, message } of noopScoped) {
+         checks.push({ name: "connectors.noop", status: "warn", detail: `${name}: ${message}` });
+       }
++
++      // 5a'. per-account credentials for multi-account connectors (the ADR-0014
++      //    alias pattern generalized, Issue #441; extends the Slack-only #371
++      //    check to google / ms-graph via the manifest capability). The
++      //    connector-credential check above probes only the static primary
++      //    secret (`connector:<name>:<secret>` — the flat/default account), so a
++      //    named-account config (`[connectors.<name>.accounts.<alias>]` /
++      //    Slack's `workspaces`) whose per-alias secret is missing would read as
++      //    "ok" there and then be silently skipped at sync time
++      //    (`account '<alias>' skipped: no token`). Probe each named account's
++      //    secret presence (warn — sync skips it; never the value, NFR-PRV-4).
++      //    Flat/single-account configs yield no named accounts → unchanged.
++      const { allConnectorManifests } = await import("../../connectors/manifest.ts");
++      for (const manifest of allConnectorManifests()) {
++        const capability = manifest.multiAccount;
++        const slice = config.connectors[manifest.name];
++        if (capability === null || slice === undefined) continue;
++        let accounts: readonly { alias: string; secretName: string }[];
++        try {
++          accounts = capability.namedAccounts(slice);
++        } catch {
++          continue; // invalid slice already surfaced by config validation
++        }
++        for (const account of accounts) {
++          if ((await resolveSecret(manifest.name, account.secretName)) !== null) continue;
++          checks.push({
++            name: `${manifest.name}.token`,
++            status: "warn",
++            detail:
++              `${capability.noun} '${account.alias}' has no token ` +
++              `(connector:${manifest.name}:${account.secretName}); ` +
++              `sync skips it (\`${capability.noun} '${account.alias}' skipped: no token\`). ` +
++              `Run \`${capability.authSetHint(account.alias)}\`.`,
++          });
++        }
++      }
+     }
+ 
+     // 5b. slack shared channels — the same global Slack channel id listed under
+@@ -375,34 +411,17 @@ export class DoctorCommand extends Command {
+         });
+       }
+ 
+-      // 5c. per-workspace slack credential / identity — the connector-credential
+-      //    check above only probes the static primary secret (`connector:slack:token`,
+-      //    the flat/default workspace), so a multi-workspace config
+-      //    (`[connectors.slack.workspaces.<alias>]`) whose per-alias token
+-      //    (`connector:slack:<alias>:token`) is missing reads as "ok" there and
+-      //    then silently drops that workspace at sync time
+-      //    (`workspace '<alias>' skipped: no token`, Issue #371). Surface each
+-      //    named workspace's token presence (warn — sync skips it) and its
+-      //    `self_user_id` presence (info — `demand.list` degrades to DM-only
+-      //    without it, ADR-0012/ADR-0041). Only named workspaces are probed: the flat/default
+-      //    workspace's `token` is already covered by the connector-credential check,
+-      //    so the flat/single-workspace path is unchanged. Warn/info only — never
+-      //    error (exit code unchanged, matching the shared-channel check above).
+-      //    Presence only, never the value (NFR-PRV-4).
++      // 5c. per-workspace slack identity — the per-alias **token** probe now runs
++      //    generically for every multi-account connector in 5a' above (Issue
++      //    #441; the Slack messages are unchanged — same `slack.token` check,
++      //    ADR-0014 / Issue #371). What stays Slack-specific is `self_user_id`
++      //    presence (info — `demand.list` degrades to DM-only without it,
++      //    ADR-0012/ADR-0041). Only named workspaces are probed, so the
++      //    flat/single-workspace path is unchanged. Info only — never error.
+       const isMultiWorkspace =
+         slack.workspaces !== undefined && Object.keys(slack.workspaces).length > 0;
+       if (isMultiWorkspace) {
+         for (const ws of workspaces) {
+-          if ((await resolveSecret("slack", ws.secretName)) === null) {
+-            checks.push({
+-              name: "slack.token",
+-              status: "warn",
+-              detail:
+-                `workspace '${ws.alias}' has no token (connector:slack:${ws.secretName}); ` +
+-                `sync skips it (\`workspace '${ws.alias}' skipped: no token\`). ` +
+-                `Run \`suasor slack auth set --workspace ${ws.alias}\`.`,
+-            });
+-          }
+           if (ws.selfUserId === undefined) {
+             checks.push({
+               name: "slack.demand",
+diff --git a/src/cli/commands/onboard.ts b/src/cli/commands/onboard.ts
+index e745312..fc34f59 100644
+--- a/src/cli/commands/onboard.ts
++++ b/src/cli/commands/onboard.ts
+@@ -218,6 +218,28 @@ export class OnboardCommand extends Command {
+         continue;
+       }
+ 
++      // Multi-account configs (`[connectors.<name>.accounts.<alias>]`, Issue
++      // #441) are out of scope for the generic single-secret flow — storing the
++      // flat/default secret would be silently ignored by sync (the named
++      // accounts win), and one stdin cannot carry N per-account secrets. Same
++      // shape as the slack multi-workspace guard (Issue #384): record the
++      // per-account manual steps, leave config untouched, and let the recap
++      // report the connector as manual-pending.
++      const multiAccount = await this.namedAccountGuard(connector);
++      if (multiAccount !== null) {
++        report.authFlow = "connector-specific";
++        manualSteps.set(connector, multiAccount.steps);
++        if (!this.json) {
++          stdout.write(
++            `${connector}: multiple accounts configured (${multiAccount.aliases.join(", ")}) — ` +
++              "onboard stores only the flat/default secret; finish each account with " +
++              `\`suasor ${connector} auth set --account <alias>\` (checklist below).\n`,
++          );
++        }
++        reports.push(report);
++        continue;
++      }
++
+       if (!this.skipAuth) {
+         const stored = await this.storeTokenFor(connector, interactive);
+         if (stored === "no-spec") {
+@@ -947,6 +969,43 @@ export class OnboardCommand extends Command {
+       | undefined;
+     return Object.keys(slack?.workspaces ?? {});
+   }
++
++  /**
++   * Detect a multi-account config for a generic connector (the ADR-0014 alias
++   * pattern generalized — `[connectors.<name>.accounts.<alias>]`, Issue #441)
++   * and build its per-account manual checklist. Returns `null` for a
++   * single-account connector / flat config (the generic flow proceeds), same
++   * degradation rules as {@link slackWorkspaceAliases} (a broken config reads
++   * as flat so onboard can still make progress).
++   */
++  private async namedAccountGuard(
++    connector: string,
++  ): Promise<{ aliases: string[]; steps: readonly string[] } | null> {
++    const { connectorManifest } = await import("../../connectors/manifest.ts");
++    const capability = connectorManifest(connector)?.multiAccount ?? null;
++    if (capability === null) return null;
++    const { loadConfig } = await import("../../config/index.ts");
++    let config: Awaited<ReturnType<typeof loadConfig>>;
++    try {
++      config = await loadConfig();
++    } catch {
++      return null;
++    }
++    const slice = config.connectors[connector] as Record<string, unknown> | undefined;
++    const table = slice?.[capability.configKey];
++    const aliases = table && typeof table === "object" ? Object.keys(table) : [];
++    if (aliases.length === 0) return null;
++    const { AUTH_SPECS } = await import("../../connectors/auth-specs.ts");
++    const label = AUTH_SPECS[connector]?.secretLabel ?? "secret";
++    return {
++      aliases,
++      steps: [
++        `suasor ${connector} auth set --account <alias>    # store each account's ${label}`,
++        `suasor ${connector} auth test --account <alias>   # verify per account`,
++        `suasor ${connector} sync`,
++      ],
++    };
++  }
+ }
+ 
+ /**
+diff --git a/src/connectors/box.ts b/src/connectors/box.ts
+index 79367f4..b837a25 100644
+--- a/src/connectors/box.ts
++++ b/src/connectors/box.ts
+@@ -314,4 +314,5 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: true,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  multiAccount: null,
+ };
+diff --git a/src/connectors/github.ts b/src/connectors/github.ts
+index 20fa577..65feaf6 100644
+--- a/src/connectors/github.ts
++++ b/src/connectors/github.ts
+@@ -440,4 +440,5 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: true,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  multiAccount: null,
+ };
+diff --git a/src/connectors/google.ts b/src/connectors/google.ts
+index bf6a3ce..be8e5dd 100644
+--- a/src/connectors/google.ts
++++ b/src/connectors/google.ts
+@@ -29,10 +29,22 @@
+  *   extension set (a pure `Set`, no SDK).
+  * - **secrets** — the OAuth refresh token comes from `ctx.secret("refreshToken")`
+  *   (keychain + env override, NFR-PRV-4); client id/secret live in config.
++ * - **multi-account** — `[connectors.google.accounts.<alias>]` tables ingest N
++ *   Google accounts (personal + work) from one install, each with its own
++ *   refresh token `connector:google:<alias>:refreshToken` and per-account error
++ *   isolation (the ADR-0014 alias pattern generalized, Issue #441). The flat
++ *   fields keep working as the single `default` account.
+  */
+ import { extname } from "node:path";
+ import { z } from "zod";
+ import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
++import {
++  type AccountsResult,
++  DEFAULT_ACCOUNT_ALIAS,
++  type ResolvedAccount,
++  resolveAccounts,
++  syncAccountsIsolated,
++} from "./accounts.ts";
+ import type {
+   Connector,
+   ConnectorConfig,
+@@ -48,8 +60,11 @@ import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
+ export const GoogleResource = z.enum(["drive", "gmail", "calendar"]);
+ export type GoogleResource = z.infer<typeof GoogleResource>;
+ 
+-/** `[connectors.google]` config (docs/design/config.md). */
+-export const GoogleConnectorConfig = z.object({
++/**
++ * One Google account's fields — the flat `[connectors.google]` shape and each
++ * `[connectors.google.accounts.<alias>]` table share it (Issue #441).
++ */
++export const GoogleAccountConfig = z.object({
+   /** OAuth client id of the desktop / web app. */
+   clientId: z.string().min(1).default(""),
+   /** Calendar id to read events from (default the primary calendar). */
+@@ -57,17 +72,60 @@ export const GoogleConnectorConfig = z.object({
+   /** Resource families to ingest. */
+   resources: z.array(GoogleResource).default(["drive", "gmail", "calendar"]),
+ });
++export type GoogleAccountConfig = z.infer<typeof GoogleAccountConfig>;
++
++/**
++ * `[connectors.google]` config (docs/design/config.md).
++ *
++ * Two shapes, mutually exclusive (the ADR-0014 alias pattern, Issue #441):
++ * - **flat** — a single account, the `default` alias. Backward compatible.
++ * - **multi** (`[connectors.google.accounts.<alias>]`) — N accounts, each with
++ *   its own clientId/resources and its own refresh token
++ *   (`connector:google:<alias>:refreshToken`).
++ * When `accounts` is present and non-empty it wins; otherwise the flat fields
++ * synthesize the single `default` account.
++ */
++export const GoogleConnectorConfig = GoogleAccountConfig.extend({
++  accounts: z.record(z.string(), GoogleAccountConfig).optional(),
++});
+ export type GoogleConnectorConfig = z.infer<typeof GoogleConnectorConfig>;
+ 
+ export const GOOGLE_CONNECTOR_NAME = "google";
+ 
+-/** Credential precondition enforced centrally by the sync service (Issue #440). */
+-const GOOGLE_CREDENTIALS: CredentialRequirement = {
+-  secretNames: ["refreshToken"],
+-  missingMessage:
+-    "google connector: no refreshToken configured " +
+-    "(set SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN or store it in the OS keychain)",
+-};
++/** The secret each Google account resolves (per alias, ADR-0014 leg 2). */
++const GOOGLE_SECRET = "refreshToken";
++
++/** Expand the config into the concrete list of accounts to sync (Issue #441). */
++export function resolveGoogleAccounts(
++  config: GoogleConnectorConfig,
++): ResolvedAccount<GoogleAccountConfig>[] {
++  // `config` is already validated (`GoogleConnectorConfig.parse`), so the flat
++  // rest *is* a parsed `GoogleAccountConfig` — no re-parse (which would reject
++  // the schema's own `default("")` placeholders against `min(1)`).
++  const { accounts, ...flat } = config;
++  return resolveAccounts(GOOGLE_SECRET, accounts, flat);
++}
++
++/**
++ * Credential precondition enforced centrally by the sync service (ADR-0007
++ * "credential 解決は scope-emptiness 判定に先行する", Issue #440). Multi-account
++ * (Issue #441): the requirement lists every configured account's secret name and
++ * is satisfied when **at least one** resolves (any-of); a per-account absence is
++ * handled by the per-account skip inside `sync` (ADR-0014 semantics).
++ */
++export function googleCredentials(config: GoogleConnectorConfig): CredentialRequirement {
++  const accounts = resolveGoogleAccounts(config);
++  const multi = accounts.length > 1 || accounts[0]?.alias !== DEFAULT_ACCOUNT_ALIAS;
++  return {
++    secretNames: accounts.map((a) => a.secretName),
++    missingMessage: multi
++      ? "google connector: no refreshToken configured for any account " +
++        "(set SUASOR_CONNECTOR_GOOGLE_<ALIAS>_REFRESHTOKEN or run " +
++        "`suasor google auth set --account <alias>`)"
++      : "google connector: no refreshToken configured " +
++        "(set SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN or store it in the OS keychain)",
++  };
++}
+ 
+ /** A normalized Google item the connector maps into a record. */
+ export interface GoogleItem {
+@@ -185,8 +243,15 @@ function driveExtractable(item: GoogleItem, client: GoogleClientLike): SourceRec
+  * `readBytes` is only called when the sync extraction stage actually runs, so
+  * unchanged records and non-extractable files pay no download cost. Gmail and
+  * Calendar items stay body-only (no fingerprint/extractable).
++ *
++ * Identity: the default account keeps `google:<resource>:<id>` (backward
++ * compatible with existing stores); a named account prefixes its alias —
++ * `google:<alias>:<resource>:<id>` — so the same message/file id in two
++ * accounts never collides (ADR-0007 identity, Issue #441). Named accounts also
++ * stash `meta.account` for provenance.
+  */
+ function toRecord(
++  alias: string,
+   resource: GoogleResource,
+   item: GoogleItem,
+   client: GoogleClientLike,
+@@ -196,12 +261,15 @@ function toRecord(
+   const isDrive = resource === "drive";
+   const fingerprint = isDrive ? (item.md5Checksum ?? item.version) : undefined;
+   const extractable = isDrive ? driveExtractable(item, client) : undefined;
++  const named = alias !== DEFAULT_ACCOUNT_ALIAS;
+   return {
+-    externalId: `google:${resource}:${item.id}`,
++    externalId: named
++      ? `google:${alias}:${resource}:${item.id}`
++      : `google:${resource}:${item.id}`,
+     sourceType: SOURCE_TYPE[resource],
+     body,
+     observedAt: item.observedAt,
+-    meta: { resource, id: item.id },
++    meta: { resource, id: item.id, ...(named ? { account: alias } : {}) },
+     ...(fingerprint ? { fingerprint } : {}),
+     ...(extractable !== undefined ? { extractable } : {}),
+   };
+@@ -330,74 +398,111 @@ export interface GoogleConnectorOptions {
+ class GoogleConnector implements Connector {
+   readonly name = GOOGLE_CONNECTOR_NAME;
+   readonly sourceType = "google";
+-  readonly credentials = GOOGLE_CREDENTIALS;
++  /** Any-of over the configured accounts' refresh tokens; enforced centrally (#440). */
++  readonly credentials: CredentialRequirement;
+ 
+-  /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
+-  private isolation: IsolationResult | null = null;
++  /** Per-account per-resource isolation outcomes (set when `sync` ran) → finalize. */
++  private isolations: IsolationResult[] = [];
++  /** Per-account status aggregate (multi-account shape, Issue #441) → finalize. */
++  private accountsResult: AccountsResult | null = null;
+ 
+   constructor(
+     private readonly config: GoogleConnectorConfig,
+     private readonly clientFactory: GoogleClientFactory,
+-  ) {}
++  ) {
++    this.credentials = googleCredentials(config);
++  }
+ 
+   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
+-    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+-    // above) is enforced centrally by the sync service before `sync()` runs, so
+-    // this early return can never mask a missing refreshToken (ADR-0007
+-    // "credential 解決は scope-emptiness 判定に先行する", Issue #440).
+-    if (this.config.resources.length === 0) return;
++    // Accounts with an empty `resources` scope are genuine no-ops and excluded
++    // up front (mirrors Slack's channel-less workspace filter): the credential
++    // precondition (`credentials` above) is enforced centrally by the sync
++    // service before `sync()` runs, so this early return can never mask a
++    // missing refreshToken (ADR-0007 "credential 解決は scope-emptiness 判定に
++    // 先行する", Issue #440).
++    const accounts = resolveGoogleAccounts(this.config).filter(
++      (a) => a.config.resources.length > 0,
++    );
++    this.isolations = [];
++    this.accountsResult = null;
++    if (accounts.length === 0) return;
+ 
+-    const refreshToken = await ctx.secret("refreshToken");
+-    // Guaranteed present by the central credential check; narrow for the client.
+-    if (refreshToken === null) throw new Error(GOOGLE_CREDENTIALS.missingMessage);
++    const clientFactory = this.clientFactory;
++    const isolations = this.isolations;
+ 
+-    const client = await this.clientFactory({
+-      clientId: this.config.clientId,
+-      refreshToken,
+-      calendarId: this.config.calendarId,
+-    });
+-    this.isolation = null;
+-
+-    // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
+-    // resource family failing (e.g. Drive 403) records a warn and is skipped
+-    // while the rest stream; only an all-resources failure throws.
+-    const fetchResource = (resource: GoogleResource): AsyncIterable<SourceRecord> =>
+-      (async function* () {
+-        let pageToken: string | undefined;
+-        do {
+-          const page = await client.listPage(resource, pageToken);
+-          for (const item of page.items) {
+-            yield toRecord(resource, item, client);
+-          }
+-          pageToken = page.nextPageToken;
+-        } while (pageToken);
+-      })();
+-
+-    yield* syncResourcesIsolated(
+-      this.config.resources,
++    // Per-account error isolation (ADR-0014 generalized, Issue #441): a
++    // tokenless account is skipped with a warning and a mid-fetch failure in
++    // one account never aborts the others; only an all-accounts failure throws.
++    // Within each account, per-resource isolation applies as before (#193).
++    yield* syncAccountsIsolated(
++      accounts,
+       ctx,
+-      (resource) => resource,
+-      "resource",
+-      fetchResource,
++      {
++        authSetHint: (alias) => `\`suasor google auth set --account ${alias}\``,
++        missingMessage: this.credentials.missingMessage,
++      },
++      async function* (account, refreshToken) {
++        const client = await clientFactory({
++          clientId: account.config.clientId,
++          refreshToken,
++          calendarId: account.config.calendarId,
++        });
++
++        const fetchResource = (resource: GoogleResource): AsyncIterable<SourceRecord> =>
++          (async function* () {
++            let pageToken: string | undefined;
++            do {
++              const page = await client.listPage(resource, pageToken);
++              for (const item of page.items) {
++                yield toRecord(account.alias, resource, item, client);
++              }
++              pageToken = page.nextPageToken;
++            } while (pageToken);
++          })();
++
++        // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
++        // resource family failing (e.g. Drive 403) records a warn and is skipped
++        // while the rest stream; an all-resources failure throws — which the
++        // account isolation above then treats as this one account failing.
++        // Named accounts prefix the resource label (`work:drive`) so warns and
++        // summary lines identify the account.
++        const label = (resource: GoogleResource): string =>
++          account.alias === DEFAULT_ACCOUNT_ALIAS ? resource : `${account.alias}:${resource}`;
++        yield* syncResourcesIsolated(
++          account.config.resources,
++          ctx,
++          label,
++          "resource",
++          fetchResource,
++          (result) => {
++            isolations.push(result);
++          },
++        );
++      },
+       (result) => {
+-        this.isolation = result;
++        this.accountsResult = result;
+       },
+     );
+   }
+ 
+   finalize(): SyncResult {
+     // Fingerprint-based change detection; no per-run cursor to persist. A
+-    // partial resource failure is surfaced so the CLI exits non-zero without
+-    // discarding the collected records (ADR-0027, Issue #193).
+-    const iso = this.isolation;
+-    if (iso?.partialFailure) {
+-      return {
+-        cursor: null,
+-        partialFailure: true,
+-        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
+-      };
+-    }
+-    return { cursor: null };
++    // partial account failure (Issue #441) and/or a partial resource failure
++    // within an account (Issue #193) are surfaced so the CLI exits non-zero
++    // without discarding the collected records (ADR-0027). The flat/single-
++    // account clean run stays summary-free (unchanged output).
++    const partialFailure =
++      (this.accountsResult?.partialFailure ?? false) ||
++      this.isolations.some((iso) => iso.partialFailure);
++    const summaryLines = [
++      ...(this.accountsResult?.summaryLines ?? []),
++      ...this.isolations.flatMap((iso) => iso.summaryLines ?? []),
++    ];
++    return {
++      cursor: null,
++      ...(partialFailure ? { partialFailure: true } : {}),
++      ...(summaryLines.length > 0 ? { summaryLines } : {}),
++    };
+   }
+ }
+ 
+@@ -418,7 +523,10 @@ export const manifest: ConnectorManifest = {
+   name: GOOGLE_CONNECTOR_NAME,
+   sourceType: "google",
+   configSchema: GoogleConnectorConfig,
+-  secretNames: GOOGLE_CREDENTIALS.secretNames,
++  // Introspection view only (`connectors list`): the default-account
++  // `refreshToken`. Named-account secrets are dynamic (`<alias>:refreshToken`,
++  // Issue #441) and resolved per config at sync time via `googleCredentials`.
++  secretNames: [GOOGLE_SECRET],
+   needsAuth: true,
+   bundledInBinary: false,
+   sliceTemplate: {
+@@ -426,8 +534,11 @@ export const manifest: ConnectorManifest = {
+   },
+   noopWarning(slice) {
+     const cfg = GoogleConnectorConfig.parse(slice ?? {});
+-    if (cfg.resources.length === 0) {
+-      return "resources unset — nothing to ingest (set resources in config)";
++    const accounts = resolveGoogleAccounts(cfg);
++    if (accounts.every((a) => a.config.resources.length === 0)) {
++      return accounts.length > 1 || accounts[0]?.alias !== DEFAULT_ACCOUNT_ALIAS
++        ? "none of the accounts have resources set — nothing to ingest (set resources per account)"
++        : "resources unset — nothing to ingest (set resources in config)";
+     }
+     return null;
+   },
+@@ -435,4 +546,16 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: true,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  // Multi-account capability (the ADR-0014 alias pattern generalized, #441):
++  // `[connectors.google.accounts.<alias>]`, per-alias refresh tokens.
++  multiAccount: {
++    configKey: "accounts",
++    noun: "account",
++    namedAccounts(slice) {
++      const cfg = GoogleConnectorConfig.parse(slice ?? {});
++      if (!cfg.accounts || Object.keys(cfg.accounts).length === 0) return [];
++      return resolveGoogleAccounts(cfg).map(({ alias, secretName }) => ({ alias, secretName }));
++    },
++    authSetHint: (alias) => `suasor google auth set --account ${alias}`,
++  },
+ };
+diff --git a/src/connectors/jira.ts b/src/connectors/jira.ts
+index 5d9830a..c0d93fd 100644
+--- a/src/connectors/jira.ts
++++ b/src/connectors/jira.ts
+@@ -408,4 +408,5 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: true,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  multiAccount: null,
+ };
+diff --git a/src/connectors/local.ts b/src/connectors/local.ts
+index ff2122f..f32e875 100644
+--- a/src/connectors/local.ts
++++ b/src/connectors/local.ts
+@@ -362,6 +362,7 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: false,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  multiAccount: null,
+   capabilityNotes: {
+     genericAuth: "local filesystem only — no credential to store or test",
+     genericDiscovery: "roots are user-supplied paths — no upstream namespace to enumerate",
+diff --git a/src/connectors/manifest.ts b/src/connectors/manifest.ts
+index 3b84906..7ef4c4a 100644
+--- a/src/connectors/manifest.ts
++++ b/src/connectors/manifest.ts
+@@ -65,6 +65,41 @@ export interface ConnectorSliceTemplate {
+ /** A connector's `[connectors.<name>]` config-slice schema (validated at load). */
+ export type ConnectorConfigSchema = z.ZodType<Record<string, unknown>, ConnectorConfig>;
+ 
++/** One named account resolved from a multi-account config slice (Issue #441). */
++export interface ManifestAccount {
++  /** Account alias (the per-alias table key). */
++  readonly alias: string;
++  /** Secret name the alias resolves under (`<alias>:<secret>`, ADR-0014 leg 2). */
++  readonly secretName: string;
++}
++
++/**
++ * A connector's multi-account capability (the ADR-0014 alias pattern lifted
++ * into the contract as a generic capability, Issue #441). Declared on the
++ * manifest so platform surfaces (doctor's per-alias credential probe, onboard's
++ * multi-account guard, the generic `auth set/test --account` verbs) work for
++ * every multi-account connector without per-connector special-casing. `null`
++ * on the manifest ⇒ the connector is single-account.
++ */
++export interface MultiAccountManifest {
++  /**
++   * Config key of the per-alias table (`accounts` for the generic shape;
++   * Slack predates the generic capability and keeps `workspaces`, ADR-0014).
++   */
++  readonly configKey: string;
++  /** Human noun for one account in messages (`account`; Slack says `workspace`). */
++  readonly noun: string;
++  /**
++   * The **named** accounts configured in a raw config slice — empty for the
++   * flat/default shape (whose plain secret the static `secretNames`
++   * introspection already covers). Parses the slice with the connector's own
++   * schema; doctor probes each returned secret name for presence (never value).
++   */
++  readonly namedAccounts: (slice: ConnectorConfig) => readonly ManifestAccount[];
++  /** Recovery command storing one alias's secret (e.g. `suasor google auth set --account work`). */
++  readonly authSetHint: (alias: string) => string;
++}
++
+ /**
+  * Everything the platform needs to know about one connector, in one place. Read
+  * by the registry-adjacent lookups + the completeness test. See the module header
+@@ -127,6 +162,12 @@ export interface ConnectorManifest {
+    * (ADR-0037 §10). Only Slack surfaces teams today.
+    */
+   readonly surfacesTeams: boolean;
++  /**
++   * Multi-account capability (`[connectors.<name>.accounts.<alias>]` tables,
++   * per-alias secrets, per-account isolation — the ADR-0014 alias pattern as a
++   * generic capability, Issue #441). `null` ⇒ single-account connector.
++   */
++  readonly multiAccount: MultiAccountManifest | null;
+   /**
+    * Human-readable reasons a connector opts out of a generic surface it might be
+    * expected to have (keyed by surface: `genericAuth` / `genericDiscovery`). Used
+diff --git a/src/connectors/ms-graph.ts b/src/connectors/ms-graph.ts
+index 9bef715..6ef2efc 100644
+--- a/src/connectors/ms-graph.ts
++++ b/src/connectors/ms-graph.ts
+@@ -36,10 +36,22 @@
+  *   `zod` + the contract + extraction extension set (a pure `Set`, no SDK).
+  * - **secrets** — the client secret comes from `ctx.secret("clientSecret")`
+  *   (keychain + env override, NFR-PRV-4); tenant/client ids live in config.
++ * - **multi-account** — `[connectors.ms-graph.accounts.<alias>]` tables ingest N
++ *   Microsoft 365 accounts (personal + work tenants) from one install, each with
++ *   its own client secret `connector:ms-graph:<alias>:clientSecret` and
++ *   per-account error isolation (the ADR-0014 alias pattern generalized, Issue
++ *   #441). The flat fields keep working as the single `default` account.
+  */
+ import { extname } from "node:path";
+ import { z } from "zod";
+ import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
++import {
++  type AccountsResult,
++  DEFAULT_ACCOUNT_ALIAS,
++  type ResolvedAccount,
++  resolveAccounts,
++  syncAccountsIsolated,
++} from "./accounts.ts";
+ import type {
+   Connector,
+   ConnectorConfig,
+@@ -55,8 +67,11 @@ import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
+ export const MsGraphResource = z.enum(["mail", "calendar", "files", "teams"]);
+ export type MsGraphResource = z.infer<typeof MsGraphResource>;
+ 
+-/** `[connectors.ms-graph]` config (docs/design/config.md). */
+-export const MsGraphConnectorConfig = z.object({
++/**
++ * One Microsoft 365 account's fields — the flat `[connectors.ms-graph]` shape
++ * and each `[connectors.ms-graph.accounts.<alias>]` table share it (Issue #441).
++ */
++export const MsGraphAccountConfig = z.object({
+   /** Azure AD tenant id (directory id). */
+   tenantId: z.string().min(1).default(""),
+   /** App registration (client) id. */
+@@ -66,17 +81,59 @@ export const MsGraphConnectorConfig = z.object({
+   /** Resource families to ingest. */
+   resources: z.array(MsGraphResource).default(["mail", "calendar"]),
+ });
++export type MsGraphAccountConfig = z.infer<typeof MsGraphAccountConfig>;
++
++/**
++ * `[connectors.ms-graph]` config (docs/design/config.md).
++ *
++ * Two shapes, mutually exclusive (the ADR-0014 alias pattern, Issue #441):
++ * - **flat** — a single account, the `default` alias. Backward compatible.
++ * - **multi** (`[connectors.ms-graph.accounts.<alias>]`) — N accounts, each with
++ *   its own tenant/client/user and its own client secret
++ *   (`connector:ms-graph:<alias>:clientSecret`).
++ * When `accounts` is present and non-empty it wins; otherwise the flat fields
++ * synthesize the single `default` account.
++ */
++export const MsGraphConnectorConfig = MsGraphAccountConfig.extend({
++  accounts: z.record(z.string(), MsGraphAccountConfig).optional(),
++});
+ export type MsGraphConnectorConfig = z.infer<typeof MsGraphConnectorConfig>;
+ 
+ export const MS_GRAPH_CONNECTOR_NAME = "ms-graph";
+ 
+-/** Credential precondition enforced centrally by the sync service (Issue #440). */
+-const MS_GRAPH_CREDENTIALS: CredentialRequirement = {
+-  secretNames: ["clientSecret"],
+-  missingMessage:
+-    "ms-graph connector: no clientSecret configured " +
+-    "(set SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET or store it in the OS keychain)",
+-};
++/** The secret each Microsoft 365 account resolves (per alias, ADR-0014 leg 2). */
++const MS_GRAPH_SECRET = "clientSecret";
++
++/** Expand the config into the concrete list of accounts to sync (Issue #441). */
++export function resolveMsGraphAccounts(
++  config: MsGraphConnectorConfig,
++): ResolvedAccount<MsGraphAccountConfig>[] {
++  // `config` is already validated (`MsGraphConnectorConfig.parse`), so the flat
++  // rest *is* a parsed `MsGraphAccountConfig` — no re-parse (which would reject
++  // the schema's own `default("")` placeholders against `min(1)`).
++  const { accounts, ...flat } = config;
++  return resolveAccounts(MS_GRAPH_SECRET, accounts, flat);
++}
++
++/**
++ * Credential precondition enforced centrally by the sync service (ADR-0007
++ * "credential 解決は scope-emptiness 判定に先行する", Issue #440). Multi-account
++ * (Issue #441): any-of over every configured account's secret name; a
++ * per-account absence is handled by the per-account skip inside `sync`.
++ */
++export function msGraphCredentials(config: MsGraphConnectorConfig): CredentialRequirement {
++  const accounts = resolveMsGraphAccounts(config);
++  const multi = accounts.length > 1 || accounts[0]?.alias !== DEFAULT_ACCOUNT_ALIAS;
++  return {
++    secretNames: accounts.map((a) => a.secretName),
++    missingMessage: multi
++      ? "ms-graph connector: no clientSecret configured for any account " +
++        "(set SUASOR_CONNECTOR_MS_GRAPH_<ALIAS>_CLIENTSECRET or run " +
++        "`suasor ms-graph auth set --account <alias>`)"
++      : "ms-graph connector: no clientSecret configured " +
++        "(set SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET or store it in the OS keychain)",
++  };
++}
+ 
+ /** DriveItem content hashes (any one drives the content fingerprint, ADR-0024 §6). */
+ interface GraphFileHashes {
+@@ -164,6 +221,7 @@ const RESOURCE_SPEC: Record<
+  * records pay no download cost.
+  */
+ function toRecord(
++  alias: string,
+   resource: MsGraphResource,
+   item: GraphItem,
+   client: MsGraphClientLike,
+@@ -193,12 +251,19 @@ function toRecord(
+       : undefined;
+   const fingerprint = resource === "files" ? contentHash(item) : undefined;
+ 
++  // Identity: the default account keeps `msgraph:<resource>:<id>` (backward
++  // compatible); a named account prefixes its alias so ids never collide across
++  // accounts (ADR-0007 identity, Issue #441). Named accounts stash
++  // `meta.account` for provenance.
++  const named = alias !== DEFAULT_ACCOUNT_ALIAS;
+   return {
+-    externalId: `msgraph:${resource}:${item.id}`,
++    externalId: named
++      ? `msgraph:${alias}:${resource}:${item.id}`
++      : `msgraph:${resource}:${item.id}`,
+     sourceType: spec.sourceType,
+     body,
+     observedAt,
+-    meta: { resource, id: item.id },
++    meta: { resource, id: item.id, ...(named ? { account: alias } : {}) },
+     ...(fingerprint ? { fingerprint } : {}),
+     ...(extractable !== undefined ? { extractable } : {}),
+   };
+@@ -323,80 +388,117 @@ export interface MsGraphConnectorOptions {
+ class MsGraphConnector implements Connector {
+   readonly name = MS_GRAPH_CONNECTOR_NAME;
+   readonly sourceType = "ms365";
+-  readonly credentials = MS_GRAPH_CREDENTIALS;
++  /** Any-of over the configured accounts' client secrets; enforced centrally (#440). */
++  readonly credentials: CredentialRequirement;
+ 
+-  /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
+-  private isolation: IsolationResult | null = null;
++  /** Per-account per-resource isolation outcomes (set when `sync` ran) → finalize. */
++  private isolations: IsolationResult[] = [];
++  /** Per-account status aggregate (multi-account shape, Issue #441) → finalize. */
++  private accountsResult: AccountsResult | null = null;
+ 
+   constructor(
+     private readonly config: MsGraphConnectorConfig,
+     private readonly clientFactory: MsGraphClientFactory,
+-  ) {}
++  ) {
++    this.credentials = msGraphCredentials(config);
++  }
+ 
+   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
+-    // Empty scope is a genuine no-op: the credential precondition (`credentials`
+-    // above) is enforced centrally by the sync service before `sync()` runs, so
+-    // this early return can never mask a missing clientSecret (ADR-0007
+-    // "credential 解決は scope-emptiness 判定に先行する", Issue #440).
+-    if (this.config.resources.length === 0) return;
++    // Accounts with an empty `resources` scope are genuine no-ops and excluded
++    // up front (mirrors Slack's channel-less workspace filter): the credential
++    // precondition (`credentials` above) is enforced centrally by the sync
++    // service before `sync()` runs, so this early return can never mask a
++    // missing clientSecret (ADR-0007 "credential 解決は scope-emptiness 判定に
++    // 先行する", Issue #440).
++    const accounts = resolveMsGraphAccounts(this.config).filter(
++      (a) => a.config.resources.length > 0,
++    );
++    this.isolations = [];
++    this.accountsResult = null;
++    if (accounts.length === 0) return;
+ 
+-    const clientSecret = await ctx.secret("clientSecret");
+-    // Guaranteed present by the central credential check; narrow for the client.
+-    if (clientSecret === null) throw new Error(MS_GRAPH_CREDENTIALS.missingMessage);
++    const clientFactory = this.clientFactory;
++    const isolations = this.isolations;
+ 
+-    if (!this.config.tenantId || !this.config.clientId) {
+-      throw new Error("ms-graph connector: tenantId and clientId are required in config");
+-    }
+-
+-    const client = await this.clientFactory({
+-      tenantId: this.config.tenantId,
+-      clientId: this.config.clientId,
+-      clientSecret,
+-      user: this.config.user,
+-    });
+-    this.isolation = null;
+-
+-    // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
+-    // resource family failing (e.g. mail 403) records a warn and is skipped
+-    // while the rest stream; only an all-resources failure throws.
+-    const user = this.config.user;
+-    const fetchResource = (resource: MsGraphResource): AsyncIterable<SourceRecord> =>
+-      (async function* () {
+-        let path: string | undefined = RESOURCE_SPEC[resource].path(user);
+-        while (path) {
+-          const page: GraphPage = await client.getPage(path);
+-          for (const item of page.value ?? []) {
+-            yield toRecord(resource, item, client);
+-          }
+-          path = page["@odata.nextLink"];
+-        }
+-      })();
+-
+-    yield* syncResourcesIsolated(
+-      this.config.resources,
++    // Per-account error isolation (ADR-0014 generalized, Issue #441): a
++    // tokenless account is skipped with a warning and a mid-fetch failure in
++    // one account never aborts the others; only an all-accounts failure throws.
++    // Within each account, per-resource isolation applies as before (#193).
++    yield* syncAccountsIsolated(
++      accounts,
+       ctx,
+-      (resource) => resource,
+-      "resource",
+-      fetchResource,
++      {
++        authSetHint: (alias) => `\`suasor ms-graph auth set --account ${alias}\``,
++        missingMessage: this.credentials.missingMessage,
++      },
++      async function* (account, clientSecret) {
++        const { tenantId, clientId, user } = account.config;
++        if (!tenantId || !clientId) {
++          // Thrown inside the account body → isolated as this one account
++          // failing (a single/default account still fails the pass, as before).
++          const where =
++            account.alias === DEFAULT_ACCOUNT_ALIAS ? "" : ` for account '${account.alias}'`;
++          throw new Error(
++            `ms-graph connector: tenantId and clientId are required in config${where}`,
++          );
++        }
++
++        const client = await clientFactory({ tenantId, clientId, clientSecret, user });
++
++        const fetchResource = (resource: MsGraphResource): AsyncIterable<SourceRecord> =>
++          (async function* () {
++            let path: string | undefined = RESOURCE_SPEC[resource].path(user);
++            while (path) {
++              const page: GraphPage = await client.getPage(path);
++              for (const item of page.value ?? []) {
++                yield toRecord(account.alias, resource, item, client);
++              }
++              path = page["@odata.nextLink"];
++            }
++          })();
++
++        // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
++        // resource family failing (e.g. mail 403) records a warn and is skipped
++        // while the rest stream; an all-resources failure throws — which the
++        // account isolation above then treats as this one account failing.
++        // Named accounts prefix the resource label (`work:mail`).
++        const label = (resource: MsGraphResource): string =>
++          account.alias === DEFAULT_ACCOUNT_ALIAS ? resource : `${account.alias}:${resource}`;
++        yield* syncResourcesIsolated(
++          account.config.resources,
++          ctx,
++          label,
++          "resource",
++          fetchResource,
++          (result) => {
++            isolations.push(result);
++          },
++        );
++      },
+       (result) => {
+-        this.isolation = result;
++        this.accountsResult = result;
+       },
+     );
+   }
+ 
+   finalize(): SyncResult {
+     // Fingerprint-based change detection; no per-run cursor to persist. A
+-    // partial resource failure is surfaced so the CLI exits non-zero without
+-    // discarding the collected records (ADR-0027, Issue #193).
+-    const iso = this.isolation;
+-    if (iso?.partialFailure) {
+-      return {
+-        cursor: null,
+-        partialFailure: true,
+-        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
+-      };
+-    }
+-    return { cursor: null };
++    // partial account failure (Issue #441) and/or a partial resource failure
++    // within an account (Issue #193) are surfaced so the CLI exits non-zero
++    // without discarding the collected records (ADR-0027). The flat/single-
++    // account clean run stays summary-free (unchanged output).
++    const partialFailure =
++      (this.accountsResult?.partialFailure ?? false) ||
++      this.isolations.some((iso) => iso.partialFailure);
++    const summaryLines = [
++      ...(this.accountsResult?.summaryLines ?? []),
++      ...this.isolations.flatMap((iso) => iso.summaryLines ?? []),
++    ];
++    return {
++      cursor: null,
++      ...(partialFailure ? { partialFailure: true } : {}),
++      ...(summaryLines.length > 0 ? { summaryLines } : {}),
++    };
+   }
+ }
+ 
+@@ -417,7 +519,10 @@ export const manifest: ConnectorManifest = {
+   name: MS_GRAPH_CONNECTOR_NAME,
+   sourceType: "ms365",
+   configSchema: MsGraphConnectorConfig,
+-  secretNames: MS_GRAPH_CREDENTIALS.secretNames,
++  // Introspection view only (`connectors list`): the default-account
++  // `clientSecret`. Named-account secrets are dynamic (`<alias>:clientSecret`,
++  // Issue #441) and resolved per config at sync time via `msGraphCredentials`.
++  secretNames: [MS_GRAPH_SECRET],
+   needsAuth: true,
+   bundledInBinary: false,
+   sliceTemplate: {
+@@ -429,8 +534,11 @@ export const manifest: ConnectorManifest = {
+   },
+   noopWarning(slice) {
+     const cfg = MsGraphConnectorConfig.parse(slice ?? {});
+-    if (cfg.resources.length === 0) {
+-      return "resources unset — nothing to ingest (set resources in config)";
++    const accounts = resolveMsGraphAccounts(cfg);
++    if (accounts.every((a) => a.config.resources.length === 0)) {
++      return accounts.length > 1 || accounts[0]?.alias !== DEFAULT_ACCOUNT_ALIAS
++        ? "none of the accounts have resources set — nothing to ingest (set resources per account)"
++        : "resources unset — nothing to ingest (set resources in config)";
+     }
+     return null;
+   },
+@@ -441,6 +549,18 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: false,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  // Multi-account capability (the ADR-0014 alias pattern generalized, #441):
++  // `[connectors.ms-graph.accounts.<alias>]`, per-alias client secrets.
++  multiAccount: {
++    configKey: "accounts",
++    noun: "account",
++    namedAccounts(slice) {
++      const cfg = MsGraphConnectorConfig.parse(slice ?? {});
++      if (!cfg.accounts || Object.keys(cfg.accounts).length === 0) return [];
++      return resolveMsGraphAccounts(cfg).map(({ alias, secretName }) => ({ alias, secretName }));
++    },
++    authSetHint: (alias) => `suasor ms-graph auth set --account ${alias}`,
++  },
+   capabilityNotes: {
+     genericDiscovery:
+       "resources are a fixed family (mail/calendar/files/teams), not enumerated ids — no discovery verb",
+diff --git a/src/connectors/notion.ts b/src/connectors/notion.ts
+index f6365c4..9e20a78 100644
+--- a/src/connectors/notion.ts
++++ b/src/connectors/notion.ts
+@@ -241,4 +241,5 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: true,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  multiAccount: null,
+ };
+diff --git a/src/connectors/slack.ts b/src/connectors/slack.ts
+index 1a4e28f..ad4e62c 100644
+--- a/src/connectors/slack.ts
++++ b/src/connectors/slack.ts
+@@ -1444,6 +1444,20 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: false,
+   surfacesChannels: true,
+   surfacesTeams: true,
++  // Multi-account capability (ADR-0014 — the original alias pattern, lifted
++  // into the generic contract by Issue #441). Slack predates the generic
++  // `accounts` key and keeps its `workspaces` table + `workspace` wording; the
++  // per-alias secret naming (`<alias>:token`) is the same shape.
++  multiAccount: {
++    configKey: "workspaces",
++    noun: "workspace",
++    namedAccounts(slice) {
++      const cfg = SlackConnectorConfig.parse(slice ?? {});
++      if (!cfg.workspaces || Object.keys(cfg.workspaces).length === 0) return [];
++      return resolveWorkspaces(cfg).map(({ alias, secretName }) => ({ alias, secretName }));
++    },
++    authSetHint: (alias) => `suasor slack auth set --workspace ${alias}`,
++  },
+   capabilityNotes: {
+     genericAuth:
+       "own multi-workspace auth + scope readiness (`slack auth set/test`, ADR-0011/0014)",
+diff --git a/src/connectors/web.ts b/src/connectors/web.ts
+index 23d16d4..e4ebdad 100644
+--- a/src/connectors/web.ts
++++ b/src/connectors/web.ts
+@@ -195,6 +195,7 @@ export const manifest: ConnectorManifest = {
+   genericDiscovery: false,
+   surfacesChannels: false,
+   surfacesTeams: false,
++  multiAccount: null,
+   capabilityNotes: {
+     genericAuth: "public pages only — no credential to store or test",
+     genericDiscovery: "urls are user-supplied — no upstream namespace to enumerate",
