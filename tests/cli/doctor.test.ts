@@ -715,4 +715,37 @@ describe("suasor doctor", () => {
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.find((c) => c.name === "store.growth")?.status).toBe("ok");
   });
+
+  test("warns when a local root overlaps an enabled API connector (#514)", async () => {
+    await run(["init"]);
+    // The local connector validates that roots exist, so build a directory that
+    // actually looks like a Box mount.
+    const { mkdirSync } = await import("node:fs");
+    const boxRoot = join(dir, "Box", "Projects");
+    mkdirSync(boxRoot, { recursive: true });
+    await writeConfig(
+      `[connectors.local]\nroots = ["${boxRoot}"]\n\n[connectors.box]\nfolders = []\n`,
+    );
+    process.env.SUASOR_CONNECTOR_BOX_TOKEN = "box_test";
+    const { code, out } = await run(["doctor", "--json"]);
+    // A warning, not an error: both routes work, they just duplicate.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const overlap = report.checks.find((c) => c.name === "connectors.overlap");
+    expect(overlap?.status).toBe("warn");
+    expect(overlap?.detail).toContain("ingested twice");
+    delete process.env.SUASOR_CONNECTOR_BOX_TOKEN;
+  });
+
+  test("no overlap warning when only the local connector is enabled (#514)", async () => {
+    await run(["init"]);
+    const { mkdirSync } = await import("node:fs");
+    const boxRoot = join(dir, "Box", "Projects");
+    mkdirSync(boxRoot, { recursive: true });
+    await writeConfig(`[connectors.local]\nroots = ["${boxRoot}"]\n`);
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    // Reading a synced folder is fine on its own — nothing is duplicated.
+    expect(report.checks.filter((c) => c.name === "connectors.overlap")).toHaveLength(0);
+  });
 });

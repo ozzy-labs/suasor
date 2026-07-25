@@ -391,6 +391,20 @@ export class DoctorCommand extends Command {
         checks.push({ name: "connectors.noop", status: "warn", detail: `${name}: ${message}` });
       }
 
+      // 5c. local ↔ API connector overlap (Issue #514). An OS-synced Box /
+      //     OneDrive / Drive mount read as plain files, plus that service's own
+      //     API connector, ingests every shared file twice under two ids —
+      //     duplicate sources, FTS rows, embeddings and search hits. The Slack
+      //     equivalent (shared channels) has had a check since ADR-0038; this
+      //     one was invisible until someone spotted the same doc twice.
+      const localRoots = (config.connectors.local?.roots as string[] | undefined) ?? [];
+      if (localRoots.length > 0) {
+        const { detectLocalOverlaps } = await import("../../connectors/local-overlap.ts");
+        for (const overlap of detectLocalOverlaps(localRoots, enabled)) {
+          checks.push({ name: "connectors.overlap", status: "warn", detail: overlap.message });
+        }
+      }
+
       // 5d. sync freshness (Issue #442). Credentials being present says the
       // connector *could* sync; this says whether it actually has. The silent
       // failure this catches is a scheduled sync that stopped running (a cron
