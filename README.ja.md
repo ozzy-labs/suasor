@@ -132,8 +132,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 
 - `search` — Search ingested sources; `mode` selects fts / semantic / hybrid (default auto).
 - `source.list` — List ingested sources newest-first.
-- `source.get` — Fetch one source (with body) by id.
-- `source.get.full` — Bundle a source's body + outgoing provenance links + extraction_meta in one call.
+- `source.get` — Fetch one source (with body); `include` bundles links / extraction.
 - `source.history` — List a source's body versions from the event log (newest first).
 - `task.list` — List tasks, most-recently-updated first.
 - `decision.list` — List recorded decisions, newest-recorded first.
@@ -168,12 +167,9 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 - `link.remove` — Remove a manual link by id (LinkRemoved).
 - `person.merge` — Merge two persons into one (PersonsMerged); reversible via person.split.
 - `person.split` — Split one identity off a person into another (PersonSplit).
-- `commitment.resolve` — Mark an open commitment fulfilled (CommitmentResolved).
-- `commitment.dismiss` — Dismiss an open commitment as a false-positive (CommitmentDismissed).
-- `commitment.reopen` — Reopen a resolved/dismissed commitment back to open (CommitmentReopened).
-- `demand.ack` — Mark a demand row handled — drops it from the un-acked demand.list (DemandAcknowledged).
-- `demand.dismiss` — Mark a demand row not relevant — drops it from the un-acked demand.list (DemandDismissed).
 - `draft.export` — Write a draft to a local file in the export sandbox (DraftExported).
+- `commitment.set` — Move a commitment to resolved / dismissed / open (ADR-0021).
+- `demand.mark` — Mark a demand row acked / dismissed (seen-state, ADR-0041).
 - `source.forget` — Purge an ingested source locally — redact + delete + tombstone (SourceForgotten).
 - `source.unforget` — Lift a forget tombstone so the source can be re-ingested (SourceUnforgotten).
 

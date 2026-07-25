@@ -832,119 +832,65 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
   // status-reporting (no throw): a no-op/invalid/missing transition is reported
   // in the result so the host can surface it without a crash.
   server.registerTool(
-    "commitment.resolve",
+    "commitment.set",
     {
-      title: "Resolve commitment",
+      title: "Set commitment state",
       description:
-        "Mark an open commitment fulfilled (appends CommitmentResolved → open → " +
-        "resolved). Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: an already-resolved commitment is a no-op; a dismissed one is " +
-        "reported invalid_state (reopen first); a missing one is reported missing.",
-      inputSchema: {
-        commitmentId: z.string().min(1).describe("Commitment id from commitment.list."),
-      },
-      annotations: { readOnlyHint: false, openWorldHint: false },
-    },
-    async ({ commitmentId }) => {
-      const result = commitmentResolve(write.store, { commitmentId });
-      return jsonResult(result);
-    },
-  );
-
-  server.registerTool(
-    "commitment.dismiss",
-    {
-      title: "Dismiss commitment",
-      description:
-        "Dismiss an open commitment as a false-positive / no longer relevant " +
-        "(appends CommitmentDismissed → open → dismissed). Write tool: requires " +
-        "human approval — no auto-apply (ADR-0004). Idempotent: an already-dismissed " +
-        "commitment is a no-op; a resolved one is reported invalid_state (reopen " +
-        "first); a missing one is reported missing.",
-      inputSchema: {
-        commitmentId: z.string().min(1).describe("Commitment id from commitment.list."),
-      },
-      annotations: { readOnlyHint: false, openWorldHint: false },
-    },
-    async ({ commitmentId }) => {
-      const result = commitmentDismiss(write.store, { commitmentId });
-      return jsonResult(result);
-    },
-  );
-
-  server.registerTool(
-    "commitment.reopen",
-    {
-      title: "Reopen commitment",
-      description:
-        "Move a resolved / dismissed commitment back to open (appends " +
-        "CommitmentReopened). Write tool: hosts must gate behind human approval — no auto-apply " +
-        "(ADR-0004). Idempotent: an already-open commitment is a no-op; a missing " +
+        "Move a commitment through its lifecycle (ADR-0021): `resolved` (fulfilled), " +
+        "`dismissed` (false positive / no longer relevant), or `open` (reopen a " +
+        "resolved or dismissed one). Appends the matching Commitment* event. Write " +
+        "tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
+        "Status-reporting (no throw): an already-in-that-state commitment is a no-op; " +
+        "resolve↔dismiss without reopening first is reported invalid_state; a missing " +
         "one is reported missing.",
       inputSchema: {
         commitmentId: z.string().min(1).describe("Commitment id from commitment.list."),
+        state: z
+          .enum(["open", "resolved", "dismissed"])
+          .describe(
+            "Target state: resolved (fulfilled) / dismissed (not relevant) / open (reopen).",
+          ),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ commitmentId }) => {
-      const result = commitmentReopen(write.store, { commitmentId });
-      return jsonResult(result);
+    async ({ commitmentId, state }) => {
+      // One tool, three transitions — the underlying services keep their own
+      // guards (a resolve from dismissed is still invalid_state, ADR-0021).
+      const apply =
+        state === "resolved"
+          ? commitmentResolve
+          : state === "dismissed"
+            ? commitmentDismiss
+            : commitmentReopen;
+      return jsonResult(apply(write.store, { commitmentId }));
     },
   );
 
-  // --- demand.ack / demand.dismiss: mark a demand row seen (ADR-0041). ---
-  // The seen-state half of neutral demand: demand.list derives outstanding
-  // @mentions / DMs / notifications, and these two mark one "handled" (ack) or
-  // "not relevant" (dismiss) by appending DemandAcknowledged / DemandDismissed →
-  // demand_seen projection, so it drops out of the default demand.list (ADR-0041,
-  // superseding ADR-0012 決定 4's host-side seen-marker). HITL, status-reporting
-  // (no throw): a no-op (already in that state) is reported, an unknown source is
-  // reported `missing`. Keyed by the demand row's source externalId.
   server.registerTool(
-    "demand.ack",
+    "demand.mark",
     {
-      title: "Acknowledge demand",
+      title: "Mark demand seen",
       description:
-        "Mark a demand row (from demand.list) as handled — appends DemandAcknowledged → " +
-        "demand_seen, so it drops out of the default (un-acked) demand.list (ADR-0041). " +
-        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). Idempotent: an " +
-        "already-acked row is a no-op; a dismissed row is re-marked acked (last-write-wins); " +
+        "Mark a demand row (from demand.list) as handled (`acked`) or not relevant " +
+        "(`dismissed`) — appends DemandAcknowledged / DemandDismissed → demand_seen, " +
+        "so the row drops out of the default (un-acked) demand.list (ADR-0041). Write " +
+        "tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
+        "Idempotent and last-write-wins: re-marking with the other state overwrites; " +
         "an unknown source is reported missing.",
       inputSchema: {
         externalId: z
           .string()
           .min(1)
-          .describe("Source id of the demand row to acknowledge (from demand.list)."),
+          .describe("Source id of the demand row to mark (from demand.list)."),
+        state: z
+          .enum(["acked", "dismissed"])
+          .describe("acked = dealt with it; dismissed = not relevant."),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ externalId }) => {
-      const result = demandAck(write.store, { externalId });
-      return jsonResult(result);
-    },
-  );
-
-  server.registerTool(
-    "demand.dismiss",
-    {
-      title: "Dismiss demand",
-      description:
-        "Mark a demand row (from demand.list) as not relevant — appends DemandDismissed → " +
-        "demand_seen, so it drops out of the default (un-acked) demand.list (ADR-0041). " +
-        "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). Idempotent: an " +
-        "already-dismissed row is a no-op; an acked row is re-marked dismissed " +
-        "(last-write-wins); an unknown source is reported missing.",
-      inputSchema: {
-        externalId: z
-          .string()
-          .min(1)
-          .describe("Source id of the demand row to dismiss (from demand.list)."),
-      },
-      annotations: { readOnlyHint: false, openWorldHint: false },
-    },
-    async ({ externalId }) => {
-      const result = demandDismiss(write.store, { externalId });
-      return jsonResult(result);
+    async ({ externalId, state }) => {
+      const apply = state === "acked" ? demandAck : demandDismiss;
+      return jsonResult(apply(write.store, { externalId }));
     },
   );
 

@@ -12,7 +12,7 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 | 意味検索 | 意味検索（embedding 有効時の vec0 KNN。`sourceType` / `observed*` フィルタ可。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]、フィルタ #142） |
 | `search（mode=hybrid）` | FTS × 意味検索の RRF 融合（`sourceType` / `observed*` フィルタ可。embedding 無効時は FTS のみに degrade、[retrieval](retrieval.md)） | 実装済み（#142。下記参照） |
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
-| `source.get.full` | source の metadata + body + outgoing provenance links + extraction_meta を 1 コールでバンドル（`source.get` + `graph.related(out)` + 抽出 sidecar の再利用、#279） | 実装済み（#279。下記参照） |
+| `source.get`（`include`） | source の metadata + body + outgoing provenance links + extraction_meta を 1 コールでバンドル（`source.get` + `graph.related(out)` + 抽出 sidecar の再利用、#279） | 実装済み（#279。下記参照） |
 | `source.history` | source の本文版を event log から新しい順に取得（真の差分用、#121） | 実装済み（下記参照） |
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
@@ -116,7 +116,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 - `source.list`: `sourceType?: string` / `observedAfter?: iso` / `observedBefore?: iso` / `limit?: int` → `{ "sources": [...] }`（`observed_at` DESC）。各 source は `externalId` / `sourceType` / `body` / `fingerprint` / `observedAt` / `meta`。
 - `source.get`: `externalId: string`（min 1）→ `{ "source": {...} | null }`（本文込み、無ければ `null`）。
 
-### `source.get.full`（確定・read・#279）
+### `source.get`（`include`）（確定・read・#279）
 
 source の metadata + body・**outgoing** provenance links・extraction_meta sidecar を 1 コールでバンドルする read tool（実体は `src/mcp/queries.ts` の `getSourceFull`、`readOnlyHint: true`）。従来は `source.get` + `graph.related(direction=out)` + 抽出 sidecar 参照の 3 往復が必要だった read パターンを 1 往復に畳む。実装は既存 query 層の再利用（`getSource` + `listLinks(direction=out)` + `getExtractionMeta`）で、graph entity は `(kind=source, id=externalId)` として扱う。
 
@@ -153,7 +153,7 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 - **Slack**（`source: "slack"`）: `source_type='slack_message'` かつ（DM = channel id が `D` 始まり）または（mention = `body LIKE '%<@uid>%'`）。`kind: "mention"|"dm"`。`channelName` / `userName` / `teamName` をローカル projection から join（[ADR-0037](../adr/0037-slack-name-enrichment.md)、live fetch なし）。
 - **GitHub**（`source: "github"`）: `source_type='github_notification'` かつ `meta.reason` が demand 相当（`review_requested` / `mention` / `team_mention` / `assign` / `author`）。`kind` = その reason。slack enrichment は `null`。
 
-**seen-state**（ADR-0041、ADR-0012 決定 4 を supersede）: 既定は **未処理（un-acked）のみ**返す。`demand.ack` / `demand.dismiss`（write）で `demand_seen` に印を付けた行、および GitHub 側で既読の notification（`meta.unread=false`）は既定で除外され「未処理」が真になる。`includeSeen: true` で全件を `seenState`（`acked` / `dismissed` / `read` / null）付きで返す。
+**seen-state**（ADR-0041、ADR-0012 決定 4 を supersede）: 既定は **未処理（un-acked）のみ**返す。`demand.mark`（`state`）（write）で `demand_seen` に印を付けた行、および GitHub 側で既読の notification（`meta.unread=false`）は既定で除外され「未処理」が真になる。`includeSeen: true` で全件を `seenState`（`acked` / `dismissed` / `read` / null）付きで返す。
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
@@ -281,11 +281,11 @@ write tool は HITL（auto-apply 経路を持たない）。`readOnlyHint: false
 | `inbox.triage` | open 項目を task 化 / decision 化 / discard に遷移（state machine） | 実装済み（#88。下記参照） |
 | `link.add` | 2 エンティティ間に手動 link を作成（relation `manual_link`） | 実装済み（#90。下記参照） |
 | `link.remove` | 手動 link を id 指定で削除（event・監査可能） | 実装済み（#90。下記参照） |
-| `commitment.resolve` | open の commitment を fulfilled に遷移（[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
-| `commitment.dismiss` | open の commitment を誤検出/不要として却下 | 実装済み（#91。下記参照） |
-| `commitment.reopen` | resolved/dismissed の commitment を open に戻す | 実装済み（#91。下記参照） |
-| `demand.ack` | demand 行を「対応済み」に印（`DemandAcknowledged` → `demand_seen`。既定 demand.list から外れる・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)） | 実装済み（#419。下記参照） |
-| `demand.dismiss` | demand 行を「対応不要」に印（`DemandDismissed` → `demand_seen`） | 実装済み（#419。下記参照） |
+| `commitment.set`（`state="resolved"`） | open の commitment を fulfilled に遷移（[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
+| `commitment.set`（`state="dismissed"`） | open の commitment を誤検出/不要として却下 | 実装済み（#91。下記参照） |
+| `commitment.set`（`state="open"`） | resolved/dismissed の commitment を open に戻す | 実装済み（#91。下記参照） |
+| `demand.mark`（`state="acked"`） | demand 行を「対応済み」に印（`DemandAcknowledged` → `demand_seen`。既定 demand.list から外れる・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)） | 実装済み（#419。下記参照） |
+| `demand.mark`（`state="dismissed"`） | demand 行を「対応不要」に印（`DemandDismissed` → `demand_seen`） | 実装済み（#419。下記参照） |
 | `person.merge` | 2 person を 1 つに統合（identity を target へ付け替え・可逆） | 実装済み（#92。下記参照） |
 | `person.split` | 1 identity を別 person へ分離（merge の逆操作） | 実装済み（#92。下記参照） |
 | `draft.export` | 下書きをローカルファイルに書き出す（sandbox・送信しない・[ADR-0025](../adr/0025-local-draft-export.md)） | 実装済み（#133。下記参照） |
@@ -592,20 +592,20 @@ task の lifecycle 状態を遷移させる write tool（`task.create` が task 
 commitment_scan (propose.generate → propose.apply)
         │ CommitmentOpened
         ▼
-     ┌──────┐  commitment.resolve   ┌──────────┐
+     ┌──────┐  commitment.set   ┌──────────┐
      │ open │ ────────────────────▶ │ resolved │
      └──────┘                       └──────────┘
-        │ commitment.dismiss     ▲        │
-        ▼                        │        │ commitment.reopen
-   ┌───────────┐  commitment.reopen       │
+        │ commitment.set     ▲        │
+        ▼                        │        │ commitment.set
+   ┌───────────┐  commitment.set       │
    │ dismissed │ ◀────────────────────────┘
    └───────────┘
 ```
 
 - **`commitment.list`（read）**: `open` / `resolved` / `dismissed` の state、`owed_by_me` / `owed_to_me` の direction、`person` でフィルタ。`updated_at` の時間フィルタ可。**`person` フィルタは person identity graph（[ADR-0022](../adr/0022-person-identity-resolution.md)）越しに一致する**（[#443](https://github.com/ozzy-labs/suasor/issues/443)）: person id / identity key（`slack:U123`）/ 素の handle / display name のどれで引いても、同一人物の別名で記録された約束がすべて出る。解決できない文字列は従来どおり生文字列の完全一致にフォールバックする。戻り値は `person`（記録どおりの生文字列・表示用）に加えて `personId` / `personName`（正規化された人物）を持つ。`brief` / `next-actions` / `commitment-chase` skill が demand と並べて「やるべきこと」signal として取り込める。
-- **`commitment.resolve`（write / HITL）**: `open` → `resolved`（`CommitmentResolved` append）。idempotent（既 `resolved` は no-op）。`dismissed` からは `invalid_state`（先に reopen）、該当なしは `missing`。
-- **`commitment.dismiss`（write / HITL）**: `open` → `dismissed`（誤検出/不要、`CommitmentDismissed` append）。idempotent。`resolved` からは `invalid_state`、該当なしは `missing`。
-- **`commitment.reopen`（write / HITL）**: `resolved` / `dismissed` → `open`（`CommitmentReopened` append）。既 `open` は no-op、該当なしは `missing`。
+- **`commitment.set`（`state="resolved"`）（write / HITL）**: `open` → `resolved`（`CommitmentResolved` append）。idempotent（既 `resolved` は no-op）。`dismissed` からは `invalid_state`（先に reopen）、該当なしは `missing`。
+- **`commitment.set`（`state="dismissed"`）（write / HITL）**: `open` → `dismissed`（誤検出/不要、`CommitmentDismissed` append）。idempotent。`resolved` からは `invalid_state`、該当なしは `missing`。
+- **`commitment.set`（`state="open"`）（write / HITL）**: `resolved` / `dismissed` → `open`（`CommitmentReopened` append）。既 `open` は no-op、該当なしは `missing`。
 
 commitment id は content 由来（`title` + `direction` + provenance）なので、同一 commitment の再抽出は台帳上 no-op（idempotent）で `resolved` / `dismissed` を `open` に蘇生させない。`dueDate` / `person` は可変 context として id に含めない。
 
@@ -613,12 +613,12 @@ commitment id は content 由来（`title` + `direction` + provenance）なの�
 
 **`commitment_scan_stale`**（[#443](https://github.com/ozzy-labs/suasor/issues/443)）: 台帳は完全に pull（誰かが `commitment_scan` を思いつくまで約束は入らない）で、取りこぼしはエラーではなく**不在**として現れるため気づけない。最新の commitment 提案時刻と最新の source 観測時刻を比べ、未スキャンの source 件数を brief / digest の completeness warning として出す（MAX 2 回 + COUNT の決定論。推論はしない）。
 
-### `demand.ack` / `demand.dismiss`（確定・write / HITL・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)）
+### `demand.mark`（`state`）（確定・write / HITL・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)）
 
 demand の seen-state 側の write tool 群。`demand.list` は取り込み済み source から未処理 demand（@mention / DM / notification）を導出するが、demand は**導出 view であって stored entity ではない**ため、seen 状態は source `externalId` をキーにした専用 `demand_seen` projection に持つ。実体は `src/propose/demand.ts`。ADR-0012 決定 4 の host 委譲 seen-marker を supersede（状態の置き場は host の記憶ではなく event ログ、[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 
-- **`demand.ack`（write / HITL）**: demand 行を「対応済み」に印（`DemandAcknowledged` append → `demand_seen` state `acked`）。以後 既定の `demand.list` から外れ、`next-actions` / `priority.list` の demand tier にも出なくなる。idempotent（既 `acked` は no-op `already_acked`）。`dismissed` 行は `acked` に上書き（LWW）。該当 source なしは `missing`。
-- **`demand.dismiss`（write / HITL）**: demand 行を「対応不要」に印（`DemandDismissed` append → `demand_seen` state `dismissed`）。idempotent（既 `dismissed` は `already_dismissed`）。`acked` 行は `dismissed` に上書き。該当なしは `missing`。
+- **`demand.mark`（`state="acked"`）（write / HITL）**: demand 行を「対応済み」に印（`DemandAcknowledged` append → `demand_seen` state `acked`）。以後 既定の `demand.list` から外れ、`next-actions` / `priority.list` の demand tier にも出なくなる。idempotent（既 `acked` は no-op `already_acked`）。`dismissed` 行は `acked` に上書き（LWW）。該当 source なしは `missing`。
+- **`demand.mark`（`state="dismissed"`）（write / HITL）**: demand 行を「対応不要」に印（`DemandDismissed` append → `demand_seen` state `dismissed`）。idempotent（既 `dismissed` は `already_dismissed`）。`acked` 行は `dismissed` に上書き。該当なしは `missing`。
 
 引数（Zod）: `{ "externalId": string }`（min 1・demand 行の source id）。`demand_seen` は last-write-wins なので replay 安定。
 
