@@ -93,6 +93,9 @@ overdue > aging_demand > un-acked demand（鮮度順） > dueDate 近接 > prior
 
 > **Extended by [ADR-0044](0044-calendar-proximity-signals.md)（2026-07-25）:** 決定 5 の基線に
 > calendar tier（`starting_soon` / `meeting_prep`）が加わった。`aging_demand` の位置づけ（overdue の下）は不変。
+>
+> **決定 5 の `aging_demand` tier は [ADR-0045](0045-priority-ranking-model.md)（2026-07-25）で
+> スコアの項（`unanswered_days`）に降格した。**signal の定義（自分宛て未返信・`to`/`cc` の区別）は不変。
 
 ## Consequences
 
