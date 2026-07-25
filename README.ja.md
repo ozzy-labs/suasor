@@ -42,6 +42,15 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 
 > npm / バイナリ / Docker で公開済み。コントリビュータは [ソースから](#ソースから) も実行できます。
 
+### アップグレード
+
+**0.3.0 は MCP tool と assistant skill を後方互換 alias なしで改名する**（ADR-0046 — host が
+ほぼ同義の入口から選ばされる状態を解消するための表面積収縮）。host 設定・自作 skill・スクリプトが
+`recall.search` / `search.hybrid` / `source.get.full` / `commitment.resolve`・`.dismiss`・`.reopen` /
+`demand.ack`・`.dismiss`、あるいは統合で消えた 16 の skill 名を参照している場合は更新が要る。
+新旧の対応は[移行表](docs/guide/troubleshooting.md)にすべて載せてある（`skills install` が
+上書きはするが削除はしない skill mirror の消し方も含む）。
+
 ## クイックスタート（暫定）
 
 > 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。MCP surface も `brief` / `graph.related`・`graph.expand` を含めて提供済みです（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。
