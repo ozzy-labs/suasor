@@ -625,4 +625,60 @@ describe("suasor doctor", () => {
     // Column == prefix + widest-name-width (`connectors.noop`, 15) + 1 separator.
     expect(detailCols[0]).toBe(PREFIX + 15 + 1);
   });
+
+  test("sync freshness: an enabled connector that never synced is a warning (#442)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test";
+    const { code, out } = await run(["doctor", "--json"]);
+    // Behind-ness is a warning, not an error: the store still answers, it is
+    // just answering from older data — that is a nudge, not a broken install.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const freshness = report.checks.filter((c) => c.name === "sync.freshness");
+    expect(freshness).toHaveLength(1);
+    expect(freshness[0]?.status).toBe("warn");
+    expect(freshness[0]?.detail).toContain("github: never synced");
+  });
+
+  test("sync freshness: a recent successful run is reported ok (#442)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "ghp_test";
+    const { Store } = await import("../../src/db/index.ts");
+    const store = Store.open({ path: join(dir, "suasor.db") });
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    store.record({
+      type: "SyncRunStarted",
+      runId: `github:${startedAt}`,
+      connector: "github",
+      startedAt,
+    });
+    store.record({
+      type: "SyncRunEnded",
+      runId: `github:${startedAt}`,
+      connector: "github",
+      status: "ok",
+      observed: 1,
+      updated: 0,
+      unchanged: 0,
+      durationMs: 100,
+    });
+    store.close();
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const freshness = report.checks.find((c) => c.name === "sync.freshness");
+    // The `ok` line stays visible on purpose: "last synced 0h ago" is what makes
+    // the *absence* of a warning meaningful rather than merely silent.
+    expect(freshness?.status).toBe("ok");
+    expect(freshness?.detail).toContain("github: last synced 0h ago");
+  });
+
+  test("sync freshness: no connectors enabled → no freshness lines (#442)", async () => {
+    await run(["init"]);
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.filter((c) => c.name === "sync.freshness")).toHaveLength(0);
+  });
 });

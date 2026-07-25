@@ -341,6 +341,42 @@ export class DoctorCommand extends Command {
       for (const { name, message } of noopScoped) {
         checks.push({ name: "connectors.noop", status: "warn", detail: `${name}: ${message}` });
       }
+
+      // 5d. sync freshness (Issue #442). Credentials being present says the
+      // connector *could* sync; this says whether it actually has. The silent
+      // failure this catches is a scheduled sync that stopped running (a cron
+      // entry with no `suasor` on PATH, a revoked token) — the store keeps
+      // answering, just from last week. Requires a migrated DB to read
+      // `sync_runs` from; skipped otherwise (the database check already errored).
+      if (dbReady && dbPath !== null && enabled.length > 0) {
+        const [{ deriveSyncFreshness }, { listSyncRuns }] = await Promise.all([
+          import("../../connectors/freshness.ts"),
+          import("../../mcp/queries.ts"),
+        ]);
+        const freshStore = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+        try {
+          const freshness = deriveSyncFreshness(
+            enabled,
+            listSyncRuns(freshStore.connection.sqlite),
+            {
+              expectedIntervalHours: config.sync.expectedIntervalHours,
+              safetyFactor: config.sync.safetyFactor,
+              perConnectorIntervalHours: config.sync.perConnectorIntervalHours,
+            },
+          );
+          for (const f of freshness) {
+            checks.push({
+              name: "sync.freshness",
+              // `ok` stays visible: "last synced 2h ago" is the line that makes
+              // the absence of a warning meaningful rather than merely quiet.
+              status: f.state === "ok" ? "ok" : "warn",
+              detail: `${f.connector}: ${f.detail}`,
+            });
+          }
+        } finally {
+          freshStore.close();
+        }
+      }
     }
 
     // 5b. (removed) shared-channel warn — the owner-wins dedup layers were

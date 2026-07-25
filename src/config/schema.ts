@@ -11,6 +11,7 @@
  *   placeholders extended by later Issues (kept lenient via `.passthrough()`).
  */
 import { z } from "zod";
+import { DEFAULT_EXPECTED_INTERVAL_HOURS, DEFAULT_SAFETY_FACTOR } from "../connectors/freshness.ts";
 
 /** `[storage]` — local private memory store (ADR-0003). */
 export const StorageConfig = z.object({
@@ -331,6 +332,33 @@ export type SlackTaskHome = z.infer<typeof SlackTaskHome>;
  * error, never at startup. Unpublished tasks are a first-class local/private tier
  * (R1-4) — no home is required to create or locally update them.
  */
+/**
+ * `[sync]` — how fresh the local store is expected to be (Issue #442).
+ *
+ * Suasor never schedules itself (ADR-0027): the OS scheduler owns the cadence,
+ * which means Suasor cannot *know* it. These values tell the freshness
+ * derivation what "behind" means, so `doctor` / the brief / the MCP surface can
+ * say "your data stopped moving" instead of answering confidently from a store
+ * that a broken cron entry froze a week ago.
+ */
+export const SyncConfig = z
+  .object({
+    /** Expected cadence in hours for connectors with no per-connector override. */
+    expectedIntervalHours: z.number().positive().default(DEFAULT_EXPECTED_INTERVAL_HOURS),
+    /**
+     * Multiplier applied before flagging: one missed run is normal (a sleeping
+     * laptop), so the warning fires at `expectedIntervalHours × safetyFactor`.
+     */
+    safetyFactor: z.number().positive().default(DEFAULT_SAFETY_FACTOR),
+    /**
+     * Per-connector cadence overrides in hours, e.g. `{ box = 168 }` for a
+     * connector you only sync weekly. Keys are connector names.
+     */
+    perConnectorIntervalHours: z.record(z.string(), z.number().positive()).default({}),
+  })
+  .passthrough();
+export type SyncConfig = z.infer<typeof SyncConfig>;
+
 export const TasksConfig = z
   .object({
     /** Per-destination task homes, each independently configured (ADR-0036 R1-1). */
@@ -430,6 +458,7 @@ export const Config = z.object({
   export: ExportConfig.default(() => ExportConfig.parse({})),
   tasks: TasksConfig.default(() => TasksConfig.parse({})),
   digest: DigestConfig.default(() => DigestConfig.parse({})),
+  sync: SyncConfig.default(() => SyncConfig.parse({})),
   connectors: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 export type Config = z.infer<typeof Config>;

@@ -75,6 +75,11 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     summary: "Bundle the period's tasks/decisions/sources/inbox for the host to summarize.",
   },
   {
+    name: "sync.status",
+    readOnlyHint: true,
+    summary: "Per-connector ingest freshness (latest run + ok/stale/never/failing verdict).",
+  },
+  {
     name: "graph.related",
     readOnlyHint: true,
     summary: "Provenance neighbours of an entity (1 hop) over the links projection.",

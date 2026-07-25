@@ -47,6 +47,33 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
   }
 }
 
+/** Record a completed sync run for `connector`, ended at `endedAt` (Issue #442). */
+async function recordSyncRun(connector: string, endedAt: string): Promise<void> {
+  const { Store } = await import("../../src/db/index.ts");
+  const store = Store.open({ path: join(dir, "suasor.db") });
+  const startedAt = new Date(new Date(endedAt).getTime() - 1000).toISOString();
+  store.record(
+    { type: "SyncRunStarted", runId: `${connector}:${startedAt}`, connector, startedAt },
+    new Date(startedAt),
+  );
+  // The projection stores the *event's* recordedAt as `ended_at` (ADR-0033), so
+  // back-dating a run means injecting the store clock, not a payload field.
+  store.record(
+    {
+      type: "SyncRunEnded",
+      runId: `${connector}:${startedAt}`,
+      connector,
+      status: "ok",
+      observed: 0,
+      updated: 0,
+      unchanged: 0,
+      durationMs: 1000,
+    },
+    new Date(endedAt),
+  );
+  store.close();
+}
+
 /** Seed a source + task + decision in the db the CLI will open. */
 async function seed(): Promise<void> {
   const { Store } = await import("../../src/db/index.ts");
@@ -231,7 +258,7 @@ describe("suasor brief", () => {
     expect(keys).toEqual(["slack_not_configured"]);
   });
 
-  test("emits no warnings when Slack is configured and embedding is enabled (Issue #189)", async () => {
+  test("a configured connector that has never synced warns sync_stale (Issue #442)", async () => {
     await Bun.write(
       join(dir, "config.toml"),
       '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_ids = ["U1"]\n',
@@ -239,7 +266,39 @@ describe("suasor brief", () => {
     await seed();
     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
     expect(code).toBe(0);
+    const warnings = JSON.parse(out).warnings as Array<{ key: string; message: string }>;
+    // Slack is wired but nothing has ever landed — an empty bundle here is a
+    // stopped pipeline, not a quiet day, and the brief now says so.
+    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
+    expect(warnings[0]?.message).toContain("slack (never synced)");
+  });
+
+  test("emits no warnings when everything is configured and freshly synced (#189/#442)", async () => {
+    await Bun.write(
+      join(dir, "config.toml"),
+      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_ids = ["U1"]\n',
+    );
+    await seed();
+    await recordSyncRun("slack", new Date().toISOString());
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
+    expect(code).toBe(0);
     expect(JSON.parse(out).warnings).toEqual([]);
     expect(out).not.toContain("[⚠");
+  });
+
+  test("a sync older than the cadence threshold warns with its age (Issue #442)", async () => {
+    await Bun.write(
+      join(dir, "config.toml"),
+      '[embedding]\nbackend = "ollama"\n\n[connectors.slack]\nself_user_ids = ["U1"]\n' +
+        "\n[sync]\nexpectedIntervalHours = 1\nsafetyFactor = 2\n",
+    );
+    await seed();
+    // 5h ago, against a 1h × 2 threshold.
+    await recordSyncRun("slack", new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString());
+    const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
+    expect(code).toBe(0);
+    const warnings = JSON.parse(out).warnings as Array<{ key: string; message: string }>;
+    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
+    expect(warnings[0]?.message).toMatch(/slack \(5h old\)/);
   });
 });

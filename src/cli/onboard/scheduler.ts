@@ -179,3 +179,67 @@ export function renderDigestSchedulerLines(
     ...jobs.map((j) => `#   suasor-digest-${j.name}: ExecStart=${command} digest --job ${j.name}`),
   ].join("\n");
 }
+
+/**
+ * Where a `--write-launchd` / `--write-systemd` unit is installed, and what the
+ * operator has to run afterwards to arm it (Issue #442).
+ *
+ * Unlike cron (`crontab -` replaces the whole table in one call), launchd and
+ * systemd are file-based: the write is a plain file, and the scheduler only
+ * picks it up after an explicit load / enable. Reporting that follow-up command
+ * is part of the contract — a written-but-never-loaded unit is precisely the
+ * silent no-sync failure this issue exists to close.
+ */
+export interface SchedulerUnitTarget {
+  /** Path (relative to the user's home) the unit file is written to. */
+  readonly relativePath: string;
+  /** Command the operator runs to activate it. */
+  readonly activate: string;
+}
+
+/**
+ * Resolve the unit file target for a file-based scheduler kind. `cron` has no
+ * unit file (`null`) — it is written through the `crontab` command instead.
+ */
+export function schedulerUnitTarget(kind: SchedulerKind): SchedulerUnitTarget | null {
+  if (kind === "launchd") {
+    return {
+      relativePath: "Library/LaunchAgents/com.suasor.sync.plist",
+      activate: "launchctl load ~/Library/LaunchAgents/com.suasor.sync.plist",
+    };
+  }
+  if (kind === "systemd") {
+    return {
+      relativePath: ".config/systemd/user/suasor-sync.service",
+      activate: "systemctl --user daemon-reload && systemctl --user enable --now suasor-sync.timer",
+    };
+  }
+  return null;
+}
+
+/**
+ * Split the systemd snippet into its two files. `renderSystemd` emits one
+ * document with `# <path>` markers because that reads best when *printed*; when
+ * writing, each half has to land in its own file or systemd ignores both.
+ */
+export function splitSystemdUnits(snippet: string): Array<{ relativePath: string; body: string }> {
+  const lines = snippet.split("\n");
+  const files: Array<{ relativePath: string; body: string }> = [];
+  let current: { relativePath: string; body: string[] } | null = null;
+  for (const line of lines) {
+    const marker = /^#\s*~\/(\S+)$/.exec(line);
+    if (marker?.[1] !== undefined) {
+      if (current !== null)
+        files.push({
+          relativePath: current.relativePath,
+          body: current.body.join("\n").trim() + "\n",
+        });
+      current = { relativePath: marker[1], body: [] };
+      continue;
+    }
+    if (current !== null) current.body.push(line);
+  }
+  if (current !== null)
+    files.push({ relativePath: current.relativePath, body: current.body.join("\n").trim() + "\n" });
+  return files;
+}

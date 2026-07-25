@@ -8,6 +8,8 @@ import {
   renderDigestSchedulerLines,
   renderSchedulerSnippet,
   schedulerKindForPlatform,
+  schedulerUnitTarget,
+  splitSystemdUnits,
 } from "../../src/cli/onboard/scheduler.ts";
 
 describe("schedulerKindForPlatform", () => {
@@ -126,5 +128,40 @@ describe("renderDigestSchedulerLines — digest push jobs (ADR-0040)", () => {
     expect(out).toContain("digest --job 'my job' ");
     const quoted = renderDigestSchedulerLines("cron", "suasor", [{ name: "it's" }]);
     expect(quoted).toContain("digest --job 'it'\\''s' ");
+  });
+});
+
+describe("scheduler unit targets (--write-launchd / --write-systemd, Issue #442)", () => {
+  test("launchd names the LaunchAgents plist and the load command", () => {
+    const target = schedulerUnitTarget("launchd");
+    expect(target?.relativePath).toBe("Library/LaunchAgents/com.suasor.sync.plist");
+    // Writing the file is not enough — launchd only runs a loaded agent, and a
+    // written-but-never-loaded unit is exactly the silent no-sync this closes.
+    expect(target?.activate).toContain("launchctl load");
+  });
+
+  test("systemd names the user unit dir and the enable command", () => {
+    const target = schedulerUnitTarget("systemd");
+    expect(target?.relativePath).toContain(".config/systemd/user/");
+    expect(target?.activate).toContain("systemctl --user enable --now suasor-sync.timer");
+  });
+
+  test("cron has no unit file (it is written through the crontab command)", () => {
+    expect(schedulerUnitTarget("cron")).toBeNull();
+  });
+
+  test("the systemd snippet splits into its two real files", () => {
+    const snippet = renderSchedulerSnippet("linux", "suasor", "systemd").snippet;
+    const files = splitSystemdUnits(snippet);
+    expect(files.map((f) => f.relativePath)).toEqual([
+      ".config/systemd/user/suasor-sync.service",
+      ".config/systemd/user/suasor-sync.timer",
+    ]);
+    // The printed form is one document with `# ~/path` markers; systemd ignores
+    // both units unless each half lands in its own file.
+    expect(files[0]?.body).toContain("ExecStart=suasor sync --json");
+    expect(files[0]?.body).not.toContain("[Timer]");
+    expect(files[1]?.body).toContain("OnCalendar=hourly");
+    expect(files[1]?.body).not.toContain("ExecStart");
   });
 });

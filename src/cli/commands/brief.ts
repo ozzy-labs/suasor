@@ -74,12 +74,18 @@ export class BriefCommand extends Command {
       { buildBrief, deriveBriefWarnings },
       { resolveSelfUserIds },
       { emitEmbeddingDisabledHint },
+      { deriveSyncFreshness, syncFreshnessInputs },
+      { connectorNames },
+      { listSyncRuns },
     ] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
       import("../../mcp/queries.ts"),
       import("../../connectors/slack.ts"),
       import("../embedding-hint.ts"),
+      import("../../connectors/freshness.ts"),
+      import("../../connectors/registry.ts"),
+      import("../../mcp/queries.ts"),
     ]);
 
     const now = Date.now();
@@ -125,13 +131,22 @@ export class BriefCommand extends Command {
     // unconfigured, not because the window is quiet, so a consumer can tell
     // "Slack not connected" from "genuinely nothing". `slackConfigured` keys off
     // `[connectors.slack]` presence, independent of whether a self_user_id is set.
-    const warnings = deriveBriefWarnings({
-      slackConfigured: config.connectors.slack !== undefined,
-      embeddingBackend: config.embedding.backend,
-    });
-
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
+      // Ingest freshness (Issue #442): a bundle assembled from a store whose
+      // scheduled sync stopped looks exactly like a quiet period. Derived here
+      // (read time, `sync_runs`) so `brief` carries the same verdict `doctor`
+      // and the MCP `sync.status` tool report.
+      const inputs = syncFreshnessInputs(connectorNames(), config);
+      const warnings = deriveBriefWarnings({
+        slackConfigured: config.connectors.slack !== undefined,
+        embeddingBackend: config.embedding.backend,
+        syncFreshness: deriveSyncFreshness(
+          inputs.enabledConnectors,
+          listSyncRuns(store.connection.sqlite),
+          inputs,
+        ),
+      });
       const brief = buildBrief(store.connection.sqlite, {
         since,
         until,

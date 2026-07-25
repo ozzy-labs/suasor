@@ -135,6 +135,8 @@ suasor sync status            # connector 別の最終 sync 時刻 / 件数 / �
 suasor sync status --json     # 機械可読（cron 監視・ダッシュボード連携向け）
 ```
 
+> `sync status` は **pull**（尋ねたときだけ答える）。尋ねなくても気づける経路は後述の「尋ねなくても気づける鮮度」を参照。
+
 sync の実行履歴は `SyncRunStarted` / `SyncRunEnded` event として追記され、`sync_runs` projection に畳まれる。**connector が throw した失敗 run も `status=error` で残る**ため、`suasor sync` 全体の exit code（前節）に加えて「どの connector の直近 sync が・いつ・なぜ失敗したか」を後追いできる。次回予定（next run）は OS スケジューラ側の責務のため表示しない（鮮度は「最終 sync からの経過」で判断する）。有効だが未 sync の connector は `never synced` と表示される。
 
 ### `--json` で鮮度を機械判定する
@@ -161,6 +163,36 @@ suasor sync status --json | jq -e --argjson maxAgeSec 5400 '
 - `endedAt` は ISO 8601。`fromdateiso8601` で epoch 秒に直し、現在時刻との差を閾値（上例 90 分）と比較する。
 - `status == "error"`（直近 run が失敗）と `never_synced`（一度も sync していない）も stale 同様に拾う。
 - `jq -e` は最後の出力が `false` / `null` なら exit 1 になるため、上例は **stale が 1 件でもあれば非ゼロ終了**して監視に乗せられる。`suasor sync` の exit code（前節・実行時の失敗検知）と、この `sync status --json` の鮮度判定（「そもそも最近走ったか」）は補完関係にある。
+
+### 尋ねなくても気づける鮮度（doctor / brief / MCP）
+
+上の `jq` 判定は「運用者が監視を組む」前提の経路で、**組まなければ何も言わない**。PATH の通らない cron 行のように sync が静かに止まった場合、秘書は先週のデータのまま自信を持って答え続ける — これを塞ぐため、鮮度判定を **3 つの日常経路に常設**した（[#442](https://github.com/ozzy-labs/suasor/issues/442)）。
+
+| 経路 | 何が出るか |
+| --- | --- |
+| `suasor doctor` | connector ごとに `sync.freshness` チェック行（`ok` / `stale` / `never` / `failing`）。**`ok` も表示する** — 「最終 sync は 2 時間前」という行があってはじめて、警告が無いことに意味が出る |
+| `suasor brief` / `suasor digest` | 遅れている connector があれば completeness warning `sync_stale`（例: `slack (120h old)`）。空の bundle が「静かな週」なのか「止まった pipeline」なのかを区別できる |
+| MCP `sync.status` tool | エージェントが自分から鮮度を確認できる read tool。最新 run + 判定（`ok` / `stale` / `never` / `failing`）を返す。`staleOnly: true` で遅れているものだけ |
+
+判定の閾値は `[sync]` セクションで設定する（省略時は 24 時間 × 2 = 48 時間）:
+
+```toml
+[sync]
+expectedIntervalHours = 24   # 期待する sync 間隔
+safetyFactor = 2             # この倍数を超えたら stale（1 回の取りこぼしは許容する）
+
+[sync.perConnectorIntervalHours]
+box = 168                    # 週次でよい connector は個別に緩める
+```
+
+既定を「日次」にしてあるのは、Suasor は運用者のスケジューラを覗けない（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）ため。ノート PC が 1 時間スリープしただけで警告が出る設定は、読まれなくなる警告になる。
+
+4 つの状態の意味:
+
+- `ok` — 閾値内に成功 run がある
+- `stale` — 最後の成功 run が閾値より古い（**スケジューラを疑う**）
+- `never` — 有効なのに完了 run が一度もない（**設定が最後まで通っていない**）
+- `failing` — 直近 run が `error`（新しくても data は進んでいない。**資格情報 / ネットワークを疑う**）
 
 ## プロアクティブな digest の push `suasor digest`
 

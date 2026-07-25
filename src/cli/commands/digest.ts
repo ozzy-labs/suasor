@@ -54,6 +54,9 @@ export class DigestCommand extends Command {
       { parseTokenPool, resolveSelfUserIds, SLACK_TOKENS_SECRET },
       { resolveSecret },
       { runDigest },
+      { deriveSyncFreshness, syncFreshnessInputs },
+      { connectorNames },
+      { listSyncRuns },
     ] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
@@ -61,6 +64,9 @@ export class DigestCommand extends Command {
       import("../../connectors/slack.ts"),
       import("../../connectors/secrets.ts"),
       import("../../digest/run.ts"),
+      import("../../connectors/freshness.ts"),
+      import("../../connectors/registry.ts"),
+      import("../../mcp/queries.ts"),
     ]);
 
     const config = await loadConfig();
@@ -96,14 +102,23 @@ export class DigestCommand extends Command {
     // configured self id (a DM-to-self needs no workspace disambiguation).
     const resolveSlackSelfId = (): string | null => selfUserIds[0] ?? null;
 
-    const warnings = deriveBriefWarnings({
-      slackConfigured: config.connectors.slack !== undefined,
-      embeddingBackend: config.embedding.backend,
-    });
     const localRoots = (config.connectors.local?.roots as string[] | undefined) ?? [];
 
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
+      // A push digest is the surface where stale ingest does the most damage:
+      // it arrives unprompted and reads as "here is what happened", so a frozen
+      // sync would quietly report a quiet week (Issue #442).
+      const inputs = syncFreshnessInputs(connectorNames(), config);
+      const warnings = deriveBriefWarnings({
+        slackConfigured: config.connectors.slack !== undefined,
+        embeddingBackend: config.embedding.backend,
+        syncFreshness: deriveSyncFreshness(
+          inputs.enabledConnectors,
+          listSyncRuns(store.connection.sqlite),
+          inputs,
+        ),
+      });
       const results = await runDigest(store.connection.sqlite, jobs, {
         ...(this.job !== undefined ? { jobName: this.job } : {}),
         dryRun: this.dryRun,

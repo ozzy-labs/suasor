@@ -189,3 +189,18 @@ notifications = "off"                     # off | all | repos（既定 off・per
 ## 実効値の確認
 
 合成後の実効 config（`env override > file > defaults`）は `suasor config show [--effective] [--json]` で確認する（[cli design](cli.md) の `config show`）。secret は**常にマスク**（`***`）され、connector の資格情報は**存在有無のみ**（`set` / `unset`）を出す（NFR-PRV-4）。`doctor`（健全性診断）とは責務分離で、`config show` は「今どの値が効いているか」を出す。
+
+## `[sync]` — 取り込み鮮度の期待値（#442）
+
+```toml
+[sync]
+expectedIntervalHours = 24   # 期待する sync 間隔（既定 24）
+safetyFactor = 2             # 閾値 = expectedIntervalHours × safetyFactor（既定 2）
+
+[sync.perConnectorIntervalHours]
+box = 168                    # connector 個別の上書き（時間）
+```
+
+- Suasor は自分をスケジュールしない（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）ので、cadence を**知り得ない**。この設定は「どれだけ経ったら遅れているとみなすか」を明示するためのもの
+- 判定結果は `suasor doctor` の `sync.freshness` チェック、`brief` / `digest` の `sync_stale` warning、MCP `sync.status` tool の 3 経路で surface する（[運用ガイド](../guide/scheduling.md)）
+- 既定を日次にしているのは、1 回の取りこぼし（スリープ中の cron 等）で警告を出すと読まれない警告になるため

@@ -16,6 +16,19 @@ export type {
   SyncResult,
 } from "./contract.ts";
 export {
+  DEFAULT_EXPECTED_INTERVAL_HOURS,
+  DEFAULT_SAFETY_FACTOR,
+  deriveSyncFreshness,
+  type SyncCadenceConfig,
+  type SyncFreshness,
+  type SyncFreshnessOptions,
+  type SyncFreshnessState,
+  type SyncRunLike,
+  staleConnectors,
+  summarizeStaleSync,
+  syncFreshnessInputs,
+} from "./freshness.ts";
+export {
   connectorNames,
   connectorSecretNames,
   hasConnector,
