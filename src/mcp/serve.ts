@@ -90,11 +90,11 @@ function defaultBuildServer({
     sqlite: store.connection.sqlite,
     // Diagnostics sink for the elicitation-capability startup warning (ADR-0004).
     ...(log !== undefined ? { log } : {}),
-    // Full [embedding] config drives recall.search (real vec0 search when a
+    // Full [embedding] config drives semantic search (real vec0 search when a
     // backend is enabled, else graceful degrade to FTS — ADR-0005/0006).
     embedding: config.embedding,
     // Pre-resolved embedder: for external backends (openai/voyage) the API key
-    // is resolved (keychain/env) before boot, so `recall.search` runs real
+    // is resolved (keychain/env) before boot, so semantic `search` runs real
     // semantic search; `undefined` lets buildMcpServer build from `embedding`.
     ...(embedder !== undefined ? { embedder } : {}),
     // Operator user ids for demand.list / priority.list @mention detection (ADR-0012/ADR-0041).
@@ -152,7 +152,7 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
   // Resolve the embedder + the external-backend key presence once, in parallel,
   // before wiring the transport (a single await point keeps boot ordering tight).
   // For external backends `createEmbedderResolved` reads the API key (keychain/
-  // env) so recall.search runs real semantic search; a missing key yields a null
+  // env) so `search` runs real semantic retrieval; a missing key yields a null
   // embedder (FTS fallback). `resolveEmbeddingApiKeyPresent` is `true` for
   // non-external backends (no key needed), so the warning below only fires for an
   // external backend with no key.

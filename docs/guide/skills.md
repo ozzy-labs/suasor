@@ -70,7 +70,7 @@ triggers:
   - 次に何をする?
   - やること教えて
   ...
-mcp (read):  priority.list, task.list, recall.search, demand.list, commitment.list
+mcp (read):  priority.list, task.list, search, demand.list, commitment.list
 description: 「次に何をする?」「やること教えて」…
 ```
 

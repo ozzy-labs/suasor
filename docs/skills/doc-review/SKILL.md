@@ -1,6 +1,6 @@
 ---
 name: doc-review
-description: 「この設計書レビューして」「仕様のレビュー」「この PDF/資料を見て」「ドキュメントの抜け漏れ確認」「この提案どう思う」と頼まれたら、Suasor MCP の source.get で対象ドキュメント本文を読み、recall.search / graph.related で関連 decision・先行仕様を引いて、整合性・抜け漏れ・前提・リスクの観点でレビュー所見を返す。read-only、外部投稿しない。
+description: 「この設計書レビューして」「仕様のレビュー」「この PDF/資料を見て」「ドキュメントの抜け漏れ確認」「この提案どう思う」と頼まれたら、Suasor MCP の source.get で対象ドキュメント本文を読み、search（mode=semantic） / graph.related で関連 decision・先行仕様を引いて、整合性・抜け漏れ・前提・リスクの観点でレビュー所見を返す。read-only、外部投稿しない。
 readOnly: true
 category: review
 triggers:
@@ -11,8 +11,8 @@ triggers:
   - この提案どう思う
 pairs: []
 mcp_tools_read:
+  - search
   - source.get
-  - recall.search
   - graph.related
   - decision.list
 mcp_tools_write: []
@@ -31,9 +31,9 @@ mcp_tools_write: []
 
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. 対象ドキュメントを特定する。漠然としていれば `search` / `recall.search`（意味検索。embedding 無効時は `signal: embedding_disabled` を見て `search` FTS へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）/ `find-document` で当たりを付ける
+1. 対象ドキュメントを特定する。漠然としていれば `search` / `search`（`mode=semantic`）（意味検索。embedding 無効時は `signal: embedding_disabled` を見て `search` FTS へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）/ `find-document` で当たりを付ける
 2. `source.get`（`externalId`）で本文を読む。Office/PDF は `[extraction]` 有効時に抽出テキストが本文に入る（無効なら name-only でレビュー不可 → 抽出の有効化を促す、[guide](../../guide/extraction.md)）
-3. `recall.search` / `decision.list` / `graph.related` で**関連 decision・先行仕様・関連やりとり**を引き、ドキュメントがそれらに沿っているか照合する
+3. `search`（`mode=semantic`） / `decision.list` / `graph.related` で**関連 decision・先行仕様・関連やりとり**を引き、ドキュメントがそれらに沿っているか照合する
 4. 以下の観点でレビュー所見を組み立てて返す:
    - **整合性** — 既存 decision / 先行仕様との矛盾
    - **抜け漏れ** — 前提・制約・エラーケース・代替案の欠落

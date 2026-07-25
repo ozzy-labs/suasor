@@ -130,9 +130,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 
 **Read tools** — side-effect-free (`readOnlyHint: true`), so hosts may auto-approve them:
 
-- `search` — FTS5 full-text search over ingested sources.
-- `recall.search` — Semantic (embedding) search; degrades to FTS when no backend is enabled.
-- `search.hybrid` — Hybrid search: RRF fusion of FTS + semantic hits; degrades to FTS-only.
+- `search` — Search ingested sources; `mode` selects fts / semantic / hybrid (default auto).
 - `source.list` — List ingested sources newest-first.
 - `source.get` — Fetch one source (with body) by id.
 - `source.get.full` — Bundle a source's body + outgoing provenance links + extraction_meta in one call.
@@ -212,7 +210,7 @@ host に Bun が無い場合は、代わりに Docker イメージを指定し�
 }
 ```
 
-意味検索（`recall.search`）は embedding backend を有効にするまで `embedding_disabled` シグナルを返すため、host は FTS の `search` へ graceful にフォールバックできます（ADR-0005）。tool スキーマは [docs/design/mcp-surface.md](docs/design/mcp-surface.md) を参照してください。
+意味検索（`search` の `mode=semantic` / `hybrid`）は embedding backend を有効にするまで `embedding_disabled` シグナルを返し、既定の `mode=auto` は backend の有無を見て FTS / hybrid を自動選択します（ADR-0005 / ADR-0046）。tool スキーマは [docs/design/mcp-surface.md](docs/design/mcp-surface.md) を参照してください。
 
 ## ライセンス
 

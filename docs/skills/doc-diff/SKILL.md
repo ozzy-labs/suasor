@@ -10,6 +10,7 @@ triggers:
   - 仕様のどこが変わったか
 pairs: []
 mcp_tools_read:
+  - search
   - source.history
   - graph.related
 mcp_tools_write: []
@@ -28,7 +29,7 @@ mcp_tools_write: []
 
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. 対象 source を特定する。漠然としていれば `search` / `recall.search` / `source.list`（`observedAfter` で期間絞り）で当たりを付ける
+1. 対象 source を特定する。漠然としていれば `search` / `search`（`mode=semantic`） / `source.list`（`observedAfter` で期間絞り）で当たりを付ける
 2. `source.history`（`externalId`、`limit?`）で本文版を新しい順に引く。各版は `observedAt` / `fingerprint` / `body` / `recordedAt`
 3. 直近 2 版（最新 = `versions[0]` と前版 = `versions[1]`）、または期間指定なら該当前後版を突き合わせ、**変更点を host LLM が要約**する（追加/削除/変更の要旨）。版が 1 つだけなら「更新履歴なし（初版のみ）」と返す
 4. 必要なら `graph.related` で関連 decision / task を添える

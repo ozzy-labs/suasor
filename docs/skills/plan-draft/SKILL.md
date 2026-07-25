@@ -1,6 +1,6 @@
 ---
 name: plan-draft
-description: 「これを分解して」「設計のたたき台」「計画に落として」「タスクに分解」「この issue を計画化」「進め方を考えて」と頼まれたら、Suasor MCP の source.get / recall.search で起点（issue・設計メモ・source）の文脈を集め、propose.generate（mode=source_extract）で task / decision 候補に分解し、ユーザー確認後に propose.apply で承認分のみ保存する。計画ドラフト本文は text-only で返し persist しない。auto-apply 経路は存在しない。
+description: 「これを分解して」「設計のたたき台」「計画に落として」「タスクに分解」「この issue を計画化」「進め方を考えて」と頼まれたら、Suasor MCP の source.get / search（mode=semantic） で起点（issue・設計メモ・source）の文脈を集め、propose.generate（mode=source_extract）で task / decision 候補に分解し、ユーザー確認後に propose.apply で承認分のみ保存する。計画ドラフト本文は text-only で返し persist しない。auto-apply 経路は存在しない。
 readOnly: false
 category: planning
 triggers:
@@ -12,8 +12,8 @@ triggers:
   - 進め方を考えて
 pairs: []
 mcp_tools_read:
+  - search
   - source.get
-  - recall.search
 mcp_tools_write:
   - propose.generate
   - propose.apply
@@ -33,7 +33,7 @@ mcp_tools_write:
 
 read で文脈を集め、計画本文は text-only、task/decision 化は HITL（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. 起点の文脈を集める: `source.get`（対象 issue/メモの本文）/ `recall.search`・`search`（関連やりとり）/ `graph.related`（関連 decision・先行仕様）。広く調べるなら `research` skill を併用
+1. 起点の文脈を集める: `source.get`（対象 issue/メモの本文）/ `search`（`mode=semantic`）・`search`（関連やりとり）/ `graph.related`（関連 decision・先行仕様）。広く調べるなら `research` skill を併用
 2. 分解方針・マイルストーン・順序/依存の**計画ドラフト本文を host LLM が構成して返す**（text-only・persist しない。handoff-draft / announcement-draft と同じ作法）
 3. 計画中の実行項目を `propose.generate`（mode=`source_extract`）で **task / decision 候補に分解**する（`source_extract` の許可 kind = `task` / `decision` / `reply_draft`）
 4. `propose.list`（`state=pending`）で候補を提示し、**ユーザー確認**を取る

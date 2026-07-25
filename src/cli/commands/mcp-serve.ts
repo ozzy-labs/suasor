@@ -1,7 +1,7 @@
 /**
  * `suasor mcp serve` — start the MCP server over stdio (ADR-0004).
  *
- * Exposes Suasor's read tools (search / recall.search / source.* / task.list /
+ * Exposes Suasor's read tools (search / source.* / task.list /
  * decision.list / inbox.list) and HITL write tools (connector.sync / propose.* /
  * task.* / decision.record / inbox.* / link.* / person.* / commitment.* /
  * draft.export / source.forget / source.unforget) over the MCP stdio transport, the agent boundary
@@ -22,10 +22,10 @@ export class McpServeCommand extends Command {
     category: "MCP",
     description: "Start the MCP server over stdio.",
     details: `
-      Exposes Suasor's read tools over MCP (stdio transport): search,
-      recall.search (returns the embedding_disabled signal until a backend is
-      enabled), source.list / source.get, and task.list / decision.list /
-      inbox.list. Read tools are side-effect-free. HITL write tools (connector.sync,
+      Exposes Suasor's read tools over MCP (stdio transport): search (mode:
+      auto / fts / semantic / hybrid — semantic paths return the
+      embedding_disabled signal until a backend is enabled), source.list /
+      source.get, and task.list / decision.list / inbox.list. Read tools are side-effect-free. HITL write tools (connector.sync,
       propose.*, task.create / task.update, decision.record, inbox.*, link.*,
       person.*, commitment.*, draft.export, source.forget, source.unforget) are also exposed; each
       is gated behind human approval (ADR-0004 — no auto-apply,

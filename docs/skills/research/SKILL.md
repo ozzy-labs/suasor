@@ -1,6 +1,6 @@
 ---
 name: research
-description: 「<X> について調べて」「<Y> の経緯」「<Z> に関するすべての情報」「<トピック> を網羅的に教えて」と頼まれたら、Suasor MCP の recall.search（意味検索）+ search（FTS5 全文）+ graph.related（関連 entity 拡張）+ brief（統合要約）を順に叩き、sources 一覧 / 関連 entities / 経緯サマリを組み立てて返す。read-only、persist なし。
+description: 「<X> について調べて」「<Y> の経緯」「<Z> に関するすべての情報」「<トピック> を網羅的に教えて」と頼まれたら、Suasor MCP の search（mode=semantic）+ search（FTS5 全文）+ graph.related（関連 entity 拡張）+ brief（統合要約）を順に叩き、sources 一覧 / 関連 entities / 経緯サマリを組み立てて返す。read-only、persist なし。
 readOnly: true
 category: retrieval
 triggers:
@@ -10,7 +10,6 @@ triggers:
   - "<トピック> を網羅的に教えて"
 pairs: []
 mcp_tools_read:
-  - recall.search
   - search
   - graph.related
   - brief
@@ -30,7 +29,7 @@ mcp_tools_write: []
 
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. `recall.search` で意味的に関連する source を引く（embedding 無効時は `signal: embedding_disabled` を見て次の `search` に寄せる）
+1. `search`（`mode=semantic`） で意味的に関連する source を引く（embedding 無効時は `signal: embedding_disabled` を見て次の `search` に寄せる）
 2. `search`（FTS5）で本文全文検索を重ね、語の一致を取りこぼさないようにする
 3. `graph.related` でヒットした entity（source / decision / task）を起点に関連 entity を辿る
 4. `brief` で集めた context を統合要約する（LLM 要約。委譲先で生成、[ADR-0006](../../adr/0006-ml-delegation.md)）

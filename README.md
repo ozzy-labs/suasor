@@ -139,9 +139,7 @@ Suasor exposes its memory to AI agents over the [Model Context Protocol](https:/
 
 **Read tools** — side-effect-free (`readOnlyHint: true`), so hosts may auto-approve them:
 
-- `search` — FTS5 full-text search over ingested sources.
-- `recall.search` — Semantic (embedding) search; degrades to FTS when no backend is enabled.
-- `search.hybrid` — Hybrid search: RRF fusion of FTS + semantic hits; degrades to FTS-only.
+- `search` — Search ingested sources; `mode` selects fts / semantic / hybrid (default auto).
 - `source.list` — List ingested sources newest-first.
 - `source.get` — Fetch one source (with body) by id.
 - `source.get.full` — Bundle a source's body + outgoing provenance links + extraction_meta in one call.
@@ -221,7 +219,7 @@ No Bun on the host? Point it at the Docker image instead (no runtime needed):
 }
 ```
 
-Semantic search (`recall.search`) returns an `embedding_disabled` signal until you enable an embedding backend, so hosts gracefully fall back to FTS `search` (ADR-0005). See [docs/design/mcp-surface.md](docs/design/mcp-surface.md) for the tool schemas.
+Semantic retrieval (`search` with `mode=semantic`/`hybrid`) returns an `embedding_disabled` signal until you enable an embedding backend, and the default `mode=auto` picks FTS or hybrid from the backend state, so hosts never have to choose the algorithm (ADR-0005 / ADR-0046). See [docs/design/mcp-surface.md](docs/design/mcp-surface.md) for the tool schemas.
 
 ## License
 

@@ -1,6 +1,6 @@
 # Document extraction (Office/PDF → text)
 
-Word / Excel / PowerPoint / PDF は既定では**ファイル名のみ**取り込まれ、本文は検索・要約できない。`[extraction]` サイドカーを有効にすると、取り込み時にこれらの本文を text/Markdown 化して `search` / `recall.search` / `research` / `doc-diff` / `doc-review` から参照できるようになる（[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。
+Word / Excel / PowerPoint / PDF は既定では**ファイル名のみ**取り込まれ、本文は検索・要約できない。`[extraction]` サイドカーを有効にすると、取り込み時にこれらの本文を text/Markdown 化して `search` / 意味検索 / `research` / `doc-diff` / `doc-review` から参照できるようになる（[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。
 
 - **既定 disabled**。設定しなければ従来どおり name-only（base install は軽いまま）
 - **ML 委譲**（[ADR-0006](../adr/0006-ml-delegation.md)）: 変換はサイドカーが行い、本体は thin client のみ（in-process パーサ無し）

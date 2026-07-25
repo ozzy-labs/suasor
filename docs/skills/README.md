@@ -10,23 +10,23 @@
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
-| [`personal-brief`](personal-brief/SKILL.md) | 「今日のまとめ」「最近どう」 | brief / recall.search / task.list / decision.list |
-| [`next-actions`](next-actions/SKILL.md) | 「次に何やる」「優先度高いのは」 | task.list / recall.search |
+| [`personal-brief`](personal-brief/SKILL.md) | 「今日のまとめ」「最近どう」 | brief / search / task.list / decision.list |
+| [`next-actions`](next-actions/SKILL.md) | 「次に何やる」「優先度高いのは」 | task.list / search |
 | [`catchup`](catchup/SKILL.md) | 「前回以降の差分」「久しぶりに確認」 | (seen-marker ベースの差分要約) |
 | [`find-document`](find-document/SKILL.md) | 「あの資料」「<語>含むファイル」 | search (FTS) |
-| [`research`](research/SKILL.md) | 「`<X>`について調べて」「網羅的に」 | recall.search + search + graph.related + brief |
-| [`meeting-prep`](meeting-prep/SKILL.md) | 「次の会議準備」「明日のMTG前確認」 | source.list(calendar) / recall.search / graph.related |
-| [`decision-rationale`](decision-rationale/SKILL.md) | 「あの決定はなぜ」「Xを選んだ理由」 | decision.list / graph.related / recall.search |
+| [`research`](research/SKILL.md) | 「`<X>`について調べて」「網羅的に」 | search + graph.related + brief |
+| [`meeting-prep`](meeting-prep/SKILL.md) | 「次の会議準備」「明日のMTG前確認」 | source.list(calendar) / search / graph.related |
+| [`decision-rationale`](decision-rationale/SKILL.md) | 「あの決定はなぜ」「Xを選んだ理由」 | decision.list / graph.related / search |
 | [`decision-log`](decision-log/SKILL.md) | 「今月の決定」「[topic] の決定履歴」 | decision.list / graph.related / brief |
 | [`action-item-status`](action-item-status/SKILL.md) | 「あの会議から何が実装されたか」 | source.list(calendar) / graph.related / task.list |
 | [`health-check`](health-check/SKILL.md) | 「健全性チェック」「滞留してるもの数えて」 | task.list / propose.list / inbox.list / commitment.list |
 | [`external-brief`](external-brief/SKILL.md) | 「上司向け週次」「クライアント向け進捗」 | task.list(completed) / decision.list / brief |
-| [`pr-review`](pr-review/SKILL.md) | 「PR #N レビューして」 | recall.search (+ gh diff) |
-| [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / recall.search（text-only・persist なし） |
-| [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | recall.search / decision.list / brief（text-only・persist なし） |
+| [`pr-review`](pr-review/SKILL.md) | 「PR #N レビューして」 | search（mode=semantic） (+ gh diff) |
+| [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / search（mode=semantic）（text-only・persist なし） |
+| [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | search（mode=semantic） / decision.list / brief（text-only・persist なし） |
 | [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
 | [`doc-diff`](doc-diff/SKILL.md) | 「前回から何が変わった」「この資料の差分」 | source.history（event log の本文版）+ graph.related |
-| [`doc-review`](doc-review/SKILL.md) | 「この設計書レビューして」「仕様のレビュー」 | source.get + recall.search / decision.list / graph.related |
+| [`doc-review`](doc-review/SKILL.md) | 「この設計書レビューして」「仕様のレビュー」 | source.get + search（mode=semantic） / decision.list / graph.related |
 | [`commitment-chase`](commitment-chase/SKILL.md) | 「催促して」「相手の約束で期限切れ」 | commitment.list(owed_to_me) + graph.related / source.get（text-only・persist なし） |
 | [`weekly-review`](weekly-review/SKILL.md) | 「週次レビュー」「棚卸し」 | task.list(overdue) / commitment.list / inbox.list / brief |
 
@@ -44,7 +44,7 @@
 | [`person-cleanup`](person-cleanup/SKILL.md) | 「同一人物をまとめて」「people を整理」 | person.list → person.merge / person.split |
 | [`task-update`](task-update/SKILL.md) | 「これ終わった」「完了にして」「task を進行中に」 | task.list → task.update |
 | [`task-publish`](task-publish/SKILL.md) | 「GitHub に起票して」「Jira を完了に」「issue にコメント」 | task.list → task.publish / task.act |
-| [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / recall.search → propose.generate(source_extract) → propose.apply / draft.export |
+| [`plan-draft`](plan-draft/SKILL.md) | 「これを分解して」「計画に落として」 | source.get / search（mode=semantic） → propose.generate(source_extract) → propose.apply / draft.export |
 | [`source-forget`](source-forget/SKILL.md) | 「あの誤取り込みを消して」「この source を忘れて」 | search / source.list → source.forget |
 | [`sync-now`](sync-now/SKILL.md) | 「最新を取り込んで」「Slack 同期して」「sync して」 | connector.sync |
 

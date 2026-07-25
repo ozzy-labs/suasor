@@ -91,7 +91,7 @@ export interface SyncOptions {
   now?: () => Date;
   /**
    * Optional embedder (ADR-0005/0006). When supplied, new/changed source bodies
-   * are embedded into the vec0 table for `recall.search`; document and query
+   * are embedded into the vec0 table for semantic `search`; document and query
    * embeddings therefore share one model. `null`/omitted keeps ingest FTS-only.
    * Embedding is best-effort: a sidecar failure is reported via `onEmbedError`
    * and does NOT fail the ingest (FTS still works — graceful degradation).
@@ -522,7 +522,7 @@ async function runSyncPass(
 
   // Embedding population (ADR-0005/0006). Best-effort: a sidecar failure is
   // reported but does not fail the ingest — FTS search still reflects the data,
-  // and `recall.search` degrades gracefully until the vectors are present.
+  // and semantic `search` degrades gracefully until the vectors are present.
   let embedded = 0;
   if (options.embedder && toEmbed.length > 0) {
     const result = await embedSources(sqlite, options.embedder, toEmbed);

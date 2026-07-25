@@ -162,7 +162,7 @@ Ingested bodies (title + body) become searchable via FTS immediately:
 suasor search rocket
 ```
 
-Via MCP the same search is available through the `search` read tool ([retrieval](../design/retrieval.md)). Enabling an embedding backend embeds bodies at ingestion time so you can also use `recall.search` semantic search (for cross-language and vocabulary-mismatch cases) ([embedding setup](embedding.md)).
+Via MCP the same search is available through the `search` read tool ([retrieval](../design/retrieval.md)). Enabling an embedding backend embeds bodies at ingestion time so you can also use 意味検索 semantic search (for cross-language and vocabulary-mismatch cases) ([embedding setup](embedding.md)).
 
 Across all connectors, the behavior of ingestion, search, delta detection, and the secret path (env override > keychain) is identical. Below we note only each connector's specific token / config slice. Tokens are **never written to config.toml** (env override or keychain).
 
