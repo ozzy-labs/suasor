@@ -93,6 +93,10 @@ starting_soon > overdue > aging_demand > meeting_prep > un-acked demand（鮮度
 - **ダブルブッキング検出** — 価値はあるが別のクエリ（重なりの検出）と別の UX（どちらを断るかの提案）であり、demand の列挙には収まらない
 - **前回 occurrence の未了 action item を prep に合成** — [ADR-0021](0021-commitment-ledger.md) の commitment と会議の紐付けが要る。`meeting_prep` が出た後に `meeting-prep` skill が pull する現行の形で当面足りる
 
+> **決定 4 / 5 は [ADR-0045](0045-priority-ranking-model.md)（2026-07-25）が改訂した:**
+> `starting_soon` の窓は 120 分 → **30 分**（唯一の hard tier として残す）、`meeting_prep` tier は
+> スコアの項（`prep_urgency`）に降格。取り込みの時間モデル修正（決定 1 / 2）と kind の定義は不変。
+
 ## Consequences
 
 ### Positive

@@ -14,6 +14,10 @@
 > proximity（`meeting_soon` / `meeting_prep`）を追加し、順序基線の最上位に `starting_soon`
 > （overdue より上 — 予定だけが時刻を動かせない）、`aging_demand` の下に `meeting_prep` を置いた。
 > 更新後の基線: `starting_soon > overdue > aging_demand > meeting_prep > un-acked demand > due_soon > priority > recency`。
+>
+> **決定 3 の順序基線は [ADR-0045](0045-priority-ranking-model.md)（2026-07-25）が supersede した:**
+> tier ラダー（辞書式）から「hard tier 1 つ + 重み付きスコア」へ移行し、程度の比較を可能にした。
+> 決定 1（中立 demand 導出）/ 決定 2（seen-state）/ 決定 4（digest の内容源）は不変。
 
 ## Context
 
