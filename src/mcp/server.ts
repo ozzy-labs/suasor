@@ -13,7 +13,7 @@
  * - `server-write.ts` — the HITL write tools (`connector.sync`, `propose.*`,
  *   `task.create` / `task.update`, `decision.record`, `inbox.add` /
  *   `inbox.triage`, `link.add` / `link.remove`, `person.merge` / `person.split`,
- *   `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `demand.dismiss`,
+ *   `commitment.set`, `demand.mark`,
  *   `source.forget` / `source.unforget`, `draft.export`). All `readOnlyHint: false`; registered only
  *   when a writable `Store` + config are supplied.
  *
@@ -53,8 +53,8 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
         "propose.generate, propose.apply, propose.reject, proposal.feedback, propose.batch, " +
         "task.create, task.update, task.publish, task.act, decision.record, inbox.add, inbox.triage, link.add, " +
-        "link.remove, person.merge, person.split, commitment.resolve, commitment.dismiss, " +
-        "commitment.reopen, demand.ack, demand.dismiss, draft.export, source.forget, source.unforget) are HITL: gate them " +
+        "link.remove, person.merge, person.split, commitment.set, demand.mark, " +
+        "draft.export, source.forget, source.unforget) are HITL: gate them " +
         "behind human approval, never auto-apply — including the destructive source.forget (local " +
         "purge, ADR-0026; source.unforget lifts its tombstone) and the local-file draft.export " +
         "(export sandbox, ADR-0025). propose.list " +

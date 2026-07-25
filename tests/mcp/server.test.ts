@@ -80,7 +80,6 @@ describe("MCP read surface", () => {
         "propose.list",
         "search",
         "source.get",
-        "source.get.full",
         "source.history",
         "source.list",
         "sync.status",
@@ -216,8 +215,8 @@ describe("MCP read surface", () => {
     // Acknowledge the mention → it leaves the demand tier.
     const ack = parseResult(
       (await client.callTool({
-        name: "demand.ack",
-        arguments: { externalId: "m1" },
+        name: "demand.mark",
+        arguments: { state: "acked", externalId: "m1" },
       })) as never,
     ) as { status: string; seenState: string };
     expect(ack.status).toBe("acked");
@@ -235,7 +234,7 @@ describe("MCP read surface", () => {
     expect(demandRes.demand.map((d) => d.externalId)).toEqual([]);
   });
 
-  test("demand.dismiss reports missing for an unknown source", async () => {
+  test("demand.mark state=dismissed reports missing for an unknown source", async () => {
     const server = buildMcpServer({
       sqlite: store.connection.sqlite,
       embedding: "disabled",
@@ -246,8 +245,8 @@ describe("MCP read surface", () => {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const res = parseResult(
       (await client.callTool({
-        name: "demand.dismiss",
-        arguments: { externalId: "nope" },
+        name: "demand.mark",
+        arguments: { state: "dismissed", externalId: "nope" },
       })) as never,
     ) as { status: string; seenState: string | null };
     expect(res.status).toBe("missing");
@@ -953,7 +952,7 @@ describe("MCP read surface", () => {
     expect(res.content[0]?.text).toContain("validation");
   });
 
-  test("source.get.full bundles body + outgoing links + extraction_meta (#279)", async () => {
+  test("source.get include=[links,extraction] bundles all three (#279)", async () => {
     seedSource("s1", "rocket plans");
     store.record({
       type: "LinkAdded",
@@ -965,8 +964,8 @@ describe("MCP read surface", () => {
     });
     const client = await connect();
     const res = await client.callTool({
-      name: "source.get.full",
-      arguments: { externalId: "s1" },
+      name: "source.get",
+      arguments: { include: ["links", "extraction"], externalId: "s1" },
     });
     const full = parseResult(res as never) as {
       source: { externalId: string; body: string } | null;
@@ -981,11 +980,11 @@ describe("MCP read surface", () => {
     expect(full.extractionMeta).toBeNull();
   });
 
-  test("source.get.full rejects an empty externalId (input validation)", async () => {
+  test("source.get rejects an empty externalId (input validation)", async () => {
     const client = await connect();
     const res = (await client.callTool({
-      name: "source.get.full",
-      arguments: { externalId: "" },
+      name: "source.get",
+      arguments: { include: ["links", "extraction"], externalId: "" },
     })) as { isError?: boolean; content: { type: string; text?: string }[] };
     expect(res.isError).toBe(true);
     expect(res.content[0]?.text).toContain("validation");
@@ -1054,8 +1053,10 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "activity.timeline",
         "brief",
         "commitment.list",
+        "commitment.set",
         "decision.list",
         "demand.list",
+        "demand.mark",
         "graph.expand",
         "graph.related",
         "inbox.list",
@@ -1064,7 +1065,6 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "propose.list",
         "search",
         "source.get",
-        "source.get.full",
         "source.history",
         "source.list",
         "sync.status",
@@ -1085,11 +1085,6 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "inbox.triage",
         "link.add",
         "link.remove",
-        "commitment.resolve",
-        "commitment.dismiss",
-        "commitment.reopen",
-        "demand.ack",
-        "demand.dismiss",
         "person.merge",
         "person.split",
         "draft.export",
@@ -1118,9 +1113,6 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
       "inbox.triage",
       "link.add",
       "link.remove",
-      "commitment.resolve",
-      "commitment.dismiss",
-      "commitment.reopen",
       "person.merge",
       "person.split",
       "draft.export",
@@ -1426,8 +1418,8 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
     // Resolve it (write tool) → no longer open.
     const resolved = parseResult(
       (await client.callTool({
-        name: "commitment.resolve",
-        arguments: { commitmentId: id },
+        name: "commitment.set",
+        arguments: { state: "resolved", commitmentId: id },
       })) as never,
     ) as { status: string };
     expect(resolved.status).toBe("resolved");

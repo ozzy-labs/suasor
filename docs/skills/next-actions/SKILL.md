@@ -48,6 +48,6 @@ read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）�
 
 - read-only。task / demand の状態を変えない
 - **順位決定はコード（`priority.list`）に委ねる**。skill 散文だけで並べ替えない（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)。会話文脈での上書きのみ host 裁量）
-- **対応済み / 不要な demand は `demand.ack` / `demand.dismiss`（write tool）で印を付ける**と基線から外れる。ここでは印付けを行わず、ホスト側で人の確認を促す（HITL、auto-apply なし、[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）
+- **対応済み / 不要な demand は `demand.mark`（`state`）（write tool）で印を付ける**と基線から外れる。ここでは印付けを行わず、ホスト側で人の確認を促す（HITL、auto-apply なし、[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）
 - **新規 task の作成は `task.create`（write tool）のため、ここでは行わず、ホスト側で人の確認を促す**（HITL、auto-apply なし）
 - 本 skill は手順書のみで実処理を持たない

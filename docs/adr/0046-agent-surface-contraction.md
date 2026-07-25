@@ -40,12 +40,22 @@ MCP host は `readOnlyHint` を見て自動承認を判断し、skill は `readO
 | `source.get` / `source.get.full` | `source.get { include?: ["links", "extraction"] }` | read |
 | `commitment.resolve` / `.dismiss` / `.reopen` | `commitment.set { state }` | write |
 | `demand.ack` / `demand.dismiss` | `demand.mark { state }` | write |
-| `propose.apply` / `propose.reject` | `propose.decide { action }` | write |
-| `link.add` / `link.remove` | `link.set { op }` | write |
 
 `search` の既定は **`auto`** とする — embedding が有効なら hybrid、無効なら FTS。**「どの検索アルゴリズムか」はエージェントが判断すべきことではない**（degrade の signal は引き続き返し、host は結果の質を知れる）。
 
 統合しないもの（意図が異なる）: `person.merge` / `person.split`（逆操作だが引数の形が違う）、`task.*` のライフサイクル（`create` / `update` / `publish` / `act` は行き先も副作用も異なる）、`source.forget` / `source.unforget`（不可逆性の重みが違い、1 本にすると誤爆が致命的）。
+
+> **実装時の訂正（2026-07-25・[#499](https://github.com/ozzy-labs/suasor/pull/499) 系列）:** 当初この表には
+> `propose.apply` / `propose.reject` → `propose.decide` と `link.add` / `link.remove` → `link.set` も
+> 含めていたが、**実装時に引数の形が違うことが判明したため撤回した**。`propose.apply` は
+> `candidates[]` + `publish`、`propose.reject` は `candidateId` + `reason`。`link.add` は 4 つの端点
+> フィールド必須、`link.remove` は `linkId` のみ。1 本に畳むと**全フィールドが optional になり、
+> 必須性がスキーマではなく実行時の検証に落ちる** — host が「1 回目の呼び出しで正しく呼べる」ための
+> 情報が失われ、収縮の目的（選択精度の向上）と逆に働く。これは本 ADR が `person.merge` / `person.split`
+> を除外した基準（「引数の形が違う」）と同一で、表の側が基準に反していた。
+>
+> 結果として tool は **45 → 39**（検索 3→1、`source.get.full` 吸収、`commitment.*` 3→1、`demand.*` 2→1）。
+> 決定 3（skill 32→約 12）と決定 4（足すなら畳む規律）は不変。
 
 ### 決定 3: skill を 32 → 約 12〜14 に畳む
 

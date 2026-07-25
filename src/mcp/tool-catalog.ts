@@ -34,11 +34,10 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     summary: "Search ingested sources; `mode` selects fts / semantic / hybrid (default auto).",
   },
   { name: "source.list", readOnlyHint: true, summary: "List ingested sources newest-first." },
-  { name: "source.get", readOnlyHint: true, summary: "Fetch one source (with body) by id." },
   {
-    name: "source.get.full",
+    name: "source.get",
     readOnlyHint: true,
-    summary: "Bundle a source's body + outgoing provenance links + extraction_meta in one call.",
+    summary: "Fetch one source (with body); `include` bundles links / extraction.",
   },
   {
     name: "source.history",
@@ -198,36 +197,19 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
     summary: "Split one identity off a person into another (PersonSplit).",
   },
   {
-    name: "commitment.resolve",
-    readOnlyHint: false,
-    summary: "Mark an open commitment fulfilled (CommitmentResolved).",
-  },
-  {
-    name: "commitment.dismiss",
-    readOnlyHint: false,
-    summary: "Dismiss an open commitment as a false-positive (CommitmentDismissed).",
-  },
-  {
-    name: "commitment.reopen",
-    readOnlyHint: false,
-    summary: "Reopen a resolved/dismissed commitment back to open (CommitmentReopened).",
-  },
-  {
-    name: "demand.ack",
-    readOnlyHint: false,
-    summary:
-      "Mark a demand row handled — drops it from the un-acked demand.list (DemandAcknowledged).",
-  },
-  {
-    name: "demand.dismiss",
-    readOnlyHint: false,
-    summary:
-      "Mark a demand row not relevant — drops it from the un-acked demand.list (DemandDismissed).",
-  },
-  {
     name: "draft.export",
     readOnlyHint: false,
     summary: "Write a draft to a local file in the export sandbox (DraftExported).",
+  },
+  {
+    name: "commitment.set",
+    readOnlyHint: false,
+    summary: "Move a commitment to resolved / dismissed / open (ADR-0021).",
+  },
+  {
+    name: "demand.mark",
+    readOnlyHint: false,
+    summary: "Mark a demand row acked / dismissed (seen-state, ADR-0041).",
   },
   {
     name: "source.forget",

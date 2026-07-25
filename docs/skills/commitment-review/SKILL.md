@@ -1,6 +1,6 @@
 ---
 name: commitment-review
-description: 「約束をスキャンして」「誰に何を約束したっけ」「貸し借り確認」「期限が来てる commitment」「この約束は完了」「コミットメント台帳」と頼まれたら、Suasor MCP の propose.generate（mode=commitment_scan）で source から約束候補を抽出し、ユーザー確認後に propose.apply で台帳に open 登録する。既存台帳は commitment.list（state / direction フィルタ）で確認し、commitment.resolve / .dismiss / .reopen で状態遷移する。auto-apply 経路は存在しない。
+description: 「約束をスキャンして」「誰に何を約束したっけ」「貸し借り確認」「期限が来てる commitment」「この約束は完了」「コミットメント台帳」と頼まれたら、Suasor MCP の propose.generate（mode=commitment_scan）で source から約束候補を抽出し、ユーザー確認後に propose.apply で台帳に open 登録する。既存台帳は commitment.list（state / direction フィルタ）で確認し、commitment.set で状態遷移する。auto-apply 経路は存在しない。
 readOnly: false
 category: commitment
 triggers:
@@ -17,9 +17,7 @@ mcp_tools_read:
 mcp_tools_write:
   - propose.generate
   - propose.apply
-  - commitment.resolve
-  - commitment.dismiss
-  - commitment.reopen
+  - commitment.set
 ---
 
 # commitment-review
@@ -51,13 +49,13 @@ read で集めて、write は HITL。**auto-apply 経路は存在しない**（[
 
 ユーザーの指示に従い、対象 commitment の状態を遷移させる（いずれも HITL・idempotent）:
 
-- `commitment.resolve` — `open` → `resolved`（果たした）
-- `commitment.dismiss` — `open` → `dismissed`（誤検出 / 不要）
-- `commitment.reopen` — `resolved` / `dismissed` → `open`（やり直し）
+- `commitment.set`（`state="resolved"`） — `open` → `resolved`（果たした）
+- `commitment.set`（`state="dismissed"`） — `open` → `dismissed`（誤検出 / 不要）
+- `commitment.set`（`state="open"`） — `resolved` / `dismissed` → `open`（やり直し）
 
 ## 制約
 
-- HITL。人の承認なしに `propose.apply` / `commitment.resolve` / `.dismiss` / `.reopen` を呼ばない。auto-apply しない。`commitment.list` / `propose.list` は read（確認）、`propose.reject` は却下の記録
+- HITL。人の承認なしに `propose.apply` / `commitment.set`（`state`） を呼ばない。auto-apply しない。`commitment.list` / `propose.list` は read（確認）、`propose.reject` は却下の記録
 - commitment id は content 由来（`title` + `direction` + provenance）。同一約束の再抽出は台帳上 no-op で、`resolved` / `dismissed` を勝手に `open` へ蘇生させない（`dueDate` / `person` は id に含めない）
 - 状態機械: `resolve` は `dismissed` からは不可（先に `reopen`）、`dismiss` は `resolved` からは不可。不正遷移は status で報告される
 - 本 skill は手順書のみで実処理を持たない

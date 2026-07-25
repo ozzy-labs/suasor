@@ -255,44 +255,41 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     },
   );
 
+  // `source.get` absorbed the former `source.get.full` (ADR-0046 決定 2): the
+  // difference was never a different question, only how much of the answer to
+  // bundle — which is an argument, not a second tool.
   server.registerTool(
     "source.get",
     {
       title: "Get source",
-      description: "Fetch a single ingested source (including its body) by external_id.",
-      inputSchema: {
-        externalId: z.string().min(1).describe("Connector-assigned source id."),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    async ({ externalId }) => {
-      const source = getSource(sqlite, externalId);
-      return jsonResult({ source });
-    },
-  );
-
-  // --- source.get.full: one-call bundle of source + provenance + extraction. ---
-  // Read tool (readOnlyHint: true): folds source.get + graph.related(out) +
-  // extraction_meta into one round-trip (Issue #279), reusing the existing query
-  // layer (getSourceFull). An unknown id returns source:null (no error).
-  server.registerTool(
-    "source.get.full",
-    {
-      title: "Get source (full bundle)",
       description:
-        "Fetch a source's metadata + body together with its outgoing provenance " +
-        "links (graph.related direction=out) and its document-extraction sidecar " +
-        "(extraction_meta, ADR-0024) in one call — what otherwise needs source.get " +
-        "+ graph.related + an extraction query in three round-trips (Issue #279). " +
-        "Read-only. An unknown id returns { source: null, links: [], " +
-        "extractionMeta: null }.",
+        "Fetch a single ingested source (including its body) by external_id. Pass " +
+        "`include` to bundle related material in the same round-trip: `links` adds " +
+        "its outgoing provenance links (graph.related direction=out), `extraction` " +
+        "adds its document-extraction sidecar (extraction_meta, ADR-0024) — what " +
+        "otherwise costs three calls (Issue #279). Read-only. An unknown id returns " +
+        "`source: null` (no error), with the requested sections empty.",
       inputSchema: {
         externalId: z.string().min(1).describe("Connector-assigned source id."),
+        include: z
+          .array(z.enum(["links", "extraction"]))
+          .optional()
+          .describe("Extra sections to bundle (default: none — source only)."),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ externalId }) => {
-      return jsonResult(getSourceFull(sqlite, externalId));
+    async ({ externalId, include }) => {
+      if (include === undefined || include.length === 0) {
+        return jsonResult({ source: getSource(sqlite, externalId) });
+      }
+      // getSourceFull already assembles all three in one pass; project down to
+      // the requested sections so the response never carries more than asked.
+      const full = getSourceFull(sqlite, externalId);
+      return jsonResult({
+        source: full.source,
+        ...(include.includes("links") ? { links: full.links } : {}),
+        ...(include.includes("extraction") ? { extractionMeta: full.extractionMeta } : {}),
+      });
     },
   );
 
