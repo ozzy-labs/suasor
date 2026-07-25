@@ -68,6 +68,24 @@ export function readAllEventRows(sqlite: Database): StoredEventRow[] {
     .all();
 }
 
+/**
+ * Stream every event row in replay order (`seq` ascending) without
+ * materializing them (Issue #498 / ADR-0047 決定 4).
+ *
+ * `readAllEventRows` loads the whole log into one array, so a store large
+ * enough to need retention is exactly the store that cannot be rebuilt — the
+ * recovery path fails precisely when it is most needed. SQLite streams rows
+ * natively, and the reducer already accepts an `Iterable`, so replay can be
+ * constant-memory with no change to its semantics.
+ */
+export function* streamAllEventRows(sqlite: Database): Generator<StoredEventRow> {
+  yield* sqlite
+    .query<StoredEventRow, []>(
+      "SELECT seq, id, type, schema_version, recorded_at, payload FROM events ORDER BY seq ASC",
+    )
+    .iterate();
+}
+
 /** Count stored events. */
 export function countEventRows(sqlite: Database): number {
   const row = sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events").get();

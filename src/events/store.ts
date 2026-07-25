@@ -8,7 +8,7 @@
  * for deterministic projection rebuilds (ADR-0002).
  */
 import type { Database } from "bun:sqlite";
-import { insertEventRow, readAllEventRows } from "../db/events-table.ts";
+import { insertEventRow, readAllEventRows, streamAllEventRows } from "../db/events-table.ts";
 import { newEventId } from "./id.ts";
 import {
   type DomainEvent,
@@ -45,6 +45,21 @@ export function appendEvent(
     payload: JSON.stringify(validated),
   });
   return validated;
+}
+
+/**
+ * Stream every event in deterministic replay (`seq` ascending) order, parsing
+ * and validating one row at a time (Issue #498 / ADR-0047 決定 4).
+ *
+ * Same validation as {@link readAllEvents} — the difference is only that the
+ * log is never held in memory all at once, so replay cost is O(1) in rows
+ * rather than O(log size).
+ */
+export function* streamAllEvents(sqlite: Database): Generator<DomainEvent> {
+  for (const row of streamAllEventRows(sqlite)) {
+    const parsed: unknown = JSON.parse(row.payload);
+    yield DomainEventSchema.parse(parsed);
+  }
 }
 
 /** Read every event in deterministic replay (`seq` ascending) order. */
