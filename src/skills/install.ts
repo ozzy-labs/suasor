@@ -7,9 +7,8 @@
  * live in a disjoint namespace and are never touched here.
  *
  * `skillStatuses` reports per-skill, per-host status (`installed` / `missing` /
- * `modified`) for `suasor skills list`. `detectDrift` reduces that to the set of
- * out-of-sync mirrors so the in-repo dogfood copies can be kept identical to the
- * SSOT (lefthook drift check).
+ * `modified`) for `suasor skills list`. `detectDrift` reduces that to the
+ * out-of-sync subset, which is what makes `modified` reportable at all.
  *
  * No heavy dependencies: only `node:fs` / `node:path` (NFR-PRF-1).
  */
@@ -169,8 +168,12 @@ export function skillStatuses(options: InstallOptions = {}): SkillStatus[] {
 /**
  * Drift = any mirror that is `missing` or `modified` relative to the SSOT.
  *
- * Used by the in-repo dogfood lefthook hook to keep `.claude/skills/` and
- * `.agents/skills/` byte-identical to `docs/skills/`.
+ * A **derivation, not an enforcement point**: nothing runs this on commit. The
+ * git hook it once described was removed with the in-repo mirror commits
+ * (ADR-0035), and the mirrors are now local install output that is never
+ * committed — so there is nothing for a hook to guard. It exists so
+ * `suasor skills list` can report `modified`, and to let a caller ask "is this
+ * host dir stale?" without diffing by hand.
  */
 export function detectDrift(options: InstallOptions = {}): SkillStatus[] {
   return skillStatuses(options).filter((s) => s.state !== "installed");
