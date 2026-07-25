@@ -9,6 +9,11 @@
 > **Extended by [ADR-0043](0043-email-demand-signals.md)（2026-07-25）:** 決定 1 の導出面に email demand
 > （自分宛て未返信スレッド）を追加し、決定 3 の順序基線に `aging_demand` tier を
 > `overdue` と un-acked demand の間へ挿入した。中立基質の構造自体は不変。
+>
+> **Extended by [ADR-0044](0044-calendar-proximity-signals.md)（2026-07-25）:** 導出面に calendar
+> proximity（`meeting_soon` / `meeting_prep`）を追加し、順序基線の最上位に `starting_soon`
+> （overdue より上 — 予定だけが時刻を動かせない）、`aging_demand` の下に `meeting_prep` を置いた。
+> 更新後の基線: `starting_soon > overdue > aging_demand > meeting_prep > un-acked demand > due_soon > priority > recency`。
 
 ## Context
 

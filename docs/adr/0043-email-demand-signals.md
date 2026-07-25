@@ -91,6 +91,9 @@ overdue > aging_demand > un-acked demand（鮮度順） > dueDate 近接 > prior
 
 「上司からのメールを上げる」は価値が明確だが、person の重要度モデル（[ADR-0022](0022-person-identity-resolution.md) の identity に重み属性を足すか、interaction 頻度から導出するか）という別の決定を要する。ここで片手間に `important_senders` 設定を足すと、後で正しいモデルが来たときに二重の設定面が残る。**未対応と明示して先送りする**。aging + `to`/`cc` の区別だけで、実運用の大半の catch は取れる見込み。
 
+> **Extended by [ADR-0044](0044-calendar-proximity-signals.md)（2026-07-25）:** 決定 5 の基線に
+> calendar tier（`starting_soon` / `meeting_prep`）が加わった。`aging_demand` の位置づけ（overdue の下）は不変。
+
 ## Consequences
 
 ### Positive

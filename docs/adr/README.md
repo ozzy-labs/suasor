@@ -84,3 +84,4 @@ NNNN-kebab-case-title.md
 | 0041 | Connector-neutral demand / priority substrate (`demand.list` + seen-state + deterministic scorer) |
 | 0042 | Slack workspace-less connector (canonical channel identity + unnamed token pool) |
 | 0043 | Email demand signals (unanswered threads addressed to me + aging tier) |
+| 0044 | Calendar proximity signals (starting-soon + prep-needed; calendar time model fix) |
