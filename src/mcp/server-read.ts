@@ -131,7 +131,11 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
-        limit: limitShape.describe(`Max hits (default ${DEFAULT_SEARCH_LIMIT}).`),
+        limit: limitShape.describe(
+          // Both paths default to the same value; asserted in tests so a future
+          // divergence can't silently make this description wrong for one mode.
+          `Max hits (default ${DEFAULT_SEARCH_LIMIT}).`,
+        ),
         fullBody: fullBodyShape,
         maxBodyChars: maxBodyCharsShape,
       },

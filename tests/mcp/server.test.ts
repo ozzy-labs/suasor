@@ -434,6 +434,16 @@ describe("MCP read surface", () => {
   // --- mode=auto: the whole point of the merge (ADR-0046 決定 2) is that the
   // caller does not have to know the backend state. These pin that it resolves
   // against the *actual* embedder, not a guess.
+  test("every search mode shares one default limit (the schema documents one number)", async () => {
+    // The merged tool documents a single `limit` default. If FTS and recall
+    // ever diverge, that description silently becomes wrong for one mode.
+    const [{ DEFAULT_SEARCH_LIMIT }, { DEFAULT_RECALL_LIMIT }] = await Promise.all([
+      import("../../src/retrieval/search.ts"),
+      import("../../src/retrieval/embedding/index.ts"),
+    ]);
+    expect(DEFAULT_RECALL_LIMIT).toBe(DEFAULT_SEARCH_LIMIT);
+  });
+
   test("search mode=auto falls back to fts when no embedding backend is enabled", async () => {
     seedSource();
     const client = await connect("disabled");
