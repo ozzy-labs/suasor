@@ -203,6 +203,7 @@ describe("suasor doctor", () => {
       "config",
       "database",
       "embedding",
+      "store.growth",
       "extraction",
       "connectors",
     ]);
@@ -680,5 +681,38 @@ describe("suasor doctor", () => {
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.filter((c) => c.name === "sync.freshness")).toHaveLength(0);
+  });
+
+  test("store growth: reports size + rate as info when no ceiling is set (#498)", async () => {
+    await run(["init"]);
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const growth = report.checks.find((c) => c.name === "store.growth");
+    // No ceiling configured → informational, and it says how to get a warning.
+    expect(growth?.status).toBe("info");
+    expect(growth?.detail).toContain("sizeWarnBytes");
+  });
+
+  test("store growth: warns once the store is at or past the ceiling (#498)", async () => {
+    await run(["init"]);
+    // A 1-byte ceiling is unreachable-low on purpose: any real store is past it.
+    await writeConfig("[storage]\nsizeWarnBytes = 1\n");
+    const { code, out } = await run(["doctor", "--json"]);
+    // Past the ceiling is a warning, not an error — the store still works, it
+    // is just time to decide about retention.
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const growth = report.checks.find((c) => c.name === "store.growth");
+    expect(growth?.status).toBe("warn");
+    expect(growth?.detail).toContain("ceiling");
+  });
+
+  test("store growth: stays ok when the ceiling is far away (#498)", async () => {
+    await run(["init"]);
+    await writeConfig("[storage]\nsizeWarnBytes = 1099511627776\n"); // 1 TiB
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.find((c) => c.name === "store.growth")?.status).toBe("ok");
   });
 });

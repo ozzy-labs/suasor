@@ -21,6 +21,14 @@ export const StorageConfig = z.object({
    * depend on `SUASOR_CONFIG_DIR`.
    */
   dbPath: z.string().min(1).nullable().default(null),
+  /**
+   * Soft ceiling for the store, in bytes (Issue #498 / [ADR-0047](../../docs/adr/0047-storage-lifecycle.md)).
+   * `null` (default) means no warning. `doctor` reports the current size, the
+   * average growth rate and the projected date this ceiling is reached — the
+   * point being that growth becomes *visible* before anyone has to decide about
+   * retention, which is deliberately opt-in and off by default.
+   */
+  sizeWarnBytes: z.number().int().positive().nullable().default(null),
 });
 export type StorageConfig = z.infer<typeof StorageConfig>;
 

@@ -240,6 +240,55 @@ export class DoctorCommand extends Command {
       }
     }
 
+    // 3b. store growth (Issue #498 / ADR-0047). The retention decision is
+    //     deliberately opt-in and off by default, so the only way it gets made
+    //     at the right time is if growth is visible *before* it hurts. Reports
+    //     size + average rate always; warns only against an explicit ceiling.
+    if (config !== null && dbReady && dbPath !== null) {
+      const { storeInfo, formatBytes } = await import("../../db/store-info.ts");
+      const growthStore = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
+      try {
+        const info = storeInfo(growthStore.connection.sqlite, dbPath, {
+          embeddingDim: config.embedding.dim,
+        });
+        const size = info.fileSizeBytes ?? 0;
+        const rate =
+          info.bytesPerDay === null
+            ? "growth unknown (< 1 day of history)"
+            : `~${formatBytes(info.bytesPerDay)}/day`;
+        const ceiling = config.storage.sizeWarnBytes;
+        if (ceiling === null) {
+          checks.push({
+            name: "store.growth",
+            status: "info",
+            detail: `${formatBytes(size)}, ${rate} (set [storage].sizeWarnBytes for a ceiling warning)`,
+          });
+        } else if (size >= ceiling) {
+          checks.push({
+            name: "store.growth",
+            status: "warn",
+            detail: `${formatBytes(size)} is at or past the ${formatBytes(ceiling)} ceiling — see ${docsUrl("adr/0047-storage-lifecycle.md")} for opt-in retention`,
+          });
+        } else {
+          // Days-to-ceiling is what makes the number actionable: "6 GB" says
+          // nothing, "reaches the ceiling in 12 days" is a decision prompt.
+          const remaining = ceiling - size;
+          const days =
+            info.bytesPerDay !== null && info.bytesPerDay > 0
+              ? Math.floor(remaining / info.bytesPerDay)
+              : null;
+          const eta = days === null ? "" : `, ceiling in ~${days} day(s)`;
+          checks.push({
+            name: "store.growth",
+            status: days !== null && days <= 30 ? "warn" : "ok",
+            detail: `${formatBytes(size)} of ${formatBytes(ceiling)}, ${rate}${eta}`,
+          });
+        }
+      } finally {
+        growthStore.close();
+      }
+    }
+
     // 4. extraction — report the configured backend; disabled is informational.
     if (config !== null) {
       const { backend, version } = config.extraction;

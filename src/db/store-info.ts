@@ -50,6 +50,35 @@ export interface EventTypeCount {
   count: number;
 }
 
+/**
+ * Where source bodies physically live, in bytes (ADR-0047 決定 1).
+ *
+ * A body is stored in up to four places — every version in `events.payload`,
+ * the current version in `sources.body`, its trigram index in `sources_fts`, and
+ * its vector in vec0 — and until now `store info` reported only the total file
+ * size, which makes the growth question unanswerable: you cannot tell whether a
+ * large store is mostly history, mostly index, or mostly vectors, so you cannot
+ * tell what a retention policy would actually reclaim.
+ *
+ * These are content sizes (SUM of LENGTH), not on-disk page usage, so they will
+ * not add up exactly to the file size — free pages, per-row overhead and the WAL
+ * live outside them. They are meant for **proportions**, not accounting.
+ */
+export interface BodyStorage {
+  /** Total bytes of every event payload (all versions of every body, ADR-0002). */
+  eventPayloadBytes: number;
+  /** Total bytes of the current body of every source row. */
+  sourceBodyBytes: number;
+  /** Total bytes held in the FTS5 index blocks (`null` when the index is absent). */
+  ftsIndexBytes: number | null;
+  /**
+   * Estimated bytes of stored vectors — `vectors × dim × 4` (f32). `null` when
+   * vec0 is absent or `embeddingDim` was not supplied. An estimate by
+   * construction: vec0's on-disk layout adds chunk metadata this does not model.
+   */
+  vectorBytesEstimate: number | null;
+}
+
 /** Store health snapshot returned by {@link storeInfo}. */
 export interface StoreInfo {
   /** Absolute path of the SQLite database file (`null` for an in-memory DB). */
@@ -66,6 +95,15 @@ export interface StoreInfo {
   embeddingsMeta: number | null;
   /** Rows in the FTS5 index over source bodies (`null` when the table is absent). */
   ftsRows: number | null;
+  /** Where source bodies live, in bytes (ADR-0047 決定 1). */
+  bodyStorage: BodyStorage;
+  /**
+   * Average growth in bytes per day since the first event, or `null` when the
+   * log holds fewer than two distinct days (no slope to measure yet). A crude
+   * average, deliberately: the alternative — storing size samples over time —
+   * would add a projection whose only purpose is to observe itself.
+   */
+  bytesPerDay: number | null;
 }
 
 /**
@@ -82,6 +120,42 @@ export function eventTypeBreakdown(sqlite: Database): EventTypeCount[] {
       "SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY count DESC, type ASC",
     )
     .all();
+}
+
+/** SUM of a column's byte length, or `null` when the table / column is absent. */
+function sumLengthOrNull(sqlite: Database, table: string, column: string): number | null {
+  const exists = sqlite
+    .query<{ n: number }, [string]>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
+    )
+    .get(table);
+  if (!exists || exists.n === 0) return null;
+  try {
+    const row = sqlite
+      .query<{ n: number | null }, []>(`SELECT SUM(LENGTH(${column})) AS n FROM ${table}`)
+      .get();
+    return row?.n ?? 0;
+  } catch {
+    // A shadow table whose shape differs across SQLite builds must not break the
+    // whole snapshot — report "unmeasurable" rather than throwing.
+    return null;
+  }
+}
+
+/**
+ * Average bytes/day of growth since the oldest event, or `null` when the log
+ * spans less than a day (dividing by ~0 would report a meaningless spike).
+ */
+function growthPerDay(sqlite: Database, totalBytes: number | null): number | null {
+  if (totalBytes === null || totalBytes === 0) return null;
+  const row = sqlite
+    .query<{ oldest: string | null }, []>("SELECT MIN(recorded_at) AS oldest FROM events")
+    .get();
+  const oldest = row?.oldest ?? null;
+  if (oldest === null) return null;
+  const days = (Date.now() - new Date(oldest).getTime()) / (24 * 60 * 60 * 1000);
+  if (!Number.isFinite(days) || days < 1) return null;
+  return Math.round(totalBytes / days);
 }
 
 /** Count rows in a table, returning `null` if the table does not exist. */
@@ -117,17 +191,33 @@ function fileSize(dbPath: string): number {
  * core projection tables; the vec0 / `embeddings_meta` / FTS counts are `null`
  * when the corresponding substrate is absent (e.g. a store opened without vec).
  */
-export function storeInfo(sqlite: Database, dbPath: string | null): StoreInfo {
+export function storeInfo(
+  sqlite: Database,
+  dbPath: string | null,
+  options: { embeddingDim?: number } = {},
+): StoreInfo {
   const onDisk = dbPath !== null && dbPath !== ":memory:";
+  const fileSizeBytes = onDisk ? fileSize(dbPath) : null;
+  const vectors = countOrNull(sqlite, DEFAULT_VEC_TABLE);
+  const dim = options.embeddingDim;
   return {
     dbPath: onDisk ? dbPath : null,
-    fileSizeBytes: onDisk ? fileSize(dbPath) : null,
+    fileSizeBytes,
+    bodyStorage: {
+      eventPayloadBytes: sumLengthOrNull(sqlite, "events", "payload") ?? 0,
+      sourceBodyBytes: sumLengthOrNull(sqlite, "sources", "body") ?? 0,
+      // Contentless FTS5 keeps its index in the `_data` shadow table.
+      ftsIndexBytes: sumLengthOrNull(sqlite, "sources_fts_data", "block"),
+      vectorBytesEstimate:
+        vectors !== null && dim !== undefined && dim > 0 ? vectors * dim * 4 : null,
+    },
+    bytesPerDay: growthPerDay(sqlite, fileSizeBytes),
     events: countEventRows(sqlite),
     projections: PROJECTION_TABLES.map((table) => ({
       table,
       rows: countOrNull(sqlite, table) ?? 0,
     })),
-    vectors: countOrNull(sqlite, DEFAULT_VEC_TABLE),
+    vectors,
     embeddingsMeta: countOrNull(sqlite, VEC_META_TABLE),
     ftsRows: countOrNull(sqlite, "sources_fts"),
   };
