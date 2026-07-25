@@ -42,6 +42,16 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 
 > Published on npm / binaries / Docker. Contributors can also run [from source](#from-source).
 
+### Upgrading
+
+**0.3.0 renames MCP tools and assistant skills with no backward-compatible aliases** (ADR-0046 —
+the agent surface was contracted so a host stops choosing between near-duplicate entry points).
+If your host config, custom skills or scripts name `recall.search`, `search.hybrid`,
+`source.get.full`, `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `.dismiss`, or any
+of the 16 folded-away skills, they must be updated — the mechanical
+[migration table](docs/guide/troubleshooting.md) lists every old → new name, including how to
+remove skill mirrors that `skills install` overwrites but never deletes.
+
 ## Quickstart (provisional)
 
 > Early development, but every CLI command below is implemented (ingest, retrieval, MCP server, and skills all work), and the MCP surface — including `brief` and `graph.related` / `graph.expand` — is shipped. See [docs/design/mcp-surface.md](docs/design/mcp-surface.md).
