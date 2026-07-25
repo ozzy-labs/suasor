@@ -9,8 +9,7 @@ triggers:
   - 議事録から task 抽出
   - 打ち合わせのフォロー
 pairs:
-  - meeting-prep
-  - action-item-status
+  - meeting
 mcp_tools_read:
   - search
   - source.list
@@ -22,7 +21,7 @@ mcp_tools_write:
 
 # meeting-followup
 
-会議後に action items を抽出する HITL write skill（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。pair: 会議前は [meeting-prep](../meeting-prep/SKILL.md)。
+会議後に action items を抽出する HITL write skill（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。pair: 会議前は [meeting](../meeting/SKILL.md)。
 
 ## いつ発火するか
 

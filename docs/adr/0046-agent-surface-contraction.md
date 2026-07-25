@@ -1,4 +1,4 @@
-# 0046. Agent surface の収縮（MCP tool 45 → 約 28 / skill 32 → 約 12）
+# 0046. Agent surface の収縮（MCP tool 45 → 39 / skill 32 → 22）
 
 - Status: Accepted（2026-07-25 承認）
 - Date: 2026-07-25
@@ -72,6 +72,8 @@ MCP host は `readOnlyHint` を見て自動承認を判断し、skill は `readO
 | triage 系 4 本 | 2 本に集約 | write |
 
 write skill は read 側と統合しない（決定 1）。`reply-draft` / `plan-draft` は write（HITL）なので read 側の `draft` とは別に残る。
+
+> **実装時の訂正（2026-07-25）:** 目標を「約 12〜14」と書いていたが、**決定 1（read/write 境界を跨がない）を守ると 22 が下限**だった。write 系 13 本は 1 本も畳めない（`inbox-triage` / `slack-triage` / `proposal-review` / `source-extract` は propose mode も対象 entity も違い、`commitment-review` / `task-update` / `person-cleanup` はそれぞれ別の台帳を触る）。read 系 19 → 9 が実際に到達した収縮で、**誤発火の実害があったクラスタはすべて解消している**（brief 5→1・review 3→1・find 2→1・meeting 2→1・decisions 2→1・draft 2→1）。12〜14 は write 側も畳める前提の見積もりで、その前提が決定 1 と両立しなかった。
 
 ### 決定 4: 追加の規律 — 足すなら畳む
 

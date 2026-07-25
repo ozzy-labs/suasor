@@ -33,8 +33,8 @@ mcp_tools_write:
 
 read で文脈を集め、計画本文は text-only、task/decision 化は HITL（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. 起点の文脈を集める: `source.get`（対象 issue/メモの本文）/ `search`（`mode=semantic`）・`search`（関連やりとり）/ `graph.related`（関連 decision・先行仕様）。広く調べるなら `research` skill を併用
-2. 分解方針・マイルストーン・順序/依存の**計画ドラフト本文を host LLM が構成して返す**（text-only・persist しない。handoff-draft / announcement-draft と同じ作法）
+1. 起点の文脈を集める: `source.get`（対象 issue/メモの本文）/ `search`（`mode=semantic`）・`search`（関連やりとり）/ `graph.related`（関連 decision・先行仕様）。広く調べるなら `find` skill を併用
+2. 分解方針・マイルストーン・順序/依存の**計画ドラフト本文を host LLM が構成して返す**（text-only・persist しない。draft / draft と同じ作法）
 3. 計画中の実行項目を `propose.generate`（mode=`source_extract`）で **task / decision 候補に分解**する（`source_extract` の許可 kind = `task` / `decision` / `reply_draft`）
 4. `propose.list`（`state=pending`）で候補を提示し、**ユーザー確認**を取る
 5. 承認分のみ `propose.apply` で保存（idempotent）。不要な候補は `propose.reject`（任意で理由）

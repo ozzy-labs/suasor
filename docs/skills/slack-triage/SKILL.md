@@ -21,7 +21,7 @@ mcp_tools_write:
 
 # slack-triage
 
-Slack の @mention / DM を「読むべきが未処理」signal として集約し、捌く HITL write skill（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0013](../../adr/0013-slack-engagement-axis.md) / [ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。demand の列挙は read で自律 OK だが、action 化（task / decision / 返信 / inbox 捕捉）や seen 印付け（`demand.mark`（`state`））で write tool を HITL で呼ぶため boundary は write（auto-apply なし・[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `personal-brief` が `priority.list` 経由で取り込む demand を、Slack 起点で正面から扱う。
+Slack の @mention / DM を「読むべきが未処理」signal として集約し、捌く HITL write skill（[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0013](../../adr/0013-slack-engagement-axis.md) / [ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。demand の列挙は read で自律 OK だが、action 化（task / decision / 返信 / inbox 捕捉）や seen 印付け（`demand.mark`（`state`））で write tool を HITL で呼ぶため boundary は write（auto-apply なし・[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `brief` が `priority.list` 経由で取り込む demand を、Slack 起点で正面から扱う。
 
 ## いつ発火するか
 
@@ -38,7 +38,7 @@ read で集めて、action 化（write）は HITL（[ADR-0004](../../adr/0004-mc
    - **受信箱に捕捉** — `inbox.add`（`sourceExternalId`）で `open` 捕捉し、以後 `inbox-triage` で解決する
    - **task / decision / 返信下書き化** — `source.get` で本文を読み、`propose.generate`（mode=`source_extract`）で候補を生成 → `propose.list` で確認 → 承認分のみ `propose.apply`（`source-extract` と同じ flow）
    - **返信したいだけ** — `reply-draft` skill（`propose.generate` mode=`reply_draft`、`reply_to_source_id` 指定）へ
-4. 処理した demand は `demand.mark`（`state="acked"`）（対応した）、対応不要なものは `demand.mark`（`state="dismissed"`）（外す）で印を付ける（HITL）。以後 既定の `demand.list` / `priority.list` / `personal-brief` から外れる（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。task 化 / inbox 捕捉した mention はそのまま ack して二重計上を防ぐ
+4. 処理した demand は `demand.mark`（`state="acked"`）（対応した）、対応不要なものは `demand.mark`（`state="dismissed"`）（外す）で印を付ける（HITL）。以後 既定の `demand.list` / `priority.list` / `brief` から外れる（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。task 化 / inbox 捕捉した mention はそのまま ack して二重計上を防ぐ
 
 ## 制約
 

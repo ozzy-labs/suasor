@@ -9,7 +9,8 @@ triggers:
   - タスク何が残ってる?
   - 今日やること
   - 優先度高いのは?
-pairs: []
+pairs:
+  - brief
 mcp_tools_read:
   - search
   - priority.list

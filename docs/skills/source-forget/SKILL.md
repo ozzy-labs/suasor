@@ -31,7 +31,7 @@ mcp_tools_write:
 
 read で対象を特定して、purge は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。**不可逆**な破壊操作のため、実行前に必ず対象を提示して確認を取る。
 
-1. 対象 source を特定する（`externalId` 不明なら `search`（FTS）/ `source.list` / `find-document` で確定）
+1. 対象 source を特定する（`externalId` 不明なら `search`（FTS）/ `source.list` / `find` で確定）
 2. 消す対象（`externalId` / タイトル / 由来）と、**不可逆・本文は復元できない**旨を**ユーザーに明示して確認を取る**（native framing: ホスト側で人の承認を促す）。任意で `reason` を添える
 3. 承認後、`source.forget`（`externalId`, `reason?`, `cascade?`）を呼ぶ。1 トランザクションで次を行う:
    - 当該 source の `SourceObserved` / `SourceBodyUpdated` の `body` を event redaction（append-only の明示的例外・[ADR-0026](../../adr/0026-source-forgetting.md)）

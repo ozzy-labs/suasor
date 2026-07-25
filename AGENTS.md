@@ -114,3 +114,15 @@ bun test                   # テスト
 | Gemini CLI     | `.gemini/settings.json` → `AGENTS.md` |
 | Codex CLI      | `AGENTS.md` + `.agents/skills/`       |
 | GitHub Copilot | `AGENTS.md` + `.agents/skills/`       |
+
+## Agent surface の規律（足すなら畳む・ADR-0046 決定 4）
+
+MCP tool / assistant skill を **新規に top-level で足す PR は、既存を 1 本畳むか、なぜ畳めないかを PR 本文に書く**。
+
+45 tools / 32 skills に到達したのは個々の判断が悪かったからではなく、「足す」判断だけがあって「畳む」判断が無かったため。表面積は host の tool 選択精度とカタログのコンテキスト消費に直接効くので、増やすときは同じ PR で減らす側も考える。
+
+畳めない正当な理由（そのまま書けばよい）:
+
+- **read / write の承認境界を跨ぐ**（跨ぐと HITL が壊れる・[ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)）
+- **引数の形が違う**（1 本にすると全フィールドが optional になり、必須性がスキーマから実行時検証に落ちる）
+- **不可逆性の重みが違う**（`source.forget` / `source.unforget` のように誤爆が致命的）

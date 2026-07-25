@@ -162,15 +162,20 @@ describe("real bundled catalog", () => {
     const src = resolveSkillsSource();
     expect(src).not.toBeNull();
     const skills = listBundledSkills(src);
-    expect(skills.length).toBeGreaterThanOrEqual(26);
-    expect(skills.map((s) => s.name)).toContain("personal-brief");
+    expect(skills.length).toBeGreaterThanOrEqual(20);
+    expect(skills.map((s) => s.name)).toContain("brief");
   });
 
-  test("ships the doc-diff, plan-draft, and doc-review skills", () => {
+  test("ships the merged read entry points (ADR-0046)", () => {
     const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
-    expect(names).toContain("doc-diff");
-    expect(names).toContain("plan-draft");
-    expect(names).toContain("doc-review");
+    for (const merged of ["brief", "review", "find", "meeting", "decisions", "draft"]) {
+      expect(names).toContain(merged);
+    }
+    // The folded-away names must be gone, not shadowed by a leftover directory.
+    for (const gone of ["personal-brief", "doc-review", "find-document", "meeting-prep"]) {
+      expect(names).not.toContain(gone);
+    }
+    expect(names).toContain("plan-draft"); // write-side draft stays separate
   });
 
   test("ships the task-update lifecycle skill", () => {
@@ -191,10 +196,10 @@ describe("real bundled catalog", () => {
     expect(names).toContain("provenance-trace");
   });
 
-  test("ships the active-surface read skills (commitment-chase / weekly-review)", () => {
+  test("ships the active-surface read skills (commitment-chase / next-actions)", () => {
     const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
     expect(names).toContain("commitment-chase");
-    expect(names).toContain("weekly-review");
+    expect(names).toContain("next-actions");
   });
 
   test("every bundled skill has frontmatter whose name matches its directory", () => {
