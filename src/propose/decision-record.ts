@@ -10,12 +10,13 @@
  * `decisions` projection (ADR-0002).
  *
  * Idempotence mirrors `task.create` / `propose.apply`: the `decisionId` is
- * content-derived from the title + provenance (id.ts), so re-recording the same
- * decision upserts the same row rather than duplicating it; the result reports
- * whether the event was appended (`created`) or the decision already existed
- * (`existing`). The id is keyed on title + provenance only (matching the
- * `decision` candidate fingerprint), so a re-record with a changed `rationale`
- * is reported `existing` — the first recorded rationale wins.
+ * content-derived from the title + rationale + provenance (id.ts, matching the
+ * `decision` candidate fingerprint), so re-recording the same decision is a
+ * no-op; the result reports whether the event was appended (`created`) or the
+ * decision already existed (`existing`). Since #435 the `rationale` is part of
+ * the identity: recording the same title with a *different* rationale creates a
+ * distinct decision instead of silently colliding with (and losing to) the
+ * first recorded rationale.
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
@@ -47,9 +48,9 @@ export function decisionRecord(
   now: Date = new Date(),
 ): DecisionRecordOutput {
   const { title, rationale, sourceExternalIds } = DecisionRecordInput.parse(input);
-  // entityId derives the id from kind/title/sourceExternalIds (id.ts) — the same
-  // function propose.apply uses for `decision` candidates, so the human path and
-  // the model-suggested path land on the same projection row for equal content.
+  // entityId derives the id from kind/title/rationale/sourceExternalIds (id.ts)
+  // — the same fingerprint propose.apply uses for `decision` candidates, so the
+  // human path and the model-suggested path share one identity for equal content.
   const decisionId = entityId({
     kind: "decision",
     candidateId: "decision.record",

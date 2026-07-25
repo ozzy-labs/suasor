@@ -175,6 +175,15 @@ export const TaskProposed = z.object({
   ...Envelope,
   /** Stable id for the task this proposal targets. */
   taskId: z.string().min(1),
+  /**
+   * Proposal-candidate provenance (#435): present when appended via
+   * `propose.apply` / `propose.batch`, so the reducer flips exactly that
+   * proposals-ledger row to `applied` (recording the actually minted `taskId`,
+   * which may carry a `-N` disambiguation suffix). Absent on direct writes
+   * (task.create / inbox.triage) and on pre-#435 events, which fall back to
+   * the legacy entity-id match (backward-compatible replay, ADR-0002).
+   */
+  candidateId: z.string().min(1).optional(),
   title: z.string().min(1),
   /** Optional due date (ISO 8601), when the task carries one (ADR-0028). */
   dueDate: IsoDateTime.nullable().default(null),
@@ -256,6 +265,13 @@ export const DecisionRecorded = z.object({
   type: z.literal("DecisionRecorded"),
   ...Envelope,
   decisionId: z.string().min(1),
+  /**
+   * Proposal-candidate provenance (#435): present when appended via
+   * `propose.apply` / `propose.batch` (same contract as
+   * {@link TaskProposed}.candidateId); absent on direct writes
+   * (decision.record / inbox.triage) and on pre-#435 events.
+   */
+  candidateId: z.string().min(1).optional(),
   title: z.string().min(1),
   rationale: z.string().default(""),
   sourceExternalIds: z.array(z.string().min(1)).default([]),
@@ -304,9 +320,10 @@ export const InboxItemTriaged = z.object({
  * (`propose.list`) and rejected (`propose.reject`). Persisting the *candidate*
  * (not the domain entity) keeps `propose.generate`'s "no domain entity write"
  * contract while giving the approve/reject HITL loop a durable surface
- * (ADR-0004). The target entity id is content-derived (src/propose/id.ts), so
- * when `propose.apply` later appends the entity event the ledger flips the
- * matching proposal to `applied` by `entity_id`.
+ * (ADR-0004). When `propose.apply` later appends the entity event, the ledger
+ * flips the matching proposal to `applied` — by the `candidateId` the entity
+ * event carries for task/decision (#435; the row's `entity_id` is updated to
+ * the actually minted id), or by `entity_id` match for the other kinds.
  */
 export const ProposalGenerated = z.object({
   type: z.literal("ProposalGenerated"),
@@ -317,7 +334,11 @@ export const ProposalGenerated = z.object({
   mode: z.string().min(1),
   /** Candidate kind (task / decision / reply_draft / triage). */
   kind: z.string().min(1),
-  /** Deterministic target entity id the candidate applies to. */
+  /**
+   * Planned (base, content-derived) target entity id. For task/decision the
+   * id actually minted at apply time may carry a `-N` disambiguation suffix
+   * (#435); the reducer records the minted id back onto the ledger row.
+   */
   entityId: z.string().min(1),
   /** Short human-readable summary (title / draft preview) for listings. */
   summary: z.string().default(""),

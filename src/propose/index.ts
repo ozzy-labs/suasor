@@ -69,6 +69,12 @@ export {
 } from "./generate.ts";
 export { candidateId, entityId, inboxId, manualLinkId } from "./id.ts";
 export {
+  mintEntityId,
+  resolveTaskIdentity,
+  type TaskDuplicate,
+  TERMINAL_TASK_STATES,
+} from "./identity.ts";
+export {
   InboxAddInput,
   type InboxAddOutput,
   inboxAdd,

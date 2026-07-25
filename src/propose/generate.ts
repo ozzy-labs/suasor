@@ -10,9 +10,10 @@
  *   2. assigns each a stable, content-derived `candidateId`.
  *
  * The id is a content hash so the same candidate yields the same id across
- * calls; combined with the deterministic entity ids `propose.apply` derives from
- * the same content, re-running generate→apply converges to the same projection
- * state (idempotence — the apply step's contract, FR-PRO-2 / FR-MNT-1).
+ * calls; `propose.apply` dedupes on that candidateId against the proposals
+ * ledger (#435), so re-running generate→apply converges to the same projection
+ * state (round-trip idempotence — the apply step's contract, FR-PRO-2 /
+ * FR-MNT-1) while distinct candidates with equal titles stay distinct entities.
  *
  * Returns the candidates inert; nothing is appended until a human approves a
  * subset and the host calls `propose.apply` (no auto-apply path, ADR-0004).
@@ -180,6 +181,9 @@ export function persistProposals(
         candidateId: candidate.candidateId,
         mode: result.mode,
         kind: candidate.kind,
+        // Planned (base) target entity id; for task/decision the id actually
+        // minted at apply time may carry a `-N` suffix, and the reducer then
+        // records the minted id back onto this ledger row (#435).
         entityId: entityId(candidate),
         summary: candidateSummary(candidate),
         sourceExternalIds: candidateSources(candidate),

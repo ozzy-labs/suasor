@@ -15,9 +15,12 @@
  * Both entity-producing actions and the inbox transition are appended as
  * separate domain events through `Store.record` (ADR-0002); the created task /
  * decision carries the inbox item's source as provenance (→ `links`). The task /
- * decision creation reuses the same content-derived ids as `task.create` /
- * `decision.record` (id.ts), so a triaged item lands on the same projection row
- * a human or the model would have produced for equal content.
+ * decision creation reuses the same content-derived identity as `task.create` /
+ * `decision.record` (id.ts / identity.ts), so a triaged item lands on the same
+ * projection row a human or the model would have produced for equal content —
+ * and, like task.create (#435), a content match whose task rows are all
+ * terminal (completed / dropped) mints a fresh `-N`-suffixed task instead of
+ * silently refreshing a long-done row.
  *
  * It is HITL — the host gates it behind approval (`readOnlyHint: false`, no
  * auto-apply, ADR-0004).
@@ -29,6 +32,7 @@
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
 import { entityId } from "./id.ts";
+import { resolveTaskIdentity } from "./identity.ts";
 
 /** Actions an open inbox item can be triaged into (Issue #88 state machine). */
 export const TRIAGE_ACTIONS = ["task", "decision", "discard"] as const;
@@ -130,12 +134,15 @@ export function inboxTriage(
   const itemTitle = title as string;
   let createdEntityId: string;
   if (action === "task") {
-    createdEntityId = entityId({
-      kind: "task",
-      candidateId: "inbox.triage",
+    // Identity (#435): a live content-equal task is reused (idempotent upsert),
+    // but a match whose rows are all terminal (completed / dropped) mints a
+    // fresh disambiguated id — re-triaging a recurring source must create a new
+    // task, not silently refresh a long-done one.
+    const { freeId, liveDuplicate } = resolveTaskIdentity(sqlite, {
       title: itemTitle,
       sourceExternalIds,
     });
+    createdEntityId = liveDuplicate?.taskId ?? freeId;
     store.record(
       { type: "TaskProposed", taskId: createdEntityId, title: itemTitle, sourceExternalIds },
       now,

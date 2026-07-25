@@ -87,6 +87,23 @@ describe("propose.batch — mixed apply/reject in one RPC (#197)", () => {
     expect(countEvents()).toBe(before);
   });
 
+  test("duplicate apply ops for the same candidate in ONE batch append once (#435)", () => {
+    // In-call dedupe: the same candidateId listed twice in one batch must not
+    // mint two entities (the second op echoes the id minted by the first).
+    const cand = generate("source_extract", { kind: "task", title: "once" });
+    const out = proposeBatch(store, {
+      operations: [
+        { action: "apply", candidate: cand },
+        { action: "apply", candidate: cand },
+      ],
+    });
+    expect(out.applied).toBe(1);
+    expect(out.skipped).toBe(1);
+    const applies = out.results.filter((r) => r.action === "apply");
+    expect(applies[0]?.entityId).toBe(applies[1]?.entityId as string);
+    expect(sqlite().query("SELECT 1 FROM tasks").all()).toHaveLength(1);
+  });
+
   test("reject op reports applied/missing without mutating", () => {
     const applied = generate("source_extract", { kind: "task", title: "already applied" });
     proposeApply(store, { candidates: [applied] });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../../src/db/index.ts";
 import { proposeApply } from "../../src/propose/apply.ts";
-import { proposeGenerate } from "../../src/propose/generate.ts";
+import { persistProposals, proposeGenerate } from "../../src/propose/generate.ts";
 
 let store: Store;
 
@@ -93,10 +93,10 @@ describe("propose.apply — candidate → event mapping", () => {
   });
 });
 
-describe("propose.apply — idempotence (acceptance criterion)", () => {
-  test("dedupes duplicate candidates within a single apply call", () => {
-    // Two identical task candidates in one call: the second sees the first's
-    // committed row (Store.record folds synchronously) and is skipped.
+describe("propose.apply — round-trip idempotence (#435)", () => {
+  test("dedupes duplicate candidates within a single apply call (no ledger row needed)", () => {
+    // Two identical task candidates in one call: the second is deduped by the
+    // in-call candidateId map and echoes the id minted for the first.
     const gen = proposeGenerate({
       mode: "source_extract",
       candidates: [{ kind: "task", title: "same", sourceExternalIds: ["gh:1"] }],
@@ -105,11 +105,12 @@ describe("propose.apply — idempotence (acceptance criterion)", () => {
     const out = proposeApply(store, { candidates: dup });
     expect(out.applied).toBe(1);
     expect(out.skipped).toBe(1);
+    expect(out.results[0]?.entityId).toBe(out.results[1]?.entityId as string);
     expect(rows("tasks")).toHaveLength(1);
   });
 
-  test("re-applying the same candidate appends NO second event (skipped)", () => {
-    const generated = proposeGenerate({
+  test("re-applying the same ledgered candidate appends NO second event (skipped)", () => {
+    const generated = persistProposals(store, {
       mode: "source_extract",
       candidates: [{ kind: "task", title: "ship it", sourceExternalIds: ["gh:1"] }],
     });
@@ -121,25 +122,95 @@ describe("propose.apply — idempotence (acceptance criterion)", () => {
     expect(second.applied).toBe(0);
     expect(second.skipped).toBe(1);
     expect(second.results[0]?.status).toBe("skipped");
+    // The skip echoes the entity id minted on the first apply (from the ledger).
+    expect(second.results[0]?.entityId).toBe(first.results[0]?.entityId as string);
     // No new event appended on the idempotent re-apply.
     expect(countEvents()).toBe(eventsAfterFirst);
     // Projection still has exactly one task.
     expect(rows("tasks")).toHaveLength(1);
   });
 
-  test("generate is deterministic: re-generating gives the same entity id, so apply skips", () => {
-    const a = proposeGenerate({
+  test("re-generating the same content yields the same candidateId, so the ledger skips re-apply", () => {
+    const a = persistProposals(store, {
       mode: "meeting_followup",
       candidates: [{ kind: "decision", title: "d", rationale: "r" }],
     });
     proposeApply(store, { candidates: a.candidates });
-    const b = proposeGenerate({
-      mode: "meeting_followup",
-      candidates: [{ kind: "decision", title: "d", rationale: "r" }],
-    });
-    const out = proposeApply(store, { candidates: b.candidates });
+    // Re-generating the same content is withheld as `decided` by persistProposals,
+    // but a host may still round-trip the stamped candidate straight to apply —
+    // the ledger (keyed by candidateId) makes that a skip, not a duplicate.
+    const out = proposeApply(store, { candidates: a.candidates });
     expect(out.skipped).toBe(1);
     expect(rows("decisions")).toHaveLength(1);
+  });
+
+  test("distinct candidates with the SAME title but different provenance become distinct tasks", () => {
+    // Recurring-title case ([boundary/propose-1]): January's and February's
+    // "経費精算" derive from different sources → different candidateIds → two tasks.
+    const jan = persistProposals(store, {
+      mode: "source_extract",
+      candidates: [{ kind: "task", title: "経費精算", sourceExternalIds: ["mail:jan"] }],
+    });
+    proposeApply(store, { candidates: jan.candidates });
+    const feb = persistProposals(store, {
+      mode: "source_extract",
+      candidates: [{ kind: "task", title: "経費精算", sourceExternalIds: ["mail:feb"] }],
+    });
+    const out = proposeApply(store, { candidates: feb.candidates });
+    expect(out.applied).toBe(1);
+    const tasks = rows("tasks") as Array<{ id: string; title: string }>;
+    expect(tasks).toHaveLength(2);
+    expect(new Set(tasks.map((t) => t.id)).size).toBe(2);
+  });
+
+  test("equal content via different modes mints a `-N`-suffixed id instead of colliding", () => {
+    // Same title + provenance through two modes → two candidateIds sharing one
+    // base entity id. The second apply must mint a disambiguated id, not skip.
+    const viaExtract = persistProposals(store, {
+      mode: "source_extract",
+      candidates: [{ kind: "task", title: "same content", sourceExternalIds: ["gh:1"] }],
+    });
+    proposeApply(store, { candidates: viaExtract.candidates });
+    const viaMeeting = persistProposals(store, {
+      mode: "meeting_followup",
+      candidates: [{ kind: "task", title: "same content", sourceExternalIds: ["gh:1"] }],
+    });
+    const out = proposeApply(store, { candidates: viaMeeting.candidates });
+    expect(out.applied).toBe(1);
+    const ids = (rows("tasks") as Array<{ id: string }>).map((t) => t.id).sort();
+    expect(ids).toHaveLength(2);
+    expect(ids[1]).toBe(`${ids[0]}-2`);
+  });
+
+  test("decisions with the same title but different rationale are distinct (no rationale collision)", () => {
+    const a = persistProposals(store, {
+      mode: "meeting_followup",
+      candidates: [{ kind: "decision", title: "use bun", rationale: "fast" }],
+    });
+    proposeApply(store, { candidates: a.candidates });
+    const b = persistProposals(store, {
+      mode: "meeting_followup",
+      candidates: [{ kind: "decision", title: "use bun", rationale: "single binary" }],
+    });
+    const out = proposeApply(store, { candidates: b.candidates });
+    expect(out.applied).toBe(1);
+    const decisions = rows("decisions") as Array<{ rationale: string }>;
+    expect(decisions.map((d) => d.rationale).sort()).toEqual(["fast", "single binary"]);
+  });
+
+  test("a recurring title with EMPTY provenance still round-trips per candidate generation", () => {
+    // The applied ledger row keeps the exact same candidate from re-applying,
+    // while the tasks projection is free to hold the completed prior task and
+    // the direct-create path (task.create) can mint the recurrence.
+    const gen = persistProposals(store, {
+      mode: "source_extract",
+      candidates: [{ kind: "task", title: "経費精算", sourceExternalIds: [] }],
+    });
+    const first = proposeApply(store, { candidates: gen.candidates });
+    expect(first.applied).toBe(1);
+    const again = proposeApply(store, { candidates: gen.candidates });
+    expect(again.skipped).toBe(1);
+    expect(rows("tasks")).toHaveLength(1);
   });
 
   test("re-applying a reply_draft with the same body is idempotent (no duplicate link)", () => {
@@ -172,6 +243,51 @@ describe("propose.apply — idempotence (acceptance criterion)", () => {
     const items = rows("inbox") as Array<{ state: string }>;
     expect(items).toHaveLength(1);
     expect(items[0]?.state).toBe("done");
+  });
+
+  test("the ledger row records the actually minted (suffixed) entity id once applied", () => {
+    const first = persistProposals(store, {
+      mode: "source_extract",
+      candidates: [{ kind: "task", title: "t", sourceExternalIds: ["gh:1"] }],
+    });
+    proposeApply(store, { candidates: first.candidates });
+    const second = persistProposals(store, {
+      mode: "meeting_followup",
+      candidates: [{ kind: "task", title: "t", sourceExternalIds: ["gh:1"] }],
+    });
+    const out = proposeApply(store, { candidates: second.candidates });
+    const mintedId = out.results[0]?.entityId as string;
+    expect(mintedId.endsWith("-2")).toBe(true);
+    const ledger = store.connection.sqlite
+      .query<{ entity_id: string; state: string }, [string]>(
+        "SELECT entity_id, state FROM proposals WHERE candidate_id = ?",
+      )
+      .get(second.candidates[0]?.candidateId as string);
+    expect(ledger?.state).toBe("applied");
+    expect(ledger?.entity_id).toBe(mintedId);
+  });
+
+  test("minted ids survive a projection rebuild identically (event-sourced, ADR-0002)", () => {
+    // Two same-content candidates through different modes → base id + `-2`.
+    // The minted ids are baked into the events, so replay reproduces them.
+    for (const mode of ["source_extract", "meeting_followup"] as const) {
+      const gen = persistProposals(store, {
+        mode,
+        candidates: [{ kind: "task", title: "recur", sourceExternalIds: ["gh:1"] }],
+      });
+      proposeApply(store, { candidates: gen.candidates });
+    }
+    const before = (rows("tasks") as Array<{ id: string }>).map((t) => t.id).sort();
+    store.rebuild();
+    const after = (rows("tasks") as Array<{ id: string }>).map((t) => t.id).sort();
+    expect(after).toEqual(before);
+    expect(after).toHaveLength(2);
+    // The ledger converges to the same applied rows too.
+    const states = store.connection.sqlite
+      .query<{ state: string }, []>("SELECT state FROM proposals")
+      .all()
+      .map((r) => r.state);
+    expect(states).toEqual(["applied", "applied"]);
   });
 
   test("applied candidates survive a projection rebuild (event-sourced, ADR-0002)", () => {

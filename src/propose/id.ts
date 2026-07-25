@@ -2,11 +2,15 @@
  * Deterministic, content-derived ids for proposal candidates and the entities
  * they apply to.
  *
- * Idempotence (FR-PRO-2 / the apply contract) hinges on these being a pure
- * function of the candidate content: the same candidate always yields the same
- * `candidateId` and the same target entity id (`taskId` / `decisionId` /
- * `draftId` / `inboxId`), so re-running generate->apply upserts the same
- * projection rows instead of creating duplicates. No randomness, no clock.
+ * Idempotence (FR-PRO-2 / the apply contract) is scoped to the *proposal
+ * round-trip*, not the domain entity (#435): the same candidate content always
+ * yields the same `candidateId`, so re-running generate→apply converges on the
+ * proposals ledger instead of re-offering / re-applying the same candidate.
+ * `entityId` is the *base* target entity id for that content; apply-time
+ * minting (src/propose/identity.ts) disambiguates it with a `-N` suffix when
+ * the base id is already occupied, so identically-titled tasks/decisions can
+ * coexist over time (recurring "経費精算" etc.) instead of colliding for the
+ * store's lifetime. No randomness, no clock.
  *
  * The hash is FNV-1a (32-bit) rendered as 8 lowercase hex chars — small, stable,
  * dependency-free, and sufficient for collision-resistance across a single
@@ -37,9 +41,14 @@ function candidateFingerprint(candidate: CandidateInput): string {
     case "task":
       return ["task", candidate.title, [...candidate.sourceExternalIds].sort().join(",")].join(SEP);
     case "decision":
-      return ["decision", candidate.title, [...candidate.sourceExternalIds].sort().join(",")].join(
-        SEP,
-      );
+      // `rationale` is part of the identity (#435): the same title decided for a
+      // different reason is a different decision, not a colliding re-record.
+      return [
+        "decision",
+        candidate.title,
+        candidate.rationale,
+        [...candidate.sourceExternalIds].sort().join(","),
+      ].join(SEP);
     case "reply_draft":
       return ["reply_draft", candidate.replyToExternalId, candidate.body].join(SEP);
     case "triage":
@@ -94,9 +103,12 @@ export function manualLinkId(endpoints: {
 }
 
 /**
- * Deterministic target entity id for a candidate (the `taskId` / `decisionId` /
- * `draftId` / `inboxId` the applied event carries). Derived from content so
- * apply upserts the same projection row on re-application.
+ * *Base* target entity id for a candidate, derived from content. For
+ * `reply_draft` / `triage` / `commitment` this IS the entity id the applied
+ * event carries (their content-equality really is semantic equality). For
+ * `task` / `decision` it is the first id in the minting sequence — apply-time
+ * minting (src/propose/identity.ts, #435) appends a `-N` suffix when the base
+ * id is already occupied, so equal titles can recur as distinct entities.
  */
 export function entityId(candidate: Candidate): string {
   const fp = fnv1a(candidateFingerprint(candidate));

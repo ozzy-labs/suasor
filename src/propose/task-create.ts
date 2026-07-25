@@ -8,15 +8,18 @@
  * behind approval (`readOnlyHint: false`, no auto-apply, ADR-0004) — and appends
  * a `TaskProposed` event that folds into the `tasks` projection (ADR-0002).
  *
- * Idempotence mirrors `propose.apply`: the `taskId` is content-derived from the
- * title + provenance, so re-creating the same task upserts the same row rather
- * than duplicating it; the result reports whether the event was appended
- * (`created`) or the task already existed (`existing`).
+ * Duplicate handling (#435, [boundary/propose-1]): the task id is content-derived
+ * (title + provenance), but a match against a *terminal* row (completed/dropped)
+ * no longer blocks creation — recurring dictated tasks ("経費精算") mint a
+ * disambiguated id (`-N` suffix) and are `created`. Only a *live* duplicate
+ * (proposed / open / in_progress) short-circuits to `existing`, and the output
+ * then carries the duplicate's id / state / updatedAt so the host can offer
+ * reopen-vs-create explicitly instead of silently doing nothing.
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
 import { TaskPriority } from "../events/types.ts";
-import { entityId } from "./id.ts";
+import { resolveTaskIdentity, type TaskDuplicate } from "./identity.ts";
 
 /** ISO 8601 timestamp (matches the event payload's `dueDate`). */
 const IsoDateTime = z.iso.datetime({ offset: true });
@@ -37,16 +40,26 @@ export type TaskCreateInput = z.input<typeof TaskCreateInput>;
 export interface TaskCreateOutput {
   taskId: string;
   status: "created" | "existing";
+  /**
+   * Present when `status` is `existing`: the live (non-terminal) duplicate that
+   * short-circuited creation — id + lifecycle state + last update, so the host
+   * can offer "reopen / point at it" vs. "this is genuinely new" (#435).
+   */
+  duplicate?: TaskDuplicate;
 }
 
 /**
  * Create a task (append `TaskProposed`). The host must have human approval first.
- * Idempotent on content: an existing task with the derived id is a no-op.
+ *
+ * Identity (#435): the id derives from title + provenance, but only a *live*
+ * duplicate (proposed / open / in_progress) is a no-op (`existing`, with the
+ * duplicate's id/state/updatedAt in the output). A content match whose rows are
+ * all terminal (completed / dropped) creates a NEW task under a `-N`-suffixed
+ * id — a recurring title is not blocked by its own history.
  *
  * `dueDate` / `priority` (ADR-0028) are NOT part of the derived id (so changing a
- * task's due date does not split it into a new task — id stays title + provenance);
- * they are carried on the `TaskProposed` event and folded onto a freshly-created
- * task. Re-creating an existing task is `existing` (no event), unchanged behaviour.
+ * task's due date does not split it into a new task); they are carried on the
+ * `TaskProposed` event and folded onto a freshly-created task.
  */
 export function taskCreate(
   store: Store,
@@ -54,18 +67,17 @@ export function taskCreate(
   now: Date = new Date(),
 ): TaskCreateOutput {
   const { title, dueDate, priority, sourceExternalIds } = TaskCreateInput.parse(input);
-  const taskId = entityId({
-    kind: "task",
-    candidateId: "task.create",
+  const { freeId, liveDuplicate } = resolveTaskIdentity(store.connection.sqlite, {
     title,
     sourceExternalIds,
   });
-
-  const existing = store.connection.sqlite.query("SELECT 1 FROM tasks WHERE id = ?").get(taskId);
-  if (existing !== null) {
-    return { taskId, status: "existing" };
+  if (liveDuplicate !== null) {
+    return { taskId: liveDuplicate.taskId, status: "existing", duplicate: liveDuplicate };
   }
 
-  store.record({ type: "TaskProposed", taskId, title, dueDate, priority, sourceExternalIds }, now);
-  return { taskId, status: "created" };
+  store.record(
+    { type: "TaskProposed", taskId: freeId, title, dueDate, priority, sourceExternalIds },
+    now,
+  );
+  return { taskId: freeId, status: "created" };
 }

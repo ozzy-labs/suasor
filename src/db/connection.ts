@@ -129,7 +129,9 @@ export function initSchema(sqlite: Database): void {
       created_at   TEXT NOT NULL,
       updated_at   TEXT NOT NULL
     );
-    -- propose.apply flips a pending proposal to applied by matching entity_id.
+    -- propose.apply flips a pending proposal to applied: task/decision events
+    -- match by candidate_id (#435); this index serves the entity_id fallback
+    -- (other kinds, pre-#435 events) and entity-keyed lookups.
     CREATE INDEX IF NOT EXISTS idx_proposals_entity ON proposals(entity_id);
     CREATE TABLE IF NOT EXISTS commitments (
       id          TEXT PRIMARY KEY,

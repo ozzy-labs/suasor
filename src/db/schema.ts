@@ -115,14 +115,19 @@ export const inbox = sqliteTable("inbox", {
  * A still-`pending` row can also carry a `reason` from proposal.feedback (Issue
  * #279) — a regeneration hint that does NOT change its state.
  * Folded from `ProposalGenerated` / `ProposalRejected` / `ProposalFeedback` plus
- * the entity events propose.apply appends (matched back by `entity_id`).
- * Rebuildable (ADR-0002).
+ * the entity events propose.apply appends (matched back by the `candidateId`
+ * the task/decision events carry, or by `entity_id` for the other kinds and
+ * pre-#435 events). Rebuildable (ADR-0002).
  */
 export const proposals = sqliteTable("proposals", {
   candidateId: text("candidate_id").primaryKey(),
   mode: text("mode").notNull(),
   kind: text("kind").notNull(),
-  /** Deterministic target entity id the candidate applies to. */
+  /**
+   * Target entity id: the planned (base, content-derived) id while pending;
+   * once applied, the actually minted id (task/decision may carry a `-N`
+   * disambiguation suffix, #435).
+   */
   entityId: text("entity_id").notNull(),
   /** Short human-readable summary for listings. */
   summary: text("summary").notNull().default(""),

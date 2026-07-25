@@ -161,7 +161,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
 
   // --- propose.apply: persist approved candidates as events (idempotent). ---
   // Write tool (HITL): turns approved candidates into domain events. Re-applying
-  // the same candidate is a no-op (content-derived ids), so it is idempotent.
+  // the same candidateId is a no-op (proposals-ledger round-trip dedupe, #435).
   server.registerTool(
     "propose.apply",
     {
@@ -169,7 +169,8 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Persist approved candidates (from propose.generate) as domain events. " +
         "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: candidates whose entity already exists are skipped. " +
+        "Idempotent per candidateId: an already-applied candidate is skipped; " +
+        "distinct candidates with equal titles create distinct tasks/decisions. " +
         "Optionally `publish: true` also pushes applied task candidates to the " +
         "single external home in one motion (ADR-0036; best-effort per task).",
       inputSchema: {
@@ -338,7 +339,8 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
 
   // --- task.create: direct HITL task creation (Issue #12 追補 D2). ---
   // The human's own "add task" path (vs. model-suggested propose.*). Appends a
-  // TaskProposed event → tasks projection. HITL, idempotent on content.
+  // TaskProposed event → tasks projection. HITL; a live duplicate is reported
+  // `existing` (with id/state/updatedAt), a terminal one creates anew (#435).
   server.registerTool(
     "task.create",
     {
@@ -346,7 +348,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Create a task directly (appends TaskProposed → tasks projection). " +
         "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: re-creating the same task (title + provenance) is a no-op. " +
+        "A live duplicate (same title + provenance, state proposed/open/in_progress) " +
+        "is a no-op: status `existing` plus the duplicate's id/state/updatedAt, so " +
+        "you can offer reopen-vs-create. A completed/dropped duplicate does NOT " +
+        "block: a new task is created (recurring titles are allowed). " +
         "Optional dueDate / priority scheduling fields (ADR-0028).",
       inputSchema: {
         title: z.string().min(1).describe("Task title."),
@@ -523,7 +528,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
   // --- decision.record: direct HITL decision recording (Issue #88). ---
   // The decision counterpart to task.create: the human's own "log this
   // decision" path. Appends DecisionRecorded → decisions projection. HITL,
-  // idempotent on content (title + provenance).
+  // idempotent on content (title + rationale + provenance, #435).
   server.registerTool(
     "decision.record",
     {
@@ -531,7 +536,8 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       description:
         "Record a decision directly (appends DecisionRecorded → decisions projection). " +
         "Write tool: hosts must gate behind human approval — no auto-apply (ADR-0004). " +
-        "Idempotent: re-recording the same decision (title + provenance) is a no-op.",
+        "Idempotent: re-recording the same decision (title + rationale + provenance) " +
+        "is a no-op; a different rationale records a distinct decision.",
       inputSchema: {
         title: z.string().min(1).describe("Decision title."),
         rationale: z.string().optional().describe("Why this decision was made."),

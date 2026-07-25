@@ -88,6 +88,33 @@ function markProposalApplied(sqlite: Database, entityId: string, ts: string): vo
 }
 
 /**
+ * Ledger flip for task/decision entity events (#435). These entities' ids are
+ * minted at apply time (possibly `-N`-suffixed, src/propose/identity.ts), so
+ * the ledger row's planned `entity_id` may not match the event's id — when the
+ * event carries its `candidateId`, flip exactly that row and record the
+ * actually minted entity id onto it. Events without a candidateId (direct
+ * task.create / inbox.triage writes, pre-#435 events) fall back to the legacy
+ * entity-id match. Idempotent either way (`WHERE state = 'pending'`).
+ */
+function markProposalAppliedFor(
+  sqlite: Database,
+  candidateId: string | undefined,
+  entityId: string,
+  ts: string,
+): void {
+  if (candidateId === undefined) {
+    markProposalApplied(sqlite, entityId, ts);
+    return;
+  }
+  sqlite
+    .query(
+      `UPDATE proposals SET state = 'applied', entity_id = $eid, updated_at = $ts
+       WHERE candidate_id = $cid AND state = 'pending'`,
+    )
+    .run({ $eid: entityId, $ts: ts, $cid: candidateId });
+}
+
+/**
  * Ensure a `persons` row exists (ADR-0022). Inserts with a zero identity count
  * (the caller adjusts it as identities attach), preserving an existing row's
  * created_at and only advancing updated_at / a non-empty display name.
@@ -292,7 +319,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
           relation: "derived_from",
         });
       }
-      markProposalApplied(sqlite, event.taskId, event.recordedAt);
+      markProposalAppliedFor(sqlite, event.candidateId, event.taskId, event.recordedAt);
       return;
     }
     case "TaskApplied": {
@@ -391,7 +418,7 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
           relation: "derived_from",
         });
       }
-      markProposalApplied(sqlite, event.decisionId, event.recordedAt);
+      markProposalAppliedFor(sqlite, event.candidateId, event.decisionId, event.recordedAt);
       return;
     }
     case "ReplyDraftProposed": {
