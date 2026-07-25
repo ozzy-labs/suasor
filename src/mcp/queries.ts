@@ -1435,6 +1435,7 @@ export interface BriefTruncation {
   decisions: boolean;
   inbox: boolean;
   demand: boolean;
+  commitments: boolean;
 }
 
 /** A period bundle for host summarization (ADR-0017). */
@@ -1455,6 +1456,14 @@ export interface Brief {
    * / github-read) rows are excluded.
    */
   demand: DemandRecord[];
+  /**
+   * Open commitments (Issue #513) — not time-filtered, exactly like `inbox`:
+   * an outstanding promise is outstanding regardless of the window. Ordered by
+   * urgency (overdue first, Issue #509), so a truncated section still leads
+   * with the ones worth chasing. Previously omitted, which meant a host reading
+   * the raw bundle silently dropped "what I owe / am owed" from its summary.
+   */
+  commitments: CommitmentRecord[];
   /**
    * Per-section truncation flags (ADR-0007): `true` where that section was cut
    * off at `limit`. The bundle otherwise looks identical whether a section is
@@ -1514,6 +1523,11 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
   const inbox = listWithTruncation(effLimit, (probeLimit) =>
     listInbox(sqlite, { state: "open", limit: probeLimit }),
   );
+  // Open commitments — non-windowed, like inbox: a promise you have not kept
+  // does not stop mattering because it was made outside the window.
+  const commitments = listWithTruncation(effLimit, (probeLimit) =>
+    listCommitments(sqlite, { state: "open", limit: probeLimit }),
+  );
   // Outstanding (un-acked) demand only — a seen mention no longer clutters the
   // brief (ADR-0041). Neutral: Slack @mention/DM + github notifications.
   const demand = listWithTruncation(effLimit, (probeLimit) =>
@@ -1530,12 +1544,14 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
     decisions: decisions.rows,
     inbox: inbox.rows,
     demand: demand.rows,
+    commitments: commitments.rows,
     truncated: {
       sources: sources.truncated,
       tasks: tasks.truncated,
       decisions: decisions.truncated,
       inbox: inbox.truncated,
       demand: demand.truncated,
+      commitments: commitments.truncated,
     },
     warnings: warnings ?? [],
   };

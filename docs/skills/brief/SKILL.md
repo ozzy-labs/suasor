@@ -56,7 +56,7 @@ mcp_tools_write: []
 
 **focus=summary**（既定）
 
-1. `brief`（`since` / `until`）で期間バンドルを取る（要約文は生成しない＝[ADR-0006](../../adr/0006-ml-delegation.md) の ML 委譲。組み立てはホスト LLM）
+1. `brief`（`since` / `until`）で期間バンドルを取る（要約文は生成しない＝[ADR-0006](../../adr/0006-ml-delegation.md) の ML 委譲。組み立てはホスト LLM）。**open commitment もバンドルに入る**（非時間軸・緊急度順・[#513](https://github.com/ozzy-labs/suasor/issues/513)）ので、`commitment.list` を別途叩く必要はない
 2. 補強が要れば `priority.list`（いま何が優先か）/ `task.list`（`updatedAfter`）/ `decision.list`（`recordedAfter`）/ `inbox.list`（`state=open`）/ `demand.list`（`observedAfter`）/ `search`（トピック関連 context）
 
 **focus=review**（棚卸し）

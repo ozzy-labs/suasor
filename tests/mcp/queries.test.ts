@@ -814,6 +814,7 @@ describe("buildBrief (ADR-0017)", () => {
       decisions: false,
       inbox: false,
       demand: false,
+      commitments: false,
     });
   });
 
@@ -826,6 +827,7 @@ describe("buildBrief (ADR-0017)", () => {
       decisions: false,
       inbox: false,
       demand: false,
+      commitments: false,
     });
   });
 
@@ -1026,6 +1028,49 @@ describe("listSourceHistory", () => {
     const limited = listSourceHistory(sqlite(), "gh:2", { limit: 1 });
     expect(limited).toHaveLength(1);
     expect(limited[0]?.body).toBe("second");
+  });
+});
+
+describe("buildBrief commitments section (Issue #513)", () => {
+  test("includes open commitments and excludes resolved / dismissed ones", () => {
+    const db = sqlite();
+    const open = (id: string, title: string, due: string | null) =>
+      store.record({
+        type: "CommitmentOpened",
+        commitmentId: id,
+        title,
+        direction: "owed_to_me",
+        dueDate: due,
+        person: null,
+        sourceExternalIds: [],
+      });
+    open("c-open", "still owed", "2026-08-01T00:00:00.000Z");
+    open("c-done", "delivered", null);
+    store.record({ type: "CommitmentResolved", commitmentId: "c-done" });
+
+    const brief = buildBrief(db, {});
+    // Non-windowed, like inbox: an outstanding promise does not stop mattering
+    // because it was made outside the window.
+    expect(brief.commitments.map((c) => c.id)).toEqual(["c-open"]);
+    expect(brief.truncated.commitments).toBe(false);
+  });
+
+  test("flags truncation so a cut section is not read as complete", () => {
+    const db = sqlite();
+    for (let i = 0; i < 3; i++) {
+      store.record({
+        type: "CommitmentOpened",
+        commitmentId: `c${i}`,
+        title: `promise ${i}`,
+        direction: "owed_by_me",
+        dueDate: null,
+        person: null,
+        sourceExternalIds: [],
+      });
+    }
+    const brief = buildBrief(db, { limit: 2 });
+    expect(brief.commitments).toHaveLength(2);
+    expect(brief.truncated.commitments).toBe(true);
   });
 });
 

@@ -185,6 +185,7 @@ describe("suasor brief", () => {
       decisions: false,
       inbox: false,
       demand: false,
+      commitments: false,
     });
   });
 

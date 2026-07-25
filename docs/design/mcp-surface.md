@@ -224,6 +224,8 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 }
 ```
 
+`commitments`（open のみ・**非時間軸**＝inbox と同じ扱い。[#513](https://github.com/ozzy-labs/suasor/issues/513)）は、期限を過ぎた約束が窓の外で結ばれたからといって重要でなくなるわけではないため時間フィルタを掛けない。並びは緊急度順（[#509](https://github.com/ozzy-labs/suasor/issues/509)）なので、打切られても催促すべき行が先頭に残る。**以前は bundle から丸ごと欠落しており、生の `brief` を読む host は「誰に何を負っているか」を静かに落としていた。**
+
 `truncated`（section ごとの打切りフラグ・[ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer"）は、各 section が `limit`（既定 50・DEFAULT_LIST_LIMIT）で打ち切られたかを示す。list 系 tool の `truncated`（boolean）と同じ規律を、複数 section を束ねる brief では section 単位で返す（各 section を `limit + 1` で probe し、超過していれば切り詰めて `true`）。`true` の section は多忙な日にバンドルが黙って過小申告している合図なので、host は window（`since` / `until`）を狭めるか、対応する list tool（`source.list` / `task.list` / `decision.list` / `inbox.list` / `demand.list`）でページングする。後方互換の additive field。
 
 `warnings`（完全性シグナル・Issue #189）は、**未設定が理由で空になった category** を区別するための注記。空 section が「本当に何も無い」のか「source 未接続だから空」なのかを host が判別できる。`buildBrief` 自体は純粋（config を知らない）で、呼び出し側（CLI / MCP server）が config から導出して渡す（`deriveBriefWarnings`）。設定済みなら空配列。

@@ -300,6 +300,7 @@ describe("MCP read surface", () => {
         decisions: boolean;
         inbox: boolean;
         demand: boolean;
+        commitments: boolean;
       };
     };
     expect(brief.sources).toHaveLength(2);
@@ -309,6 +310,7 @@ describe("MCP read surface", () => {
       decisions: false,
       inbox: false,
       demand: false,
+      commitments: false,
     });
   });
 
