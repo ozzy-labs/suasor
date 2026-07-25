@@ -11,6 +11,26 @@ suasor store info                   # store-size snapshot
 suasor store info --breakdown       # aggregate the event log by type (for rebuild/replay debugging)
 ```
 
+## Every command fails right after an upgrade (`invalid connector configuration`)
+
+A config that a **breaking release** removed keys from fails at load, so *every* verb that reads config stops with the same error until the config is migrated. This is deliberate — a silently-ignored key would sync the wrong scope ([ADR-0007](../adr/0007-connector-contract.md) "no silent wrong answer"). The error text carries the migration.
+
+**Slack, upgrading from `0.1.x` to `0.2.0`** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md)): the multi-workspace shape is gone.
+
+```text
+error: invalid connector configuration
+  connectors.slack: remove 'workspaces' — the workspace-less shape is a single flat
+  [connectors.slack] with 'channels' … and one token pool …
+```
+
+Migrate in three mechanical steps (details + examples in the [connectors guide](connectors.md#slack)):
+
+1. **config** — merge every `[connectors.slack.workspaces.<alias>].channels` into the one flat `[connectors.slack] channels` list (channel ids are globally unique, so no grouping is needed). Drop `workspaces` / `team` / `self_user_id`; move per-alias `since` into `[connectors.slack.channel_since]`, and collect your own user ids into `self_user_ids = ["U…"]`.
+2. **tokens** — store every workspace's token as **one pool**, replacing the per-alias secrets: `suasor slack auth set` (comma-separated for multiple) or the env override `SUASOR_CONNECTOR_SLACK_TOKENS`. The old `SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN` overrides are no longer read.
+3. **verify** — `suasor slack auth test` (checks every pool token) then `suasor doctor`.
+
+Cursors carry over automatically (the per-alias map is flattened with a max-ts merge), so the next sync resumes rather than cold-starting. Messages ingested before the upgrade keep their old `slack:<team>:<channel>:<ts>` ids and stay searchable as a separate lineage; the optional cleanup is in the [connectors guide](connectors.md#slack).
+
 ## Reading the diagnostics
 
 ### `suasor doctor`

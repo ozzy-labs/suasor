@@ -42,6 +42,12 @@
 - **ドキュメント先行**: `docs/requirements/` → `docs/adr/` → `docs/design/` → ユーザー doc を**実装より先に**確定する
 - **全変更を Issue + PR**（GitHub Flow / **squash merge のみ** / main 直 push 禁止 = ruleset で強制）
 - ブランチ命名 `<type>/<short-description>`、Conventional Commits、PR タイトルもコミット規約に合わせる
+- **squash commit の本文は空**（repo 設定 `squash_merge_commit_message=BLANK` / title は PR タイトル）。PR 本文をそのまま commit 本文にすると、行またぎの括弧などで release-please の Conventional Commits パーサが commit ごと取りこぼし、changelog / version bump から脱落する。**破壊的変更やリリースノートに残したい footer は、マージ時に明示的に渡す**:
+
+  ```bash
+  gh pr merge <N> --squash --body "BREAKING CHANGE: <移行手順を 1 段落で>"
+  ```
+
 - 実装は `docs/design/` の仕様に従う。仕様にない判断は ADR/Issue で先に決める
 
 ## Tech Stack
