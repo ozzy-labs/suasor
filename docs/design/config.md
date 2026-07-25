@@ -204,3 +204,4 @@ box = 168                    # connector 個別の上書き（時間）
 - Suasor は自分をスケジュールしない（[ADR-0027](../adr/0027-bulk-sync-orchestration.md)）ので、cadence を**知り得ない**。この設定は「どれだけ経ったら遅れているとみなすか」を明示するためのもの
 - 判定結果は `suasor doctor` の `sync.freshness` チェック、`brief` / `digest` の `sync_stale` warning、MCP `sync.status` tool の 3 経路で surface する（[運用ガイド](../guide/scheduling.md)）
 - 既定を日次にしているのは、1 回の取りこぼし（スリープ中の cron 等）で警告を出すと読まれない警告になるため
+- `perConnectorIntervalHours` のキーは**登録済み connector 名でなければ fail-fast**（`ConfigError`）。record は任意キーを受けるため、typo（`gihub = 168`）を許すと本物の connector が既定閾値のまま放置され、「変えたつもりの閾値」で警告が出る／出ないという silent wrong answer になる（`[connectors.*]` の strict 検証と同じ規律）

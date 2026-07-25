@@ -327,4 +327,42 @@ describe("sidecar remote-egress gate (Issue #436, ADR-0003)", () => {
     });
     expect(cfg.export.composition.backend).toBe("disabled");
   });
+
+  test("rejects a sync cadence override naming an unknown connector (#442)", async () => {
+    try {
+      await loadConfig({
+        env: {},
+        configDir: "/cfg",
+        // A typo here would otherwise leave `github` on the default threshold
+        // while the operator believes they raised it — the exact silent-wrong
+        // answer the freshness surface exists to prevent.
+        fileLayer: { sync: { perConnectorIntervalHours: { gihub: 168 } } },
+      });
+      throw new Error("expected ConfigError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      const err = e as ConfigError;
+      expect(err.issues.some((i) => i.startsWith("sync.perConnectorIntervalHours.gihub"))).toBe(
+        true,
+      );
+      // The message names the valid keys so the fix is mechanical.
+      expect(err.issues.some((i) => i.includes("github"))).toBe(true);
+    }
+  });
+
+  test("accepts a sync cadence override for a registered connector (#442)", async () => {
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: { sync: { perConnectorIntervalHours: { box: 168 } } },
+    });
+    expect(cfg.sync.perConnectorIntervalHours).toEqual({ box: 168 });
+  });
+
+  test("defaults leave the cadence overrides empty (#442)", async () => {
+    const cfg = await loadConfig({ env: {}, configDir: "/cfg" });
+    expect(cfg.sync.perConnectorIntervalHours).toEqual({});
+    expect(cfg.sync.expectedIntervalHours).toBe(24);
+    expect(cfg.sync.safetyFactor).toBe(2);
+  });
 });
