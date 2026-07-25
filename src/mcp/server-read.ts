@@ -231,23 +231,38 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       title: "List sources",
       description:
         "List ingested sources newest-first (by observed_at), optionally filtered " +
-        "by source_type and an observed_after/observed_before time window. Returns " +
+        "by source_type, an observed_after/observed_before window, and — for " +
+        "calendar events — a starts_after/starts_before window over the event's " +
+        "own start time (ADR-0044). Returns " +
         "`truncated: true` when more rows match than `limit` returned (ADR-0007 — " +
         "page with a tighter window rather than trusting a full page is complete).",
       inputSchema: {
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
+        startsAfter: isoDateTime
+          .optional()
+          .describe(
+            "Calendar events only: inclusive lower bound on the event's own start time. " +
+              "Use this for 'next week's meetings' — an observed_at window answers a " +
+              "different question (recently *edited* events).",
+          ),
+        startsBefore: isoDateTime
+          .optional()
+          .describe("Calendar events only: exclusive upper bound on the event's own start time."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ sourceType, observedAfter, observedBefore, limit }) => {
+    async ({ sourceType, observedAfter, observedBefore, startsAfter, startsBefore, limit }) => {
       const effLimit = limit ?? DEFAULT_LIST_LIMIT;
       const { rows: sources, truncated } = listWithTruncation(effLimit, (probeLimit) =>
         listSources(sqlite, {
           sourceType,
           observed: { after: observedAfter, before: observedBefore },
+          ...(startsAfter !== undefined || startsBefore !== undefined
+            ? { startsBetween: { after: startsAfter, before: startsBefore } }
+            : {}),
           limit: probeLimit,
         }),
       );

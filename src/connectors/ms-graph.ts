@@ -95,7 +95,14 @@ interface GraphItem {
   name?: string;
   lastModifiedDateTime?: string;
   receivedDateTime?: string;
-  start?: { dateTime?: string };
+  start?: { dateTime?: string; timeZone?: string };
+  end?: { dateTime?: string; timeZone?: string };
+  isAllDay?: boolean;
+  isOrganizer?: boolean;
+  responseStatus?: { response?: string };
+  attendees?: Array<{ type?: string; emailAddress?: { address?: string } }>;
+  hasAttachments?: boolean;
+  seriesMasterId?: string;
   createdDateTime?: string;
   /** DriveItem byte size (drives the extraction size guard, ADR-0024 §5). */
   size?: number;
@@ -120,6 +127,23 @@ interface GraphPage {
   "@odata.nextLink"?: string;
 }
 
+/** Milliseconds in a day — the calendar window is expressed in days. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Rolling calendar ingest window (ADR-0044 決定 1), matching google's: past for
+ * follow-up, future for preparation.
+ */
+export const CALENDAR_WINDOW_PAST_DAYS = 30;
+export const CALENDAR_WINDOW_FUTURE_DAYS = 90;
+
+function calendarWindowStart(): string {
+  return new Date(Date.now() - CALENDAR_WINDOW_PAST_DAYS * DAY_MS).toISOString();
+}
+function calendarWindowEnd(): string {
+  return new Date(Date.now() + CALENDAR_WINDOW_FUTURE_DAYS * DAY_MS).toISOString();
+}
+
 /**
  * Map a Graph resource family to its (`source_type`, list path) pair. The path
  * is relative to the Graph base; `{user}` is substituted from config.
@@ -134,7 +158,15 @@ const RESOURCE_SPEC: Record<
   },
   calendar: {
     sourceType: "ms365_calendar",
-    path: (u) => `/users/${u}/events?$top=50&$select=id,subject,bodyPreview,start`,
+    // `calendarView` — NOT `/events` (ADR-0044 決定 1). `/events` returns
+    // recurring *series masters*, so a weekly standup arrived as one event
+    // starting years ago; calendarView expands occurrences over a window, which
+    // is what google's `singleEvents: true` already did.
+    path: (u) =>
+      `/users/${u}/calendarView?startDateTime=${calendarWindowStart()}` +
+      `&endDateTime=${calendarWindowEnd()}&$top=50` +
+      "&$select=id,subject,bodyPreview,body,start,end,isAllDay,isOrganizer,responseStatus," +
+      "attendees,hasAttachments,seriesMasterId,lastModifiedDateTime",
   },
   files: {
     sourceType: "ms365_file",
@@ -172,10 +204,12 @@ function toRecord(
   const title = item.subject ?? item.name ?? "";
   const detail = item.body?.content ?? item.bodyPreview ?? "";
   const body = title && detail ? `${title}\n\n${detail}` : title || detail;
+  // Modification time, never the start time: conflating them is what made a
+  // "next week's meetings" filter actually select recently-*edited* events
+  // (ADR-0044 決定 1). Event times live in `meta.start` / `meta.end`.
   const observedAt =
     item.lastModifiedDateTime ??
     item.receivedDateTime ??
-    item.start?.dateTime ??
     item.createdDateTime ??
     new Date(0).toISOString();
 
@@ -198,10 +232,51 @@ function toRecord(
     sourceType: spec.sourceType,
     body,
     observedAt,
-    meta: { resource, id: item.id },
+    meta: {
+      resource,
+      id: item.id,
+      ...(resource === "calendar" ? calendarMeta(item) : {}),
+    },
     ...(fingerprint ? { fingerprint } : {}),
     ...(extractable !== undefined ? { extractable } : {}),
   };
+}
+
+/**
+ * Connector-neutral calendar facts for a Graph event (ADR-0044 決定 1) — the
+ * same key names google emits, so the demand derivation needs one SQL branch
+ * rather than one per connector.
+ */
+function calendarMeta(item: GraphItem): Record<string, unknown> {
+  const self = item.attendees?.find((a) => a.type === "required" || a.type === "optional");
+  const response = item.responseStatus?.response ?? "";
+  return {
+    start: normalizeInstant(item.start?.dateTime),
+    end: normalizeInstant(item.end?.dateTime),
+    allDay: item.isAllDay === true,
+    role:
+      item.isOrganizer === true
+        ? "organizer"
+        : self === undefined
+          ? "none"
+          : self.type === "optional"
+            ? "optional"
+            : "required",
+    response: ["accepted", "declined", "tentative"].includes(response) ? response : "none",
+    // Count only — never the addresses (ADR-0003 content minimization).
+    attendees: item.attendees?.length ?? 0,
+    hasAgenda: (item.body?.content ?? item.bodyPreview ?? "").trim().length > 0,
+    hasAttachments: item.hasAttachments === true,
+    recurring: item.seriesMasterId != null,
+  };
+}
+
+/** Graph returns local-time strings without an offset; treat them as UTC instants. */
+function normalizeInstant(value: string | undefined): string {
+  if (value === undefined || value === "") return new Date(0).toISOString();
+  const withZone = /[Zz]|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`;
+  const parsed = new Date(withZone);
+  return Number.isNaN(parsed.getTime()) ? new Date(0).toISOString() : parsed.toISOString();
 }
 
 /**

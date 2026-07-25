@@ -128,6 +128,15 @@ function toSourceRecord(row: SourceRow): SourceRecord {
 export interface ListSourcesOptions {
   /** Restrict to a single `source_type` (e.g. "github_issue"). */
   sourceType?: string;
+  /**
+   * Window over a calendar event's **own start time** (`meta.start`, ADR-0044
+   * 決定 2), not over `observed_at`. Additive because the alternative — asking
+   * for "next week's meetings" with an observed-at window — silently answers a
+   * different question: it selects recently *edited* events, so a meeting
+   * booked three months ago for tomorrow is missing while one renamed
+   * yesterday is present. Rows without `meta.start` are excluded.
+   */
+  startsBetween?: { after?: string; before?: string };
   /** Window over `observed_at`. */
   observed?: TimeRange;
   /** Max rows (default {@link DEFAULT_LIST_LIMIT}). */
@@ -143,6 +152,18 @@ export function listSources(sqlite: Database, options: ListSourcesOptions = {}):
     params.push(options.sourceType);
   }
   pushTimeRange(clauses, params, "observed_at", options.observed);
+  if (options.startsBetween !== undefined) {
+    const { after, before } = options.startsBetween;
+    clauses.push("json_extract(meta, '$.start') IS NOT NULL");
+    if (after !== undefined) {
+      clauses.push("json_extract(meta, '$.start') >= ?");
+      params.push(after);
+    }
+    if (before !== undefined) {
+      clauses.push("json_extract(meta, '$.start') < ?");
+      params.push(before);
+    }
+  }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(options.limit ?? DEFAULT_LIST_LIMIT);
   const rows = sqlite
