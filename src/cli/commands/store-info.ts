@@ -62,7 +62,9 @@ export class StoreInfoCommand extends Command {
 
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
-      const info = storeInfo(store.connection.sqlite, dbPath);
+      const info = storeInfo(store.connection.sqlite, dbPath, {
+        embeddingDim: config.embedding.dim,
+      });
       const breakdown = this.breakdown ? eventTypeBreakdown(store.connection.sqlite) : undefined;
       if (this.json) {
         const payload = breakdown === undefined ? info : { ...info, eventBreakdown: breakdown };
@@ -83,6 +85,44 @@ export class StoreInfoCommand extends Command {
       const fts = info.ftsRows === null ? "(no FTS table)" : String(info.ftsRows);
       this.context.stdout.write(`  vec0:       ${vectors} vector(s), meta rows: ${meta}\n`);
       this.context.stdout.write(`  fts:        ${fts} row(s)\n`);
+
+      // Where the bodies actually are (ADR-0047 決定 1). Without this split, a
+      // large store is unattributable: you cannot tell whether it is mostly
+      // history, mostly index, or mostly vectors — so you cannot tell what a
+      // retention policy would reclaim.
+      const b = info.bodyStorage;
+      const measured =
+        b.eventPayloadBytes +
+        b.sourceBodyBytes +
+        (b.ftsIndexBytes ?? 0) +
+        (b.vectorBytesEstimate ?? 0);
+      const share = (n: number) => (measured > 0 ? ` (${Math.round((n / measured) * 100)}%)` : "");
+      this.context.stdout.write("  body storage:\n");
+      this.context.stdout.write(
+        `    events (all versions)  ${formatBytes(b.eventPayloadBytes)}${share(b.eventPayloadBytes)}\n`,
+      );
+      this.context.stdout.write(
+        `    sources (current)      ${formatBytes(b.sourceBodyBytes)}${share(b.sourceBodyBytes)}\n`,
+      );
+      this.context.stdout.write(
+        `    fts index              ${
+          b.ftsIndexBytes === null
+            ? "(unmeasurable)"
+            : formatBytes(b.ftsIndexBytes) + share(b.ftsIndexBytes)
+        }\n`,
+      );
+      this.context.stdout.write(
+        `    vectors (est.)         ${
+          b.vectorBytesEstimate === null
+            ? "(none)"
+            : formatBytes(b.vectorBytesEstimate) + share(b.vectorBytesEstimate)
+        }\n`,
+      );
+      if (info.bytesPerDay !== null) {
+        this.context.stdout.write(
+          `  growth:     ~${formatBytes(info.bytesPerDay)}/day (average)\n`,
+        );
+      }
       if (breakdown !== undefined) {
         this.context.stdout.write("  events by type:\n");
         if (breakdown.length === 0) {

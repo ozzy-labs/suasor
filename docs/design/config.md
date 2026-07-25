@@ -19,6 +19,7 @@ dbPath = "/path/to/suasor.db"
 ```
 
 - `dbPath` 既定は `null` → loader が `<configDir>/suasor.db` に解決（`SUASOR_CONFIG_DIR` に追従）
+- `sizeWarnBytes` 既定は `null`（警告なし）。設定すると `doctor` が現在サイズ・平均成長率・**上限到達までの日数**を出し、30 日以内なら warn する（[#498](https://github.com/ozzy-labs/suasor/issues/498) / [ADR-0047](../adr/0047-storage-lifecycle.md)）。retention は opt-in・既定 OFF なので、**判断のタイミングを逃さないための可視化**が先に立つ
 - encryption 等の追加項目は将来 Issue で拡張
 
 ### `[embedding]`（確定）

@@ -25,7 +25,7 @@ suasor config show [--effective] [--json]  # 実効 config（env > file > defaul
 suasor config edit [--editor <cmd>]    # $EDITOR で config.toml を開き、保存後に schema 検証。不正なら差し戻し（rollback）
 suasor validate-config [--fix]         # config.toml の構造検証（必須欠落 / invalid / dangling / typo）。--fix で安全な除去のみ自動修正
 suasor export backup [--out <path>] [--format sqlite|tgz]  # store dir の整合バックアップ（VACUUM INTO・無副作用）。既定 sqlite 単一ファイル
-suasor store info [--breakdown] [--json]  # store 規模（event 数 / projection 行数 / DB ファイルサイズ / vec0 件数 / FTS 規模）。--breakdown で event type 別ヒストグラム
+suasor store info [--breakdown] [--json]  # store 規模（event 数 / projection 行数 / DB ファイルサイズ / vec0 件数 / FTS 規模 / 本文の保存先内訳 / 平均成長率）。--breakdown で event type 別ヒストグラム
 suasor extraction status [--json]      # 文書抽出カバレッジ（extracted / stale / pending）+ backend / version
 suasor extraction list-pending [--limit N] [--json]  # (re)抽出待ち source の drilldown（pending / stale）
 suasor extraction serve [--host H] [--port N] [--command PATH]  # 同梱の抽出サイドカー（markitdown CLI を per-request spawn する薄い HTTP shim・POST /extract）
@@ -135,7 +135,7 @@ suasor --version                       # バージョン出力
 | `export backup` | `--out <path>` | DB と同ディレクトリの timestamped 名 | バックアップ出力先。既存ファイルがあれば error（上書き拒否） |
 | `export backup` | `--format sqlite\|tgz` | sqlite | `sqlite`＝自己完結の単一 `.db`（VACUUM INTO スナップショット・正本）/ `tgz`＝同スナップショットの gzip tar（アーカイブ向け） |
 | `store info` | `--breakdown` | false | event ログを type 別に集計（`COUNT(*) GROUP BY type`）して追加表示。`--json` 併用時は `eventBreakdown`（`{type, count}[]`）を追加 |
-| `store info` | `--json` | false | 人間可読レポートの代わりに `StoreInfo`（dbPath / fileSizeBytes / events / projections / vectors / embeddingsMeta / ftsRows）を JSON で出力 |
+| `store info` | `--json` | false | 人間可読レポートの代わりに `StoreInfo`（dbPath / fileSizeBytes / events / projections / vectors / embeddingsMeta / ftsRows / **bodyStorage**（eventPayloadBytes / sourceBodyBytes / ftsIndexBytes / vectorBytesEstimate）/ **bytesPerDay**）を JSON で出力 |
 | `extraction status` | `--json` | false | 人間可読テーブルの代わりに `ExtractionStatus`（backend / version / totals）を JSON で出力 |
 | `extraction list-pending` | `--limit N` | 50 | 列挙する source 数の上限（正の整数。非正値は error） |
 | `extraction list-pending` | `--json` | false | `PendingExtraction[]`（`{externalId, name, reason}`）を JSON で出力 |

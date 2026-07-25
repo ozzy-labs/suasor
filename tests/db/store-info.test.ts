@@ -133,3 +133,107 @@ describe("formatBytes", () => {
     expect(formatBytes(1024 * 1024 * 1024)).toBe("1.0 GB");
   });
 });
+
+describe("storeInfo body storage breakdown (#498 / ADR-0047)", () => {
+  test("attributes bytes to events, sources and the FTS index", () => {
+    const dbPath = join(dir, "suasor.db");
+    const store = Store.open({ path: dbPath, embeddingDim: 3 });
+    try {
+      const body = "x".repeat(5000);
+      seed(store, "gh:1", body);
+
+      const info = storeInfo(store.connection.sqlite, dbPath, { embeddingDim: 3 });
+      const b = info.bodyStorage;
+      // The same body is held twice over: once in the event payload (every
+      // version, ADR-0002) and once in the current-row projection.
+      expect(b.sourceBodyBytes).toBeGreaterThanOrEqual(body.length);
+      expect(b.eventPayloadBytes).toBeGreaterThanOrEqual(body.length);
+      // The trigram index is a third copy, and typically the largest.
+      expect(b.ftsIndexBytes).not.toBeNull();
+      expect(b.ftsIndexBytes ?? 0).toBeGreaterThan(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a body updated in place adds a version to events but not to sources", () => {
+    const dbPath = join(dir, "suasor.db");
+    const store = Store.open({ path: dbPath, embeddingDim: 3 });
+    try {
+      seed(store, "gh:1", "y".repeat(4000));
+      const afterFirst = storeInfo(store.connection.sqlite, dbPath).bodyStorage;
+      store.record({
+        type: "SourceBodyUpdated",
+        externalId: "gh:1",
+        body: "z".repeat(4000),
+        observedAt: "2026-06-15T00:00:00.000Z",
+        fingerprint: "gh:1-v2",
+      });
+      const afterSecond = storeInfo(store.connection.sqlite, dbPath).bodyStorage;
+
+      // This asymmetry is the whole reason the breakdown exists: history grows
+      // with every revision while the projection stays one body wide, so a big
+      // store can be mostly versions nobody would miss.
+      expect(afterSecond.eventPayloadBytes).toBeGreaterThan(afterFirst.eventPayloadBytes);
+      expect(afterSecond.sourceBodyBytes).toBeCloseTo(afterFirst.sourceBodyBytes, -2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("estimates vector bytes only when a dim is supplied", () => {
+    const dbPath = join(dir, "suasor.db");
+    const store = Store.open({ path: dbPath, embeddingDim: 3 });
+    try {
+      seed(store, "gh:1", "alpha");
+      expect(storeInfo(store.connection.sqlite, dbPath).bodyStorage.vectorBytesEstimate).toBeNull();
+      // 0 vectors × 3 dims × 4 bytes = 0 — measurable, just empty.
+      expect(
+        storeInfo(store.connection.sqlite, dbPath, { embeddingDim: 3 }).bodyStorage
+          .vectorBytesEstimate,
+      ).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("growth is null until the log spans at least a day", () => {
+    const dbPath = join(dir, "suasor.db");
+    const store = Store.open({ path: dbPath, embeddingDim: 3 });
+    try {
+      seed(store, "gh:1", "alpha");
+      // Every event was just recorded, so there is no slope to report yet —
+      // dividing by ~0 days would print a meaningless spike.
+      expect(storeInfo(store.connection.sqlite, dbPath).bytesPerDay).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("growth is a real rate once the log has history", () => {
+    const dbPath = join(dir, "suasor.db");
+    const store = Store.open({ path: dbPath, embeddingDim: 3 });
+    try {
+      // Back-date the first event by 10 days via the injectable store clock.
+      const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      store.record(
+        {
+          type: "SourceObserved",
+          externalId: "gh:old",
+          sourceType: "github_issue",
+          body: "old",
+          observedAt: "2026-06-01T00:00:00.000Z",
+          fingerprint: "gh:old",
+          meta: {},
+        },
+        tenDaysAgo,
+      );
+      seed(store, "gh:1", "alpha");
+      const rate = storeInfo(store.connection.sqlite, dbPath).bytesPerDay;
+      expect(rate).not.toBeNull();
+      expect(rate ?? 0).toBeGreaterThan(0);
+    } finally {
+      store.close();
+    }
+  });
+});
