@@ -24,7 +24,7 @@
  */
 import type { Database } from "bun:sqlite";
 import { DEFAULT_VEC_TABLE, VEC_META_TABLE } from "../db/connection.ts";
-import { readAllEvents } from "../events/store.ts";
+import { streamAllEvents } from "../events/store.ts";
 import { applyEvents, rebuildSourcesFts } from "./reducer.ts";
 
 /** Projection tables cleared before replay (the event store is untouched). */
@@ -112,8 +112,8 @@ export interface RebuildOptions {
  * projections are rolled back.
  */
 export function rebuildProjections(sqlite: Database, options: RebuildOptions = {}): RebuildResult {
-  const events = readAllEvents(sqlite);
   let clearedEmbeddings = 0;
+  let replayed = 0;
   const tx = sqlite.transaction(() => {
     clearedEmbeddings = truncateProjections(sqlite);
     // Defer FTS during replay: a source updated K times would otherwise be
@@ -121,9 +121,21 @@ export function rebuildProjections(sqlite: Database, options: RebuildOptions = {
     // then we rebuild the FTS index once from the final state — O(sources) not
     // O(events). truncateProjections already emptied sources_fts, so the bulk
     // insert below reproduces exactly what per-event syncing would have left.
-    applyEvents(sqlite, events, options.onProgress, { deferFts: true });
+    // Streamed, not materialized (ADR-0047 決定 4): the store big enough to
+    // need a rebuild is exactly the one that used to OOM loading its own log.
+    // The reducer already takes an Iterable, so this is constant-memory replay
+    // with identical semantics — the count comes from the stream itself.
+    applyEvents(
+      sqlite,
+      streamAllEvents(sqlite),
+      () => {
+        replayed += 1;
+        options.onProgress?.();
+      },
+      { deferFts: true },
+    );
     rebuildSourcesFts(sqlite);
   });
   tx();
-  return { events: events.length, clearedEmbeddings };
+  return { events: replayed, clearedEmbeddings };
 }

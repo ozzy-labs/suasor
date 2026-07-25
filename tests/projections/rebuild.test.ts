@@ -402,3 +402,60 @@ describe("slack_teams rebuild (ADR-0037 §10 / §9, Issue #361)", () => {
     expect(rows).toEqual([{ team_id: "T1", name: "Acme" }]);
   });
 });
+
+describe("streaming replay (#498 / ADR-0047 決定 4)", () => {
+  test("replays without materializing the log, and reports the streamed count", async () => {
+    const { Store } = await import("../../src/db/index.ts");
+    const { rebuildProjections } = await import("../../src/projections/rebuild.ts");
+    const store = Store.open({ path: ":memory:" });
+    try {
+      for (let i = 0; i < 200; i++) {
+        store.record({
+          type: "SourceObserved",
+          externalId: `s:${i}`,
+          sourceType: "github_issue",
+          body: `body ${i}`,
+          observedAt: "2026-06-14T00:00:00.000Z",
+          fingerprint: `s:${i}`,
+          meta: {},
+        });
+      }
+      const result = rebuildProjections(store.connection.sqlite);
+      // The count now comes from the stream rather than an array length — a
+      // mismatch here would mean replay silently skipped events.
+      expect(result.events).toBe(200);
+      const rows = store.connection.sqlite
+        .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sources")
+        .get();
+      expect(rows?.n).toBe(200);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("streamAllEvents yields the same events, in the same order, as readAllEvents", async () => {
+    const { Store } = await import("../../src/db/index.ts");
+    const { readAllEvents, streamAllEvents } = await import("../../src/events/store.ts");
+    const store = Store.open({ path: ":memory:" });
+    try {
+      for (let i = 0; i < 25; i++) {
+        store.record({
+          type: "SourceObserved",
+          externalId: `s:${i}`,
+          sourceType: "github_issue",
+          body: `body ${i}`,
+          observedAt: "2026-06-14T00:00:00.000Z",
+          fingerprint: `s:${i}`,
+          meta: {},
+        });
+      }
+      const eager = readAllEvents(store.connection.sqlite).map((e) => e.id);
+      const streamed = [...streamAllEvents(store.connection.sqlite)].map((e) => e.id);
+      // Replay determinism (ADR-0002) depends on order, so this equality is the
+      // contract — not merely the same set.
+      expect(streamed).toEqual(eager);
+    } finally {
+      store.close();
+    }
+  });
+});
