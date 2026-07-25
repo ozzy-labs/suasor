@@ -4,31 +4,34 @@
 
 > 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
-## Read 系（自律 OK・19）
+## Read 系（自律 OK・9）
 
 各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_*` が SSOT・[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
 
+> **[ADR-0046](../adr/0046-agent-surface-contraction.md) で 32 → 22 に収縮した。** 同じ意図の skill を 1 本に畳み、違いは引数（期間・読み手・対象・深さ）に逃がしている。ユーザーは skill 名を知らずに話しかけるので、「今週どうなってる」の一言で 5 本が競合する状態が問題だった。**read / write の承認境界は跨いでいない**（跨ぐと HITL が壊れる）ため、畳まれたのは read 系のみ。
+
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
-| [`personal-brief`](personal-brief/SKILL.md) | 「今日のまとめ」「最近どう」 | brief / search / task.list / decision.list |
-| [`next-actions`](next-actions/SKILL.md) | 「次に何やる」「優先度高いのは」 | task.list / search |
-| [`catchup`](catchup/SKILL.md) | 「前回以降の差分」「久しぶりに確認」 | (seen-marker ベースの差分要約) |
-| [`find-document`](find-document/SKILL.md) | 「あの資料」「<語>含むファイル」 | search (FTS) |
-| [`research`](research/SKILL.md) | 「`<X>`について調べて」「網羅的に」 | search + graph.related + brief |
-| [`meeting-prep`](meeting-prep/SKILL.md) | 「次の会議準備」「明日のMTG前確認」 | source.list(calendar) / search / graph.related |
-| [`decision-rationale`](decision-rationale/SKILL.md) | 「あの決定はなぜ」「Xを選んだ理由」 | decision.list / graph.related / search |
-| [`decision-log`](decision-log/SKILL.md) | 「今月の決定」「[topic] の決定履歴」 | decision.list / graph.related / brief |
-| [`action-item-status`](action-item-status/SKILL.md) | 「あの会議から何が実装されたか」 | source.list(calendar) / graph.related / task.list |
-| [`health-check`](health-check/SKILL.md) | 「健全性チェック」「滞留してるもの数えて」 | task.list / propose.list / inbox.list / commitment.list |
-| [`external-brief`](external-brief/SKILL.md) | 「上司向け週次」「クライアント向け進捗」 | task.list(completed) / decision.list / brief |
-| [`pr-review`](pr-review/SKILL.md) | 「PR #N レビューして」 | search（mode=semantic） (+ gh diff) |
-| [`handoff-draft`](handoff-draft/SKILL.md) | 「引き継ぎ書作って」 | task.list / decision.list / search（mode=semantic）（text-only・persist なし） |
-| [`announcement-draft`](announcement-draft/SKILL.md) | 「リリース告知文」 | search（mode=semantic） / decision.list / brief（text-only・persist なし） |
-| [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
-| [`doc-diff`](doc-diff/SKILL.md) | 「前回から何が変わった」「この資料の差分」 | source.history（event log の本文版）+ graph.related |
-| [`doc-review`](doc-review/SKILL.md) | 「この設計書レビューして」「仕様のレビュー」 | source.get + search（mode=semantic） / decision.list / graph.related |
+| [`brief`](brief/SKILL.md) | 「今日のまとめ」「前回以降の差分」「週次の棚卸し」「上司向け週次報告」「今どれくらい溜まってる」 | brief / priority.list / task.list / decision.list / inbox.list / demand.list / commitment.list |
+| [`next-actions`](next-actions/SKILL.md) | 「次に何やる」「優先度高いのは」 | priority.list / task.list / search |
+| [`find`](find/SKILL.md) | 「あの資料どこ」「`<X>` について調べて」「網羅的に」 | search / graph.related / brief |
+| [`review`](review/SKILL.md) | 「この設計書レビューして」「この PR レビューして」「前回から何が変わった」 | source.get / source.history / search / graph.related |
+| [`meeting`](meeting/SKILL.md) | 「来週の会議準備」「あの会議から何が実装されたか」 | source.list(calendar) / search / graph.related / task.list |
+| [`decisions`](decisions/SKILL.md) | 「今月の決定」「あの決定はなぜ」 | decision.list / graph.related / search |
+| [`draft`](draft/SKILL.md) | 「リリース告知文書いて」「引き継ぎ書作って」 | search / decision.list / task.list（text-only・persist なし） |
 | [`commitment-chase`](commitment-chase/SKILL.md) | 「催促して」「相手の約束で期限切れ」 | commitment.list(owed_to_me) + graph.related / source.get（text-only・persist なし） |
-| [`weekly-review`](weekly-review/SKILL.md) | 「週次レビュー」「棚卸し」 | task.list(overdue) / commitment.list / inbox.list / brief |
+| [`provenance-trace`](provenance-trace/SKILL.md) | 「この task の出どころ」「由来を辿って」 | graph.related / graph.expand(direction=in) / source.get |
+
+### 畳んだ対応（移行表）
+
+| 旧 skill | 新 skill | 引数 |
+|---|---|---|
+| `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` | `period` / `audience` / `focus` |
+| `doc-review` / `pr-review` / `doc-diff` | `review` | `target` |
+| `find-document` / `research` | `find` | `depth` |
+| `meeting-prep` / `action-item-status` | `meeting` | `phase` |
+| `decision-log` / `decision-rationale` | `decisions` | `mode` |
+| `announcement-draft` / `handoff-draft` | `draft` | `kind` |
 
 ## HITL write 系（人の承認で適用・13）
 

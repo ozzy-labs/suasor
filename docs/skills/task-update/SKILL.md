@@ -20,7 +20,7 @@ mcp_tools_write:
 
 # task-update
 
-task の lifecycle 状態を遷移させる HITL write skill。`task.create` が task を開き（`proposed`）`task.list` が読むのに対し、本 skill は `in_progress` / `completed` / `dropped` への前進（および再開）を担う（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `external-brief` が読む `state` を実際に動かす経路。
+task の lifecycle 状態を遷移させる HITL write skill。`task.create` が task を開き（`proposed`）`task.list` が読むのに対し、本 skill は `in_progress` / `completed` / `dropped` への前進（および再開）を担う（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `brief` が読む `state` を実際に動かす経路。
 
 ## いつ発火するか
 

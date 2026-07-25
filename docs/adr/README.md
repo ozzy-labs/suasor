@@ -86,5 +86,5 @@ NNNN-kebab-case-title.md
 | 0043 | Email demand signals (unanswered threads addressed to me + aging tier) |
 | 0044 | Calendar proximity signals (starting-soon + prep-needed; calendar time model fix) |
 | 0045 | Priority ranking model (one hard tier + weighted score; fixed weights) |
-| 0046 | Agent surface contraction (MCP tools 45 → ~28, skills 32 → ~12) |
+| 0046 | Agent surface contraction (MCP tools 45 → 39, skills 32 → 22) |
 | 0047 | Storage lifecycle (visibility first + opt-in retention; no content-addressing) |

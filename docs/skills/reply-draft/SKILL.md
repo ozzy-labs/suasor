@@ -7,7 +7,8 @@ triggers:
   - 返信案を考えて
   - 下書き作って
   - これに返信したい
-pairs: []
+pairs:
+  - draft
 mcp_tools_read:
   - source.get
 mcp_tools_write:

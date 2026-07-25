@@ -11,6 +11,48 @@ suasor store info                   # store-size snapshot
 suasor store info --breakdown       # aggregate the event log by type (for rebuild/replay debugging)
 ```
 
+## v0.3 へのアップグレード: agent surface の収縮（ADR-0046）
+
+MCP tool と skill の**名前が変わった**（後方互換の alias は残していない・[ADR-0046](../adr/0046-agent-surface-contraction.md) 決定 5）。host 設定・自作 skill・スクリプトが旧名を参照している場合は機械的に置換する。
+
+### MCP tool（45 → 39）
+
+| 旧 | 新 |
+|---|---|
+| `recall.search` | `search`（`mode: "semantic"`） |
+| `search.hybrid` | `search`（`mode: "hybrid"`） |
+| `source.get.full` | `source.get`（`include: ["links", "extraction"]`） |
+| `commitment.resolve` | `commitment.set`（`state: "resolved"`） |
+| `commitment.dismiss` | `commitment.set`（`state: "dismissed"`） |
+| `commitment.reopen` | `commitment.set`（`state: "open"`） |
+| `demand.ack` | `demand.mark`（`state: "acked"`） |
+| `demand.dismiss` | `demand.mark`（`state: "dismissed"`） |
+
+`search` の既定は `mode: "auto"`（embedding があれば hybrid、無ければ FTS）。**呼び出し側でアルゴリズムを選ぶ必要はなくなった**。
+
+### skill（32 → 22）
+
+| 旧 | 新 |
+|---|---|
+| `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` |
+| `doc-review` / `pr-review` / `doc-diff` | `review` |
+| `find-document` / `research` | `find` |
+| `meeting-prep` / `action-item-status` | `meeting` |
+| `decision-log` / `decision-rationale` | `decisions` |
+| `announcement-draft` / `handoff-draft` | `draft` |
+
+**旧 skill を install 済みの環境では、古い mirror が残る**（install は上書きするが削除はしない）。`suasor skills list` が旧名を `modified` / 孤児として出したら、mirror ディレクトリを手で消す:
+
+```bash
+rm -rf ~/.claude/skills/{personal-brief,catchup,weekly-review,external-brief,health-check}
+rm -rf ~/.claude/skills/{doc-review,pr-review,doc-diff,find-document,research}
+rm -rf ~/.claude/skills/{meeting-prep,action-item-status,decision-log,decision-rationale}
+rm -rf ~/.claude/skills/{announcement-draft,handoff-draft}
+suasor skills install   # 新しい catalog を展開
+```
+
+`.agents/skills/` 側も同様。
+
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 
 A config that a **breaking release** removed keys from fails at load, so *every* verb that reads config stops with the same error until the config is migrated. This is deliberate — a silently-ignored key would sync the wrong scope ([ADR-0007](../adr/0007-connector-contract.md) "no silent wrong answer"). The error text carries the migration.

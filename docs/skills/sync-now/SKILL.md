@@ -1,6 +1,6 @@
 ---
 name: sync-now
-description: 「最新を取り込んでから状況教えて」「Slack 同期して」「sync して」「最新に更新して」「<connector> を今すぐ取り込んで」と頼まれたら、Suasor MCP の connector.sync で有効な connector の read 専用 ingest pass を走らせ、ソースの鮮度を担保する。personal-brief / next-actions など読み取り系の前段に使える。
+description: 「最新を取り込んでから状況教えて」「Slack 同期して」「sync して」「最新に更新して」「<connector> を今すぐ取り込んで」と頼まれたら、Suasor MCP の connector.sync で有効な connector の read 専用 ingest pass を走らせ、ソースの鮮度を担保する。brief / next-actions など読み取り系の前段に使える。
 readOnly: false
 category: retrieval
 triggers:
@@ -16,7 +16,7 @@ mcp_tools_write:
 
 # sync-now
 
-会話から connector の **read 専用 ingest pass** を走らせ、ローカルストアの鮮度を担保する HITL write skill（[ADR-0027](../../adr/0027-bulk-sync-orchestration.md) / [ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。Suasor の中核価値「散在した業務情報を手元に集める」は、定期的に sync しないと常に古くなる。`personal-brief` / `next-actions` / `research` など読み取り系を実行する前段に使い、「最新を取り込んでから」のニーズに応える。CLI `suasor sync` の会話版に相当する。
+会話から connector の **read 専用 ingest pass** を走らせ、ローカルストアの鮮度を担保する HITL write skill（[ADR-0027](../../adr/0027-bulk-sync-orchestration.md) / [ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。Suasor の中核価値「散在した業務情報を手元に集める」は、定期的に sync しないと常に古くなる。`brief` / `next-actions` / `find` など読み取り系を実行する前段に使い、「最新を取り込んでから」のニーズに応える。CLI `suasor sync` の会話版に相当する。
 
 ## いつ発火するか
 
@@ -28,7 +28,7 @@ mcp_tools_write:
 
 1. どの connector を対象にするか（全有効 connector か、特定の connector か）を確認する
 2. `connector.sync` を呼んで ingest pass を走らせる。差分は fingerprint / cursor で検知され、同一データの再実行は event を重複 append しない（冪等・[ADR-0007](../../adr/0007-connector-contract.md) FR-ING-3）
-3. 取り込み結果（connector ごとの件数）を要約する。後続の読み取り系 skill（`personal-brief` 等）に繋げる
+3. 取り込み結果（connector ごとの件数）を要約する。後続の読み取り系 skill（`brief` 等）に繋げる
 
 ## 制約
 

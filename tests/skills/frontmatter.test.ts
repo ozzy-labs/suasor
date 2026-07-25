@@ -124,8 +124,11 @@ describe("skillMatchesQuery", () => {
 describe("bundled skill catalog invariants (ADR-0032)", () => {
   const infos = loadSkillInfos(listBundledSkills());
 
-  test("there are 32 bundled skills", () => {
-    expect(infos.length).toBe(32);
+  test("there are 22 bundled skills (ADR-0046 contraction)", () => {
+    // Was 32. The merge folded same-intent skills onto one entry with an
+    // argument (brief / review / find / meeting / decisions / draft), which is
+    // what stops "今週どうなってる" from matching five descriptions at once.
+    expect(infos.length).toBe(22);
   });
 
   test("every skill carries readOnly (boolean) + category (enum)", () => {
@@ -154,10 +157,12 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
     }
   });
 
-  test("exactly 19 read-only and 13 write skills (docs/skills/README.md split)", () => {
+  test("exactly 9 read-only and 13 write skills (docs/skills/README.md split)", () => {
+    // Only read skills merged — the read/write boundary is never crossed
+    // (ADR-0046 決定 1), so the write count is unchanged by the contraction.
     const read = infos.filter((i) => i.frontmatter.readOnly === true).length;
     const write = infos.filter((i) => i.frontmatter.readOnly === false).length;
-    expect(read).toBe(19);
+    expect(read).toBe(9);
     expect(write).toBe(13);
   });
 

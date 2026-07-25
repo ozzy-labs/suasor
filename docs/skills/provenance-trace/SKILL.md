@@ -19,7 +19,7 @@ mcp_tools_write: []
 
 # provenance-trace
 
-任意の entity（task / decision / source 等）を起点に「何に由来するか」を `links` projection 上で辿る read-only skill（[ADR-0018](../../adr/0018-knowledge-graph-traversal.md) / [ADR-0020](../../adr/0020-multi-actor-coordination-scope.md)）。`decision-rationale`（決定の「なぜ」）や `research`（トピック横断）に埋もれていた汎用 provenance トレースを正面から扱う。
+任意の entity（task / decision / source 等）を起点に「何に由来するか」を `links` projection 上で辿る read-only skill（[ADR-0018](../../adr/0018-knowledge-graph-traversal.md) / [ADR-0020](../../adr/0020-multi-actor-coordination-scope.md)）。`decisions`（決定の「なぜ」）や `find`（トピック横断）に埋もれていた汎用 provenance トレースを正面から扱う。
 
 ## いつ発火するか
 

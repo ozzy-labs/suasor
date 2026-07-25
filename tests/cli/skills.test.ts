@@ -56,7 +56,7 @@ describe("suasor skills search", () => {
   test("finds skills by category keyword with read/write boundary", async () => {
     const { code, out } = await run(["skills", "search", "meeting"]);
     expect(code).toBe(0);
-    expect(out).toContain("meeting-prep");
+    expect(out).toContain("meeting");
     expect(out).toContain("meeting-followup");
     expect(out).toContain("read");
     expect(out).toContain("write");
@@ -66,7 +66,7 @@ describe("suasor skills search", () => {
   test("matches a trigger phrase", async () => {
     const { code, out } = await run(["skills", "search", "引き継ぎ"]);
     expect(code).toBe(0);
-    expect(out).toContain("handoff-draft");
+    expect(out).toContain("draft");
   });
 
   test("reports no matches gracefully", async () => {
@@ -114,10 +114,10 @@ describe("suasor skills info", () => {
   });
 
   test("--json emits the frontmatter with name", async () => {
-    const { code, out } = await run(["skills", "info", "research", "--json"]);
+    const { code, out } = await run(["skills", "info", "find", "--json"]);
     expect(code).toBe(0);
     const parsed = JSON.parse(out) as { name: string; category: string; readOnly: boolean };
-    expect(parsed.name).toBe("research");
+    expect(parsed.name).toBe("find");
     expect(parsed.category).toBe("retrieval");
     expect(parsed.readOnly).toBe(true);
   });
@@ -130,13 +130,13 @@ describe("suasor skills list --format", () => {
     expect(out).toContain("brief");
     expect(out).toContain("write");
     expect(out).toContain("read");
-    expect(out).toContain("personal-brief");
+    expect(out).toContain("decisions");
   });
 
   test("compact (default) keeps the original status-only rows", async () => {
     const { code, out } = await run(["skills", "list", "--scope", "claude"]);
     expect(code).toBe(0);
-    expect(out).toContain("personal-brief");
+    expect(out).toContain("brief");
     // No read/write boundary column in compact mode.
     expect(out).not.toMatch(/\bwrite\b/);
   });

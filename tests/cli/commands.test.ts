@@ -135,13 +135,13 @@ describe("suasor skills install / list", () => {
     const install = await run(["skills", "install", "--scope", "claude", "--host", dir]);
     expect(install.code).toBe(0);
     expect(install.out).toContain("created");
-    expect(existsSync(join(dir, ".claude", "skills", "personal-brief", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(dir, ".claude", "skills", "brief", "SKILL.md"))).toBe(true);
     // Only the requested host dir is written for scope=claude.
     expect(existsSync(join(dir, ".agents", "skills"))).toBe(false);
 
     const list = await run(["skills", "list", "--scope", "claude", "--host", dir]);
     expect(list.code).toBe(0);
-    expect(list.out).toContain("personal-brief");
+    expect(list.out).toContain("brief");
     // Every skill row reports installed; the summary confirms 0 missing.
     expect(list.out).toContain("0 missing");
     expect(list.out).not.toMatch(/^missing\s/m);

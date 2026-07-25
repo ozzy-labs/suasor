@@ -71,7 +71,7 @@ describe("skills commands — available in the binary (#445)", () => {
   // verbs are no longer gated: the binary build must behave like a normal one.
   for (const args of [
     ["skills", "search", "brief"],
-    ["skills", "info", "research"],
+    ["skills", "info", "find"],
   ]) {
     test(`${args.join(" ")}: binary build → succeeds off the embedded catalog`, async () => {
       const { code, err } = await run(args, { binary: true });
@@ -84,7 +84,7 @@ describe("skills commands — available in the binary (#445)", () => {
     const { code, out, err } = await run(["skills", "list", "--host", dir], { binary: true });
     expect(code).toBe(0);
     expect(err).not.toContain(UNSUPPORTED);
-    expect(out).toContain("research");
+    expect(out).toContain("find");
   });
 
   test("skills install --dry-run: binary build plans writes from the embedding", async () => {
