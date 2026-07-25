@@ -17,7 +17,7 @@
  */
 import { join } from "node:path";
 import { z } from "zod";
-import { loadConnectorConfigSchema } from "../connectors/registry.ts";
+import { connectorNames, loadConnectorConfigSchema } from "../connectors/registry.ts";
 import { ConfigError } from "./error.ts";
 import { Config } from "./schema.ts";
 import { collectSidecarEndpoints, SIDECAR_LOOPBACK_ALLOWLIST } from "./sidecar-egress.ts";
@@ -230,6 +230,29 @@ function validateSidecarEgress(config: Config): void {
 }
 
 /**
+ * Reject `[sync.perConnectorIntervalHours]` keys that name no registered
+ * connector (Issue #442).
+ *
+ * The record is open — any string key parses — so a typo (`gihub = 168`) would
+ * silently leave the real connector on the default threshold, and the staleness
+ * check would then fire (or stay quiet) against a cadence the operator believes
+ * they changed. That is the failure mode the freshness surface exists to
+ * prevent, so it fails fast here like `validateConnectorSlices` does.
+ */
+function validateSyncCadenceOverrides(config: Config): void {
+  const known = new Set(connectorNames());
+  const issues = Object.keys(config.sync.perConnectorIntervalHours)
+    .filter((name) => !known.has(name))
+    .map(
+      (name) =>
+        `sync.perConnectorIntervalHours.${name}: unknown connector (known: ${[...known].sort().join(", ")})`,
+    );
+  if (issues.length > 0) {
+    throw new ConfigError("invalid sync cadence override", issues);
+  }
+}
+
+/**
  * Load and validate the effective configuration.
  *
  * @throws {ConfigError} when any layer holds an invalid value (fail-fast).
@@ -267,6 +290,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Confi
   // Content-egressing sidecars (pandoc/markitdown/ollama) must be loopback unless
   // the operator opts into a remote host via `<section>.allowRemote` (Issue #436).
   validateSidecarEgress(config);
+  // `[sync.perConnectorIntervalHours]` keys must name registered connectors, so a
+  // typo can't silently keep the default staleness threshold (Issue #442).
+  validateSyncCadenceOverrides(config);
   if (config.storage.dbPath === null) {
     config.storage.dbPath = join(configDir, "suasor.db");
   }
