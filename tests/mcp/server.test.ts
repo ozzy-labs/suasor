@@ -176,7 +176,11 @@ describe("MCP read surface", () => {
   });
 
   test("priority.list ranks tasks + demand deterministically; ack drops a mention", async () => {
-    // A dated task (tier 2) and an un-acked slack mention (tier 1).
+    // A far-future task (scores ~0 on due_soon) and a *fresh* un-acked mention.
+    // The mention is stamped at the real clock because priority.list over MCP
+    // uses the real `now`: under the score model (ADR-0045) a stale mention
+    // decays to zero, so a fixed 2026-06 timestamp would make this assert the
+    // tie-break between two zero-score rows rather than the ranking itself.
     store.record({
       type: "TaskProposed",
       taskId: "t-soon",
@@ -190,7 +194,7 @@ describe("MCP read surface", () => {
       externalId: "m1",
       sourceType: "slack_message",
       body: "ping <@U_ME>",
-      observedAt: "2026-06-14T00:00:00.000Z",
+      observedAt: new Date().toISOString(),
       fingerprint: "m1",
       meta: { team: "T1", channel: "C1" },
     });
@@ -205,7 +209,7 @@ describe("MCP read surface", () => {
     const client = new Client({ name: "test", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-    // Un-acked mention (tier 1) ranks above the dated task (tier 2).
+    // A fresh un-acked mention outranks a task due in 2099.
     const before = parseResult(
       (await client.callTool({ name: "priority.list", arguments: {} })) as never,
     ) as { items: { id: string; reason: string }[] };

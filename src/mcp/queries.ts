@@ -1496,7 +1496,15 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
  *   - `priority`       — no due date, but a priority (high > normal > low)
  *   - `recency`        — none of the above; most-recently-updated
  */
-export type PriorityReason = "overdue" | "unacked_demand" | "due_soon" | "priority" | "recency";
+export type PriorityReason =
+  | "starting_soon"
+  | "overdue"
+  | "aging"
+  | "due_soon"
+  | "unacked_demand"
+  | "prep"
+  | "priority"
+  | "recency";
 
 /** One ranked next-action row (ADR-0041): a task, commitment, or demand signal. */
 export interface PriorityItem {
@@ -1508,10 +1516,20 @@ export interface PriorityItem {
   id: string;
   /** Short human-readable label (task/commitment title, or demand body summary). */
   title: string;
-  /** The rule tier that determined placement (the score rationale). */
+  /**
+   * The **dominant scoring term** — what put this row where it is (ADR-0045
+   * 決定 4). Not a tier name: `starting_soon` is the one hard tier, everything
+   * else names the term that contributed most to `score`.
+   */
   reason: PriorityReason;
-  /** One-line human explanation of the rationale. */
+  /** One-line human statement of that dominant term (e.g. 「期限を 21 日超過」). */
   explanation: string;
+  /**
+   * Total weighted score (ADR-0045 決定 2), rounded to 3 decimals. Returned for
+   * transparency and debugging — but **not the thing to show a human**: the
+   * answer to "why is this first?" is `explanation`, never a number.
+   */
+  score: number;
   /** Whether the row is overdue (task / commitment only). */
   overdue: boolean;
   /** Due date driving `due_soon` / `overdue` (null for demand / undated). */
@@ -1553,80 +1571,138 @@ function priorityRank(priority: string | null): number {
 /** Per-source-list candidate cap = the `limit` ceiling (docs/design/mcp-surface). */
 const PRIORITY_CANDIDATE_CAP = 500;
 
-/** Internal ranked row carrying the computed sort keys (ADR-0041 comparator). */
+/**
+ * Scoring weights (ADR-0045 決定 3). **Code constants, deliberately not config**:
+ * one behaviour to reason about, orderings pinned by tests, and no need to
+ * reproduce a user's settings to explain why a row is on top. Personal variation
+ * is absorbed by the host LLM's conversational override ("ignore Slack today"),
+ * not by a knob almost nobody turns.
+ *
+ * Each term is capped (see `SATURATION`) so one very old item cannot push
+ * everything else down forever.
+ */
+const WEIGHTS = {
+  /**
+   * Days past due, for a task or commitment. The strongest single signal.
+   * Applied as `overdue × (0.5 + 0.5 × ramp)` so **crossing a deadline never
+   * lowers a row's score**: being late at all already outranks the most
+   * imminent not-yet-due item (whose ceiling is `dueSoon`, deliberately below
+   * this term's floor). Without the floor, "due in an hour" scored near the
+   * dueSoon maximum while "an hour late" scored near zero — an inversion at
+   * exactly the moment the item becomes more urgent.
+   */
+  overdue: 3,
+  /** Days an email demand addressed to me has gone unanswered (ADR-0043). */
+  aging: 2.5,
+  /** Freshness of a slack / github demand — newer is more actionable. */
+  freshness: 1.5,
+  /**
+   * Closeness of an upcoming due date. Ceiling (1.4, at "due right now") sits
+   * below the `overdue` floor (1.5) so the deadline crossing is monotonic.
+   */
+  dueSoon: 1.4,
+  /** Closeness of a meeting that needs preparation (ADR-0044). */
+  prep: 1.8,
+  /** Declared task priority (high / normal / low). */
+  priority: 1,
+} as const;
+
+/** Per-term saturation, in days (or points for `priority`). */
+const SATURATION = {
+  /** A month overdue and two months overdue are equally "very late". */
+  overdue: 30,
+  /** Past three weeks unanswered, more days add nothing. */
+  aging: 21,
+  /** Demand older than a week has decayed as far as it will. */
+  freshness: 7,
+  /** Only the next two weeks of due dates pull rank. */
+  dueSoon: 14,
+} as const;
+
+/**
+ * The hard tier (ADR-0045 決定 1): a meeting starting within this many minutes
+ * outranks everything, unconditionally. 30 minutes is the window in which there
+ * is no room to finish anything else first — the only case where the wall clock
+ * genuinely voids every other consideration.
+ */
+export const STARTING_SOON_MINUTES = 30;
+
+/** Whole days between two ISO timestamps (negative → 0). */
+function daysBetween(from: string, to: string): number {
+  const ms = new Date(to).getTime() - new Date(from).getTime();
+  return Number.isFinite(ms) ? Math.max(0, ms / (24 * 60 * 60 * 1000)) : 0;
+}
+
+/** Internal ranked row carrying its score and the term that dominated it. */
 interface RankedCandidate {
-  tier: 0 | 1 | 2;
+  /** 0 = the hard tier (imminent meeting); 1 = everything else, ordered by score. */
+  tier: 0 | 1;
   entity: "task" | "commitment" | "demand";
   id: string;
   title: string;
   overdue: boolean;
   dueDate: string | null;
   priority: string | null;
-  prioRank: number;
-  /** Demand freshness key (`observed_at`); null for task / commitment. */
-  observedAt: string | null;
-  /** Recency key: `updated_at` (task / commitment) or `observed_at` (demand). */
+  /** Total weighted score (tier 1 only; the hard tier sorts by start time). */
+  score: number;
+  /** The term that contributed most to `score` — what the row's reason reports. */
+  reason: PriorityReason;
+  /** Human-readable statement of that dominant term. */
+  explanation: string;
+  /** Start time for the hard tier (ISO 8601); null otherwise. */
+  startsAt: string | null;
+  /** Final tie-break so identical input always yields identical order. */
   recencyKey: string;
   record: TaskRecord | CommitmentRecord | DemandRecord;
 }
 
+/** One scored term: its contribution and the sentence it would explain itself with. */
+interface ScoredTerm {
+  reason: PriorityReason;
+  value: number;
+  explanation: string;
+}
+
 /**
- * Total order over candidates (ADR-0041 決定 3). Lexicographic by tier, then the
- * tier-appropriate sub-keys, with deterministic tie-breaks so identical input
- * always yields identical order (pinned by tests):
- *   overdue (tier 0) > un-acked demand (tier 1) > everything else (tier 2)
- * Within a task/commitment tier: dated-before-undated → nearest due date →
- * higher priority → most-recently-updated. Within demand: freshest first.
- * Final tie-break: entity then id (ascending).
+ * Pick the dominant term and total the score (ADR-0045 決定 4).
+ *
+ * The dominant term — not the number — is what a row reports as its reason, so
+ * the answer to "why is this first?" stays "期限を 21 日超過", never "score 7.3".
+ */
+function scoreOf(terms: ScoredTerm[]): {
+  score: number;
+  reason: PriorityReason;
+  explanation: string;
+} {
+  let score = 0;
+  let top: ScoredTerm = { reason: "recency", value: 0, explanation: "most recently updated" };
+  for (const term of terms) {
+    score += term.value;
+    if (term.value > top.value) top = term;
+  }
+  return { score, reason: top.reason, explanation: top.explanation };
+}
+
+/**
+ * Total order over candidates (ADR-0045).
+ *
+ * Tier 0 (a meeting starting within {@link STARTING_SOON_MINUTES}) sorts by
+ * start time, soonest first, and outranks everything. Tier 1 sorts by score,
+ * highest first. Ties break on recency then entity then id, so identical input
+ * always yields identical order (pinned by tests).
  */
 function comparePriority(a: RankedCandidate, b: RankedCandidate): number {
   if (a.tier !== b.tier) return a.tier - b.tier;
-  if (a.tier === 1) {
-    // Demand: freshness (newest observed_at first), then externalId desc.
-    if (a.observedAt !== b.observedAt) return (a.observedAt ?? "") < (b.observedAt ?? "") ? 1 : -1;
-    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  if (a.tier === 0) {
+    const aStart = a.startsAt ?? "";
+    const bStart = b.startsAt ?? "";
+    if (aStart !== bStart) return aStart < bStart ? -1 : 1; // soonest first
+  } else if (a.score !== b.score) {
+    return b.score - a.score; // highest score first
   }
-  // Tasks / commitments (overdue tier 0 or plain tier 2).
-  const aDue = a.dueDate;
-  const bDue = b.dueDate;
-  if ((aDue === null) !== (bDue === null)) return aDue === null ? 1 : -1; // dated rows first
-  if (aDue !== null && bDue !== null && aDue !== bDue) return aDue < bDue ? -1 : 1; // sooner first
-  if (a.prioRank !== b.prioRank) return b.prioRank - a.prioRank; // higher priority first
-  if (a.recencyKey !== b.recencyKey) return a.recencyKey < b.recencyKey ? 1 : -1; // newer first
+  if (a.recencyKey !== b.recencyKey) return a.recencyKey < b.recencyKey ? 1 : -1;
   if (a.entity !== b.entity) return a.entity < b.entity ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-/** The tier a candidate falls into (ADR-0041). */
-function tierOf(overdue: boolean, entity: RankedCandidate["entity"]): 0 | 1 | 2 {
-  if (overdue) return 0;
-  if (entity === "demand") return 1;
-  return 2;
-}
-
-/** Score rationale for a candidate (the tier that placed it, ADR-0041). */
-function reasonOf(c: RankedCandidate): PriorityReason {
-  if (c.tier === 0) return "overdue";
-  if (c.tier === 1) return "unacked_demand";
-  if (c.dueDate !== null) return "due_soon";
-  if (c.prioRank > 0) return "priority";
-  return "recency";
-}
-
-/** One-line human explanation for a scored candidate. */
-function explanationOf(c: RankedCandidate): string {
-  switch (reasonOf(c)) {
-    case "overdue":
-      return `${c.entity} overdue (due ${c.dueDate})`;
-    case "unacked_demand":
-      return `unprocessed ${(c.record as DemandRecord).kind} demand`;
-    case "due_soon":
-      return `due ${c.dueDate}`;
-    case "priority":
-      return `priority ${c.priority}`;
-    default:
-      return "most recently updated";
-  }
 }
 
 /** First non-empty line of a demand body, trimmed to a short label. */
@@ -1663,20 +1739,50 @@ export function buildPriorities(
 
   const candidates: RankedCandidate[] = [];
 
+  /** Cap a raw day count at its saturation point and scale to [0, 1]. */
+  const ramp = (days: number, ceiling: number) => Math.min(days, ceiling) / ceiling;
+
   // Active tasks (open + in_progress) — completed / dropped / proposed excluded.
   for (const state of ["open", "in_progress"] as const) {
     for (const task of listTasks(sqlite, { state, now, limit: PRIORITY_CANDIDATE_CAP })) {
-      const tier = tierOf(task.overdue, "task");
+      const terms: ScoredTerm[] = [];
+      if (task.overdue && task.dueDate !== null) {
+        // Magnitude matters: "1 day late" and "3 weeks late" are different
+        // situations that the old tier ladder scored identically.
+        const late = daysBetween(task.dueDate, now);
+        terms.push({
+          reason: "overdue",
+          value: WEIGHTS.overdue * (0.5 + 0.5 * ramp(late, SATURATION.overdue)),
+          explanation: `期限を ${Math.floor(late)} 日超過`,
+        });
+      } else if (task.dueDate !== null) {
+        const until = daysBetween(now, task.dueDate);
+        terms.push({
+          reason: "due_soon",
+          value: WEIGHTS.dueSoon * (1 - ramp(until, SATURATION.dueSoon)),
+          explanation: `期限まで ${Math.ceil(until)} 日`,
+        });
+      }
+      if (task.priority !== null) {
+        terms.push({
+          reason: "priority",
+          value: (WEIGHTS.priority * priorityRank(task.priority)) / 3,
+          explanation: `priority ${task.priority}`,
+        });
+      }
+      const { score, reason, explanation } = scoreOf(terms);
       candidates.push({
-        tier,
+        tier: 1,
         entity: "task",
         id: task.id,
         title: task.title,
         overdue: task.overdue,
         dueDate: task.dueDate,
         priority: task.priority,
-        prioRank: priorityRank(task.priority),
-        observedAt: null,
+        score,
+        reason,
+        explanation,
+        startsAt: null,
         recencyKey: task.updatedAt,
         record: task,
       });
@@ -1686,16 +1792,35 @@ export function buildPriorities(
   // Open commitments — overdue derived like a task (past due AND still open).
   for (const c of listCommitments(sqlite, { state: "open", limit: PRIORITY_CANDIDATE_CAP })) {
     const overdue = c.dueDate !== null && c.dueDate < now;
+    const terms: ScoredTerm[] = [];
+    if (overdue && c.dueDate !== null) {
+      const late = daysBetween(c.dueDate, now);
+      terms.push({
+        reason: "overdue",
+        value: WEIGHTS.overdue * (0.5 + 0.5 * ramp(late, SATURATION.overdue)),
+        explanation: `約束の期限を ${Math.floor(late)} 日超過`,
+      });
+    } else if (c.dueDate !== null) {
+      const until = daysBetween(now, c.dueDate);
+      terms.push({
+        reason: "due_soon",
+        value: WEIGHTS.dueSoon * (1 - ramp(until, SATURATION.dueSoon)),
+        explanation: `約束の期限まで ${Math.ceil(until)} 日`,
+      });
+    }
+    const { score, reason, explanation } = scoreOf(terms);
     candidates.push({
-      tier: tierOf(overdue, "commitment"),
+      tier: 1,
       entity: "commitment",
       id: c.id,
       title: c.title,
       overdue,
       dueDate: c.dueDate,
       priority: null,
-      prioRank: 0,
-      observedAt: null,
+      score,
+      reason,
+      explanation,
+      startsAt: null,
       recencyKey: c.updatedAt,
       record: c,
     });
@@ -1706,6 +1831,31 @@ export function buildPriorities(
     ...(selfUserIds.length > 0 ? { selfUserIds } : {}),
     limit: PRIORITY_CANDIDATE_CAP,
   })) {
+    const age = daysBetween(d.observedAt, now);
+    // Two time terms with opposite signs (ADR-0045 決定 2): a mention decays as
+    // it ages, an unanswered email addressed to me gets worse. The tier ladder
+    // needed two separate tiers to express this; one score expresses both.
+    const decaying = d.source === "slack" || d.source === "github";
+    const terms: ScoredTerm[] = decaying
+      ? [
+          {
+            reason: "unacked_demand",
+            value: WEIGHTS.freshness * (1 - ramp(age, SATURATION.freshness)),
+            explanation: `未処理の ${d.kind}`,
+          },
+        ]
+      : [
+          // The aging half: unanswered mail addressed to me gets *worse* with
+          // time. Unreachable until ADR-0043 adds `email` to DemandSource
+          // (#488) — written now because the two opposite-signed time terms are
+          // the reason this model replaced the tier ladder at all (ADR-0045).
+          {
+            reason: "aging",
+            value: WEIGHTS.aging * ramp(age, SATURATION.aging),
+            explanation: `${Math.floor(age)} 日未返信`,
+          },
+        ];
+    const { score, reason, explanation } = scoreOf(terms);
     candidates.push({
       tier: 1,
       entity: "demand",
@@ -1714,8 +1864,10 @@ export function buildPriorities(
       overdue: false,
       dueDate: null,
       priority: null,
-      prioRank: 0,
-      observedAt: d.observedAt,
+      score,
+      reason,
+      explanation,
+      startsAt: null,
       recencyKey: d.observedAt,
       record: d,
     });
@@ -1728,8 +1880,9 @@ export function buildPriorities(
     entity: c.entity,
     id: c.id,
     title: c.title,
-    reason: reasonOf(c),
-    explanation: explanationOf(c),
+    reason: c.reason,
+    explanation: c.explanation,
+    score: Math.round(c.score * 1000) / 1000,
     overdue: c.overdue,
     dueDate: c.dueDate,
     priority: c.priority,

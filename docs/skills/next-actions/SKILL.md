@@ -33,11 +33,11 @@ mcp_tools_write: []
 
 read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-1. **`priority.list` を基線として取る**（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md) 決定 3）。これは open/in_progress な task + open commitment + **un-acked demand** を、**固定 comparator**で 1 本のランク付きリストに合成した決定論的 scorer で、同一入力に対し順序が一定になる（テストで固定）。順序基準はコードが持つ:
+1. **`priority.list` を基線として取る**（[ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md) 決定 3 / [ADR-0045](../../adr/0045-priority-ranking-model.md)）。open/in_progress な task + open commitment + **un-acked demand** を 1 本のランク付きリストに合成した決定論的 scorer で、同一入力に対し順序が一定になる（テストで固定）。順序モデルはコードが持つ:
 
-   **`overdue`（task/commitment 期限超過）> un-acked `demand`（@mention/DM/notification・鮮度順）> `dueDate` 近接（期日が近い順）> `priority` 高（high > normal > low）> 更新新しさ**
+   **hard tier（開始 30 分以内の会議）> 重み付きスコア**（[ADR-0045](../../adr/0045-priority-ranking-model.md)）。スコアは超過日数 / 未返信日数 / demand の鮮度 / 期日接近 / 会議準備 / priority を合成する。**程度が効く** — 「3 週間超過」は「1 日超過」より上、期限を跨いでもスコアは下がらない
 
-   各 item は `rank` / `entity`（task/commitment/demand）/ `id` / `title` / `reason`（どの規則で上に来たか: `overdue` / `unacked_demand` / `due_soon` / `priority` / `recency`）/ `explanation` / `record`（元レコード）を持つ。この `reason` を根拠として提示する。`selfUserId` 未設定時 demand は DM のみ。
+   各 item は `rank` / `entity` / `id` / `title` / `reason`（**最も寄与した項**: `starting_soon` / `overdue` / `aging` / `unacked_demand` / `due_soon` / `prep` / `priority` / `recency`）/ `explanation`（その項の一文）/ `score` / `record` を持つ。**根拠として提示するのは `explanation`**（「期限を 21 日超過」）であって `score` の数値ではない（[ADR-0045](../../adr/0045-priority-ranking-model.md) 決定 4）。`selfUserId` 未設定時 demand は DM のみ。
 2. 必要に応じ各 entity の詳細を補う（基線の順位は変えない・表示補強のみ）:
    - `task.list`（`state=open` / `in_progress`、期間指定は `updatedAfter` / `updatedBefore`）で task の `dueDate` / `priority` / `overdue` を詳しく見る（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）
    - `demand.list` で demand 行の `channelName` / `userName`（ローカル join した人間可読名・未解決は `null`＝生 id fallback、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）や github notification の `source`/`kind`（reason）を見る。提示は **id ではなく名前**で行う

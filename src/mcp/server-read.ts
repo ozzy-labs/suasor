@@ -463,14 +463,16 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     {
       title: "Ranked next-actions",
       description:
-        "Deterministic cross-entity next-actions ranking (ADR-0041): open/in-progress " +
-        "tasks + open commitments + outstanding (un-acked) demand, merged into one ranked " +
-        "list by a fixed comparator so identical input always yields identical order. The " +
-        "ranking basis lives in code, not skill prose: overdue > un-acked demand (freshness) " +
-        "> due-date proximity > priority (high>normal>low) > recency. Each row carries " +
-        "`reason` (the rule tier that placed it) + `explanation` (why it is here) and the " +
-        "underlying `record`. An acked mention drops out of the demand tier, so it can no " +
-        "longer sit permanently above dated work. next-actions / personal-brief consume this " +
+        "Deterministic cross-entity next-actions ranking (ADR-0041 / ADR-0045): " +
+        "open/in-progress tasks + open commitments + outstanding (un-acked) demand, merged " +
+        "into one ranked list so identical input always yields identical order. The ranking " +
+        "basis lives in code, not skill prose: one hard tier (a meeting starting within 30 " +
+        "minutes, which nothing outranks) above a weighted score combining how overdue, how " +
+        "long unanswered, demand freshness, due-date proximity, meeting-prep urgency and " +
+        "declared priority. Each row carries `reason` (the term that contributed most), " +
+        "`explanation` (that term in words — show this, not the number), `score`, and the " +
+        "underlying `record`. An acked mention drops out of demand entirely, so it can no " +
+        "longer sit permanently above dated work. next-actions / brief consume this " +
         "baseline; the host may still override with conversational context. Returns " +
         "`truncated: true` when more candidates matched than `limit` returned (ADR-0007).",
       inputSchema: {

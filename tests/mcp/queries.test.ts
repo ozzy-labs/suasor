@@ -1075,45 +1075,74 @@ describe("buildPriorities — deterministic cross-entity scorer (ADR-0041)", () 
     });
   }
 
-  test("fixes the order: overdue > un-acked demand > due_soon > priority > recency", () => {
-    commitment("c-overdue", "commitment overdue", "2026-06-05T00:00:00.000Z"); // tier 0, due 06-05
-    task("t-overdue", "task overdue", { dueDate: "2026-06-10T00:00:00.000Z" }); // tier 0, due 06-10
-    demand("dm1", "2026-06-19T00:00:00.000Z"); // tier 1, freshest
-    demand("dm2", "2026-06-18T00:00:00.000Z"); // tier 1, older
-    task("t-soon", "task soon", { dueDate: "2026-06-25T00:00:00.000Z" }); // tier 2, due_soon
-    task("t-prio", "task prioritised", { priority: "high" }); // tier 2, priority
-    task("t-recent", "task recent"); // tier 2, recency
+  test("orders by weighted score: how late / how soon, not just which tier", () => {
+    commitment("c-overdue", "commitment overdue", "2026-06-05T00:00:00.000Z"); // 15d late
+    task("t-overdue", "task overdue", { dueDate: "2026-06-10T00:00:00.000Z" }); // 10d late
+    demand("dm1", "2026-06-19T00:00:00.000Z"); // freshest
+    demand("dm2", "2026-06-18T00:00:00.000Z"); // older
+    task("t-soon", "task soon", { dueDate: "2026-06-25T00:00:00.000Z" });
+    task("t-prio", "task prioritised", { priority: "high" });
+    task("t-recent", "task recent");
 
     const { items } = buildPriorities(sqlite(), { now: NOW });
     expect(items.map((i) => i.id)).toEqual([
-      "c-overdue", // overdue, sooner due first
+      "c-overdue", // 15 days late outscores 10 days late — magnitude, not tier
       "t-overdue",
-      "dm1", // un-acked demand, freshest first
+      "dm1", // a fresh mention beats a task due in 5 days
       "dm2",
-      "t-soon", // has a due date
-      "t-prio", // priority beats recency
+      "t-prio",
+      "t-soon",
       "t-recent",
     ]);
-    // Rank + reason rationale reflect the tier that placed each row.
+    // The reason names the dominant *term*, not a tier (ADR-0045 決定 4).
     expect(items.map((i) => i.reason)).toEqual([
       "overdue",
       "overdue",
       "unacked_demand",
       "unacked_demand",
-      "due_soon",
       "priority",
+      "due_soon",
       "recency",
     ]);
     expect(items[0]?.rank).toBe(1);
-    expect(items.map((i) => i.entity)).toEqual([
-      "commitment",
-      "task",
-      "demand",
-      "demand",
-      "task",
-      "task",
-      "task",
-    ]);
+    expect(items[0]?.explanation).toContain("15 日超過");
+  });
+
+  test("crossing a deadline never lowers the score (monotonic at the boundary)", () => {
+    // The calibration bug this pins: with a pure ramp, "due in an hour" scored
+    // near the due_soon ceiling while "an hour late" scored near zero — the
+    // score dropped at exactly the moment the item became more urgent.
+    task("t-just-late", "1 時間超過", { dueDate: "2026-06-19T23:00:00.000Z" });
+    task("t-due-now", "あと 1 時間", { dueDate: "2026-06-20T01:00:00.000Z" });
+    const { items } = buildPriorities(sqlite(), { now: NOW });
+    expect(items.map((i) => i.id)).toEqual(["t-just-late", "t-due-now"]);
+  });
+
+  test("magnitude is expressible: three weeks late outranks one day late", () => {
+    // The tier ladder scored these identically — both merely "overdue".
+    task("t-slightly", "1 日超過", { dueDate: "2026-06-19T00:00:00.000Z" });
+    task("t-badly", "3 週間超過", { dueDate: "2026-05-30T00:00:00.000Z" });
+    const { items } = buildPriorities(sqlite(), { now: NOW });
+    expect(items.map((i) => i.id)).toEqual(["t-badly", "t-slightly"]);
+    expect((items[0]?.score ?? 0) > (items[1]?.score ?? 0)).toBe(true);
+  });
+
+  test("a decaying mention loses to a task that is actually late", () => {
+    // The inversion ADR-0045 set out to fix: under the ladder, any un-acked
+    // demand sat above every non-overdue row and below every overdue one,
+    // regardless of how stale the mention or how urgent the task.
+    demand("dm-old", "2026-06-05T00:00:00.000Z"); // 15 days stale
+    task("t-late", "task late", { dueDate: "2026-06-18T00:00:00.000Z" }); // 2 days late
+    const { items } = buildPriorities(sqlite(), { now: NOW });
+    expect(items.map((i) => i.id)).toEqual(["t-late", "dm-old"]);
+  });
+
+  test("identical input yields identical order (deterministic tie-break)", () => {
+    task("t-a", "same", { priority: "normal" });
+    task("t-b", "same", { priority: "normal" });
+    const first = buildPriorities(sqlite(), { now: NOW }).items.map((i) => i.id);
+    const second = buildPriorities(sqlite(), { now: NOW }).items.map((i) => i.id);
+    expect(first).toEqual(second);
   });
 
   test("an acked mention drops out of the demand tier (no longer above dated work)", () => {
