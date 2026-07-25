@@ -78,6 +78,26 @@ export const SourceForgotten = z.object({
 });
 
 /**
+ * A source's body was dropped by the retention policy (ADR-0047 決定 2).
+ *
+ * Distinct from `SourceForgotten`, which purges the source entirely and lays a
+ * tombstone so it is never re-ingested. Retention keeps the source — its
+ * metadata, provenance links and embedding all survive — and drops **only the
+ * body**, because the point is to bound storage, not to erase a record. The
+ * source may be re-ingested later and simply gets its body back.
+ *
+ * Body-less by construction; the historical bodies are redacted in place on the
+ * same transaction, so replay reproduces the dropped state (ADR-0002).
+ */
+export const SourceBodyDropped = z.object({
+  type: z.literal("SourceBodyDropped"),
+  ...Envelope,
+  externalId: z.string().min(1),
+  /** Why the body went away — currently always `retention` (audit). */
+  reason: z.string().default("retention"),
+});
+
+/**
  * A forget tombstone was lifted (ADR-0026 R1-1). Appended by `source.unforget`
  * (HITL); its reducer DELETEs the `forgotten_sources` row so the connector may
  * re-ingest the source on the next sync. Body-less (no content is restored — the
@@ -607,6 +627,7 @@ export const DomainEvent = z.discriminatedUnion("type", [
   SourceBodyUpdated,
   SourceForgotten,
   SourceUnforgotten,
+  SourceBodyDropped,
   ConnectorSyncCompleted,
   SyncRunStarted,
   SyncRunEnded,
@@ -643,6 +664,7 @@ export const EVENT_TYPES = [
   "SourceBodyUpdated",
   "SourceForgotten",
   "SourceUnforgotten",
+  "SourceBodyDropped",
   "ConnectorSyncCompleted",
   "SyncRunStarted",
   "SyncRunEnded",
@@ -682,6 +704,7 @@ export type NewEvent =
   | Omit<z.input<typeof SourceBodyUpdated>, "id" | "recordedAt">
   | Omit<z.input<typeof SourceForgotten>, "id" | "recordedAt">
   | Omit<z.input<typeof SourceUnforgotten>, "id" | "recordedAt">
+  | Omit<z.input<typeof SourceBodyDropped>, "id" | "recordedAt">
   | Omit<z.input<typeof ConnectorSyncCompleted>, "id" | "recordedAt">
   | Omit<z.input<typeof SyncRunStarted>, "id" | "recordedAt">
   | Omit<z.input<typeof SyncRunEnded>, "id" | "recordedAt">

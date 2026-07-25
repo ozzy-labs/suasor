@@ -12,6 +12,7 @@ export {
   InboxItemTriaged,
   type NewEvent,
   ReplyDraftProposed,
+  SourceBodyDropped,
   SourceBodyUpdated,
   SourceForgotten,
   SourceObserved,

@@ -82,12 +82,21 @@ export interface SourceRecord {
   observedAt: string;
   /** Decoded connector metadata (stored as JSON). */
   meta: Record<string, unknown>;
+  /**
+   * When the retention policy dropped this body (ADR-0047 決定 2), or `null`
+   * when the body is intact. **A non-null value with an empty `body` means the
+   * text was removed to bound storage — not that the source had no text.**
+   * Surfaced rather than silently returning "" (ADR-0007 no silent wrong
+   * answer); the metadata, links and embedding all still exist.
+   */
+  bodyDroppedAt: string | null;
 }
 
 interface SourceRow {
   external_id: string;
   source_type: string;
   body: string;
+  body_dropped_at?: string | null;
   fingerprint: string;
   observed_at: string;
   meta: string;
@@ -112,6 +121,7 @@ function toSourceRecord(row: SourceRow): SourceRecord {
     fingerprint: row.fingerprint,
     observedAt: row.observed_at,
     meta: parseMeta(row.meta),
+    bodyDroppedAt: row.body_dropped_at ?? null,
   };
 }
 
@@ -137,7 +147,7 @@ export function listSources(sqlite: Database, options: ListSourcesOptions = {}):
   params.push(options.limit ?? DEFAULT_LIST_LIMIT);
   const rows = sqlite
     .query<SourceRow, (string | number)[]>(
-      `SELECT external_id, source_type, body, fingerprint, observed_at, meta
+      `SELECT external_id, source_type, body, body_dropped_at, fingerprint, observed_at, meta
          FROM sources
          ${where}
         ORDER BY observed_at DESC
@@ -151,7 +161,7 @@ export function listSources(sqlite: Database, options: ListSourcesOptions = {}):
 export function getSource(sqlite: Database, externalId: string): SourceRecord | null {
   const row = sqlite
     .query<SourceRow, [string]>(
-      `SELECT external_id, source_type, body, fingerprint, observed_at, meta
+      `SELECT external_id, source_type, body, body_dropped_at, fingerprint, observed_at, meta
          FROM sources
         WHERE external_id = ?`,
     )

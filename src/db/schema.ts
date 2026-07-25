@@ -20,6 +20,12 @@ export const sources = sqliteTable("sources", {
   observedAt: text("observed_at").notNull(),
   /** JSON-encoded connector metadata. */
   meta: text("meta").notNull().default("{}"),
+  /**
+   * When the retention policy dropped this body (ADR-0047 決定 2); NULL when the
+   * body is intact. Lets readers say "removed by retention" instead of showing
+   * an empty body that looks like a source with nothing in it.
+   */
+  bodyDroppedAt: text("body_dropped_at"),
 });
 
 /**

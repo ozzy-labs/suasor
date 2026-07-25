@@ -19,6 +19,7 @@ dbPath = "/path/to/suasor.db"
 ```
 
 - `dbPath` 既定は `null` → loader が `<configDir>/suasor.db` に解決（`SUASOR_CONFIG_DIR` に追従）
+- `[storage.retention].bodyMaxAgeDays` 既定は `null`（**retention は既定 OFF**）。設定すると `suasor store retention` が対象を落とす（[ADR-0047](../adr/0047-storage-lifecycle.md) 決定 2）。**本文は全文検索から恒久的に消える**（event log からも消えるので rebuild でも戻らない）ため、既定 ON にはしない。**残すもの**: source 行・メタデータ・provenance link・embedding — 「いつ・誰から・何に繋がっていたか」は本文より桁違いに小さく、想起の足がかりとして最も効く
 - `sizeWarnBytes` 既定は `null`（警告なし）。設定すると `doctor` が現在サイズ・平均成長率・**上限到達までの日数**を出し、30 日以内なら warn する（[#498](https://github.com/ozzy-labs/suasor/issues/498) / [ADR-0047](../adr/0047-storage-lifecycle.md)）。retention は opt-in・既定 OFF なので、**判断のタイミングを逃さないための可視化**が先に立つ
 - encryption 等の追加項目は将来 Issue で拡張
 

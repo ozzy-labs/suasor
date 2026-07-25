@@ -1,0 +1,1 @@
+ALTER TABLE `sources` ADD `body_dropped_at` text;
