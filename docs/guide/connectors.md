@@ -484,6 +484,25 @@ roots = ["/Users/me/Library/CloudStorage/Box-Box", "/Users/me/OneDrive"]  # dire
 - **scanning**: symlinks are not followed (read-only, cycle avoidance). Unreadable directories / files are warned and skipped without stopping the whole pass
 - **note (division of labor with API connectors, ADR-0023 §3)**: ingesting the same file via both `box` (API) and `local` (FS) duplicates it. Because identity is based on the entity (path / `box:file:<id>`) they become separate sources and are not merged automatically. Operate by dividing "which connector owns which range" in config
 
+## 同期フォルダと API connector の二重取り込み
+
+OS 同期された Box / OneDrive / Google Drive のマウントを `local` connector の root にしつつ、**同じサービスの API connector も有効にする**と、重なるファイルが **2 つの identity で二重に取り込まれる**（`local:<sha1(path)>` と `box:file:<id>` など）。source 行・FTS 行・embedding・検索ヒットがすべて二重になり、**extraction 有効時は両経路が全文を持つので最も無駄が大きい**。
+
+`suasor doctor` が `connectors.overlap` として警告する（[#514](https://github.com/ozzy-labs/suasor/issues/514)）:
+
+```text
+warn  connectors.overlap  local root /Users/me/Box/Projects looks like a Box Drive mount
+                          while the 'box' connector is also enabled — the same files are
+                          ingested twice under different ids …
+```
+
+**どちらか一方に寄せる** — root を外すか、API connector を無効にする。判断材料:
+
+- **API connector 側に寄せる**: 共有・権限・更新者などのメタデータが取れる。同期フォルダを常時マウントしていない環境でも動く
+- **`local` 側に寄せる**: API の rate limit を消費しない。同期済みなのでオフラインでも読める
+
+検出は**マウント名のヒューリスティック**（環境依存なので確実ではない）。警告止まりで exit code は変えない。
+
 ## Adding a new connector
 
 1. Write the `Connector` implementation and factory in `src/connectors/<name>.ts` (lazy-import the SDK inside `sync`)
