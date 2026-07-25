@@ -287,3 +287,83 @@ describe("commitment scan staleness (Issue #443)", () => {
     ).toEqual([]);
   });
 });
+
+describe("commitment ledger urgency order (Issue #509)", () => {
+  function open(id: string, title: string, dueDate: string | null) {
+    store.record({
+      type: "CommitmentOpened",
+      commitmentId: id,
+      title,
+      direction: "owed_to_me",
+      dueDate,
+      person: null,
+      sourceExternalIds: [],
+    });
+  }
+
+  const NOW = "2026-07-25T00:00:00.000Z";
+
+  test("overdue promises come first, longest overdue leading", () => {
+    // All three are touched at the same instant, so under the old
+    // `updated_at DESC` order the chase-worthy ones sorted arbitrarily — and
+    // with a row limit, last.
+    open("fresh", "no due date", null);
+    open("soon", "due next week", "2026-08-01T00:00:00.000Z");
+    open("late-a", "3 days late", "2026-07-22T00:00:00.000Z");
+    open("late-b", "3 weeks late", "2026-07-04T00:00:00.000Z");
+
+    const rows = listCommitments(store.connection.sqlite, { state: "open", now: NOW });
+    expect(rows.map((r) => r.id)).toEqual(["late-b", "late-a", "soon", "fresh"]);
+    expect(rows.map((r) => r.overdue)).toEqual([true, true, false, false]);
+  });
+
+  test("undated promises sort last, not into the middle", () => {
+    open("undated", "someday", null);
+    open("dated", "due next week", "2026-08-01T00:00:00.000Z");
+    const rows = listCommitments(store.connection.sqlite, { state: "open", now: NOW });
+    expect(rows.map((r) => r.id)).toEqual(["dated", "undated"]);
+  });
+
+  test("overdue is read-time derived from the injected now, never stored", () => {
+    open("c1", "due 2026-07-22", "2026-07-22T00:00:00.000Z");
+    // Before the due date it is not overdue; after, it is — same row, no write.
+    expect(
+      listCommitments(store.connection.sqlite, { now: "2026-07-20T00:00:00.000Z" })[0]?.overdue,
+    ).toBe(false);
+    expect(listCommitments(store.connection.sqlite, { now: NOW })[0]?.overdue).toBe(true);
+  });
+
+  test("a resolved commitment past its due date is not overdue", () => {
+    open("done", "was due", "2026-07-01T00:00:00.000Z");
+    store.record({ type: "CommitmentResolved", commitmentId: "done" });
+    expect(listCommitments(store.connection.sqlite, { now: NOW })[0]?.overdue).toBe(false);
+  });
+
+  test("the overdue filter selects exactly the chase-worthy rows", () => {
+    open("late", "late", "2026-07-01T00:00:00.000Z");
+    open("soon", "soon", "2026-08-01T00:00:00.000Z");
+    open("undated", "undated", null);
+    const rows = listCommitments(store.connection.sqlite, { overdue: true, now: NOW });
+    expect(rows.map((r) => r.id)).toEqual(["late"]);
+  });
+
+  test("dueBefore filters by due date and excludes undated rows", () => {
+    open("early", "early", "2026-07-10T00:00:00.000Z");
+    open("later", "later", "2026-09-01T00:00:00.000Z");
+    open("undated", "undated", null);
+    const rows = listCommitments(store.connection.sqlite, {
+      dueBefore: "2026-08-01T00:00:00.000Z",
+      now: NOW,
+    });
+    expect(rows.map((r) => r.id)).toEqual(["early"]);
+  });
+
+  test("the most chase-worthy row survives a tight limit", () => {
+    // The failure this fixes: with updated_at ordering the limit truncated
+    // precisely the rows the chase surface exists to find.
+    open("late", "3 weeks late", "2026-07-04T00:00:00.000Z");
+    for (let i = 0; i < 5; i++) open(`fresh-${i}`, "no due date", null);
+    const rows = listCommitments(store.connection.sqlite, { state: "open", now: NOW, limit: 1 });
+    expect(rows.map((r) => r.id)).toEqual(["late"]);
+  });
+});

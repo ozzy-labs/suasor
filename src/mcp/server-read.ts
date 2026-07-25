@@ -790,13 +790,15 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     {
       title: "List commitments",
       description:
-        "List commitments most-recently-updated first, optionally filtered by " +
-        "state (open / resolved / dismissed), direction (owed_by_me / " +
-        "owed_to_me), and the related person (exact match — chase a specific " +
-        "person). Read-only: the visibility half of the commitment ledger " +
-        "(ADR-0021). Use as a priority signal in next-actions / personal-brief; " +
-        "the resolve/dismiss/reopen lifecycle lives in separate write tools. " +
-        "Returns `truncated: true` when more rows match than `limit` returned (ADR-0007).",
+        "List commitments **by urgency**: overdue first (longest overdue leading), " +
+        "then upcoming by due date, then undated by recency (Issue #509). Each row " +
+        "carries a read-time-derived `overdue`. Optionally filtered by state (open / " +
+        "resolved / dismissed), direction (owed_by_me / owed_to_me), the related " +
+        "person (matched through the identity graph, so any alias of the same human " +
+        "works), `dueBefore`, and `overdue`. Read-only: the visibility half of the " +
+        "commitment ledger (ADR-0021); the lifecycle lives in commitment.set. " +
+        "Returns `truncated: true` when more rows match than `limit` returned (ADR-0007) " +
+        "— but the chase-worthy rows are at the top, so a truncated page keeps them.",
       inputSchema: {
         state: z
           .enum(["open", "resolved", "dismissed"])
@@ -813,17 +815,35 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           .describe("Filter by related person (exact match, default: any)."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
         updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
+        dueBefore: isoDateTime
+          .optional()
+          .describe("Keep only commitments due before this instant (undated rows excluded)."),
+        overdue: z
+          .boolean()
+          .optional()
+          .describe("Keep only overdue commitments (past due and still open)."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ state, direction, person, updatedAfter, updatedBefore, limit }) => {
+    async ({
+      state,
+      direction,
+      person,
+      updatedAfter,
+      updatedBefore,
+      dueBefore,
+      overdue,
+      limit,
+    }) => {
       const effLimit = limit ?? DEFAULT_LIST_LIMIT;
       const { rows: commitments, truncated } = listWithTruncation(effLimit, (probeLimit) =>
         listCommitments(sqlite, {
           ...(state ? { state } : {}),
           ...(direction ? { direction } : {}),
           ...(person !== undefined ? { person } : {}),
+          ...(dueBefore !== undefined ? { dueBefore } : {}),
+          ...(overdue !== undefined ? { overdue } : {}),
           updated: { after: updatedAfter, before: updatedBefore },
           limit: probeLimit,
         }),
