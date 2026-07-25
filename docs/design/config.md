@@ -192,6 +192,17 @@ notifications = "off"                     # off | all | repos（既定 off・per
 
 合成後の実効 config（`env override > file > defaults`）は `suasor config show [--effective] [--json]` で確認する（[cli design](cli.md) の `config show`）。secret は**常にマスク**（`***`）され、connector の資格情報は**存在有無のみ**（`set` / `unset`）を出す（NFR-PRV-4）。`doctor`（健全性診断）とは責務分離で、`config show` は「今どの値が効いているか」を出す。
 
+## `[connectors.google]` / `[connectors.ms-graph]` の `self_addresses`（#488）
+
+```toml
+[connectors.google]
+self_addresses = ["me@example.com", "me@old-domain.com", "team@example.com"]
+```
+
+email demand（自分宛ての未返信スレッド・[ADR-0043](../adr/0043-email-demand-signals.md)）の「自分」を定める。**未設定なら email demand は常に空**（Slack の `self_user_ids` と同じ形）で、`doctor` が警告する。
+
+**API から自動導出しない**のは、エイリアス・旧アドレス・配布リスト（`team@`）も実務上「自分宛て」であり、プロフィール API が返す単一の主アドレスでは取りこぼすため。
+
 ## `[sync]` — 取り込み鮮度の期待値（#442）
 
 ```toml

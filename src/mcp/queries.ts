@@ -898,8 +898,13 @@ export function listCommitments(
   }));
 }
 
-/** Connector-neutral demand source grouping (ADR-0041). */
-export type DemandSource = "slack" | "github";
+/**
+ * Connector-neutral demand source grouping (ADR-0041 / ADR-0043 決定 4).
+ * `email` covers both Gmail and Outlook: the user's mental model is "mail", not
+ * "which provider" — and the originating connector is still visible in each
+ * row's `sourceType` (`gmail_message` / `ms365_mail`).
+ */
+export type DemandSource = "slack" | "github" | "email";
 
 /**
  * Seen-state of a demand row (ADR-0041). `acked` / `dismissed` come from the
@@ -977,6 +982,12 @@ export interface DemandRecord extends SourceRecord {
 export interface ListDemandOptions {
   /** Operator user ids (`Uxxxx`) for Slack `<@you>` mention detection (ADR-0012). */
   selfUserIds?: string[];
+  /**
+   * Operator email addresses for the email branch (ADR-0043 決定 2), lowercased.
+   * Empty ⇒ **no email demand is returned at all** — "addressed to me and
+   * unanswered" is underivable without knowing who "me" is.
+   */
+  selfAddresses?: string[];
   /** Restrict to a single connector (`slack` / `github`); default: both. */
   source?: DemandSource;
   /**
@@ -1068,6 +1079,76 @@ export function listDemand(sqlite: Database, options: ListDemandOptions = {}): D
            LEFT JOIN slack_teams
              ON slack_teams.team_id = json_extract(sources.meta, '$.team')
           WHERE sources.source_type = 'slack_message' AND (${orClauses.join(" OR ")})`,
+      );
+    }
+  }
+
+  // Email branch (ADR-0043 決定 3): the newest inbound message of each thread
+  // that is addressed to me and still unanswered. One row per *thread*, not per
+  // message — five replies to one conversation is one thing to deal with, and
+  // counting them separately would report an "unprocessed" number that is a
+  // lie.
+  //
+  // Unanswered = no later message in the same thread sent by me. That makes
+  // replying self-resolving: the moment my reply is ingested the predicate
+  // breaks and the row leaves demand, with no ack required — unlike Slack,
+  // where acking is the only exit.
+  if (options.source !== "slack" && options.source !== "github") {
+    const selfAddresses = (options.selfAddresses ?? []).filter((a) => a.length > 0);
+    const wantsTo = kinds === undefined || kinds.includes("to");
+    const wantsCc = kinds === undefined || kinds.includes("cc");
+    if (selfAddresses.length > 0 && (wantsTo || wantsCc)) {
+      const selfList = selfAddresses.map(() => "?").join(", ");
+      // `to` / `cc` are JSON arrays in meta; json_each unrolls them so a
+      // membership test is an ordinary IN against the address list.
+      const addressedTo = `EXISTS (SELECT 1 FROM json_each(sources.meta, '$.to') WHERE json_each.value IN (${selfList}))`;
+      const addressedCc = `EXISTS (SELECT 1 FROM json_each(sources.meta, '$.cc') WHERE json_each.value IN (${selfList}))`;
+      const addressed =
+        wantsTo && wantsCc
+          ? `(${addressedTo} OR ${addressedCc})`
+          : wantsTo
+            ? addressedTo
+            : addressedCc;
+      branches.push(
+        `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
+                sources.observed_at, sources.meta,
+                'email' AS source,
+                CASE WHEN ${addressedTo} THEN 'to' ELSE 'cc' END AS kind,
+                NULL AS channel_name, NULL AS user_name, NULL AS team_name
+           FROM sources
+          WHERE sources.source_type IN ('gmail_message', 'ms365_mail')
+            -- inbound (not sent by me)
+            AND json_extract(sources.meta, '$.from') NOT IN (${selfList})
+            -- addressed to me: bcc / list delivery is excluded by construction
+            AND ${addressed}
+            -- List-Id / List-Unsubscribe present ⇒ newsletter, never demand
+            AND COALESCE(json_extract(sources.meta, '$.bulk'), 0) IS NOT 1
+            -- no reply from me after this message in the same thread
+            AND NOT EXISTS (
+              SELECT 1 FROM sources AS reply
+               WHERE reply.source_type IN ('gmail_message', 'ms365_mail')
+                 AND json_extract(reply.meta, '$.thread') = json_extract(sources.meta, '$.thread')
+                 AND json_extract(reply.meta, '$.from') IN (${selfList})
+                 AND reply.observed_at > sources.observed_at
+            )
+            -- only the newest inbound message of the thread represents it
+            AND NOT EXISTS (
+              SELECT 1 FROM sources AS newer
+               WHERE newer.source_type IN ('gmail_message', 'ms365_mail')
+                 AND json_extract(newer.meta, '$.thread') = json_extract(sources.meta, '$.thread')
+                 AND json_extract(newer.meta, '$.from') NOT IN (${selfList})
+                 AND newer.observed_at > sources.observed_at
+            )`,
+      );
+      // Parameter order must match the placeholders above, in order.
+      const wantsBoth = wantsTo && wantsCc;
+      branchParams.push(
+        ...selfAddresses, // addressedTo inside the CASE
+        ...selfAddresses, // from NOT IN
+        ...selfAddresses, // addressed (first branch)
+        ...(wantsBoth ? selfAddresses : []), // addressed (second branch, when OR)
+        ...selfAddresses, // reply-from IN
+        ...selfAddresses, // newer-from NOT IN
       );
     }
   }
@@ -1500,6 +1581,8 @@ export interface Brief {
 }
 
 export interface BuildBriefOptions {
+  /** Operator email addresses for email demand (ADR-0043 決定 2). */
+  selfAddresses?: string[];
   /** Window lower bound (inclusive), ISO 8601. */
   since?: string;
   /** Window upper bound (exclusive), ISO 8601. */
@@ -1524,7 +1607,7 @@ export interface BuildBriefOptions {
  * caller (which knows the config); empty when omitted.
  */
 export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): Brief {
-  const { since, until, limit, selfUserIds, warnings } = options;
+  const { since, until, limit, selfUserIds, selfAddresses, warnings } = options;
   const window: TimeRange = { after: since, before: until };
   // Effective per-section cap (each list query defaults to DEFAULT_LIST_LIMIT).
   // Probe every section with limit+1 so a section cut off at the cap is reported
@@ -1555,6 +1638,7 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
     listDemand(sqlite, {
       observed: window,
       ...(selfUserIds ? { selfUserIds } : {}),
+      ...(selfAddresses !== undefined && selfAddresses.length > 0 ? { selfAddresses } : {}),
       limit: probeLimit,
     }),
   );
@@ -1635,6 +1719,8 @@ export interface PriorityItem {
 export interface BuildPrioritiesOptions {
   /** Operator Slack user ids for demand `<@you>` mentions (ADR-0012). */
   selfUserIds?: string[];
+  /** Operator email addresses for email demand (ADR-0043 決定 2). */
+  selfAddresses?: string[];
   /**
    * Reference "now" for overdue / freshness (ISO 8601). Injectable so the ranking
    * is deterministic under test (ADR-0028); defaults to the current wall clock.
@@ -1766,8 +1852,16 @@ function scoreOf(terms: ScoredTerm[]): {
   reason: PriorityReason;
   explanation: string;
 } {
+  // `recency` means "no rule applied", so it may only win when there are no
+  // terms at all. Seeding with it let a fully-decayed term (value 0 — e.g. a
+  // three-week-old mention) report `recency`, which reads as "nothing is going
+  // on here" for a row that is still an outstanding demand.
   let score = 0;
-  let top: ScoredTerm = { reason: "recency", value: 0, explanation: "most recently updated" };
+  let top: ScoredTerm = terms[0] ?? {
+    reason: "recency",
+    value: 0,
+    explanation: "most recently updated",
+  };
   for (const term of terms) {
     score += term.value;
     if (term.value > top.value) top = term;
@@ -1919,32 +2013,35 @@ export function buildPriorities(
   }
 
   // Outstanding (un-acked) demand — a seen mention is already filtered out.
+  const selfAddresses = options.selfAddresses ?? [];
   for (const d of listDemand(sqlite, {
     ...(selfUserIds.length > 0 ? { selfUserIds } : {}),
+    ...(selfAddresses.length > 0 ? { selfAddresses } : {}),
     limit: PRIORITY_CANDIDATE_CAP,
   })) {
     const age = daysBetween(d.observedAt, now);
     // Two time terms with opposite signs (ADR-0045 決定 2): a mention decays as
     // it ages, an unanswered email addressed to me gets worse. The tier ladder
     // needed two separate tiers to express this; one score expresses both.
-    const decaying = d.source === "slack" || d.source === "github";
-    const terms: ScoredTerm[] = decaying
+    // The two opposite-signed time terms — the reason this model replaced the
+    // tier ladder at all (ADR-0045 決定 2). A mention decays as it ages; mail
+    // addressed *to* me gets worse. `cc` mail decays like a mention: promoting
+    // it by age would refill the tier with things nobody expects an answer to
+    // (ADR-0043 決定 5).
+    const ages = d.source === "email" && d.kind === "to";
+    const terms: ScoredTerm[] = ages
       ? [
-          {
-            reason: "unacked_demand",
-            value: WEIGHTS.freshness * (1 - ramp(age, SATURATION.freshness)),
-            explanation: `未処理の ${d.kind}`,
-          },
-        ]
-      : [
-          // The aging half: unanswered mail addressed to me gets *worse* with
-          // time. Unreachable until ADR-0043 adds `email` to DemandSource
-          // (#488) — written now because the two opposite-signed time terms are
-          // the reason this model replaced the tier ladder at all (ADR-0045).
           {
             reason: "aging",
             value: WEIGHTS.aging * ramp(age, SATURATION.aging),
             explanation: `${Math.floor(age)} 日未返信`,
+          },
+        ]
+      : [
+          {
+            reason: "unacked_demand",
+            value: WEIGHTS.freshness * (1 - ramp(age, SATURATION.freshness)),
+            explanation: `未処理の ${d.kind}`,
           },
         ];
     const { score, reason, explanation } = scoreOf(terms);

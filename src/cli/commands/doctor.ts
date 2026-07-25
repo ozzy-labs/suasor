@@ -391,6 +391,30 @@ export class DoctorCommand extends Command {
         checks.push({ name: "connectors.noop", status: "warn", detail: `${name}: ${message}` });
       }
 
+      // 5b-2. Mail connector enabled but no self_addresses (Issue #488): email
+      //      demand is derived from "addressed to me and unanswered", so
+      //      without the operator's own addresses it is *silently always
+      //      empty* — the same failure shape as Slack's self_user_ids.
+      for (const name of ["google", "ms-graph"]) {
+        const slice = config.connectors[name];
+        if (slice === undefined || slice.enabled === false) continue;
+        const resources = (slice.resources as string[] | undefined) ?? [];
+        const ingestsMail =
+          resources.length === 0 || resources.includes("gmail") || resources.includes("mail");
+        if (!ingestsMail) continue;
+        const addresses = (slice.self_addresses as string[] | undefined) ?? [];
+        if (addresses.length === 0) {
+          checks.push({
+            name: "connectors.self_addresses",
+            status: "warn",
+            detail:
+              `${name}: no self_addresses configured — email demand (unanswered threads ` +
+              `addressed to you) is always empty. Add your own addresses, including ` +
+              `aliases and any team@ you answer, to [connectors.${name}].self_addresses`,
+          });
+        }
+      }
+
       // 5c. local ↔ API connector overlap (Issue #514). An OS-synced Box /
       //     OneDrive / Drive mount read as plain files, plus that service's own
       //     API connector, ingests every shared file twice under two ids —

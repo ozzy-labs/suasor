@@ -65,6 +65,12 @@ export const MsGraphConnectorConfig = z.object({
   user: z.string().min(1).default("me"),
   /** Resource families to ingest. */
   resources: z.array(MsGraphResource).default(["mail", "calendar"]),
+  /**
+   * The operator's own email addresses (ADR-0043 決定 2). Empty ⇒ no email
+   * demand is derived at all. See the google connector for why this is
+   * configured rather than read from the API.
+   */
+  self_addresses: z.array(z.string().min(1)).default([]),
 });
 export type MsGraphConnectorConfig = z.infer<typeof MsGraphConnectorConfig>;
 
@@ -106,6 +112,13 @@ interface GraphItem {
   createdDateTime?: string;
   /** DriveItem byte size (drives the extraction size guard, ADR-0024 §5). */
   size?: number;
+  /** Mail fields (ADR-0043 決定 1). */
+  conversationId?: string;
+  from?: { emailAddress?: { address?: string } };
+  toRecipients?: Array<{ emailAddress?: { address?: string } }>;
+  ccRecipients?: Array<{ emailAddress?: { address?: string } }>;
+  isRead?: boolean;
+  internetMessageHeaders?: Array<{ name?: string; value?: string }>;
   /** DriveItem `file` facet (present on files, absent on folders). */
   file?: { hashes?: GraphFileHashes };
 }
@@ -154,7 +167,11 @@ const RESOURCE_SPEC: Record<
 > = {
   mail: {
     sourceType: "ms365_mail",
-    path: (u) => `/users/${u}/messages?$top=50&$select=id,subject,bodyPreview,receivedDateTime`,
+    // The extra $select fields are the email-demand signal (ADR-0043 決定 1):
+    // no additional requests, just stop discarding what the API already returns.
+    path: (u) =>
+      `/users/${u}/messages?$top=50&$select=id,subject,bodyPreview,receivedDateTime,` +
+      "conversationId,from,toRecipients,ccRecipients,isRead,internetMessageHeaders",
   },
   calendar: {
     sourceType: "ms365_calendar",
@@ -236,6 +253,7 @@ function toRecord(
       resource,
       id: item.id,
       ...(resource === "calendar" ? calendarMeta(item) : {}),
+      ...(resource === "mail" ? mailMeta(item) : {}),
     },
     ...(fingerprint ? { fingerprint } : {}),
     ...(extractable !== undefined ? { extractable } : {}),
@@ -268,6 +286,27 @@ function calendarMeta(item: GraphItem): Record<string, unknown> {
     hasAgenda: (item.body?.content ?? item.bodyPreview ?? "").trim().length > 0,
     hasAttachments: item.hasAttachments === true,
     recurring: item.seriesMasterId != null,
+  };
+}
+
+/**
+ * Connector-neutral mail facts for a Graph message (ADR-0043 決定 1) — the same
+ * key names Gmail emits, so the demand derivation needs one SQL branch.
+ */
+function mailMeta(item: GraphItem): Record<string, unknown> {
+  const addr = (a?: { emailAddress?: { address?: string } }) =>
+    (a?.emailAddress?.address ?? "").trim().toLowerCase();
+  const headerNames = new Set(
+    (item.internetMessageHeaders ?? []).map((h) => (h.name ?? "").toLowerCase()),
+  );
+  return {
+    thread: item.conversationId ?? "",
+    from: addr(item.from),
+    to: (item.toRecipients ?? []).map(addr).filter((a) => a.length > 0),
+    cc: (item.ccRecipients ?? []).map(addr).filter((a) => a.length > 0),
+    unread: item.isRead === false,
+    // A mechanical fact (the header is present), never a guess about the subject.
+    bulk: headerNames.has("list-id") || headerNames.has("list-unsubscribe"),
   };
 }
 
