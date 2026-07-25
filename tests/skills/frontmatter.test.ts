@@ -247,3 +247,47 @@ describe("docs quote the real skill count (Issue #518)", () => {
     });
   }
 });
+
+describe("namespace disjointness with the ecosystem dev skills (Issue #520)", () => {
+  /**
+   * Skill names supplied by `@ozzylabs/skills` (drive / lint / commit / …).
+   * ADR-0008 declares the two catalogs namespace-disjoint, and they install
+   * into the *same* host dir — so a shared name means one silently overwrites
+   * the other. That is not hypothetical: the contraction (#501) named a merged
+   * skill `review`, which is also the ecosystem's code-review skill, the one
+   * drive itself runs in its review phase.
+   *
+   * Listed here rather than discovered because the dev catalog ships from a
+   * different repo; a name added there later is caught the next time this list
+   * is refreshed, which is still infinitely better than the zero checks that
+   * let the collision through.
+   */
+  const ECOSYSTEM_SKILLS = [
+    "backlog",
+    "ci-fix",
+    "commit",
+    "commit-conventions",
+    "deps",
+    "drive",
+    "implement",
+    "lessons-triage",
+    "lint",
+    "lint-rules",
+    "policy",
+    "pr",
+    "release",
+    "review",
+    "ship",
+    "skill-metrics",
+    "skill-observability",
+    "test",
+    "usage-guard",
+    "verify",
+  ] as const;
+
+  test("no bundled skill takes an ecosystem dev-skill name", () => {
+    const bundled = new Set(listBundledSkills().map((s) => s.name));
+    const collisions = ECOSYSTEM_SKILLS.filter((name) => bundled.has(name));
+    expect(collisions).toEqual([]);
+  });
+});
