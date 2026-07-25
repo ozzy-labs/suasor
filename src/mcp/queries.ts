@@ -202,7 +202,7 @@ export function getExtractionMeta(
 }
 
 /**
- * A source's full bundle for `source.get.full` (Issue #279): the source record
+ * A source's full bundle for `source.get` with `include` (Issue #279): the source record
  * (metadata + body), its outgoing provenance links, and its extraction-meta
  * sidecar — what otherwise needs `source.get` + `graph.related(out)` + an
  * extraction query in three round-trips, returned in one. `source` is `null`
@@ -218,7 +218,7 @@ export interface SourceFull {
 
 /**
  * Bundle a source's metadata + body, its outgoing provenance links, and its
- * extraction-meta sidecar in one call (`source.get.full`, Issue #279). Reuses
+ * extraction-meta sidecar in one call (`source.get` + `include`, Issue #279). Reuses
  * the existing query layer (`getSource` + `listLinks(direction=out)` +
  * `getExtractionMeta`); a graph entity is addressed as `(kind=source, id=externalId)`.
  * Pure SELECTs (read-only). An unknown id returns `{ source: null, links: [],
@@ -838,7 +838,8 @@ export type DemandSource = "slack" | "github";
 
 /**
  * Seen-state of a demand row (ADR-0041). `acked` / `dismissed` come from the
- * local `demand_seen` projection (a `demand.ack` / `demand.dismiss` event);
+ * local `demand_seen` projection (a `demand.mark` write → DemandAcknowledged /
+ * DemandDismissed event);
  * `read` is derived for a `github_notification` whose ingested `meta.unread` is
  * `false` (already read on GitHub). `null` = outstanding (un-acked) — the only
  * rows `demand.list` returns by default.
@@ -961,7 +962,7 @@ function nameOrNull(value: string | null): string | null {
  *     the reason (e.g. `review_requested`). No slack enrichment (those are null).
  *
  * By default only **outstanding** (un-acked) demand is returned: rows with a
- * `demand_seen` marker (`demand.ack` / `demand.dismiss`, ADR-0041) — or a github
+ * `demand_seen` marker (written by `demand.mark`, ADR-0041) — or a github
  * notification already read on GitHub (`meta.unread === false`) — are hidden. Set
  * `includeSeen` to return everything with `seenState` populated. This is what
  * makes "unprocessed" true (ADR-0012 決定 4's host-side seen-marker is superseded;

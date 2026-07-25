@@ -408,8 +408,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "carry `channelName` / `userName` / `teamName` joined locally from the " +
         "slack_channels / person_identities / slack_teams projections (ADR-0037), or `null` " +
         "when unresolved / for github (fall back to `meta`); never live-fetched. Returns " +
-        "only OUTSTANDING (un-acked) demand by default — rows marked seen via demand.ack / " +
-        "demand.dismiss, or a github notification already read (`meta.unread=false`), are " +
+        "only OUTSTANDING (un-acked) demand by default — rows marked seen via demand.mark, " +
+        "or a github notification already read (`meta.unread=false`), are " +
         "hidden so 'unprocessed' is true (ADR-0041 supersedes ADR-0012 決定 4). Pass " +
         "includeSeen=true to return all with `seenState` populated. Use as the priority " +
         "signal in next-actions / personal-brief. Returns `truncated: true` when more rows " +

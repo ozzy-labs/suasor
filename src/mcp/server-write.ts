@@ -825,7 +825,7 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
   );
 
-  // --- commitment.resolve / .dismiss / .reopen: ledger lifecycle (ADR-0021). ---
+  // --- commitment.set: ledger lifecycle (ADR-0021 / ADR-0046 決定 2). ---
   // The state-transition half of the commitment ledger. Extraction rides the
   // `commitment_scan` propose mode (→ CommitmentOpened); these three move a
   // commitment through its lifecycle. Each appends a Commitment* event. HITL,

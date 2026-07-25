@@ -149,7 +149,7 @@ export const proposals = sqliteTable("proposals", {
  * Commitment ledger (ADR-0021). One row per extracted/confirmed commitment
  * ("約束/コミットメント"), tracking its state through the HITL lifecycle:
  *   - `open`      — confirmed and outstanding (commitment.list shows it)
- *   - `resolved`  — fulfilled (commitment.resolve)
+ *   - `resolved`  — fulfilled (`commitment.set` state="resolved")
  *   - `dismissed` — a false-positive / no-longer-relevant (commitment.dismiss)
  * `direction` records who owes whom (owed_by_me / owed_to_me); `dueDate` and
  * `person` are optional context. Folded from the `Commitment*` events; matched

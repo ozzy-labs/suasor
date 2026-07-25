@@ -1,6 +1,6 @@
 /**
- * Commitment lifecycle write tools — `commitment.resolve` / `commitment.dismiss`
- * / `commitment.reopen` (ADR-0021 / docs/design/mcp-surface.md).
+ * Commitment lifecycle services behind the `commitment.set` write tool
+ * (ADR-0021 / ADR-0046 決定 2 / docs/design/mcp-surface.md).
  *
  * The state-transition half of the commitment ledger: `commitment.list` reads
  * outstanding commitments, the propose pipeline (`commitment_scan` mode) extracts

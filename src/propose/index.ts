@@ -10,7 +10,7 @@
  *   - `decision.record` is the direct human "log decision" path,
  *   - `inbox.add` / `inbox.triage` are the daily inbox capture + resolution loop,
  *   - `link.add` / `link.remove` are the manual knowledge-graph link CRUD (#90),
- *   - `commitment.resolve` / `.dismiss` / `.reopen` drive the commitment ledger
+ *   - `commitment.set` drives the commitment ledger
  *     lifecycle (ADR-0021); extraction rides the `commitment_scan` propose mode,
  *   - `person.merge` / `person.split` resolve connector author identities (#92).
  *
