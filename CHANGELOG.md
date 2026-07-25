@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.2.0](https://github.com/ozzy-labs/suasor/compare/v0.1.22...v0.2.0) (2026-07-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **slack:** the ADR-0014 multi-workspace config shape and the per-alias tokens are removed. Migrate to the flat [connectors.slack] shape with one token pool: keychain connector:slack:tokens via suasor slack auth set, or env SUASOR_CONNECTOR_SLACK_TOKENS. A legacy config fails at load with the mechanical migration message; see docs/guide/connectors.md.
+* **slack:** slack message ids are now canonical slack:<channel>:<ts> with no team prefix. Pre-existing team-prefixed sources remain as a historical lineage; the cleanup and backfill path is documented in docs/guide/connectors.md.
+
+### Features
+
+* **extraction:** ship the bundled 'extraction serve' markitdown sidecar ([#450](https://github.com/ozzy-labs/suasor/issues/450)) ([c31efb1](https://github.com/ozzy-labs/suasor/commit/c31efb1a7eabf6027711fbc5f943e9ce7c2e98b7))
+* **slack:** canonical channel identity, drop owner election ([1f09737](https://github.com/ozzy-labs/suasor/commit/1f0973774131856e3e0216209b05eb602a40adb7))
+* **slack:** follow/unfollow by name + suggest-and-confirm picker ([99be73f](https://github.com/ozzy-labs/suasor/commit/99be73fc0c21eb9c29c577d7cbda5873301e62b0))
+* **slack:** unnamed token pool + reachability fetch + flat config ([6a95b8f](https://github.com/ozzy-labs/suasor/commit/6a95b8fef45e6ee74bc7eca25eb62ab379f126a7))
+
+
+### Bug Fixes
+
+* **brief:** per-section truncated flags (no silent wrong answer) ([#454](https://github.com/ozzy-labs/suasor/issues/454)) ([cd95373](https://github.com/ozzy-labs/suasor/commit/cd9537300ef51fb51d15ecafbd24d3cdfb3165fe))
+* **config:** loopback validation for sidecar baseUrls + allowRemote opt-in (export/extraction/embedding) ([#460](https://github.com/ozzy-labs/suasor/issues/460)) ([d1c4ab5](https://github.com/ozzy-labs/suasor/commit/d1c4ab526e34e8eedb06b7ce827ef5deb66fd1e6))
+* **deps:** clear new hono/body-parser advisories via overrides ([#480](https://github.com/ozzy-labs/suasor/issues/480)) ([0706c23](https://github.com/ozzy-labs/suasor/commit/0706c2347c498d5732c62ea1ba92388d1439dae8))
+* **deps:** clear the fast-uri HIGH advisories via override ([#482](https://github.com/ozzy-labs/suasor/issues/482)) ([a4183b2](https://github.com/ozzy-labs/suasor/commit/a4183b26d68c2750805d79b16f6b9cca5aee6c21))
+* **deps:** force axios &gt;=1.18.1 (GHSA-gcfj-64vw-6mp9); skip harness worktrees in trivy ([#465](https://github.com/ozzy-labs/suasor/issues/465)) ([5657379](https://github.com/ozzy-labs/suasor/commit/56573799fef5e98de037f977e6acc256d0ed2c9c))
+* **embedding:** per-text length cap + failure isolation (long docs poison batches and jam drain) ([#461](https://github.com/ozzy-labs/suasor/issues/461)) ([05aa76b](https://github.com/ozzy-labs/suasor/commit/05aa76be897cb218150ce5ef877d1c0c2c6c88d1))
+* **propose:** enforce recorded rejection and honest HITL boundary (ADR-0004) ([#452](https://github.com/ozzy-labs/suasor/issues/452)) ([60ac6fc](https://github.com/ozzy-labs/suasor/commit/60ac6fcdea7c2e1ac6a3c644a532b5af9f50c90f))
+* **propose:** task/decision identity — scope idempotency to the proposal round-trip, allow recurring titles ([#463](https://github.com/ozzy-labs/suasor/issues/463)) ([ae4a622](https://github.com/ozzy-labs/suasor/commit/ae4a622bb8155a55a69743a02bf2388b60735eed))
+* **retrieval:** japanese short-query correctness + bounded search excerpts ([#451](https://github.com/ozzy-labs/suasor/issues/451)) ([bfa62c8](https://github.com/ozzy-labs/suasor/commit/bfa62c8e3720a687638f8ea8aeb81441e8fa293b))
+* **slack:** reachability failover + team disambiguator for actuators ([#474](https://github.com/ozzy-labs/suasor/issues/474)) ([33fe661](https://github.com/ozzy-labs/suasor/commit/33fe661b499fce03b6664fa1e17f1a48fc927640))
+
+
+### Performance
+
+* **slack:** narrow the reachability sweep to configured channel types ([#473](https://github.com/ozzy-labs/suasor/issues/473)) ([4d784dc](https://github.com/ozzy-labs/suasor/commit/4d784dc30803e9bd41165a99040d092e851157ce))
+
 ## [0.1.22](https://github.com/ozzy-labs/suasor/compare/v0.1.21...v0.1.22) (2026-07-06)
 
 
