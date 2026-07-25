@@ -1,5 +1,5 @@
 ---
-name: review
+name: source-review
 description: 「この設計書レビューして」「この PR レビューして」「前回から何が変わった」「仕様の抜け漏れ確認」「#123 確認して」と頼まれたら、対象（document / pr / diff）を見分けて Suasor MCP の source.get / source.history / search / graph.related を読み取り系で組み合わせ、レビュー所見または変更点の要約を返す。read-only、外部投稿はしない。
 readOnly: true
 category: review
@@ -20,9 +20,11 @@ mcp_tools_read:
 mcp_tools_write: []
 ---
 
-# review
+# source-review
 
-レビューの単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。**target** で振る舞いを決める。read-only。
+取り込み済み素材（document / PR / 版の差分）をレビューする単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。
+
+> **名前について**: `review` ではなく `source-review` なのは、`@ozzylabs/skills` の dev skill `review`（コードレビュー）と**名前空間を分けるため**（[ADR-0008](../../adr/0008-assistant-skills.md)・[#520](https://github.com/ozzy-labs/suasor/issues/520)）。同じ host dir に install されるので、名前が衝突すると一方が他方を上書きして壊す。**target** で振る舞いを決める。read-only。
 
 以前は `doc-review` / `doc-diff` / `pr-review` の 3 本に分かれていたが、ユーザーの「レビューして」からはどれが発火すべきか判別できなかった。違いは**何を見るか**だけである。
 

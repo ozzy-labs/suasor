@@ -35,7 +35,7 @@ MCP tool と skill の**名前が変わった**（後方互換の alias は残�
 | 旧 | 新 |
 |---|---|
 | `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` |
-| `doc-review` / `pr-review` / `doc-diff` | `review` |
+| `doc-review` / `pr-review` / `doc-diff` | `source-review` |
 | `find-document` / `research` | `find` |
 | `meeting-prep` / `action-item-status` | `meeting` |
 | `decision-log` / `decision-rationale` | `decisions` |

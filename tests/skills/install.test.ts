@@ -168,7 +168,7 @@ describe("real bundled catalog", () => {
 
   test("ships the merged read entry points (ADR-0046)", () => {
     const names = listBundledSkills(resolveSkillsSource()).map((s) => s.name);
-    for (const merged of ["brief", "review", "find", "meeting", "decisions", "draft"]) {
+    for (const merged of ["brief", "source-review", "find", "meeting", "decisions", "draft"]) {
       expect(names).toContain(merged);
     }
     // The folded-away names must be gone, not shadowed by a leftover directory.

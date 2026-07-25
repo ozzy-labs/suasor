@@ -15,7 +15,7 @@
 | [`brief`](brief/SKILL.md) | 「今日のまとめ」「前回以降の差分」「週次の棚卸し」「上司向け週次報告」「今どれくらい溜まってる」 | brief / priority.list / task.list / decision.list / inbox.list / demand.list / commitment.list |
 | [`next-actions`](next-actions/SKILL.md) | 「次に何やる」「優先度高いのは」 | priority.list / task.list / search |
 | [`find`](find/SKILL.md) | 「あの資料どこ」「`<X>` について調べて」「網羅的に」 | search / graph.related / brief |
-| [`review`](review/SKILL.md) | 「この設計書レビューして」「この PR レビューして」「前回から何が変わった」 | source.get / source.history / search / graph.related |
+| [`source-review`](source-review/SKILL.md) | 「この設計書レビューして」「この PR レビューして」「前回から何が変わった」 | source.get / source.history / search / graph.related |
 | [`meeting`](meeting/SKILL.md) | 「来週の会議準備」「あの会議から何が実装されたか」 | source.list(calendar) / search / graph.related / task.list |
 | [`decisions`](decisions/SKILL.md) | 「今月の決定」「あの決定はなぜ」 | decision.list / graph.related / search |
 | [`draft`](draft/SKILL.md) | 「リリース告知文書いて」「引き継ぎ書作って」 | search / decision.list / task.list（text-only・persist なし） |
@@ -27,7 +27,7 @@
 | 旧 skill | 新 skill | 引数 |
 |---|---|---|
 | `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` | `period` / `audience` / `focus` |
-| `doc-review` / `pr-review` / `doc-diff` | `review` | `target` |
+| `doc-review` / `pr-review` / `doc-diff` | `source-review` | `target` |
 | `find-document` / `research` | `find` | `depth` |
 | `meeting-prep` / `action-item-status` | `meeting` | `phase` |
 | `decision-log` / `decision-rationale` | `decisions` | `mode` |

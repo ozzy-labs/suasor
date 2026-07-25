@@ -10,7 +10,7 @@ triggers:
   - <Y> の経緯
   - 網羅的に教えて
 pairs:
-  - review
+  - source-review
   - decisions
 mcp_tools_read:
   - search
