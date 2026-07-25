@@ -56,10 +56,31 @@ export const GoogleConnectorConfig = z.object({
   calendarId: z.string().min(1).default("primary"),
   /** Resource families to ingest. */
   resources: z.array(GoogleResource).default(["drive", "gmail", "calendar"]),
+  /**
+   * The operator's own email addresses (ADR-0043 決定 2), lowercased on read.
+   * Email demand — "addressed to me and still unanswered" — cannot be derived
+   * without knowing who "me" is, so an empty list means **no email demand at
+   * all** (the same shape as Slack's `self_user_ids`).
+   *
+   * Not auto-derived from the API on purpose: aliases, former addresses and
+   * distribution lists (`team@`) are all legitimately "me", and the single
+   * primary address a profile call returns would silently miss them.
+   */
+  self_addresses: z.array(z.string().min(1)).default([]),
 });
 export type GoogleConnectorConfig = z.infer<typeof GoogleConnectorConfig>;
 
 export const GOOGLE_CONNECTOR_NAME = "google";
+
+/**
+ * The operator's own addresses from a connector slice, lowercased and
+ * de-duplicated (ADR-0043 決定 2). Mirrors `resolveSelfUserIds` for Slack.
+ */
+export function resolveSelfAddresses(config: ConnectorConfig): string[] {
+  const raw = (config as { self_addresses?: unknown } | undefined)?.self_addresses;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((a) => String(a).trim().toLowerCase()).filter((a) => a.length > 0))];
+}
 
 /** Milliseconds in a day — the calendar window is expressed in days. */
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -119,6 +140,46 @@ export interface CalendarMeta {
   recurring: boolean;
 }
 
+/**
+ * Mail facts, in connector-neutral form (ADR-0043 決定 1) — identical key names
+ * across Gmail and Graph so the demand derivation needs one SQL branch.
+ *
+ * Addresses are lowercased at ingest so comparison never needs `LOWER()` at
+ * query time. `bulk` is a *mechanical* fact (a List-Id / List-Unsubscribe
+ * header), deliberately not a heuristic over subjects: newsletters routinely
+ * address you in To, and letting them into the demand tier would recreate the
+ * "pile of unprocessed" that ADR-0041 removed.
+ */
+export interface MailMeta {
+  /** Thread id (`threadId` / `conversationId`) — demand is per thread. */
+  thread: string;
+  /** Sender address, lowercased. */
+  from: string;
+  /** To recipients, lowercased. */
+  to: string[];
+  /** Cc recipients, lowercased. */
+  cc: string[];
+  /** Whether the message is unread (auxiliary; never the demand predicate). */
+  unread: boolean;
+  /** Whether the message carries list headers (newsletter / automated). */
+  bulk: boolean;
+}
+
+/** Extract the bare address from a header value like `Name <a@b.com>`. */
+export function parseAddress(value: string): string {
+  const angled = /<([^>]+)>/.exec(value);
+  return (angled?.[1] ?? value).trim().toLowerCase();
+}
+
+/** Split a To/Cc header into lowercased bare addresses. */
+export function parseAddressList(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === "") return [];
+  return value
+    .split(",")
+    .map((part) => parseAddress(part))
+    .filter((a) => a.length > 0);
+}
+
 /** A normalized Google item the connector maps into a record. */
 export interface GoogleItem {
   id: string;
@@ -134,6 +195,12 @@ export interface GoogleItem {
    * derivation needs one SQL branch, not one per connector.
    */
   calendar?: CalendarMeta;
+  /**
+   * Mail-only: thread, participants and state, in connector-neutral form
+   * (ADR-0043 決定 1). Gmail already fetches the full payload and discards
+   * these headers, so this costs zero extra API calls.
+   */
+  mail?: MailMeta;
   /**
    * Drive file MIME type (Drive items only). Google-native types
    * (`application/vnd.google-apps.*`) are exported; everything else is downloaded
@@ -257,7 +324,12 @@ function toRecord(
     sourceType: SOURCE_TYPE[resource],
     body,
     observedAt: item.observedAt,
-    meta: { resource, id: item.id, ...(item.calendar !== undefined ? item.calendar : {}) },
+    meta: {
+      resource,
+      id: item.id,
+      ...(item.calendar !== undefined ? item.calendar : {}),
+      ...(item.mail !== undefined ? item.mail : {}),
+    },
     ...(fingerprint ? { fingerprint } : {}),
     ...(extractable !== undefined ? { extractable } : {}),
   };
@@ -337,13 +409,26 @@ const defaultGoogleClientFactory: GoogleClientFactory = async ({
         for (const m of list.data.messages ?? []) {
           const full = await gmail.users.messages.get({ userId: "me", id: m.id ?? "" });
           const headers = full.data.payload?.headers ?? [];
-          const subject = headers.find((h) => h.name === "Subject")?.value ?? "";
+          const header = (name: string) =>
+            headers.find((h) => h.name?.toLowerCase() === name)?.value ?? undefined;
+          const subject = header("subject") ?? "";
           const internal = Number(full.data.internalDate ?? 0);
+          const labels = full.data.labelIds ?? [];
           items.push({
             id: m.id ?? "",
             title: subject,
             detail: full.data.snippet ?? "",
             observedAt: new Date(internal).toISOString(),
+            // Already-fetched headers that used to be read and thrown away
+            // (ADR-0043 決定 1) — zero additional requests.
+            mail: {
+              thread: full.data.threadId ?? "",
+              from: parseAddress(header("from") ?? ""),
+              to: parseAddressList(header("to")),
+              cc: parseAddressList(header("cc")),
+              unread: labels.includes("UNREAD"),
+              bulk: header("list-id") !== undefined || header("list-unsubscribe") !== undefined,
+            },
           });
         }
         return { items, nextPageToken: list.data.nextPageToken ?? undefined };

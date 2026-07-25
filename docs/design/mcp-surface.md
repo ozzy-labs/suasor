@@ -239,6 +239,12 @@ CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json
 > **`bodyDroppedAt`**（[#498](https://github.com/ozzy-labs/suasor/issues/498) / [ADR-0047](../adr/0047-storage-lifecycle.md)）: retention が本文を落とした時刻。`null` なら本文は健在。**非 null + 空 `body` は「storage を抑えるために削除した」であって「本文が元々無い」ではない** — 空文字だけを黙って返すのは [ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer" に反するため明示する。メタデータ・provenance link・embedding は残っているので、source 自体は引き続き発見できる。
 >
 > **`source.list` の `startsAfter` / `startsBefore`**（[ADR-0044](../adr/0044-calendar-proximity-signals.md) 決定 2 / [#490](https://github.com/ozzy-labs/suasor/issues/490)）: calendar event の**自身の開始時刻**（`meta.start`）に対する窓。`observedAfter` / `observedBefore` は**更新時刻**の窓であり、「来週の会議」をそちらで引くと**別の問いに答える**（最近編集された予定が返る）。`meta.start` を持たない行は除外。
+>
+> **email demand**（[ADR-0043](../adr/0043-email-demand-signals.md) / [#488](https://github.com/ozzy-labs/suasor/issues/488)）: `demand.list` の `source` に `email` が加わった（gmail / outlook 双方。ユーザーの心的モデルは「メール」であり、由来は `sourceType` に残る）。**スレッド単位**で、自分宛て（To/Cc）かつ**未返信**の最新 inbound 1 行が代表。`kind` は `to` / `cc`。
+>
+> **返信すれば ack なしで消える**（自分の返信が sync で入ると述語が破れる）。**新着で再浮上する**（代表行が変わる）。newsletter は `List-Id` / `List-Unsubscribe` という**機械的事実**で除外し、bcc / 配信は「To/Cc に自分がいる」条件で構造的に除外する。`self_addresses` 未設定なら**常に空**（`doctor` が警告する）。
+>
+> ランキングでは `to` のみが **aging**（古いほど高い）で、`cc` は mention と同じく減衰する（[ADR-0045](../adr/0045-priority-ranking-model.md)）。
 
 ### `sync.status`（確定・read・#442）
 

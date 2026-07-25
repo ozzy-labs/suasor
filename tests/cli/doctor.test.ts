@@ -748,4 +748,41 @@ describe("suasor doctor", () => {
     // Reading a synced folder is fine on its own — nothing is duplicated.
     expect(report.checks.filter((c) => c.name === "connectors.overlap")).toHaveLength(0);
   });
+
+  test("warns when a mail connector has no self_addresses (#488)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.google]\nclientId = "x"\nresources = ["gmail"]\n');
+    process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN = "rt";
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const warn = report.checks.find((c) => c.name === "connectors.self_addresses");
+    // Without it, email demand is silently always empty — the same failure
+    // shape as Slack's self_user_ids.
+    expect(warn?.status).toBe("warn");
+    expect(warn?.detail).toContain("always empty");
+    delete process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN;
+  });
+
+  test("no self_addresses warning once they are configured (#488)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      '[connectors.google]\nclientId = "x"\nresources = ["gmail"]\nself_addresses = ["me@example.com"]\n',
+    );
+    process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.filter((c) => c.name === "connectors.self_addresses")).toHaveLength(0);
+    delete process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN;
+  });
+
+  test("no self_addresses warning when the connector ingests no mail (#488)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.google]\nclientId = "x"\nresources = ["drive"]\n');
+    process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.filter((c) => c.name === "connectors.self_addresses")).toHaveLength(0);
+    delete process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN;
+  });
 });

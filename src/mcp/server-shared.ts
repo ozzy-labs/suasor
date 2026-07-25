@@ -70,6 +70,12 @@ export interface McpServerDeps {
    */
   slackSelfUserIds?: string[];
   /**
+   * Operator email addresses for email demand (ADR-0043 決定 2), resolved from
+   * `[connectors.google]` / `[connectors.ms-graph]`. Empty/omitted ⇒ no email
+   * demand is derived — "addressed to me" is underivable without it.
+   */
+  selfAddresses?: string[];
+  /**
    * Whether the Slack connector is configured at all (`[connectors.slack]`
    * present), independent of whether a `self_user_id` is set (Issue #189). Drives
    * the `brief` completeness signal `slack_not_configured` so the host can tell

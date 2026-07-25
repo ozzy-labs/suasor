@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Config, collectConfigWarnings, loadConfig } from "../config/index.ts";
 import { syncFreshnessInputs } from "../connectors/freshness.ts";
+import { resolveSelfAddresses } from "../connectors/google.ts";
 import { connectorNames } from "../connectors/registry.ts";
 import type { SecretStoreOptions } from "../connectors/secrets.ts";
 import { resolveSelfUserIds } from "../connectors/slack.ts";
@@ -99,6 +100,13 @@ function defaultBuildServer({
     ...(embedder !== undefined ? { embedder } : {}),
     // Operator user ids for demand.list / priority.list @mention detection (ADR-0012/ADR-0041).
     slackSelfUserIds: resolveSelfUserIds(config.connectors.slack ?? {}),
+    // Email demand needs to know who "me" is (ADR-0043 決定 2). Both mail
+    // connectors contribute, since a person's work and personal addresses can
+    // live in different providers.
+    selfAddresses: [
+      ...resolveSelfAddresses(config.connectors.google ?? {}),
+      ...resolveSelfAddresses(config.connectors["ms-graph"] ?? {}),
+    ],
     // Whether [connectors.slack] is configured at all — drives the brief
     // `slack_not_configured` completeness signal (Issue #189), independent of
     // whether a self_user_id is set.

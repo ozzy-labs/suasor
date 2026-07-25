@@ -461,6 +461,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       const { rows: demand, truncated } = listWithTruncation(effLimit, (probeLimit) =>
         listDemand(sqlite, {
           selfUserIds,
+          ...(deps.selfAddresses !== undefined ? { selfAddresses: deps.selfAddresses } : {}),
           ...(source ? { source } : {}),
           ...(kinds ? { kinds } : {}),
           ...(includeSeen !== undefined ? { includeSeen } : {}),
@@ -506,6 +507,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       const selfUserIds = selfUserId ? [selfUserId] : (deps.slackSelfUserIds ?? []);
       const priorities = buildPriorities(sqlite, {
         selfUserIds,
+        ...(deps.selfAddresses !== undefined ? { selfAddresses: deps.selfAddresses } : {}),
         ...(limit !== undefined ? { limit } : {}),
       });
       return jsonResult(priorities);
@@ -541,6 +543,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         until: effUntil,
         ...(limit !== undefined ? { limit } : {}),
         selfUserIds: deps.slackSelfUserIds ?? [],
+        ...(deps.selfAddresses !== undefined ? { selfAddresses: deps.selfAddresses } : {}),
         // Completeness signals (Issue #189): mark categories empty because they
         // are unconfigured (Slack not wired / embedding disabled) so the host
         // can distinguish "not connected" from "genuinely quiet".
