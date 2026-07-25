@@ -693,6 +693,12 @@ export interface CommitmentRecord {
   personId: string | null;
   /** Canonical display name for `personId`; null when unresolved or unnamed. */
   personName: string | null;
+  /**
+   * Whether the commitment is past due and still open — derived at read time
+   * from an injectable `now`, never stored (ADR-0028's discipline, applied to
+   * the ledger in Issue #509).
+   */
+  overdue: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -726,6 +732,16 @@ export interface ListCommitmentsOptions {
   /** Window over `updated_at`. */
   updated?: TimeRange;
   limit?: number;
+  /** Keep only commitments with `due_date < dueBefore` (ISO 8601, mirrors task.list). */
+  dueBefore?: string;
+  /** Keep only overdue commitments (read-time derived: past due AND still open). */
+  overdue?: boolean;
+  /**
+   * Reference "now" for the overdue derivation (ISO 8601). Injectable so the
+   * boundary is deterministic under test (ADR-0028's discipline); defaults to
+   * the current wall clock.
+   */
+  now?: string;
 }
 
 /**
@@ -803,7 +819,20 @@ export function listCommitments(
     }
   }
   pushTimeRange(clauses, params, "c.updated_at", options.updated);
+  const now = options.now ?? new Date().toISOString();
+  if (options.dueBefore !== undefined) {
+    clauses.push("c.due_date IS NOT NULL AND c.due_date < ?");
+    params.push(options.dueBefore);
+  }
+  if (options.overdue === true) {
+    // Same derivation as the ORDER BY below, expressed as a filter.
+    clauses.push("c.due_date IS NOT NULL AND c.due_date < ? AND c.state = 'open'");
+    params.push(now);
+  }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  // The ORDER BY classifies overdue with the same `now`; bound before `limit`
+  // so the positional parameter order stays correct.
+  params.push(now);
   params.push(options.limit ?? DEFAULT_LIST_LIMIT);
   // `person_name` is the canonical display name when the row resolved to a
   // person; the raw `person` string stays authoritative for display, so a host
@@ -815,7 +844,21 @@ export function listCommitments(
          FROM commitments c
          LEFT JOIN persons p ON p.id = c.person_id
          ${where}
-        ORDER BY c.updated_at DESC
+        ORDER BY
+          -- Urgency, not recency (Issue #509). Ordering by updated_at alone put
+          -- the promises most in need of chasing — long-untouched and overdue —
+          -- last, where the row limit truncates them first, which defeated the
+          -- entire point of the commitment-chase surface.
+          CASE
+            WHEN c.due_date IS NOT NULL AND c.due_date < ? AND c.state = 'open' THEN 0
+            WHEN c.due_date IS NOT NULL THEN 1
+            ELSE 2
+          END ASC,
+          -- Overdue: longest overdue first. Dated: soonest first. Both are
+          -- due_date ASC, so one clause serves the two tiers.
+          CASE WHEN c.due_date IS NULL THEN 1 ELSE 0 END ASC,
+          c.due_date ASC,
+          c.updated_at DESC
         LIMIT ?`,
     )
     .all(...params);
@@ -828,6 +871,7 @@ export function listCommitments(
     person: r.person,
     personId: r.person_id,
     personName: r.person_name !== null && r.person_name !== "" ? r.person_name : null,
+    overdue: r.due_date !== null && r.due_date < now && r.state === "open",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));

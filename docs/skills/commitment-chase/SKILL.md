@@ -32,10 +32,10 @@ mcp_tools_write: []
 
 すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。副作用なし・エージェント自律 OK。**専用 tool は追加しない**（既存合成、[ADR-0008](../../adr/0008-assistant-skills.md)）。
 
-1. `commitment.list`（`state=open`, `direction=owed_to_me`）で相手が負う未解決の約束を引く。各 commitment は `title` / `dueDate?` / `person?`（記録どおりの生文字列）/ `personId?` / `personName?`（person identity graph で解決した正規化人物・[ADR-0022](../../adr/0022-person-identity-resolution.md)）/ `updated_at`（[ADR-0021](../../adr/0021-commitment-ledger.md)）
+1. `commitment.list`（`state=open`, `direction=owed_to_me`）で相手が負う未解決の約束を引く。**既定で緊急度順**（期限超過が先頭・超過が長い順 → 期日が近い順 → 期日なし）で返り、各行に read 時派生の `overdue` が付く（[#509](https://github.com/ozzy-labs/suasor/issues/509)）。超過分だけ欲しいときは `overdue: true` で絞る。各 commitment は `title` / `dueDate?` / `person?`（記録どおりの生文字列）/ `personId?` / `personName?`（person identity graph で解決した正規化人物・[ADR-0022](../../adr/0022-person-identity-resolution.md)）/ `updated_at`（[ADR-0021](../../adr/0021-commitment-ledger.md)）
 2. 期限超過（`dueDate` が現在時刻より過去）の約束をホスト側で抽出する。overdue 判定は read 時のホスト側合成（`dueDate < now`）で行う。`dueDate` を持たない約束は催促対象外（期限がないため）として別枠で軽く触れるに留める
 3. `graph.related`（各 commitment id 起点、`direction=in`）で約束の出所 source を辿り、`source.get` で本文を補って「誰に・何を・いつ約束してもらったか」を再構成する（provenance、[ADR-0018](../../adr/0018-knowledge-graph-traversal.md)）
-4. ホスト LLM が期限超過の約束ごとに催促文ドラフトを **text-only** で組み立てて提示する。まとめる単位は **`personId`（あれば）** — 同一人物の Slack / GitHub 別名で記録された約束が別人として 2 通に割れないようにする。`personId` が無い行は生の `person` 文字列でまとめる。緊急度（超過日数）順に並べる
+4. ホスト LLM が期限超過の約束ごとに催促文ドラフトを **text-only** で組み立てて提示する。並び替えは不要（基線が既に緊急度順）。まとめる単位は **`personId`（あれば）** — 同一人物の Slack / GitHub 別名で記録された約束が別人として 2 通に割れないようにする。`personId` が無い行は生の `person` 文字列でまとめる。緊急度（超過日数）順に並べる
 
 > 特定の相手だけ追うときは `commitment.list` の `person` フィルタを使う。identity graph 越しに一致するので、`slack:U123` / 素の handle / 表示名のどれで引いても同一人物の約束がすべて出る。
 
