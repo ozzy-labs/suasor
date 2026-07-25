@@ -84,11 +84,11 @@ Aggregates the event log by `type` (`COUNT(*) GROUP BY type`, read-only) and pri
 
 ## Nothing in search (FTS is fine but recall is empty)
 
-Results appear in `suasor search` (FTS5 full-text search) but `recall.search` (semantic search) is empty, or recall does not work even after enabling embedding. Embedding is an **optional add-on**; FTS works fully even when it is off ([ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)).
+Results appear in `suasor search` (FTS5 full-text search) but 意味検索 (semantic search) is empty, or recall does not work even after enabling embedding. Embedding is an **optional add-on**; FTS works fully even when it is off ([ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)).
 
 ### embedding sidecar down / `embedding_disabled`
 
-- When the backend is **unset (disabled by default)**, `recall.search` returns empty plus an `embedding_disabled` signal, and the host falls back to `search` (FTS) — graceful degradation. This is behaving as designed.
+- When the backend is **unset (disabled by default)**, 意味検索 returns empty plus an `embedding_disabled` signal, and the host falls back to `search` (FTS) — graceful degradation. This is behaving as designed.
 - recall is empty despite an enabled backend → the sidecar (Ollama) may be down, or an external API key may not resolve. `suasor doctor`'s embedding check surfaces this (an unresolved API key is a readiness WARN).
 - Embedding during a sync run is **best-effort**. A sidecar failure stays a warning (stderr) and the ingest itself still succeeds (`warning: <connector> embedding skipped: ...`). To backfill embeddings afterward:
 
@@ -125,7 +125,7 @@ Results appear in `suasor search` (FTS5 full-text search) but `recall.search` (s
 
 ## Ingested Office/PDF but the body text isn't searchable
 
-You ingested Word / Excel / PowerPoint / PDF but `search` / `recall.search` does not hit the **body text** — only the filename matches. These are ingested **name-only** (body not extracted) by default; making the body searchable needs the `[extraction]` sidecar ([ADR-0024](../adr/0024-document-extraction-sidecar.md) / [extraction guide](extraction.md)). It is a silent "sync is exit 0 but there is no body" symptom, and it has several causes.
+You ingested Word / Excel / PowerPoint / PDF but `search` / 意味検索 does not hit the **body text** — only the filename matches. These are ingested **name-only** (body not extracted) by default; making the body searchable needs the `[extraction]` sidecar ([ADR-0024](../adr/0024-document-extraction-sidecar.md) / [extraction guide](extraction.md)). It is a silent "sync is exit 0 but there is no body" symptom, and it has several causes.
 
 First make the current state visible (roll-up → drilldown):
 

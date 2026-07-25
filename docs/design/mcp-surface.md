@@ -9,8 +9,8 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 | tool | 役割 | 状態 |
 |---|---|---|
 | `search` | FTS5 全文検索（`sourceType` / `observed*` フィルタ可、[retrieval](retrieval.md)） | #8 実装済（フィルタ #142） |
-| `recall.search` | 意味検索（embedding 有効時の vec0 KNN。`sourceType` / `observed*` フィルタ可。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]、フィルタ #142） |
-| `search.hybrid` | FTS × 意味検索の RRF 融合（`sourceType` / `observed*` フィルタ可。embedding 無効時は FTS のみに degrade、[retrieval](retrieval.md)） | 実装済み（#142。下記参照） |
+| 意味検索 | 意味検索（embedding 有効時の vec0 KNN。`sourceType` / `observed*` フィルタ可。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]、フィルタ #142） |
+| `search（mode=hybrid）` | FTS × 意味検索の RRF 融合（`sourceType` / `observed*` フィルタ可。embedding 無効時は FTS のみに degrade、[retrieval](retrieval.md)） | 実装済み（#142。下記参照） |
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
 | `source.get.full` | source の metadata + body + outgoing provenance links + extraction_meta を 1 コールでバンドル（`source.get` + `graph.related(out)` + 抽出 sidecar の再利用、#279） | 実装済み（#279。下記参照） |
 | `source.history` | source の本文版を event log から新しい順に取得（真の差分用、#121） | 実装済み（下記参照） |
@@ -71,9 +71,9 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 - `analyzedQuery` は FTS / LIKE fallback とも whitespace 分割トークン（fallback も per-token AND のため）。痩せ/空結果の原因（何が検索されたか）を可視化する
 - **payload 抑制（retrieval-m2）**: 既定は全文ではなく hit ごとの上限付き `excerpt`（既定 240 code point）。lexical hit はマッチ位置中心、recall は先頭 N chars を切り出す。全文は `source.get` に委譲し、`fullBody: true` で `body`（全文）、`maxBodyChars` で excerpt 長を上書き（[ADR-0018](0018-knowledge-graph-traversal.md) の payload 抑制原則を search に適用）
 - ランキング・短クエリ fallback・クエリエスケープの詳細は [retrieval](retrieval.md) を参照
-- 意味検索が要るケースは `recall.search`（embedding 有効時）へ
+- 意味検索が要るケースは 意味検索（embedding 有効時）へ
 
-### `recall.search`（意味検索・graceful degradation・ADR-0005）
+### 意味検索（意味検索・graceful degradation・ADR-0005）
 
 引数は `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit` / `fullBody?` / `maxBodyChars?`）。embedding backend が有効なときは query を埋め込み、`vec0` の KNN で最近傍 source を引いて `search` と同形の hits を返す（`strategy` は無く、`score` は L2 distance ＝ 小さいほど近い・best-first）。hits も `search` と同様、既定は上限付き `excerpt`（recall は先頭 N chars）で `fullBody` / `maxBodyChars` に対応する（retrieval-m2）。`sourceType` / `observed*` フィルタは JOIN 済み `sources` 行への post-filter で適用する（KNN は多めに引いてから絞る、#142）。詳細は [retrieval](retrieval.md)。
 
@@ -84,9 +84,9 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 
 `reason` は診断用の補助（host は `signal` を見る）。ingest 時の文書 embedding と query embedding は同一モデルで、`[embedding].model` が両者を駆動する（[config](config.md) / [retrieval](retrieval.md)）。
 
-### `search.hybrid`（確定・read・RRF 融合・#142）
+### `search（mode=hybrid）`（確定・read・RRF 融合・#142）
 
-`search`（FTS）と `recall.search`（vec）を**両方走らせ**、2 つのランク済みリストを Reciprocal Rank Fusion（RRF）で融合する read tool。lexical（完全一致）と semantic（言語跨ぎ・語彙ミスマッチ）の盲点を相互補完する。FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）を保ったままの additive 拡張で、新 ADR は不要（融合方式の詳細は [retrieval](retrieval.md) の Hybrid 節）。
+`search`（FTS）と 意味検索（vec）を**両方走らせ**、2 つのランク済みリストを Reciprocal Rank Fusion（RRF）で融合する read tool。lexical（完全一致）と semantic（言語跨ぎ・語彙ミスマッチ）の盲点を相互補完する。FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）を保ったままの additive 拡張で、新 ADR は不要（融合方式の詳細は [retrieval](retrieval.md) の Hybrid 節）。
 
 引数（Zod）: `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit` / `fullBody?` / `maxBodyChars?`）。フィルタ・limit・body 射影は両経路に適用される。
 
@@ -109,7 +109,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 ```
 
 - **融合**: 各リストの 0-based rank に `1 / (k + rank)`（`k` 既定 60）を寄与とし `externalId` ごとに合算。両リストにヒットした文書は両寄与を得て上位化。重複 `externalId` は dedup（両側に居れば FTS 側 hit を代表とし lexical の `excerpt` / `body` / `score` を保持）。同点は `externalId` 昇順で決定的
-- **graceful degrade**: embedding 無効 / サイドカー到達不能のときは FTS のみで融合（実質パススルー）し、`recall.search` と同じ `embedding_disabled` シグナルを付与する（hard error にしない）
+- **graceful degrade**: embedding 無効 / サイドカー到達不能のときは FTS のみで融合（実質パススルー）し、`mode=semantic` と同じ `embedding_disabled` シグナルを付与する（hard error にしない）
 
 ### `source.list` / `source.get`
 
@@ -317,7 +317,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 }
 ```
 
-`[embedding].backend` が有効なとき、新規 / 本文変更 source（`observed` + `updated`）は同一モデルで埋め込まれ vec0 に populate される（`recall.search` 用、[retrieval](retrieval.md)）。embedding は best-effort で、サイドカー失敗時も取り込み自体は成功する（FTS は反映済み・`embedded` が 0 になるだけ）。
+`[embedding].backend` が有効なとき、新規 / 本文変更 source（`observed` + `updated`）は同一モデルで埋め込まれ vec0 に populate される（意味検索 用、[retrieval](retrieval.md)）。embedding は best-effort で、サイドカー失敗時も取り込み自体は成功する（FTS は反映済み・`embedded` が 0 になるだけ）。
 
 `[extraction].backend` が有効なとき、新規 / 変更された extractable な source（Office/PDF。`local` 先行、API connector は [ADR-0034](../adr/0034-api-connector-extraction.md) で段階展開）は本文がサイドカー抽出テキストに差し替えられる（`extracted`、[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。抽出も best-effort で、unsupported / oversized / 失敗時は name-only に degrade（取り込みは成功）。抽出は fingerprint 確定前・embedding 前に走るため、embedding は抽出テキストを埋め込む。
 

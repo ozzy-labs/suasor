@@ -41,7 +41,7 @@ export interface McpServerDeps {
   log?: (message: string) => void;
   /**
    * Effective `[embedding]` config. When `backend !== "disabled"` (and the
-   * backend is implemented), `recall.search` runs real vec0 semantic search
+   * backend is implemented), `search` (mode=semantic/hybrid) runs real vec0 semantic search
    * with the configured model; otherwise it returns the `embedding_disabled`
    * signal so the host falls back to FTS `search` (ADR-0005 graceful degrade).
    *

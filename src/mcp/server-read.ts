@@ -79,8 +79,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     });
   };
 
-  // Shared body-projection args for the retrieval tools (search / recall.search /
-  // search.hybrid). By default each hit returns a bounded excerpt, not the full
+  // Shared body-projection args for the retrieval tool (`search`, every mode).
+  // By default each hit returns a bounded excerpt, not the full
   // body, so a multi-hit response can't overflow the host context; the full text
   // is fetched via source.get (retrieval-m2 / ADR-0018 payload suppression).
   const fullBodyShape = z
@@ -96,21 +96,38 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     .optional()
     .describe(`Max characters per hit excerpt (default ${DEFAULT_EXCERPT_CHARS}).`);
 
-  // --- search: FTS-first full-text search (ADR-0005, the default path). ---
+  // --- search: the single retrieval entry point (ADR-0046 決定 2). ---
+  // Was three tools (`search` / `recall.search` / `search.hybrid`), which pushed
+  // the choice of *retrieval algorithm* onto a host that was only asked to find
+  // something — and got it wrong in both directions (semantic when embeddings are
+  // off, FTS when they are on). `mode` keeps every path reachable, and `auto`
+  // (the default) picks the best available one from the backend state.
   server.registerTool(
     "search",
     {
       title: "Search",
       description:
-        "Full-text search over ingested source bodies (SQLite FTS5, FTS-first). " +
-        "Handles Japanese and English uniformly; short queries fall back to a " +
-        "per-token substring scan. Optionally filter by source_type and an " +
+        "Search ingested source bodies. `mode` selects the retrieval path and " +
+        "defaults to `auto`: hybrid (FTS × semantic, RRF-fused) when an embedding " +
+        "backend is available, plain FTS otherwise — so callers do not have to know " +
+        "the backend state. `fts` is SQLite FTS5 (handles Japanese and English " +
+        "uniformly; short queries fall back to a per-token substring scan). " +
+        "`semantic` is vec0 KNN, crossing the wall FTS cannot (JA↔EN, vocabulary " +
+        "mismatch). `hybrid` fuses both with Reciprocal Rank Fusion. When a semantic " +
+        "path is requested but unavailable, results degrade (to empty for `semantic`, " +
+        "to FTS-only for `hybrid`/`auto`) and carry an `embedding_disabled` signal " +
+        "(ADR-0005) — never an error. Optionally filter by source_type and an " +
         "observed_after/observed_before window (lower bound inclusive, upper " +
-        "exclusive). Returns ranked hits best-first. Each hit carries a bounded " +
-        "`excerpt` (not the full body) by default — fetch full text via " +
-        "source.get, or pass fullBody=true (ADR-0018).",
+        "exclusive). Each hit carries a bounded `excerpt` (not the full body) by " +
+        "default — fetch full text via source.get, or pass fullBody=true (ADR-0018).",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
+        mode: z
+          .enum(["auto", "fts", "semantic", "hybrid"])
+          .optional()
+          .describe(
+            "Retrieval path (default `auto`: hybrid when embeddings are available, else fts).",
+          ),
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
@@ -120,125 +137,63 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ query, sourceType, observedAfter, observedBefore, limit, fullBody, maxBodyChars }) => {
-      const result = searchSources(sqlite, query, {
-        limit: limit ?? DEFAULT_SEARCH_LIMIT,
-        ...(sourceType !== undefined ? { sourceType } : {}),
-        ...(observedAfter !== undefined ? { observedAfter } : {}),
-        ...(observedBefore !== undefined ? { observedBefore } : {}),
-        ...(fullBody !== undefined ? { fullBody } : {}),
-        ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
-      });
-      return jsonResult(result);
-    },
-  );
-
-  // --- recall.search: semantic (embedding) search, graceful-degraded. ---
-  server.registerTool(
-    "recall.search",
-    {
-      title: "Recall (semantic search)",
-      description:
-        "Semantic (embedding) search over ingested sources (vec0 KNN). Crosses the " +
-        "wall FTS cannot (JA↔EN, vocabulary mismatch). When no embedding backend is " +
-        "enabled — or the sidecar is unreachable — it returns empty results with an " +
-        "`embedding_disabled` signal so the host can fall back to `search` (ADR-0005). " +
-        "Optionally filter by source_type and an observed_after/observed_before " +
-        "window (lower bound inclusive, upper exclusive; applied as a post-filter). " +
-        "Each hit carries a bounded `excerpt` (not the full body) by default — " +
-        "fetch full text via source.get, or pass fullBody=true (ADR-0018).",
-      inputSchema: {
-        query: z.string().min(1).describe("Free-text query."),
-        sourceType: z.string().min(1).optional().describe("Filter by source_type."),
-        observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
-        observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
-        limit: limitShape.describe(`Max hits (default ${DEFAULT_RECALL_LIMIT}).`),
-        fullBody: fullBodyShape,
-        maxBodyChars: maxBodyCharsShape,
-      },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    async ({ query, sourceType, observedAfter, observedBefore, limit, fullBody, maxBodyChars }) => {
-      // No embedder (backend disabled or unimplemented) → embedding_disabled.
-      if (embedder === null) {
-        return jsonResult({
-          hits: [],
-          signal: EMBEDDING_DISABLED_SIGNAL,
-          reason: "backend_disabled",
-        });
-      }
-      try {
-        const result = await recallSearch(sqlite, embedder, query, {
-          limit: limit ?? DEFAULT_RECALL_LIMIT,
-          ...(sourceType !== undefined ? { sourceType } : {}),
-          ...(observedAfter !== undefined ? { observedAfter } : {}),
-          ...(observedBefore !== undefined ? { observedBefore } : {}),
-          ...(fullBody !== undefined ? { fullBody } : {}),
-          ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
-        });
-        return jsonResult(result);
-      } catch (error) {
-        // A sidecar failure (Ollama down, etc.) must NOT hard-error: degrade to
-        // the same signal so the host keeps working via FTS `search` (ADR-0005).
-        if (error instanceof EmbeddingError) {
-          return jsonResult({
-            hits: [],
-            signal: EMBEDDING_DISABLED_SIGNAL,
-            reason: "backend_unreachable",
-          });
-        }
-        throw error;
-      }
-    },
-  );
-
-  // --- search.hybrid: RRF fusion of FTS + semantic hits (ADR-0005 range). ---
-  // Read tool: runs `search` (FTS) and `recall.search` (vec) and fuses the two
-  // ranked lists with Reciprocal Rank Fusion (src/retrieval/hybrid.ts), so each
-  // path covers the other's blind spot. When no embedding backend is available
-  // — or the sidecar is unreachable — it gracefully degrades to FTS-only and
-  // reports the `embedding_disabled` signal (same contract as recall.search).
-  server.registerTool(
-    "search.hybrid",
-    {
-      title: "Hybrid search (FTS × semantic RRF)",
-      description:
-        "Hybrid retrieval: fuse FTS (`search`) and semantic (`recall.search`) hits " +
-        "with Reciprocal Rank Fusion, so lexical and semantic matches reinforce each " +
-        "other (best of both). Filters (source_type + observed window) and limit apply " +
-        "to both paths. When no embedding backend is enabled — or the sidecar is " +
-        "unreachable — it degrades to FTS-only and returns the `embedding_disabled` " +
-        "signal (ADR-0005). Hits carry an `rrfScore` (higher = better, best-first). " +
-        "Each hit carries a bounded `excerpt` (not the full body) by default — " +
-        "fetch full text via source.get, or pass fullBody=true (ADR-0018).",
-      inputSchema: {
-        query: z.string().min(1).describe("Free-text query."),
-        sourceType: z.string().min(1).optional().describe("Filter by source_type."),
-        observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
-        observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
-        limit: limitShape.describe(`Max fused hits (default ${DEFAULT_SEARCH_LIMIT}).`),
-        fullBody: fullBodyShape,
-        maxBodyChars: maxBodyCharsShape,
-      },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    async ({ query, sourceType, observedAfter, observedBefore, limit, fullBody, maxBodyChars }) => {
-      const effLimit = limit ?? DEFAULT_SEARCH_LIMIT;
+    async ({
+      query,
+      mode,
+      sourceType,
+      observedAfter,
+      observedBefore,
+      limit,
+      fullBody,
+      maxBodyChars,
+    }) => {
+      // `auto` resolves against the *actual* backend state, which is exactly the
+      // judgement a host cannot make reliably from a tool catalog.
+      const effMode =
+        mode === undefined || mode === "auto" ? (embedder === null ? "fts" : "hybrid") : mode;
       const filters = {
         ...(sourceType !== undefined ? { sourceType } : {}),
         ...(observedAfter !== undefined ? { observedAfter } : {}),
         ...(observedBefore !== undefined ? { observedBefore } : {}),
       };
-      // Same body-projection applied to both fused paths so representatives are
-      // consistent (retrieval-m2).
       const bodyOpts = {
         ...(fullBody !== undefined ? { fullBody } : {}),
         ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
       };
-      const fts = searchSources(sqlite, query, { limit: effLimit, ...filters, ...bodyOpts });
 
-      // Resolve the vec side, degrading to FTS-only on no/failed backend so the
-      // tool always returns fused (here: FTS) results rather than erroring.
+      if (effMode === "fts") {
+        const result = searchSources(sqlite, query, {
+          limit: limit ?? DEFAULT_SEARCH_LIMIT,
+          ...filters,
+          ...bodyOpts,
+        });
+        return jsonResult({ ...result, mode: "fts" });
+      }
+
+      if (effMode === "semantic") {
+        const effLimit = limit ?? DEFAULT_RECALL_LIMIT;
+        const degraded = (reason: string) =>
+          jsonResult({ hits: [], signal: EMBEDDING_DISABLED_SIGNAL, reason, mode: "semantic" });
+        if (embedder === null) return degraded("backend_disabled");
+        try {
+          const result = await recallSearch(sqlite, embedder, query, {
+            limit: effLimit,
+            ...filters,
+            ...bodyOpts,
+          });
+          return jsonResult({ ...result, mode: "semantic" });
+        } catch (error) {
+          // A sidecar failure (Ollama down, etc.) must NOT hard-error: degrade to
+          // the same signal so the host keeps working (ADR-0005).
+          if (error instanceof EmbeddingError) return degraded("backend_unreachable");
+          throw error;
+        }
+      }
+
+      // hybrid: fuse FTS + semantic so each path covers the other's blind spot,
+      // degrading to FTS-only (with the signal) when the vec side is unavailable.
+      const effLimit = limit ?? DEFAULT_SEARCH_LIMIT;
+      const fts = searchSources(sqlite, query, { limit: effLimit, ...filters, ...bodyOpts });
       let vecHits = [] as Awaited<ReturnType<typeof recallSearch>>["hits"];
       let signal: typeof EMBEDDING_DISABLED_SIGNAL | undefined;
       if (embedder === null) {
@@ -260,9 +215,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           }
         }
       }
-
       const hits = fuseRrf(fts.hits, vecHits, { k: DEFAULT_RRF_K, limit: effLimit });
-      return jsonResult({ hits, ...(signal ? { signal } : {}) });
+      return jsonResult({ hits, mode: "hybrid", ...(signal ? { signal } : {}) });
     },
   );
 

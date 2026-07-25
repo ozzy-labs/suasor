@@ -11,11 +11,11 @@ triggers:
   - 優先度高いのは?
 pairs: []
 mcp_tools_read:
+  - search
   - priority.list
   - task.list
   - demand.list
   - commitment.list
-  - recall.search
 mcp_tools_write: []
 ---
 
@@ -41,7 +41,7 @@ read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）�
    - `task.list`（`state=open` / `in_progress`、期間指定は `updatedAfter` / `updatedBefore`）で task の `dueDate` / `priority` / `overdue` を詳しく見る（[ADR-0028](../../adr/0028-task-scheduling-fields.md)）
    - `demand.list` で demand 行の `channelName` / `userName`（ローカル join した人間可読名・未解決は `null`＝生 id fallback、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）や github notification の `source`/`kind`（reason）を見る。提示は **id ではなく名前**で行う
    - `commitment.list`（`state=open`、`direction=owed_by_me` で自分が負う約束）で約束の相手/期日を見る（[ADR-0021](../../adr/0021-commitment-ledger.md)）
-   - `recall.search` で各項目に関連する context を補強（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
+   - `search`（`mode=semantic`） で各項目に関連する context を補強（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 3. 基線の順序に沿って next-actions を提示する。**会話文脈による上書きは host の裁量**（例:「今日は Slack を無視して」→ demand tier を落とす）。上書きしない限り、順位は `priority.list` の基線に従う
 
 ## 制約

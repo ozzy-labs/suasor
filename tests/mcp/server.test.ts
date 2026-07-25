@@ -78,9 +78,7 @@ describe("MCP read surface", () => {
         "person.list",
         "priority.list",
         "propose.list",
-        "recall.search",
         "search",
-        "search.hybrid",
         "source.get",
         "source.get.full",
         "source.history",
@@ -433,17 +431,64 @@ describe("MCP read surface", () => {
     expect(parsed.hits[0]?.body).toBe("deploy the rocket to mars");
   });
 
-  test("recall.search returns empty + embedding_disabled signal when off", async () => {
+  // --- mode=auto: the whole point of the merge (ADR-0046 決定 2) is that the
+  // caller does not have to know the backend state. These pin that it resolves
+  // against the *actual* embedder, not a guess.
+  test("search mode=auto falls back to fts when no embedding backend is enabled", async () => {
     seedSource();
     const client = await connect("disabled");
-    const res = await client.callTool({ name: "recall.search", arguments: { query: "rocket" } });
+    const res = await client.callTool({ name: "search", arguments: { query: "rocket" } });
+    const parsed = parseResult(res as never) as { mode: string; hits: { externalId: string }[] };
+    expect(parsed.mode).toBe("fts");
+    expect(parsed.hits[0]?.externalId).toBe("gh:1");
+  });
+
+  test("search mode=auto uses hybrid when an embedder is present", async () => {
+    seedSource();
+    // The embedder throws (sidecar down), so the vec side degrades — but the
+    // resolved mode is still hybrid, which is what `auto` had to decide.
+    const failing: Embedder = {
+      model: "bge-m3",
+      embed: () => Promise.reject(new EmbeddingError("ollama down")),
+    };
+    const client = await connect("ollama", failing);
+    const res = await client.callTool({ name: "search", arguments: { query: "rocket" } });
+    const parsed = parseResult(res as never) as { mode: string; signal?: string };
+    expect(parsed.mode).toBe("hybrid");
+    expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
+  });
+
+  test("search mode=fts stays lexical even when an embedder is present", async () => {
+    seedSource();
+    const failing: Embedder = {
+      model: "bge-m3",
+      embed: () => Promise.reject(new EmbeddingError("ollama down")),
+    };
+    const client = await connect("ollama", failing);
+    const res = await client.callTool({
+      name: "search",
+      arguments: { query: "rocket", mode: "fts" },
+    });
+    const parsed = parseResult(res as never) as { mode: string; hits: { externalId: string }[] };
+    expect(parsed.mode).toBe("fts");
+    // No signal path was taken at all — the lexical result stands on its own.
+    expect(parsed.hits[0]?.externalId).toBe("gh:1");
+  });
+
+  test("search mode=semantic returns empty + embedding_disabled signal when off", async () => {
+    seedSource();
+    const client = await connect("disabled");
+    const res = await client.callTool({
+      name: "search",
+      arguments: { query: "rocket", mode: "semantic" },
+    });
     const parsed = parseResult(res as never) as { hits: unknown[]; signal: string; reason: string };
     expect(parsed.hits).toEqual([]);
     expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
     expect(parsed.reason).toBe("backend_disabled");
   });
 
-  test("recall.search degrades (signal) when the sidecar is unreachable", async () => {
+  test("search mode=semantic degrades (signal) when the sidecar is unreachable", async () => {
     seedSource();
     // Backend enabled, but the injected embedder throws (sidecar down).
     const failing: Embedder = {
@@ -451,15 +496,18 @@ describe("MCP read surface", () => {
       embed: () => Promise.reject(new EmbeddingError("ollama down")),
     };
     const client = await connect("ollama", failing);
-    const res = await client.callTool({ name: "recall.search", arguments: { query: "rocket" } });
+    const res = await client.callTool({
+      name: "search",
+      arguments: { query: "rocket", mode: "semantic" },
+    });
     const parsed = parseResult(res as never) as { hits: unknown[]; signal: string; reason: string };
     expect(parsed.hits).toEqual([]);
-    // Signal stays embedding_disabled so hosts keep falling back to `search`.
+    // Signal stays embedding_disabled so hosts know the semantic path is off.
     expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
     expect(parsed.reason).toBe("backend_unreachable");
   });
 
-  test("recall.search returns vec0 KNN hits when an embedder is enabled", async () => {
+  test("search mode=semantic returns vec0 KNN hits when an embedder is enabled", async () => {
     // A dedicated 3-dim store so the fixed test vectors fit the vec0 column.
     const knnStore = Store.open({ path: ":memory:", embeddingDim: 3 });
     try {
@@ -508,8 +556,8 @@ describe("MCP read surface", () => {
       await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
       const res = await client.callTool({
-        name: "recall.search",
-        arguments: { query: "deploy to the cluster" },
+        name: "search",
+        arguments: { query: "deploy to the cluster", mode: "semantic" },
       });
       const parsed = parseResult(res as never) as {
         hits: { externalId: string }[];
@@ -552,10 +600,13 @@ describe("MCP read surface", () => {
     expect(parsed.hits.map((h) => h.externalId)).toEqual(["sl:1"]);
   });
 
-  test("search.hybrid degrades to FTS-only with embedding_disabled when off", async () => {
+  test("search mode=hybrid degrades to FTS-only with embedding_disabled when off", async () => {
     seedSource();
     const client = await connect("disabled");
-    const res = await client.callTool({ name: "search.hybrid", arguments: { query: "rocket" } });
+    const res = await client.callTool({
+      name: "search",
+      arguments: { query: "rocket", mode: "hybrid" },
+    });
     const parsed = parseResult(res as never) as {
       hits: { externalId: string; rrfScore: number }[];
       signal?: string;
@@ -565,7 +616,7 @@ describe("MCP read surface", () => {
     expect(parsed.hits[0]?.rrfScore).toBeGreaterThan(0);
   });
 
-  test("search.hybrid fuses FTS + vec hits (RRF) when an embedder is enabled", async () => {
+  test("search mode=hybrid fuses FTS + vec hits (RRF) when an embedder is enabled", async () => {
     const knnStore = Store.open({ path: ":memory:", embeddingDim: 3 });
     try {
       const seed = (id: string, body: string) =>
@@ -605,7 +656,10 @@ describe("MCP read surface", () => {
       const client = new Client({ name: "test", version: "0.0.0" });
       await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-      const res = await client.callTool({ name: "search.hybrid", arguments: { query: "rocket" } });
+      const res = await client.callTool({
+        name: "search",
+        arguments: { query: "rocket", mode: "hybrid" },
+      });
       const parsed = parseResult(res as never) as {
         hits: { externalId: string; rrfScore: number }[];
         signal?: string;
@@ -998,9 +1052,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "person.list",
         "priority.list",
         "propose.list",
-        "recall.search",
         "search",
-        "search.hybrid",
         "source.get",
         "source.get.full",
         "source.history",

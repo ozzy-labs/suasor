@@ -1,7 +1,7 @@
 /**
  * Hybrid retrieval: Reciprocal Rank Fusion of FTS + vec hit lists (ADR-0005
  * range, docs/design/retrieval.md). FTS-first stays the default; hybrid is an
- * additive `search.hybrid` read tool that fuses the two ranked lists so each
+ * `search` read tool's `mode: "hybrid"` path, which fuses the two ranked lists so each
  * compensates for the other's blind spot (FTS: exact/lexical; vec: semantic /
  * JA↔EN vocabulary mismatch).
  *

@@ -1,6 +1,6 @@
 ---
 name: find-document
-description: 「あの資料どこ」「先週共有された PDF」「<キーワード>含むファイル」「あの議事録」「あの Doc」と頼まれたら、Suasor MCP の search（FTS5 全文検索）で本文ベースに横断検索し、connector 取り込み済みの source を返す。意味検索が要るときは recall.search を補助的に併用する。外部 SaaS を直接叩かない。
+description: 「あの資料どこ」「先週共有された PDF」「<キーワード>含むファイル」「あの議事録」「あの Doc」と頼まれたら、Suasor MCP の search（FTS5 全文検索）で本文ベースに横断検索し、connector 取り込み済みの source を返す。意味検索が要るときは search（mode=semantic） を補助的に併用する。外部 SaaS を直接叩かない。
 readOnly: true
 category: retrieval
 triggers:
@@ -12,7 +12,6 @@ triggers:
 pairs: []
 mcp_tools_read:
   - search
-  - recall.search
 mcp_tools_write: []
 ---
 
@@ -31,7 +30,7 @@ read tool のみ（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）�
 1. `search`（FTS5、[retrieval.md](../../design/retrieval.md)）で query を本文全文検索する。返り値 `hits[]` は `externalId` / `sourceType` / `observedAt` / `score`（bm25 昇順=より関連）/ `excerpt`（既定は上限付き抜粋・全文ではない）、および `strategy`（`fts` | `like-fallback`）
 2. 必要なら `source.list`（`sourceType` 絞り / `observedAfter` / `observedBefore`）で source 種別・期間を絞り込む
 3. 本文全体が要れば `source.get`（`externalId`）で取得する（`search` に `fullBody: true` を渡しても全文 `body` を得られるが、既定は抜粋で payload を抑える・retrieval-m2）
-4. 意味検索ハイブリッドが要る場合のみ `recall.search` を補助的に併用する（embedding 無効時は `signal: embedding_disabled` を見て `search` に寄せる）
+4. 意味検索ハイブリッドが要る場合のみ `search`（`mode=semantic`） を補助的に併用する（embedding 無効時は `signal: embedding_disabled` を見て `search` に寄せる）
 5. 該当 source を提示して返す
 
 ## 制約

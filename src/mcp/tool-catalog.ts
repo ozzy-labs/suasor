@@ -28,16 +28,10 @@ export interface McpToolInfo {
 
 /** Read tools — registered unconditionally, `readOnlyHint: true` (ADR-0004). */
 const READ_TOOLS: readonly McpToolInfo[] = [
-  { name: "search", readOnlyHint: true, summary: "FTS5 full-text search over ingested sources." },
   {
-    name: "recall.search",
+    name: "search",
     readOnlyHint: true,
-    summary: "Semantic (embedding) search; degrades to FTS when no backend is enabled.",
-  },
-  {
-    name: "search.hybrid",
-    readOnlyHint: true,
-    summary: "Hybrid search: RRF fusion of FTS + semantic hits; degrades to FTS-only.",
+    summary: "Search ingested sources; `mode` selects fts / semantic / hybrid (default auto).",
   },
   { name: "source.list", readOnlyHint: true, summary: "List ingested sources newest-first." },
   { name: "source.get", readOnlyHint: true, summary: "Fetch one source (with body) by id." },

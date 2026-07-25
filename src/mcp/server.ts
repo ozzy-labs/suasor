@@ -7,7 +7,7 @@
  * read/write split is structural (not just advisory):
  *
  * - `server-read.ts` — the side-effect-free read tools (`search`,
- *   `recall.search`, `search.hybrid`, `source.*`, `task.list`, `decision.list`,
+ *   `source.*`, `task.list`, `decision.list`,
  *   `demand.list`, `priority.list`, `brief`, `graph.*`, `inbox.list`,
  *   `propose.list`, `commitment.list`, `person.list`). All `readOnlyHint: true`.
  * - `server-write.ts` — the HITL write tools (`connector.sync`, `propose.*`,
@@ -48,7 +48,7 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       instructions:
         "Suasor local-first work memory (ADR-0004). Read tools (readOnlyHint: " +
         "true) are safe to call autonomously. Default retrieval is `search` " +
-        "(FTS5); `recall.search` adds semantic search only when an embedding backend " +
+        "(FTS5); `search` with mode=semantic/hybrid adds vector search only when an embedding backend " +
         "is enabled, otherwise it returns the `embedding_disabled` signal so you can " +
         "fall back to `search`. Write tools (readOnlyHint: false — connector.sync, " +
         "propose.generate, propose.apply, propose.reject, proposal.feedback, propose.batch, " +

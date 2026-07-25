@@ -73,7 +73,7 @@ export interface ConnectorSyncDeps {
   /**
    * Effective config: the `[connectors.<name>]` slices plus the optional
    * `[embedding]` section. When `embedding.backend` is enabled, ingest also
-   * (re)populates vec0 so `recall.search` works (ADR-0005/0006).
+   * (re)populates vec0 so semantic `search` works (ADR-0005/0006).
    */
   config: {
     connectors: Record<string, Record<string, unknown>>;

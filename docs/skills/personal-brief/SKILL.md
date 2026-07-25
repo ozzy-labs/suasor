@@ -1,6 +1,6 @@
 ---
 name: personal-brief
-description: 「今日のまとめ」「今週どうなってる」「最近どう」「自分の状況」「先週の振り返り」と聞かれたら、指定期間（既定は直近 24h）の主要な動きを自分向けにまとめる。Suasor MCP の brief / recall.search / task.list / decision.list / inbox.list を読み取り系で組み合わせて要約する。
+description: 「今日のまとめ」「今週どうなってる」「最近どう」「自分の状況」「先週の振り返り」と聞かれたら、指定期間（既定は直近 24h）の主要な動きを自分向けにまとめる。Suasor MCP の brief / search（mode=semantic） / task.list / decision.list / inbox.list を読み取り系で組み合わせて要約する。
 readOnly: true
 category: brief
 triggers:
@@ -12,9 +12,9 @@ triggers:
 pairs:
   - external-brief
 mcp_tools_read:
+  - search
   - brief
   - priority.list
-  - recall.search
   - task.list
   - decision.list
   - inbox.list
@@ -46,7 +46,7 @@ mcp_tools_write: []
    - `inbox.list`（`state=open`）— 未処理シグナル
    - `demand.list`（`observedAfter=since`）— connector 中立の未処理 demand（Slack @mention/DM + demand 相当の github notification。「読むべきが未処理」、[ADR-0012](../../adr/0012-slack-demand-digest.md) / [ADR-0041](../../adr/0041-neutral-demand-priority-substrate.md)）。既定は un-acked のみ。`selfUserId` 未設定時 slack は DM のみ。各 demand の `channelName` / `userName`（ローカル join した人間可読名、[ADR-0037](../../adr/0037-slack-name-enrichment.md) §10）で要約に **id ではなく名前**（「`#<channelName>` の `<userName>` から」）を出し、`null`（未解決）のときだけ `meta` の生 id に fallback する（id-only が続くなら `slack resolve-names` で遡及解決、§11）
    - `commitment.list`（`state=open`）— 未解決の commitment（約束/コミットメント。「能動的にやるべき約束」、[ADR-0021](../../adr/0021-commitment-ledger.md)）
-   - `recall.search` — トピックの関連 context（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
+   - `search`（`mode=semantic`） — トピックの関連 context（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
 4. 集めた結果をホスト LLM が「主要な動き」として要約して返す
 
 ## 制約
