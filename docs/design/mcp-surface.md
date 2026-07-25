@@ -165,7 +165,13 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 決定論的 cross-entity scorer。open/in_progress な tasks + open commitments + un-acked demand を**固定 comparator**で 1 本のランク付きリストに合成する（実体は `src/mcp/queries.ts` の `buildPriorities`、`readOnlyHint: true`）。順位の基線はコードが持ち（skill 散文ではない）、同一入力に対し順序が一定になる（テストで固定）。
 
-順序基準（辞書式）: **overdue（task / commitment）> un-acked demand（鮮度＝`observed_at` 新しい順）> dueDate 近接（期日が近い順・期日あり優先）> priority（high>normal>low）> 更新新しさ**。各行は `reason`（どの tier で上に来たか）+ `explanation`（理由の一文）+ `record`（元 projection レコード）を持つ。ack 済み mention は demand tier から外れるため、期日付き作業の上に居座り続けることはない。`next-actions` / `personal-brief` はこの基線を消費する（会話文脈での上書きは host の裁量）。
+順序モデル（[ADR-0045](../adr/0045-priority-ranking-model.md)）: **hard tier 1 つ + 重み付きスコア**。hard tier は「開始 30 分以内の会議」のみ（壁時計が他のすべての考慮を無効化する唯一の領域・[ADR-0044](../adr/0044-calendar-proximity-signals.md) 実装時に有効化）。それ以外は `overdue`（超過日数）/ `aging`（未返信日数・[ADR-0043](../adr/0043-email-demand-signals.md)）/ `unacked_demand`（鮮度）/ `due_soon`（期日接近）/ `prep`（会議準備）/ `priority` を**重み付きで合成した単一スコア**で比較する。
+
+**tier ラダーからスコアへ移した理由**は程度を比較できなかったこと — 旧実装では「1 日超過」と「3 週間超過」が同格で、`starting_soon` の窓が 120 分だったため **110 分後の会議が 3 週間放置のタスクより上**に出ていた。またスコアなら、mention の鮮度（新しいほど高い）とメールの未返信日数（古いほど高い）という**逆符号の時間項**が 1 本のモデルに共存できる（tier では 2 段必要だった）。
+
+重みは**コード内定数**（config 化しない・[ADR-0045](../adr/0045-priority-ranking-model.md) 決定 3）。各項は飽和点を持ち（例: 超過 30 日で頭打ち）、1 件の長期放置が他を永久に押し下げない。**期限を跨いでもスコアは下がらない**（`overdue` の下限 > `due_soon` の上限）。
+
+各行は `reason`（**最も寄与した項**）+ `explanation`（その項の一文・例「期限を 21 日超過」）+ `score`（総スコア）+ `record` を持つ。**表示の主役は `explanation` であって数値ではない**（決定 4）。ack 済み mention は demand から外れるため、期日付き作業の上に居座り続けることはない。`next-actions` / `brief` はこの基線を消費する（会話文脈での上書きは host の裁量）。
 
 | 追加引数 | 戻り値キー |
 |---|---|

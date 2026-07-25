@@ -91,6 +91,6 @@ mcp_tools_write: []
 
 - read-only。persist しない（イベントを書かない）
 - 要約の生成はホスト LLM 側。本 skill は手順書のみで実処理を持たない
-- 順位付けが要る場面では `priority.list` の基線を消費する（散文で順位を作り直さない・[ADR-0045](../../adr/0045-priority-ranking-model.md)）
+- 順位付けが要る場面では `priority.list` の基線を消費する（散文で順位を作り直さない）。根拠は各行の `explanation` を示す（`score` の数値は出さない・[ADR-0045](../../adr/0045-priority-ranking-model.md) 決定 4）
 - demand の表示は `channelName` / `userName`（ローカル join した人間可読名・[ADR-0037](../../adr/0037-slack-name-enrichment.md)）を優先し、`null` のときだけ生 id に fallback する
 - 時間窓は各 projection の自然な timestamp（task/inbox=`updated_at`、decision=`recorded_at`、source=`observed_at`）。下限 inclusive / 上限 exclusive
