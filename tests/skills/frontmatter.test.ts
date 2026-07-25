@@ -221,3 +221,29 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
   // assistant mirror は gitignore されたローカル install のみ。install の正しさは
   // tests/skills/install.test.ts（synthetic SSOT 上の installSkills / detectDrift）が担保する。
 });
+
+describe("docs quote the real skill count (Issue #518)", () => {
+  // The contraction (#501) renamed and merged skills but left "32" in two
+  // guides, so the docs advertised a catalog that no longer existed. Counting
+  // is cheap; noticing a stale number in prose is not.
+  const count = listBundledSkills().length;
+
+  for (const file of ["docs/guide/skills.md", "docs/guide/install.md"]) {
+    test(`${file} carries no stale skill count`, async () => {
+      const { readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const text = readFileSync(join(import.meta.dir, "../..", file), "utf8");
+      // Every numeric claim about the catalog size, in either language. The
+      // first draft of this guard only matched "all N" / "全 N" and silently
+      // passed while "N 個のアシスタント skill" stayed stale — so it is pinned
+      // by a deliberate-break check during development, not by inspection.
+      const claims = [
+        ...[...text.matchAll(/(?:all |全 )(\d+)/g)].map((m) => Number(m[1])),
+        ...[...text.matchAll(/(\d+) 個のアシスタント/g)].map((m) => Number(m[1])),
+        ...[...text.matchAll(/(\d+) (?:skill|件)\b/g)].map((m) => Number(m[1])),
+      ];
+      expect(claims.length).toBeGreaterThan(0);
+      for (const claimed of claims) expect(claimed).toBe(count);
+    });
+  }
+});

@@ -11,9 +11,9 @@ the simplest option if you don't already run Bun:
 
 | You... | Use | Runtime on the host | Connectors | Secrets | Assistant skills |
 | --- | --- | --- | --- | --- | --- |
-| just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) | GitHub + local files only | env vars only | **all 32, bundled** |
-| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | keychain or env | all 32 |
-| already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 | all | keychain or env | all 32 |
+| just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) | GitHub + local files only | env vars only | **all 22, bundled** |
+| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | keychain or env | all 22 |
+| already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 | all | keychain or env | all 22 |
 
 The binary trades connector breadth for zero setup — the capability columns are
 the whole difference, and [Binary scope](#binary-scope) spells each one out.
@@ -55,7 +55,7 @@ chmod +x suasor-bun-linux-x64
 >   `googleapis`, `box-typescript-sdk-gen`, `playwright-core`) — so those
 >   connectors are not available in the standalone binary.
 >
-> The assistant skills are **not** external: all 32 are compiled into the binary
+> The assistant skills are **not** external: all 22 are compiled into the binary
 > (Issue #445), so `skills install` / `list` / `search` / `info` work there
 > exactly as they do on npm / Docker.
 >

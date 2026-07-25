@@ -1,6 +1,6 @@
 # アシスタント skill 利用ガイド
 
-Suasor は 32 個のアシスタント skill を同梱する（[ADR-0008](../adr/0008-assistant-skills.md)）。自然文で頼むと該当 skill が発火し、Suasor MCP の read / write tool を組み合わせて「次にやること」「今日のまとめ」「この資料から task 抽出」などを返す。本ガイドは **install → 起動 → 確認 → トラブルシュート** を 1 本にまとめる。
+Suasor は 22 個のアシスタント skill を同梱する（[ADR-0008](../adr/0008-assistant-skills.md)）。自然文で頼むと該当 skill が発火し、Suasor MCP の read / write tool を組み合わせて「次にやること」「今日のまとめ」「この資料から task 抽出」などを返す。本ガイドは **install → 起動 → 確認 → トラブルシュート** を 1 本にまとめる。
 
 > skill の責務一覧（catalog）は [docs/skills/README.md](../skills/README.md)。frontmatter の機械可読フィールド仕様は [ADR-0032](../adr/0032-skill-frontmatter-schema.md)。CLI verb の一覧は [docs/design/cli.md](../design/cli.md)。
 
@@ -86,7 +86,7 @@ description: 「次に何をする?」「やること教えて」…
 
 ### `modified` / drift と表示される
 
-mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。なお [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo の mirror commit と `skills-drift` フックは廃止され、assistant mirror は `.gitignore` 済みのローカル install 物になった（commit されない）。host dir に commit されているのは vendored dev skill のみ。
+mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。なお [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo の mirror commit と `skills-drift` フックは廃止された。**host dir（`.claude/skills/` / `.agents/skills/`）配下は現在すべてローカル install 物で、commit されるものは無い** — dev skill の project-scope vendoring も 2026-07-04 に撤回され user-scope install へ移行した。
 
 ### read / write 境界が分からない
 
@@ -94,7 +94,7 @@ mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と
 
 ### standalone binary の skill
 
-standalone binary でも `skills install` / `list` / `search` / `info` は **npm / Docker と同じく全 32 skill で動く**（Issue #445）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、SSOT は `src/skills/embedded.ts`（生成物・commit 済み）としてソースに inline してある。`docs/skills/` が実在する repo / npm 実行ではそちらをディスクから読み、無ければ埋め込みへフォールバックする。
+standalone binary でも `skills install` / `list` / `search` / `info` は **npm / Docker と同じく全 22 skill で動く**（Issue #445）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、SSOT は `src/skills/embedded.ts`（生成物・commit 済み）としてソースに inline してある。`docs/skills/` が実在する repo / npm 実行ではそちらをディスクから読み、無ければ埋め込みへフォールバックする。
 
 SSOT を編集したら `node scripts/generate-embedded-skills.mjs` で再生成する（忘れると `tests/skills/embedded.test.ts` の drift テストが落ちる）。
 
@@ -103,5 +103,5 @@ SSOT を編集したら `node scripts/generate-embedded-skills.mjs` で再生成
 - [ADR-0008](../adr/0008-assistant-skills.md) — アシスタント skill の SSOT / install / drift
 - [ADR-0032](../adr/0032-skill-frontmatter-schema.md) — frontmatter 機械可読フィールド + `skills search` / `info`
 - [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) — read 自律 / write HITL 境界
-- [docs/skills/README.md](../skills/README.md) — skill catalog（全 32 件の責務と発火例）
+- [docs/skills/README.md](../skills/README.md) — skill catalog（全 22 件の責務と発火例）
 - [docs/design/cli.md](../design/cli.md) — CLI verb 一覧
