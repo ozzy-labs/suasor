@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/ozzy-labs/suasor/compare/v0.2.1...v0.2.2) (2026-07-25)
+
+
+### Bug Fixes
+
+* **config:** reject sync cadence overrides naming unknown connectors ([#493](https://github.com/ozzy-labs/suasor/issues/493)) ([b9807b4](https://github.com/ozzy-labs/suasor/commit/b9807b420e20816f82037ed7d932d54c83c1f898))
+
 ## [0.2.1](https://github.com/ozzy-labs/suasor/compare/v0.2.0...v0.2.1) (2026-07-25)
 
 
