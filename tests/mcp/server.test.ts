@@ -85,6 +85,7 @@ describe("MCP read surface", () => {
         "source.get.full",
         "source.history",
         "source.list",
+        "sync.status",
         "task.list",
       ].sort(),
     );
@@ -1004,6 +1005,7 @@ describe("MCP write surface (connector.sync, HITL — ADR-0007 / #10)", () => {
         "source.get.full",
         "source.history",
         "source.list",
+        "sync.status",
         "task.list",
         // write (HITL)
         "connector.sync",

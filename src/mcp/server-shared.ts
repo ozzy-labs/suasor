@@ -78,6 +78,22 @@ export interface McpServerDeps {
    */
   slackConfigured?: boolean;
   /**
+   * Sync-freshness inputs (Issue #442): which connectors are enabled, plus the
+   * `[sync]` cadence expectations. Drives the `sync.status` read tool and the
+   * brief's `sync_stale` completeness signal — a bundle built from a store that
+   * stopped updating is indistinguishable from a quiet week without it. Omitted
+   * ⇒ `sync.status` reports runs without a freshness verdict and the brief
+   * emits no staleness warning.
+   */
+  sync?: {
+    /** Connector names that are enabled in config (the set to judge). */
+    enabledConnectors: string[];
+    /** `[sync]` cadence expectations (see `SyncConfig`). */
+    expectedIntervalHours: number;
+    safetyFactor: number;
+    perConnectorIntervalHours: Record<string, number>;
+  };
+  /**
    * Writable store + connector config for the `connector.sync` write tool
    * (ADR-0007 / Issue #10). When omitted, the server exposes read tools only
    * (e.g. a read-only deployment); the write tool is simply not registered.

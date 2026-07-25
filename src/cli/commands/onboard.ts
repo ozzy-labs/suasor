@@ -145,6 +145,16 @@ export class OnboardCommand extends Command {
     description: "Append the cron line to your crontab (otherwise the template is only printed).",
   });
 
+  writeLaunchd = Option.Boolean("--write-launchd", false, {
+    description:
+      "Write the launchd agent to ~/Library/LaunchAgents (macOS; prints the load command).",
+  });
+
+  writeSystemd = Option.Boolean("--write-systemd", false, {
+    description:
+      "Write the systemd user service + timer to ~/.config/systemd/user (prints the enable command).",
+  });
+
   json = Option.Boolean("--json", false, {
     description: "Emit a machine-readable per-step summary instead of human-readable output.",
   });
@@ -321,6 +331,18 @@ export class OnboardCommand extends Command {
       const wrote = await this.appendCron(command);
       if (!this.json) {
         stdout.write(wrote ? "Appended the cron line to your crontab.\n" : "");
+      }
+    }
+    // --write-launchd / --write-systemd (Issue #442): the same opt-in as
+    // --write-cron for the two file-based schedulers. Both stay explicit — the
+    // wizard never installs a background job the operator did not ask for
+    // (ADR-0027: Suasor runs no daemon, and it does not quietly arrange one).
+    if (this.writeLaunchd || this.writeSystemd) {
+      const kind = this.writeLaunchd ? "launchd" : "systemd";
+      const written = await this.writeSchedulerUnit(kind, command);
+      if (!this.json && written !== null) {
+        stdout.write(`Wrote ${written.paths.join(", ")}.\n`);
+        stdout.write(`Activate it with:\n  ${written.activate}\n`);
       }
     }
     if (!this.json) {
@@ -657,6 +679,54 @@ export class OnboardCommand extends Command {
     } finally {
       store.close();
     }
+  }
+
+  /**
+   * Write the launchd plist / systemd units to the user's home (Issue #442).
+   *
+   * Returns the written paths plus the activation command, or `null` when the
+   * write failed (reported on stderr). Existing files are **not** overwritten:
+   * a hand-tuned unit is the operator's, and silently replacing it would be the
+   * kind of surprise that makes a wizard untrustworthy.
+   */
+  private async writeSchedulerUnit(
+    kind: "launchd" | "systemd",
+    command: string,
+  ): Promise<{ paths: string[]; activate: string } | null> {
+    const [{ renderSchedulerSnippet, schedulerUnitTarget, splitSystemdUnits }, { homedir }, fs] =
+      await Promise.all([
+        import("../onboard/scheduler.ts"),
+        import("node:os"),
+        import("node:fs/promises"),
+      ]);
+    const target = schedulerUnitTarget(kind);
+    if (target === null) return null;
+    const snippet = renderSchedulerSnippet(process.platform, command, kind).snippet;
+    const files =
+      kind === "systemd"
+        ? splitSystemdUnits(snippet)
+        : [{ relativePath: target.relativePath, body: `${snippet}\n` }];
+    const home = homedir();
+    const { dirname, join } = await import("node:path");
+    const written: string[] = [];
+    for (const file of files) {
+      const path = join(home, file.relativePath);
+      try {
+        await fs.mkdir(dirname(path), { recursive: true });
+        // `wx` fails when the file exists — never clobber an existing unit.
+        await fs.writeFile(path, file.body, { flag: "wx" });
+        written.push(path);
+      } catch (cause) {
+        const exists = (cause as { code?: string } | undefined)?.code === "EEXIST";
+        this.context.stderr.write(
+          exists
+            ? `warning: ${path} already exists — left untouched (edit it by hand if the command changed)\n`
+            : `warning: could not write ${path}: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+        );
+      }
+    }
+    if (written.length === 0) return null;
+    return { paths: written, activate: target.activate };
   }
 
   /** Append the cron line to the user's crontab (best-effort). Returns success. */

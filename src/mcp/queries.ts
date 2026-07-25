@@ -21,6 +21,7 @@
  * lexicographically (valid because the stored timestamps are zero-padded UTC).
  */
 import type { Database } from "bun:sqlite";
+import { type SyncFreshness, summarizeStaleSync } from "../connectors/freshness.ts";
 import { docsUrl } from "../shared/doc-ref.ts";
 
 /** Default page size for the list queries (matches retrieval's default). */
@@ -1112,7 +1113,7 @@ export function listPersons(sqlite: Database, options: ListPersonsOptions = {}):
  * window is genuinely quiet — so the host can tell "Slack not connected" from
  * "nothing happened".
  */
-export type BriefWarningKey = "slack_not_configured" | "embedding_disabled";
+export type BriefWarningKey = "slack_not_configured" | "embedding_disabled" | "sync_stale";
 
 /** A single completeness signal: a stable {@link BriefWarningKey} + a human note. */
 export interface BriefWarning {
@@ -1122,12 +1123,15 @@ export interface BriefWarning {
   message: string;
 }
 
-const BRIEF_WARNING_MESSAGE: Record<BriefWarningKey, string> = {
+const BRIEF_WARNING_MESSAGE: Record<Exclude<BriefWarningKey, "sync_stale">, string> = {
   slack_not_configured: "Slack connector not configured — demand (@mention / DM) is always empty",
   embedding_disabled: `embedding backend off — recall-backed material degrades to FTS-only (${docsUrl(
     "guide/embedding.md",
   )})`,
 };
+// `sync_stale` carries which connectors are behind and by how long, so its
+// message is built per call (see `deriveBriefWarnings`) rather than being a
+// constant like the two above.
 
 /** Inputs for {@link deriveBriefWarnings} — the config facts that gate categories. */
 export interface BriefCompleteness {
@@ -1135,6 +1139,13 @@ export interface BriefCompleteness {
   slackConfigured: boolean;
   /** The effective embedding backend (`"disabled"` ⇒ recall degrades to FTS). */
   embeddingBackend: string;
+  /**
+   * Per-connector sync freshness (Issue #442), from `deriveSyncFreshness`. A
+   * bundle assembled from a store that stopped updating looks exactly like a
+   * quiet week; this is what tells the two apart. Omitted ⇒ no staleness
+   * warning (callers that cannot cheaply read `sync_runs` stay unchanged).
+   */
+  syncFreshness?: readonly SyncFreshness[];
 }
 
 /**
@@ -1152,6 +1163,10 @@ export function deriveBriefWarnings(completeness: BriefCompleteness): BriefWarni
   }
   if (completeness.embeddingBackend === "disabled") {
     warnings.push({ key: "embedding_disabled", message: BRIEF_WARNING_MESSAGE.embedding_disabled });
+  }
+  if (completeness.syncFreshness !== undefined) {
+    const stale = summarizeStaleSync(completeness.syncFreshness);
+    if (stale !== null) warnings.push({ key: "sync_stale", message: stale });
   }
   return warnings;
 }

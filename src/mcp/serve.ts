@@ -9,6 +9,8 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Config, collectConfigWarnings, loadConfig } from "../config/index.ts";
+import { syncFreshnessInputs } from "../connectors/freshness.ts";
+import { connectorNames } from "../connectors/registry.ts";
 import type { SecretStoreOptions } from "../connectors/secrets.ts";
 import { resolveSelfUserIds } from "../connectors/slack.ts";
 import { Store } from "../db/index.ts";
@@ -101,6 +103,10 @@ function defaultBuildServer({
     // `slack_not_configured` completeness signal (Issue #189), independent of
     // whether a self_user_id is set.
     slackConfigured: config.connectors.slack !== undefined,
+    // Sync freshness inputs (Issue #442): drives `sync.status` and the brief's
+    // `sync_stale` signal, so an agent can say "my data is 5 days old" instead
+    // of answering confidently from a store a broken cron entry froze.
+    sync: syncFreshnessInputs(connectorNames(), config),
     // Enable the `connector.sync` write tool (HITL) over the same store
     // (ADR-0007 / Issue #10 D5). The `[embedding]` config in `config` also lets
     // ingest (re)populate vec0. Hosts gate the write via `readOnlyHint: false`.

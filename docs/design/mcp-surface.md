@@ -21,6 +21,7 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 | `priority.list` | 決定論的 cross-entity scorer: tasks + open commitments + un-acked demand を固定 comparator で 1 本のランク付きリストに合成（overdue > demand 鮮度 > dueDate 近接 > priority > 更新順、[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)） | 実装済（#419） |
 | `person.list` | 解決済み person 一覧 + 各 person の connector identity（`includeEmpty?`、[ADR-0022](../adr/0022-person-identity-resolution.md)） | 実装済み（#92。下記参照） |
 | `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
+| `sync.status` | 取り込み鮮度（connector 別の最新 run + `ok`/`stale`/`never`/`failing` 判定・[#442](https://github.com/ozzy-labs/suasor/issues/442)） | 実装済み（#442。下記参照） |
 | `activity.timeline` | entity 軸の時系列ビュー（person/project/source 等を起点に provenance 接続された source/task/decision をマージし新しい順に返す。`brief` の期間軸と対をなす entity 軸、#279） | 実装済み（#279。下記参照） |
 | `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)）。`graph.expand` の `direction` で後方トレース（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)、下記参照） | 実装済み（#71・#90 / #97） |
 
@@ -221,8 +222,23 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 
 - `slack_not_configured`: `[connectors.slack]` が未設定（`self_user_id` の有無とは独立）。`demand` が常に空になる。
 - `embedding_disabled`: `[embedding].backend = "disabled"`。recall 由来の素材が FTS-only に劣化する。
+- `sync_stale`: 有効な connector の取り込みが遅れている（[#442](https://github.com/ozzy-labs/suasor/issues/442)）。メッセージは遅れている connector と理由（`slack (120h old)` / `github (never synced)` / `google (last run failed)`）を並べる。**空の bundle が「静かな週」なのか「止まった pipeline」なのかを区別する**ための signal で、他 2 つと違い config だけでなく `sync_runs` から read 時に導出する（`deriveSyncFreshness`）。
 
 CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json` では同じ `warnings` 配列をバンドルに含める。
+
+### `sync.status`（確定・read・#442）
+
+取り込み鮮度の read tool（`readOnlyHint: true`）。`sync_runs`（[ADR-0033](../adr/0033-sync-run-history.md)）は全 run を記録してきたが、読むのは `suasor sync status` だけで、**エージェントには自分のデータが止まっていることを知る手段が無かった** — PATH の通らない cron 行に凍結された store から、自信を持って先週の答えを返してしまう。
+
+引数（Zod）: `staleOnly?: boolean`（`ok` 以外だけ返す）。
+
+戻り値: `{ runs, freshness, stale }`。
+
+- `runs` — connector 別の最新 run（`listSyncRuns` そのまま）
+- `freshness` — connector ごとの判定（`ok` / `stale` / `never` / `failing`）+ `lastSyncAt` / `ageHours` / `thresholdHours` / `detail`
+- `stale` — `ok` でない connector 名の配列（`staleOnly` の有無に関わらず全件）
+
+判定は **read 時派生**（`now` 依存の状態を projection に焼かない — [ADR-0028](../adr/0028-task-scheduling-fields.md) の overdue と同型）。閾値は `[sync]` config（既定 24h × 2）。`[sync]` を渡さない embed では `freshness` / `stale` は `null`（**判定を捏造しない**）。同じ導出関数を `doctor` の `sync.freshness` チェックと brief の `sync_stale` warning が共有するので、3 経路の見解が食い違うことはない。
 
 ### `activity.timeline`（確定・read・#279）
 

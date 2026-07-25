@@ -17,6 +17,7 @@ import type { Database } from "bun:sqlite";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { EmbeddingConfig } from "../config/schema.ts";
+import { deriveSyncFreshness, type SyncFreshness } from "../connectors/freshness.ts";
 import {
   DEFAULT_RECALL_LIMIT,
   EMBEDDING_DISABLED_SIGNAL,
@@ -44,6 +45,7 @@ import {
   listProposals,
   listSourceHistory,
   listSources,
+  listSyncRuns,
   listTasks,
   listWithTruncation,
 } from "./queries.ts";
@@ -60,6 +62,20 @@ export interface ReadToolContext {
 /** Register every read tool onto `server` in the original order. */
 export function registerReadTools(server: McpServer, ctx: ReadToolContext): void {
   const { sqlite, embedder, embeddingConfig, deps } = ctx;
+
+  // Sync freshness (Issue #442), derived at read time from `sync_runs` + the
+  // `[sync]` cadence expectations. Shared by `sync.status` and the brief's
+  // `sync_stale` warning so the two can never disagree about what is behind.
+  // Returns `undefined` when the host did not supply the config (older embeds).
+  const freshness = (): SyncFreshness[] | undefined => {
+    const cfg = deps.sync;
+    if (cfg === undefined) return undefined;
+    return deriveSyncFreshness(cfg.enabledConnectors, listSyncRuns(sqlite), {
+      expectedIntervalHours: cfg.expectedIntervalHours,
+      safetyFactor: cfg.safetyFactor,
+      perConnectorIntervalHours: cfg.perConnectorIntervalHours,
+    });
+  };
 
   // Shared body-projection args for the retrieval tools (search / recall.search /
   // search.hybrid). By default each hit returns a bounded excerpt, not the full
@@ -557,9 +573,55 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         warnings: deriveBriefWarnings({
           slackConfigured: deps.slackConfigured ?? (deps.slackSelfUserIds ?? []).length > 0,
           embeddingBackend: embeddingConfig.backend,
+          // Stale ingest is the third way a bundle can be empty for a reason
+          // that has nothing to do with the window being quiet (Issue #442).
+          ...(() => {
+            const f = freshness();
+            return f !== undefined ? { syncFreshness: f } : {};
+          })(),
         }),
       });
       return jsonResult(brief);
+    },
+  );
+
+  // --- sync.status ---
+  // Read tool (readOnlyHint: true): the ingest-freshness view the secretary
+  // needs to caveat its own answers (Issue #442). `suasor sync status` has shown
+  // this at the CLI since ADR-0033, but an agent had no way to ask — so a store
+  // frozen by a broken cron entry produced confident, silently week-old answers.
+  server.registerTool(
+    "sync.status",
+    {
+      title: "Sync status / data freshness",
+      description:
+        "Per-connector ingest freshness: the latest sync run (start / end / status / " +
+        "counts) plus a derived verdict — ok / stale / never / failing — against the " +
+        "configured cadence ([sync], Issue #442). Use it to caveat an answer whose " +
+        "data may be behind, or to explain an empty result that is a stopped sync " +
+        "rather than a quiet week. Read-only; derived at read time (nothing stored).",
+      inputSchema: {
+        staleOnly: z
+          .boolean()
+          .optional()
+          .describe("Return only connectors that are not ok (stale / never / failing)."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ staleOnly }) => {
+      const runs = listSyncRuns(sqlite);
+      const derived = freshness();
+      // No `[sync]` context (a host that embedded the server without config):
+      // report the raw runs rather than inventing a verdict.
+      if (derived === undefined) {
+        return jsonResult({ runs, freshness: null, stale: null });
+      }
+      const shown = staleOnly === true ? derived.filter((f) => f.state !== "ok") : derived;
+      return jsonResult({
+        runs,
+        freshness: shown,
+        stale: derived.filter((f) => f.state !== "ok").map((f) => f.connector),
+      });
     },
   );
 

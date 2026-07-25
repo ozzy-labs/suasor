@@ -142,6 +142,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 - `demand.list` — List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).
 - `priority.list` — Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).
 - `brief` — Bundle the period's tasks/decisions/sources/inbox for the host to summarize.
+- `sync.status` — Per-connector ingest freshness (latest run + ok/stale/never/failing verdict).
 - `graph.related` — Provenance neighbours of an entity (1 hop) over the links projection.
 - `graph.expand` — Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.
 - `activity.timeline` — Entity-axis merged source/task/decision timeline (newest-first) for one entity.

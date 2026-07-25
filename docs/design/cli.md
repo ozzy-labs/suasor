@@ -6,7 +6,7 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
 
 ```bash
 suasor init [--force]                  # 設定 + DB 初期化 + ネクストステップ案内（skills install は別コマンド）
-suasor onboard [--connector a,b] [--skip-auth] [--skip-sync] [--write-cron] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]。slack は独自経路（auth set/test・conversations）を関数として bridge・token pool（ADR-0042）・[#384]）
+suasor onboard [--connector a,b] [--skip-auth] [--skip-sync] [--write-cron] [--write-launchd] [--write-systemd] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]。slack は独自経路（auth set/test・conversations）を関数として bridge・token pool（ADR-0042）・[#384]）
 suasor db migrate [--vec]              # projection schema 適用（idempotent）
 suasor projections rebuild [--no-progress]  # event replay で projection 再構築
 suasor <connector> sync [--full] [--json] [--discover | --no-discover]  # 取り込み（github / slack / ms-graph / google / box / web / local / notion / jira）。--discover/--no-discover は Slack の discovery sweep 単発トグル（ADR-0039）
@@ -71,6 +71,8 @@ suasor --version                       # バージョン出力
 | `onboard` | `--skip-auth` | false | keychain 格納 + auth test を skip（token は env override / binary 前提） |
 | `onboard` | `--skip-sync` | false | 初回 `suasor sync` を skip |
 | `onboard` | `--write-cron` | false | cron 行を crontab に追記する（既定は雛形を表示のみ） |
+| `onboard` | `--write-launchd` | false | launchd agent を `~/Library/LaunchAgents/com.suasor.sync.plist` に書き、`launchctl load` コマンドを表示する（既存ファイルは上書きしない） |
+| `onboard` | `--write-systemd` | false | systemd user unit（service + timer）を `~/.config/systemd/user/` に書き、`systemctl --user enable --now` コマンドを表示する（既存ファイルは上書きしない） |
 | `onboard` | `--json` | false | 各ステップ結果（auth / config 追記有無 / sync / scheduler 種別）を機械可読出力 |
 | `db migrate` | `--vec` / `--no-vec` | true | sqlite-vec の vec0 substrate を作る／作らない |
 | `search` | `--limit N` | 20 | 返す hit の最大数（正の整数。非正値は error） |
