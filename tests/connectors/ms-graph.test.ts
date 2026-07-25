@@ -28,11 +28,14 @@ function fakeGraph(
   const client: MsGraphClientLike = {
     async getPage(path) {
       paths.push(path);
-      // Each path (including synthetic `next:<bucket>` links) maps 1:1 to a
-      // configured page list; unknown paths return an empty page.
-      const list = pagesByPath[path] ?? [];
-      const idx = cursors[path] ?? 0;
-      cursors[path] = idx + 1;
+      // Each path (including synthetic `next:<bucket>` links) maps to a
+      // configured page list. Matched by prefix because the calendarView path
+      // embeds a rolling window (ADR-0044 決定 1), so it carries timestamps
+      // that no fixed fixture key could ever equal.
+      const key = Object.keys(pagesByPath).find((k) => path === k || path.startsWith(k));
+      const list = key === undefined ? [] : (pagesByPath[key] ?? []);
+      const idx = cursors[key ?? path] ?? 0;
+      cursors[key ?? path] = idx + 1;
       return list[idx] ?? { value: [] };
     },
     async downloadFile(itemId) {
@@ -84,14 +87,20 @@ describe("MS Graph connector — record mapping (ADR-0007 identity)", () => {
           ],
         },
       ],
-      "/users/me/events?$top=50&$select=id,subject,bodyPreview,start": [
+      "/users/me/calendarView": [
         {
           value: [
             {
               id: "e1",
               subject: "Standup",
               bodyPreview: "agenda",
+              lastModifiedDateTime: "2026-06-09T12:00:00Z",
               start: { dateTime: "2026-06-11T09:00:00Z" },
+              end: { dateTime: "2026-06-11T09:30:00Z" },
+              isOrganizer: true,
+              responseStatus: { response: "organizer" },
+              attendees: [{ type: "required" }, { type: "optional" }],
+              seriesMasterId: "series-1",
             },
           ],
         },
@@ -108,7 +117,15 @@ describe("MS Graph connector — record mapping (ADR-0007 identity)", () => {
 
     const cal = records.find((r) => r.sourceType === "ms365_calendar");
     expect(cal?.externalId).toBe("msgraph:calendar:e1");
-    expect(cal?.observedAt).toBe("2026-06-11T09:00:00Z");
+    // observed_at is the *modification* time; the event's own times live in
+    // meta.start / meta.end (ADR-0044 決定 1). Sharing one column is what made
+    // "next week's meetings" select recently-edited events instead.
+    expect(cal?.observedAt).toBe("2026-06-09T12:00:00Z");
+    expect(cal?.meta.start).toBe("2026-06-11T09:00:00.000Z");
+    expect(cal?.meta.end).toBe("2026-06-11T09:30:00.000Z");
+    expect(cal?.meta.role).toBe("organizer");
+    expect(cal?.meta.attendees).toBe(2);
+    expect(cal?.meta.recurring).toBe(true);
   });
 
   test("files and teams resources produce ms365_file / ms365_teams_message", async () => {
@@ -407,9 +424,10 @@ function fakeFailingGraph(opts: {
       for (const [token, error] of Object.entries(opts.failPaths)) {
         if (path.includes(token)) throw error;
       }
-      const list = opts.pagesByPath[path] ?? [];
-      const idx = cursors[path] ?? 0;
-      cursors[path] = idx + 1;
+      const key = Object.keys(opts.pagesByPath).find((k) => path === k || path.startsWith(k));
+      const list = key === undefined ? [] : (opts.pagesByPath[key] ?? []);
+      const idx = cursors[key ?? path] ?? 0;
+      cursors[key ?? path] = idx + 1;
       return list[idx] ?? { value: [] };
     },
     async downloadFile() {
@@ -422,7 +440,7 @@ describe("MS Graph connector — per-resource error isolation (Issue #193)", () 
   test("one resource family failing is skipped; the rest stream; one aggregated warn", async () => {
     const client = fakeFailingGraph({
       pagesByPath: {
-        "/users/me/events?$top=50&$select=id,subject,bodyPreview,start": [
+        "/users/me/calendarView": [
           {
             value: [{ id: "e1", subject: "Standup", start: { dateTime: "2026-06-11T00:00:00Z" } }],
           },
@@ -445,9 +463,7 @@ describe("MS Graph connector — per-resource error isolation (Issue #193)", () 
   test("partial failure sets partialFailure + a summary line in finalize", async () => {
     const client = fakeFailingGraph({
       pagesByPath: {
-        "/users/me/events?$top=50&$select=id,subject,bodyPreview,start": [
-          { value: [{ id: "e1", subject: "Standup" }] },
-        ],
+        "/users/me/calendarView": [{ value: [{ id: "e1", subject: "Standup" }] }],
       },
       failPaths: { "/messages": new Error("boom") },
     });
@@ -467,7 +483,7 @@ describe("MS Graph connector — per-resource error isolation (Issue #193)", () 
   test("all resources failing throws", async () => {
     const client = fakeFailingGraph({
       pagesByPath: {},
-      failPaths: { "/messages": new Error("403"), "/events": new Error("404") },
+      failPaths: { "/messages": new Error("403"), "/calendarView": new Error("404") },
     });
     const connector = createMsGraphConnector(
       { ...baseConfig, resources: ["mail", "calendar"] },

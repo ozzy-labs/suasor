@@ -61,6 +61,27 @@ export type GoogleConnectorConfig = z.infer<typeof GoogleConnectorConfig>;
 
 export const GOOGLE_CONNECTOR_NAME = "google";
 
+/** Milliseconds in a day — the calendar window is expressed in days. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Rolling calendar ingest window (ADR-0044 決定 1). Past covers follow-up
+ * ("what did we decide last month"); future covers preparation. Occurrences
+ * outside it are simply not fetched — already-ingested rows stay.
+ */
+export const CALENDAR_WINDOW_PAST_DAYS = 30;
+export const CALENDAR_WINDOW_FUTURE_DAYS = 90;
+
+/**
+ * Normalize a Google date/dateTime to an ISO instant. All-day events carry a
+ * bare `YYYY-MM-DD`, which is widened to midnight UTC so every stored start is
+ * comparable with a single string comparison.
+ */
+function normalizeInstant(value: string | null | undefined): string {
+  if (value == null || value === "") return new Date(0).toISOString();
+  return value.length === 10 ? `${value}T00:00:00.000Z` : new Date(value).toISOString();
+}
+
 /** Credential precondition enforced centrally by the sync service (Issue #440). */
 const GOOGLE_CREDENTIALS: CredentialRequirement = {
   secretNames: ["refreshToken"],
@@ -68,6 +89,35 @@ const GOOGLE_CREDENTIALS: CredentialRequirement = {
     "google connector: no refreshToken configured " +
     "(set SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN or store it in the OS keychain)",
 };
+
+/**
+ * Event facts a calendar item carries, in connector-neutral form (ADR-0044
+ * 決定 1). `start` / `end` are the event's own times — deliberately separate
+ * from `observedAt`, which stays "when this was last modified": conflating the
+ * two is what made `meeting-prep` filter next week's meetings by *modification*
+ * time, so a meeting booked three months ago for tomorrow fell outside the
+ * window while one renamed yesterday came in.
+ */
+export interface CalendarMeta {
+  /** Event start (ISO 8601, UTC-normalized). */
+  start: string;
+  /** Event end (ISO 8601, UTC-normalized). */
+  end: string;
+  /** Whether this is an all-day event (excluded from proximity). */
+  allDay: boolean;
+  /** The operator's role: organizer / required / optional / none. */
+  role: "organizer" | "required" | "optional" | "none";
+  /** The operator's RSVP: accepted / declined / tentative / none. */
+  response: "accepted" | "declined" | "tentative" | "none";
+  /** Attendee count only — never the addresses (ADR-0003 minimization). */
+  attendees: number;
+  /** Whether the event body carries an agenda. */
+  hasAgenda: boolean;
+  /** Whether the event has attachments. */
+  hasAttachments: boolean;
+  /** Whether this is an occurrence of a recurring series. */
+  recurring: boolean;
+}
 
 /** A normalized Google item the connector maps into a record. */
 export interface GoogleItem {
@@ -78,6 +128,12 @@ export interface GoogleItem {
   detail: string;
   /** Observation time (ISO 8601). */
   observedAt: string;
+  /**
+   * Calendar-only: the event's own times and the operator's relationship to it
+   * (ADR-0044 決定 1). Kept under connector-neutral key names so the demand
+   * derivation needs one SQL branch, not one per connector.
+   */
+  calendar?: CalendarMeta;
   /**
    * Drive file MIME type (Drive items only). Google-native types
    * (`application/vnd.google-apps.*`) are exported; everything else is downloaded
@@ -201,7 +257,7 @@ function toRecord(
     sourceType: SOURCE_TYPE[resource],
     body,
     observedAt: item.observedAt,
-    meta: { resource, id: item.id },
+    meta: { resource, id: item.id, ...(item.calendar !== undefined ? item.calendar : {}) },
     ...(fingerprint ? { fingerprint } : {}),
     ...(extractable !== undefined ? { extractable } : {}),
   };
@@ -292,19 +348,56 @@ const defaultGoogleClientFactory: GoogleClientFactory = async ({
         }
         return { items, nextPageToken: list.data.nextPageToken ?? undefined };
       }
-      // calendar
+      // calendar: a rolling window, expanded to occurrences (ADR-0044 決定 1).
+      // Without timeMin/timeMax `singleEvents` expands the *entire* history of
+      // every recurring series; the window bounds that to what a secretary can
+      // act on (past for follow-up, future for prep).
+      const now = Date.now();
       const res = await calendar.events.list({
         calendarId,
         maxResults: 50,
         singleEvents: true,
+        timeMin: new Date(now - CALENDAR_WINDOW_PAST_DAYS * DAY_MS).toISOString(),
+        timeMax: new Date(now + CALENDAR_WINDOW_FUTURE_DAYS * DAY_MS).toISOString(),
         ...(pageToken ? { pageToken } : {}),
       });
-      const items: GoogleItem[] = (res.data.items ?? []).map((e) => ({
-        id: e.id ?? "",
-        title: e.summary ?? "",
-        detail: e.description ?? "",
-        observedAt: e.updated ?? e.start?.dateTime ?? e.start?.date ?? new Date(0).toISOString(),
-      }));
+      const items: GoogleItem[] = (res.data.items ?? []).map((e) => {
+        const self = (e.attendees ?? []).find((a) => a.self === true);
+        const allDay = e.start?.date != null;
+        return {
+          id: e.id ?? "",
+          title: e.summary ?? "",
+          detail: e.description ?? "",
+          // Modification time, not start time — the two are different questions
+          // and sharing one column is what broke the "next week" filter.
+          observedAt: e.updated ?? new Date(0).toISOString(),
+          calendar: {
+            start: normalizeInstant(e.start?.dateTime ?? e.start?.date),
+            end: normalizeInstant(e.end?.dateTime ?? e.end?.date),
+            allDay,
+            role:
+              e.organizer?.self === true
+                ? "organizer"
+                : self === undefined
+                  ? "none"
+                  : self.optional === true
+                    ? "optional"
+                    : "required",
+            response:
+              self?.responseStatus === "accepted"
+                ? "accepted"
+                : self?.responseStatus === "declined"
+                  ? "declined"
+                  : self?.responseStatus === "tentative"
+                    ? "tentative"
+                    : "none",
+            attendees: (e.attendees ?? []).length,
+            hasAgenda: (e.description ?? "").trim().length > 0,
+            hasAttachments: (e.attachments ?? []).length > 0,
+            recurring: e.recurringEventId != null,
+          },
+        };
+      });
       return { items, nextPageToken: res.data.nextPageToken ?? undefined };
     },
     async downloadFile(fileId) {

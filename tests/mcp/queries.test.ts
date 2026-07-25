@@ -1031,6 +1031,57 @@ describe("listSourceHistory", () => {
   });
 });
 
+describe("source.list startsBetween (Issue #490 / ADR-0044 決定 2)", () => {
+  /** A calendar event: modified at `observedAt`, actually starting at `start`. */
+  function event(id: string, observedAt: string, start: string) {
+    store.record({
+      type: "SourceObserved",
+      externalId: id,
+      sourceType: "google_calendar",
+      body: `event ${id}`,
+      observedAt,
+      fingerprint: id,
+      meta: { resource: "calendar", start, end: start, allDay: false },
+    });
+  }
+
+  test("selects by the event's own start, not by when it was last edited", () => {
+    // The exact failure meeting-prep had: a meeting booked long ago for
+    // tomorrow was missing, while one renamed yesterday came in.
+    event("booked-long-ago", "2026-04-01T00:00:00.000Z", "2026-07-27T09:00:00.000Z");
+    event("renamed-yesterday", "2026-07-25T00:00:00.000Z", "2026-06-01T09:00:00.000Z");
+
+    const nextWeek = listSources(sqlite(), {
+      startsBetween: { after: "2026-07-26T00:00:00.000Z", before: "2026-08-02T00:00:00.000Z" },
+    });
+    expect(nextWeek.map((r) => r.externalId)).toEqual(["booked-long-ago"]);
+
+    // For contrast: the old observed_at window answers the other question.
+    const edited = listSources(sqlite(), {
+      observed: { after: "2026-07-20T00:00:00.000Z" },
+    });
+    expect(edited.map((r) => r.externalId)).toEqual(["renamed-yesterday"]);
+  });
+
+  test("excludes rows that carry no start (non-calendar sources)", () => {
+    event("meeting", "2026-07-01T00:00:00.000Z", "2026-07-27T09:00:00.000Z");
+    source("gh:1", "2026-07-27T00:00:00.000Z");
+    const rows = listSources(sqlite(), {
+      startsBetween: { after: "2026-07-26T00:00:00.000Z" },
+    });
+    expect(rows.map((r) => r.externalId)).toEqual(["meeting"]);
+  });
+
+  test("bounds are inclusive lower / exclusive upper, like every other window", () => {
+    event("at-lower", "2026-07-01T00:00:00.000Z", "2026-07-26T00:00:00.000Z");
+    event("at-upper", "2026-07-01T00:00:00.000Z", "2026-08-02T00:00:00.000Z");
+    const rows = listSources(sqlite(), {
+      startsBetween: { after: "2026-07-26T00:00:00.000Z", before: "2026-08-02T00:00:00.000Z" },
+    });
+    expect(rows.map((r) => r.externalId)).toEqual(["at-lower"]);
+  });
+});
+
 describe("buildBrief commitments section (Issue #513)", () => {
   test("includes open commitments and excludes resolved / dismissed ones", () => {
     const db = sqlite();

@@ -40,7 +40,7 @@ mcp_tools_write: []
 
 ### phase=prep
 
-1. `source.list` で対象の calendar event を引く。**時間フィルタは開始時刻で絞る**（更新時刻ではない — この取り違えが「3 か月前に作られた明日の会議」を落としていた。[ADR-0044](../../adr/0044-calendar-proximity-signals.md) 決定 2）
+1. `source.list` で対象の calendar event を引く。**`startsAfter` / `startsBefore`（イベント自身の開始時刻）で絞る** — `observedAfter` / `observedBefore` は**更新時刻**の窓なので別の問いに答えてしまう（3 か月前に予約された明日の会議が落ち、昨日タイトルを直した先月の会議が入る。[ADR-0044](../../adr/0044-calendar-proximity-signals.md) 決定 2 / [#490](https://github.com/ozzy-labs/suasor/issues/490)）
 2. `source.get`（`externalId`）で event 本文・議題を取る
 3. `search` で過去の関連やりとりを引く
 4. `graph.related` で関連 decisions / sources を辿る
@@ -48,7 +48,7 @@ mcp_tools_write: []
 
 ### phase=status
 
-1. `source.list` で対象の会議 event を特定する
+1. `source.list`（`startsAfter` / `startsBefore`）で対象の会議 event を特定する
 2. `graph.related` でその会議に由来する task / decision を辿る
 3. `task.list`（`state`）で各 task の現在状態を引く
 4. **決めたことごとに「実装された / 進行中 / 手つかず」**を対応付けて返す

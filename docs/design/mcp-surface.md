@@ -237,6 +237,8 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json` では同じ `warnings` 配列をバンドルに含める。
 
 > **`bodyDroppedAt`**（[#498](https://github.com/ozzy-labs/suasor/issues/498) / [ADR-0047](../adr/0047-storage-lifecycle.md)）: retention が本文を落とした時刻。`null` なら本文は健在。**非 null + 空 `body` は「storage を抑えるために削除した」であって「本文が元々無い」ではない** — 空文字だけを黙って返すのは [ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer" に反するため明示する。メタデータ・provenance link・embedding は残っているので、source 自体は引き続き発見できる。
+>
+> **`source.list` の `startsAfter` / `startsBefore`**（[ADR-0044](../adr/0044-calendar-proximity-signals.md) 決定 2 / [#490](https://github.com/ozzy-labs/suasor/issues/490)）: calendar event の**自身の開始時刻**（`meta.start`）に対する窓。`observedAfter` / `observedBefore` は**更新時刻**の窓であり、「来週の会議」をそちらで引くと**別の問いに答える**（最近編集された予定が返る）。`meta.start` を持たない行は除外。
 
 ### `sync.status`（確定・read・#442）
 
