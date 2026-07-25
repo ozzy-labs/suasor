@@ -6,6 +6,10 @@
 - Related: [ADR-0002](0002-event-sourced-architecture.md)（seen-state は event）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（write は HITL）, [ADR-0006](0006-ml-delegation.md)（決定論的算術は委譲対象外＝プロダクトコードに置いてよい）, [ADR-0012](0012-slack-demand-digest.md)（本 ADR が決定 3 / 4 を supersede）, [ADR-0021](0021-commitment-ledger.md)（commitment 期限）, [ADR-0028](0028-task-scheduling-fields.md)（dueDate / priority / overdue 派生）, [ADR-0036](0036-task-external-home.md)（差別化宣言「横断捕捉 + AI 提案 + 優先付け」）, [ADR-0040](0040-proactive-push-lane.md)（digest の内容源として消費）
 - Tracks: #412（決定）/ [#419](https://github.com/ozzy-labs/suasor/issues/419)（実装）
 
+> **Extended by [ADR-0043](0043-email-demand-signals.md)（2026-07-25）:** 決定 1 の導出面に email demand
+> （自分宛て未返信スレッド）を追加し、決定 3 の順序基線に `aging_demand` tier を
+> `overdue` と un-acked demand の間へ挿入した。中立基質の構造自体は不変。
+
 ## Context
 
 [ADR-0036](0036-task-external-home.md) は Suasor の差別化を「**横断捕捉 + AI 提案 + 優先付け**（どの単独ツールにもできない）」と宣言する。しかし adversarial review で、**優先付けはプロダクトコードに存在しない**ことが確定した:
