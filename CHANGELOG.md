@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1](https://github.com/ozzy-labs/suasor/compare/v0.2.0...v0.2.1) (2026-07-25)
+
+
+### Features
+
+* **skills:** embed the catalog in the binary, default install to user scope ([#484](https://github.com/ozzy-labs/suasor/issues/484)) ([047bdfa](https://github.com/ozzy-labs/suasor/commit/047bdfa68f331cc4c9198ed1f62e6c5d62cfd08d))
+* **sync:** surface ingest freshness in doctor, brief, and MCP ([#491](https://github.com/ozzy-labs/suasor/issues/491)) ([638bff0](https://github.com/ozzy-labs/suasor/commit/638bff0e78762f81268269c744c29878f2600a92))
+
+
+### Bug Fixes
+
+* **commitment:** join the ledger to person identities, nudge on staleness ([#492](https://github.com/ozzy-labs/suasor/issues/492)) ([8cbaec5](https://github.com/ozzy-labs/suasor/commit/8cbaec5870f1abdd83ed081c69d94d2d5cf8e724))
+
 ## [0.2.0](https://github.com/ozzy-labs/suasor/compare/v0.1.22...v0.2.0) (2026-07-25)
 
 
