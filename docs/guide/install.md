@@ -9,11 +9,14 @@ runtime: it runs on **Bun**. Pick a channel by whether you already use Bun — t
 binary and Docker image need **no runtime at all** (Bun is bundled), so they are
 the simplest option if you don't already run Bun:
 
-| You... | Use | Runtime on the host |
-| --- | --- | --- |
-| just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) |
-| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) |
-| already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 |
+| You... | Use | Runtime on the host | Connectors | Secrets | Assistant skills |
+| --- | --- | --- | --- | --- | --- |
+| just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) | GitHub + local files only | env vars only | **all 32, bundled** |
+| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | keychain or env | all 32 |
+| already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 | all | keychain or env | all 32 |
+
+The binary trades connector breadth for zero setup — the capability columns are
+the whole difference, and [Binary scope](#binary-scope) spells each one out.
 
 > Releases are automated with release-please: merging its release PR publishes
 > npm + binaries + Docker (see [Releasing](#releasing-maintainers)).
@@ -51,12 +54,14 @@ chmod +x suasor-bun-linux-x64
 >   `@slack/web-api`, `@azure/msal-node`, `@microsoft/microsoft-graph-client`,
 >   `googleapis`, `box-typescript-sdk-gen`, `playwright-core`) — so those
 >   connectors are not available in the standalone binary.
-> - The bundled `docs/skills` directory — so `skills install` / `skills list` /
->   `skills search` / `skills info` are not available in the standalone binary.
 >
-> The GitHub connector and all retrieval/MCP features work in the binary. Use the
-> **npm** package or the **Docker** image for the full connector set, keychain
-> secrets, and the assistant skills.
+> The assistant skills are **not** external: all 32 are compiled into the binary
+> (Issue #445), so `skills install` / `list` / `search` / `info` work there
+> exactly as they do on npm / Docker.
+>
+> The GitHub connector, the local-files connector, and all retrieval/MCP features
+> work in the binary. Use the **npm** package or the **Docker** image for the full
+> connector set and keychain secrets.
 
 Commands that depend on the external pieces fail fast in the binary with a
 human-readable error pointing here (instead of an opaque `Cannot find module` /
@@ -64,7 +69,7 @@ keyring failure):
 
 | Command | In the binary | Escape hatch |
 | --- | --- | --- |
-| `skills install` / `skills list` / `skills search` / `skills info` | unavailable (no bundled `docs/skills`) | npm / Docker |
+| `skills install` / `skills list` / `skills search` / `skills info` | **available** (catalog compiled in, #445) | — |
 | `<connector> sync` for slack / ms-graph / google / box / web | unavailable (SDK external) | npm / Docker |
 | `<connector> auth set` (all connectors) | unavailable (keychain external) | set `SUASOR_CONNECTOR_<NAME>_<SECRET>` directly |
 | `<connector> auth test` for ms-graph / google / box | unavailable (SDK external) | npm / Docker |

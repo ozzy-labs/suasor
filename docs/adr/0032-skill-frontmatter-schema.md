@@ -68,7 +68,7 @@
 - `suasor skills info <name>`: 単一 skill の `name` / `category` / `readOnly` / `triggers` / `pairs` / `mcp_tools_*` / `description` を整形表示する。`--json` 対応。未知 name はエラー（exit 1）。
 - `suasor skills list --format=detailed`: 既存の status 一覧に `category` / `readOnly`（read/write）列を加えた詳細表示。既定 `--format` は従来どおり（`compact`）で **既存出力を壊さない**。`--json` は従来 `SkillStatus[]` を維持。
 
-CLI は import-clean を保つ（frontmatter ロードは `execute` 内で lazy-import、[docs/design/cli.md](../design/cli.md)・NFR-PRF-1）。standalone binary では `docs/skills` が同梱されないため、既存 `skills install` / `list` と同じ `standaloneGate` で弾く。
+CLI は import-clean を保つ（frontmatter ロードは `execute` 内で lazy-import、[docs/design/cli.md](../design/cli.md)・NFR-PRF-1）。standalone binary でも動く（[Issue #445](https://github.com/ozzy-labs/suasor/issues/445) で catalog をソースに inline した `src/skills/embedded.ts` へフォールバックするため。旧: `standaloneGate` で弾いていた）。
 
 ### (e) 利用ガイド
 

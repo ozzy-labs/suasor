@@ -55,10 +55,11 @@
 SSOT（本ディレクトリ）はパッケージに同梱され、`suasor skills install` でエージェントの skill ディレクトリに展開する（[ADR-0008](../adr/0008-assistant-skills.md)・[docs/design/cli.md](../design/cli.md)）。
 
 ```bash
-suasor skills install                 # カレントプロジェクトの .claude/skills/ + .agents/skills/ へ展開
+suasor skills install                 # ~/.claude/skills/ + ~/.agents/skills/ へ展開（user scope・既定）
+suasor skills install --project       # カレントプロジェクトの .claude/skills/ + .agents/skills/ へ展開
 suasor skills install --scope claude  # Claude Code（.claude/skills/）のみ
 suasor skills install --scope agents  # Codex / Copilot / Gemini（.agents/skills/）のみ
-suasor skills install --host /path/to/project   # 展開先プロジェクトを指定
+suasor skills install --host /path/to/project   # 展開先を明示指定（--project より優先）
 suasor skills install --dry-run       # 書き込まず差分だけ確認
 suasor skills list                    # 各 skill の状態（installed / missing / modified）
 suasor skills list --format=detailed  # 状態 + category + read/write 境界を併記

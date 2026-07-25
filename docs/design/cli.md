@@ -51,8 +51,8 @@ suasor slack cursor backfill --channel C1 --since 180d [--yes]  # cursor を過�
 suasor slack resolve-names [--force] [--no-progress] [--json]  # 既取り込み分の channel/user 名を遡及解決（ADR-0037・pool から到達性で解決）
 suasor slack follow <name|id>... | --suggest [--yes]  # channel を名前/ID で channels へ追加（--suggest は参加中 public/private を提案し 1 回確認で反映・ADR-0042）
 suasor slack unfollow <name|id>...     # channels から削除（名前は slack_channels projection でオフライン解決）
-suasor skills install [--scope S] [--host DIR] [--dry-run]  # アシスタント skill 展開
-suasor skills list [--scope S] [--host DIR] [--format F] [--json]  # アシスタント skill 状態一覧（detailed で category/境界併記）
+suasor skills install [--scope S] [--host DIR] [--project] [--dry-run]  # アシスタント skill 展開（既定 user scope）
+suasor skills list [--scope S] [--host DIR] [--project] [--format F] [--json]  # アシスタント skill 状態一覧（detailed で category/境界併記）
 suasor skills search <kw> [--json]                          # name/description/category/triggers 横断検索
 suasor skills info <name> [--json]                          # 単一 skill の詳細（category/境界/triggers/pairs/MCP tools）
 suasor --version                       # バージョン出力
@@ -171,10 +171,12 @@ suasor --version                       # バージョン出力
 | `slack resolve-names` | `--no-progress` | false | 進捗インジケータを無効化（stderr が非 TTY のときは自動 off） |
 | `slack resolve-names` | `--json` | false | 解決 / skip / degrade 件数のサマリを JSON で出力 |
 | `skills install` | `--scope S` | all | 展開先 `claude`（`.claude/skills/`） \| `agents`（`.agents/skills/`） \| `all` |
-| `skills install` | `--host DIR` | cwd | 展開先のベースディレクトリ（プロジェクトルート） |
+| `skills install` | `--host DIR` | `$HOME` | 展開先のベースディレクトリ（明示指定・`--project` より優先） |
+| `skills install` | `--project` | false | 展開先を cwd（プロジェクトルート）にする。既定は user scope（`$HOME`） |
 | `skills install` | `--dry-run` | false | 書き込まず変更内容（created / updated / unchanged）だけ表示 |
 | `skills list` | `--scope S` | all | 状態を確認する展開先 |
-| `skills list` | `--host DIR` | cwd | 状態を確認するベースディレクトリ |
+| `skills list` | `--host DIR` | `$HOME` | 状態を確認するベースディレクトリ（明示指定・`--project` より優先） |
+| `skills list` | `--project` | false | 状態を確認する先を cwd にする。既定は user scope（`$HOME`） |
 | `skills list` | `--format F` | compact | `compact`（status のみ・従来出力） \| `detailed`（category + read/write 境界を併記、[ADR-0032](../adr/0032-skill-frontmatter-schema.md)） |
 | `skills list` | `--json` | false | 人間可読リストの代わりに `SkillStatus[]`（name / host / state / mirrorPath）を JSON で出力（shape 不変） |
 | `skills search` | `<query>` | （必須） | name / description / category / triggers を横断する部分一致検索（[ADR-0032](../adr/0032-skill-frontmatter-schema.md)） |
@@ -221,6 +223,9 @@ suasor --version                       # バージョン出力
 - `slack auth set` / `slack auth test` / `slack conversations` は Slack 固有の運用 verb（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）。汎用 connector 契約（`sync` のみ）は太らせず、token 保存（keychain）・scope 検証・会話 id 発見を担う。いずれも Slack SDK を読まず `fetch` のみ（import-clean）。`auth test` は `auth.test` 1 回で granted scopes（`x-oauth-scopes`）と feature readiness（`READY` / `READY (degraded)` / `MISSING <scope>` / `N/A`）を出す。readiness は scope 層のみで channel membership は保証しない。`conversations` は型ごとに `missing_scope` を自己申告し、`config.toml` に貼れる `[connectors.slack]` ブロックを出力する。サービス本体は `src/connectors/slack/`
 - `slack conversations` の人間可読出力は各行を `Joined / ID / Name` の 3 列で並べる。先頭 `Joined` 列の `✓` は token の principal がその channel の member（= sync で到達可能）であることを示し、空欄は未参加を意味する。**`✓` の無い channel は `not_in_channel` を返し、bot が join / `/invite` されるまで ingest が 0 件**になる（[ADR-0011](../adr/0011-slack-operational-verbs-and-readiness.md)）。未参加 channel が 1 つでもある場合のみ、この含意を説明する note を stderr に出す（全 join 済みなら出さない）。`ID` 列が `channels` 設定に貼る値（名前ではなく id・#158）。`--json` 出力は列整形を行わず member 情報は raw のまま返す
 - `skills install` は SSOT `docs/skills/<name>/SKILL.md`（パッケージ同梱）を `<host>/.claude/skills/<name>/SKILL.md` / `<host>/.agents/skills/<name>/SKILL.md` に展開する（[ADR-0008](../adr/0008-assistant-skills.md)）。冪等で、内容一致は `unchanged`・欠落は `created`・差分は SSOT で `updated`。エコシステム共通 dev skill（`@ozzylabs/skills`）は名前空間 disjoint で touch しない。サービス本体は `src/skills/`
+- **展開先の既定は user scope（`$HOME`）**（[Issue #445](https://github.com/ozzy-labs/suasor/issues/445)）。skill は作業プロジェクトに依らず使いたいものなので、1 回の install で全プロジェクトから発火する場所を既定にする。プロジェクト固有に置きたい場合のみ `--project`（cwd）か `--host <path>`（明示）を使う。`--host` は `--project` より優先
+- install は展開先に `.suasor-skills.json`（`{ version, installedAt }`）を残す。mirror 自体は SSOT とバイト一致でなければ drift 検出（`modified`）が壊れるため、stamp は **mirror の外**（`<host>/.claude/skills/.suasor-skills.json` / `<host>/.agents/skills/.suasor-skills.json`）に置く。stamp の version が実行中の suasor と食い違うと `skills list` と `mcp serve` 起動時に stderr へ 1 行だけ再 install を促す（stdout の一覧 / JSON-RPC ストリームは汚さない）。未 install なら黙る
+- **standalone binary でも skills 系 verb は全て動く**（[Issue #445](https://github.com/ozzy-labs/suasor/issues/445)）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、catalog を `src/skills/embedded.ts`（生成物・commit 済み・`node scripts/generate-embedded-skills.mjs`）としてソースに inline した。`docs/skills/` を解決できる repo / npm 実行ではディスクを読み、解決できなければ埋め込みへフォールバックする。drift は `tests/skills/embedded.test.ts` が検出する
 - `skills list` は host dir ごとに各 skill を `installed`（SSOT と一致）/ `missing`（未展開）/ `modified`（展開済みだが SSOT と差分）で報告する。[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo dogfood-commit と `skills-drift` フックは廃止された。assistant mirror は `.gitignore` 済みのローカル install 物（commit しない）で、host dir に commit されるのは vendored dev skill（drive / lint 等）のみ。install 正しさは `tests/skills/install.test.ts` が担保する
 - 長時間コマンド（`<connector> sync` / `sync` / `projections rebuild` / `embeddings rebuild` / `embeddings drain` / discovery verb 群 / `slack conversations` / `slack resolve-names`）の TTY 進捗表示は実装済み（`src/cli/progress.ts` の `createProgress`・stderr / TTY 限定・`--no-progress` で無効化）。env 上書きは現状未導入（必要が出れば別途検討）
 

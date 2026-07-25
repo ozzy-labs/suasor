@@ -19,9 +19,8 @@
  * we author is flat scalars + simple string arrays) + Zod, so the CLI can
  * lazy-load this cheaply (NFR-PRF-1, ADR-0008).
  */
-import { readFileSync } from "node:fs";
 import { z } from "zod";
-import type { BundledSkill } from "./catalog.ts";
+import { type BundledSkill, readSkillSource } from "./catalog.ts";
 
 /** Closed set of skill categories (ADR-0032 §(b)). Extend only with an ADR update. */
 export const SKILL_CATEGORIES = [
@@ -195,7 +194,7 @@ export interface SkillInfo {
  * or otherwise fails the schema.
  */
 export function loadSkillFrontmatter(skill: BundledSkill): SkillInfo {
-  const md = readFileSync(skill.sourcePath, "utf8");
+  const md = readSkillSource(skill);
   const result = validateFrontmatter(md);
   if (!result.ok) {
     throw new SkillFrontmatterError(skill.name, result.error);

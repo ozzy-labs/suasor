@@ -16,12 +16,24 @@
  * The skills service (fs work) is lazy-imported inside `execute` to keep the
  * command registry cheap to build (NFR-PRF-1, docs/design/cli.md).
  */
+import { homedir } from "node:os";
 import { Command, Option } from "clipanion";
-import { standaloneGate } from "../build-target.ts";
+import { VERSION } from "../../version.ts";
 
 /** Install targets for assistant skills (ADR-0008). Mirrors `skills` module. */
 const SCOPES = ["claude", "agents", "all"] as const;
 type Scope = (typeof SCOPES)[number];
+
+/**
+ * Resolve the base dir the host dirs (`.claude/skills` / `.agents/skills`) are
+ * written under (Issue #445). Explicit `--host` wins; otherwise `--project`
+ * selects the repo-local install and the default is the user home, so a single
+ * install serves every project (the ecosystem `@ozzylabs/skills` convention).
+ */
+function resolveBaseDir(host: string | undefined, project: boolean): string {
+  if (host !== undefined) return host;
+  return project ? process.cwd() : homedir();
+}
 
 export class SkillsInstallCommand extends Command {
   static override paths = [["skills", "install"]];
@@ -33,13 +45,24 @@ export class SkillsInstallCommand extends Command {
       Expands the bundled assistant skills (SSOT docs/skills/<name>/SKILL.md)
       into .claude/skills/ and/or .agents/skills/ (ADR-0008). Idempotent:
       unchanged skills are left as-is, drifted ones are refreshed from the SSOT.
+
+      Installs under your home directory by default (user scope), so the skills
+      are available in every project; pass --project for a repo-local install,
+      or --host <dir> for an explicit root. Each host dir is stamped with the
+      writing suasor version, and 'skills list' / 'mcp serve' warn once when the
+      installed mirrors came from a different version.
     `,
     examples: [
-      ["Install to all agent dirs in the current project", "suasor skills install"],
+      ["Install for every project (user scope)", "suasor skills install"],
+      ["Install into this repo only", "suasor skills install --project"],
       ["Install only for Claude Code", "suasor skills install --scope claude"],
       ["Preview without writing", "suasor skills install --dry-run"],
-      ["Install into a specific project root", "suasor skills install --host /path/to/project"],
+      ["Install into a specific root", "suasor skills install --host /path/to/project"],
     ],
+  });
+
+  project = Option.Boolean("--project", false, {
+    description: "Install into the current project instead of the user home (default: user).",
   });
 
   scope = Option.String("--scope", "all", {
@@ -47,7 +70,7 @@ export class SkillsInstallCommand extends Command {
   });
 
   host = Option.String("--host", {
-    description: "Base directory to install under (default: current directory).",
+    description: "Base directory to install under (default: user home, or cwd with --project).",
   });
 
   dryRun = Option.Boolean("--dry-run", false, {
@@ -55,14 +78,6 @@ export class SkillsInstallCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const gate = standaloneGate(
-      "'skills install' (the bundled docs/skills are not shipped in the binary)",
-    );
-    if (!gate.ok) {
-      this.context.stderr.write(gate.message);
-      return 1;
-    }
-
     if (!SCOPES.includes(this.scope as Scope)) {
       this.context.stderr.write(
         `error: invalid --scope '${this.scope}' (expected: ${SCOPES.join(" | ")})\n`,
@@ -74,9 +89,10 @@ export class SkillsInstallCommand extends Command {
     let results: Awaited<ReturnType<typeof installSkills>>;
     try {
       results = installSkills({
-        baseDir: this.host,
+        baseDir: resolveBaseDir(this.host, this.project),
         scope: this.scope as Scope,
         dryRun: this.dryRun,
+        version: VERSION,
       });
     } catch (cause) {
       this.context.stderr.write(
@@ -130,12 +146,16 @@ export class SkillsListCommand extends Command {
     ],
   });
 
+  project = Option.Boolean("--project", false, {
+    description: "Inspect the project-local install instead of the user home (default: user).",
+  });
+
   scope = Option.String("--scope", "all", {
     description: "Status target: claude | agents | all (default all).",
   });
 
   host = Option.String("--host", {
-    description: "Base directory to inspect (default: current directory).",
+    description: "Base directory to inspect (default: user home, or cwd with --project).",
   });
 
   format = Option.String("--format", "compact", {
@@ -147,14 +167,6 @@ export class SkillsListCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const gate = standaloneGate(
-      "'skills list' (the bundled docs/skills are not shipped in the binary)",
-    );
-    if (!gate.ok) {
-      this.context.stderr.write(gate.message);
-      return 1;
-    }
-
     if (!SCOPES.includes(this.scope as Scope)) {
       this.context.stderr.write(
         `error: invalid --scope '${this.scope}' (expected: ${SCOPES.join(" | ")})\n`,
@@ -170,10 +182,16 @@ export class SkillsListCommand extends Command {
       return 1;
     }
 
-    const { skillStatuses } = await import("../../skills/index.ts");
+    const { scopeHosts, skillStatuses, staleMirrorWarning } = await import("../../skills/index.ts");
+    const baseDir = resolveBaseDir(this.host, this.project);
+    // One line, before the listing: the installed mirrors came from another
+    // suasor version, so what the agent reads is not what this build ships
+    // (Issue #445). stderr keeps --json / piped stdout machine-readable.
+    const stale = staleMirrorWarning(baseDir, VERSION, scopeHosts(this.scope as Scope));
+    if (stale !== null) this.context.stderr.write(stale);
     let statuses: Awaited<ReturnType<typeof skillStatuses>>;
     try {
-      statuses = skillStatuses({ baseDir: this.host, scope: this.scope as Scope });
+      statuses = skillStatuses({ baseDir, scope: this.scope as Scope });
     } catch (cause) {
       this.context.stderr.write(
         `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
@@ -252,14 +270,6 @@ export class SkillsSearchCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const gate = standaloneGate(
-      "'skills search' (the bundled docs/skills are not shipped in the binary)",
-    );
-    if (!gate.ok) {
-      this.context.stderr.write(gate.message);
-      return 1;
-    }
-
     const { listBundledSkills, loadSkillInfos, skillMatchesQuery } = await import(
       "../../skills/index.ts"
     );
@@ -318,14 +328,6 @@ export class SkillsInfoCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const gate = standaloneGate(
-      "'skills info' (the bundled docs/skills are not shipped in the binary)",
-    );
-    if (!gate.ok) {
-      this.context.stderr.write(gate.message);
-      return 1;
-    }
-
     const { listBundledSkills, loadSkillFrontmatter } = await import("../../skills/index.ts");
     let skill: ReturnType<typeof listBundledSkills>[number] | undefined;
     let fm: Awaited<ReturnType<typeof loadSkillFrontmatter>>["frontmatter"];

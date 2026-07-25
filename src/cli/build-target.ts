@@ -9,9 +9,11 @@
  *  - the OS-keychain secret store (`@napi-rs/keyring`) — so keychain-backed
  *    onboarding (`<connector> auth set`) is unavailable in the binary;
  *  - the heavier connector SDKs (Slack / Microsoft Graph / Google / Box / Web) —
- *    so `<connector> sync` for those connectors is unavailable;
- *  - the bundled `docs/skills` directory — so `skills install` / `skills list`
- *    are unavailable.
+ *    so `<connector> sync` for those connectors is unavailable.
+ *
+ * The assistant skills are **not** on that list: since Issue #445 the catalog is
+ * inlined as source (`src/skills/embedded.ts`), so `skills install` / `list` /
+ * `search` / `info` work in the binary and are no longer gated here.
  *
  * Run those in the binary and you would otherwise hit an opaque
  * `Cannot find module` / keyring failure deep inside `execute`. This module

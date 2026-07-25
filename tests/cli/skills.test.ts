@@ -5,10 +5,11 @@
  * shapes.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
+import { VERSION } from "../../src/version.ts";
 
 let dir: string;
 
@@ -154,5 +155,68 @@ describe("suasor skills list --format", () => {
     // Status shape only — no frontmatter fields leaked into the JSON.
     expect(parsed[0]).toHaveProperty("state");
     expect(parsed[0]).not.toHaveProperty("category");
+  });
+});
+
+describe("suasor skills install — scope + version stamp (#445)", () => {
+  test("--host writes mirrors and stamps the host dirs with the running version", async () => {
+    const { code, out } = await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    expect(code).toBe(0);
+    expect(out).toContain("wrote");
+    // The mirror is byte-identical to the SSOT (the stamp lives beside it, not
+    // inside it — otherwise drift detection would flag every skill).
+    const { listBundledSkills, readSkillSource, mirrorPath, readStamp } = await import(
+      "../../src/skills/index.ts"
+    );
+    const [skill] = listBundledSkills();
+    if (!skill) throw new Error("no bundled skill");
+    expect(readFileSync(mirrorPath(dir, "claude", skill.name), "utf8")).toBe(
+      readSkillSource(skill),
+    );
+    const stamp = readStamp(dir, "claude");
+    expect(stamp?.version).toBe(VERSION);
+    expect(stamp?.installedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test("--dry-run writes neither mirrors nor a stamp", async () => {
+    const { code, out } = await run([
+      "skills",
+      "install",
+      "--host",
+      dir,
+      "--scope",
+      "claude",
+      "--dry-run",
+    ]);
+    expect(code).toBe(0);
+    expect(out).toContain("would write");
+    const { readStamp } = await import("../../src/skills/index.ts");
+    expect(readStamp(dir, "claude")).toBeNull();
+    expect(existsSync(join(dir, ".claude", "skills"))).toBe(false);
+  });
+
+  test("skills list warns once when the installed mirrors carry another version", async () => {
+    await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    // Rewrite the stamp as if an older suasor had installed them.
+    const { stampPath } = await import("../../src/skills/index.ts");
+    writeFileSync(
+      stampPath(dir, "claude"),
+      JSON.stringify({ version: "0.0.1-old", installedAt: "2020-01-01T00:00:00.000Z" }),
+    );
+    const { code, err } = await run(["skills", "list", "--host", dir, "--scope", "claude"]);
+    expect(code).toBe(0);
+    expect(err).toContain("another suasor version");
+    expect(err).toContain("0.0.1-old");
+    expect(err).toContain("skills install");
+  });
+
+  test("skills list is quiet when the stamp matches, and when nothing is installed", async () => {
+    // Nothing installed → not "stale", just absent (no nagging).
+    const fresh = await run(["skills", "list", "--host", dir, "--scope", "claude"]);
+    expect(fresh.err).not.toContain("another suasor version");
+    // Installed by this build → current.
+    await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    const after = await run(["skills", "list", "--host", dir, "--scope", "claude"]);
+    expect(after.err).not.toContain("another suasor version");
   });
 });
