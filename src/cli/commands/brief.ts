@@ -170,7 +170,7 @@ export class BriefCommand extends Command {
       this.context.stdout.write(
         `  tasks: ${brief.tasks.length}  decisions: ${brief.decisions.length}  ` +
           `sources: ${brief.sources.length}  demand: ${brief.demand.length}  ` +
-          `inbox(open): ${brief.inbox.length}\n`,
+          `inbox(open): ${brief.inbox.length}  commitments(open): ${brief.commitments.length}\n`,
       );
       // Flag any section the per-section --limit cut off, so a scheduled digest
       // never silently understates a busy day (ADR-0007 "no silent wrong answer").
@@ -192,6 +192,11 @@ export class BriefCommand extends Command {
       for (const item of brief.demand) {
         const snippet = item.body.replaceAll(/\s+/g, " ").slice(0, 80);
         this.context.stdout.write(`  [demand:${item.kind}] ${snippet}\n`);
+      }
+      // Overdue first (Issue #509), so a scanned list leads with what to chase.
+      for (const c of brief.commitments) {
+        const due = c.dueDate === null ? "" : ` (due ${c.dueDate}${c.overdue ? ", overdue" : ""})`;
+        this.context.stdout.write(`  [commitment:${c.direction}] ${c.title}${due}\n`);
       }
       return 0;
     } finally {
