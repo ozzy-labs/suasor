@@ -16,8 +16,8 @@
  * (content-minimization: the body lives only in the file). A write failure
  * throws before any event, so the log never claims an export that did not happen.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { extname, isAbsolute, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Store } from "../db/index.ts";
 import type { Composer } from "./compose.ts";
 
@@ -75,10 +75,47 @@ export class DraftExportError extends Error {
   }
 }
 
-/** True when `dir` is equal to or nested under `root` (both resolved absolute). */
+/**
+ * Resolve a path through symlinks as far as it exists (Issue #512).
+ *
+ * The export dir legitimately may not exist yet (nothing has been written), and
+ * `realpathSync` throws on a missing path — so walk up to the nearest existing
+ * ancestor, resolve *that*, and re-append the remainder. A symlinked parent is
+ * therefore still dereferenced even when the leaf is absent.
+ */
+function realpathBestEffort(path: string): string {
+  let current = resolve(path);
+  const trailing: string[] = [];
+  for (;;) {
+    try {
+      return trailing.length === 0
+        ? realpathSync(current)
+        : join(realpathSync(current), ...trailing.reverse());
+    } catch {
+      const parent = dirname(current);
+      // Reached the filesystem root without finding anything that exists:
+      // nothing to dereference, so the lexical form is the best answer.
+      if (parent === current) return resolve(path);
+      trailing.push(current.slice(parent.length + 1));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * True when `dir` is equal to or nested under `root`, **comparing real paths**
+ * (ADR-0025 §3/§4, Issue #512).
+ *
+ * `path.resolve` alone normalizes text and does not dereference symlinks, so a
+ * symlinked export dir or connector root slipped past this check — and cloud
+ * sync folders (Dropbox / OneDrive / iCloud) are commonly reached through
+ * exactly such links. That is the configuration ADR-0023 names as the local
+ * connector's reason to exist, which makes the bypass land precisely on the
+ * re-ingest loop this guard was written to prevent.
+ */
 function isInside(dir: string, root: string): boolean {
-  const d = resolve(dir);
-  const r = resolve(root);
+  const d = realpathBestEffort(dir);
+  const r = realpathBestEffort(root);
   return d === r || d.startsWith(r + sep);
 }
 
