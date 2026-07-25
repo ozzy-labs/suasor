@@ -179,3 +179,91 @@ describe("draftExport (ADR-0025 / #138)", () => {
     expect(events().some((e) => e.type === "DraftExported")).toBe(false);
   });
 });
+
+describe("symlink containment (Issue #512 / ADR-0025 §3/§4)", () => {
+  test("rejects an export dir that reaches a connector root through a symlink", async () => {
+    const { mkdtempSync, mkdirSync, symlinkSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const base = mkdtempSync(join(tmpdir(), "suasor-export-link-"));
+    try {
+      // A local connector root, and a symlink that points inside it — the shape
+      // a Dropbox / OneDrive / iCloud folder takes in practice.
+      const root = join(base, "synced-root");
+      mkdirSync(join(root, "drafts"), { recursive: true });
+      const link = join(base, "exports");
+      symlinkSync(join(root, "drafts"), link);
+
+      const store = Store.open({ path: ":memory:" });
+      try {
+        // path.resolve() alone sees two unrelated strings and lets this through,
+        // recreating the re-ingest loop ADR-0025 exists to prevent.
+        await expect(
+          draftExport(
+            store,
+            { content: "hello", filename: "note.md", format: "md" },
+            { exportDir: link, localRoots: [root] },
+          ),
+        ).rejects.toThrow(/inside local connector root/);
+      } finally {
+        store.close();
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("still allows a genuinely separate export dir", async () => {
+    const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const base = mkdtempSync(join(tmpdir(), "suasor-export-ok-"));
+    try {
+      const root = join(base, "connector-root");
+      const out = join(base, "exports");
+      mkdirSync(root, { recursive: true });
+      const store = Store.open({ path: ":memory:" });
+      try {
+        const result = await draftExport(
+          store,
+          { content: "hello", filename: "note.md", format: "md" },
+          { exportDir: out, localRoots: [root] },
+        );
+        expect(result.path).toContain("note.md");
+      } finally {
+        store.close();
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("works when the export dir does not exist yet", async () => {
+    const { mkdtempSync, mkdirSync, symlinkSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const base = mkdtempSync(join(tmpdir(), "suasor-export-missing-"));
+    try {
+      // The leaf is absent (nothing exported yet) but its parent is a symlink
+      // into the connector root — the check must still dereference the parent.
+      const root = join(base, "synced-root");
+      mkdirSync(root, { recursive: true });
+      const link = join(base, "linked");
+      symlinkSync(root, link);
+      const store = Store.open({ path: ":memory:" });
+      try {
+        await expect(
+          draftExport(
+            store,
+            { content: "hi", filename: "n.md", format: "md" },
+            { exportDir: join(link, "not-created-yet"), localRoots: [root] },
+          ),
+        ).rejects.toThrow(/inside local connector root/);
+      } finally {
+        store.close();
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
