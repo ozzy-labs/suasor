@@ -673,8 +673,16 @@ export interface CommitmentRecord {
   state: string;
   /** Optional due date (ISO 8601); null when the commitment has none. */
   dueDate: string | null;
-  /** Optional related person; null when unknown. */
+  /** Optional related person, verbatim as recorded; null when unknown. */
   person: string | null;
+  /**
+   * Canonical person (ADR-0022) the `person` string resolved to, or null when it
+   * matches no known identity (Issue #443). `person.merge` moves this, so two
+   * aliases of one human share a single ledger view.
+   */
+  personId: string | null;
+  /** Canonical display name for `personId`; null when unresolved or unnamed. */
+  personName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -686,6 +694,8 @@ interface CommitmentRow {
   state: string;
   due_date: string | null;
   person: string | null;
+  person_id: string | null;
+  person_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -695,7 +705,13 @@ export interface ListCommitmentsOptions {
   state?: string;
   /** Restrict to a direction (owed_by_me / owed_to_me). */
   direction?: string;
-  /** Restrict to a related person (exact match on the stored `person`, ADR-0021). */
+  /**
+   * Restrict to a related person (ADR-0021 / Issue #443). Matches through the
+   * person identity graph (ADR-0022), not just the stored string: any alias of
+   * the same human — a Slack id, a bare handle, a display name, or the person id
+   * — selects every commitment linked to them. Falls back to an exact match on
+   * the raw stored string when the query resolves to no known person.
+   */
   person?: string;
   /** Window over `updated_at`. */
   updated?: TimeRange;
@@ -711,6 +727,43 @@ export interface ListCommitmentsOptions {
  * `brief` / `next-actions` skills can surface "やるべきこと" alongside demand.
  * Pure SELECT.
  */
+/**
+ * Resolve a `commitment.list` person query to a canonical person id (ADR-0022),
+ * or `null` when it names nothing known. Accepts what a human would type: a
+ * person id, an identity key (`slack:U123`), a bare handle, or a display name.
+ *
+ * Ambiguity resolves to `null` rather than to a guess — a filter that silently
+ * picks one of two people named "Tanaka" would answer the wrong question
+ * confidently, and the raw-string branch still returns the literal matches.
+ */
+function resolveQueryPersonId(sqlite: Database, query: string): string | null {
+  const value = query.trim();
+  if (value === "") return null;
+  const asPerson = sqlite
+    .query<{ id: string }, [string]>("SELECT id FROM persons WHERE id = ?")
+    .get(value);
+  if (asPerson !== null) return asPerson.id;
+  const byKey = sqlite
+    .query<{ person_id: string }, [string]>(
+      "SELECT person_id FROM person_identities WHERE identity_key = ?",
+    )
+    .get(value);
+  if (byKey !== null) return byKey.person_id;
+  const byHandle = sqlite
+    .query<{ person_id: string }, [string]>(
+      "SELECT DISTINCT person_id FROM person_identities WHERE handle = ? LIMIT 2",
+    )
+    .all(value);
+  if (byHandle.length === 1 && byHandle[0] !== undefined) return byHandle[0].person_id;
+  const byName = sqlite
+    .query<{ id: string }, [string]>(
+      "SELECT id FROM persons WHERE display_name = ? AND identity_count > 0 LIMIT 2",
+    )
+    .all(value);
+  if (byName.length === 1 && byName[0] !== undefined) return byName[0].id;
+  return null;
+}
+
 export function listCommitments(
   sqlite: Database,
   options: ListCommitmentsOptions = {},
@@ -718,26 +771,41 @@ export function listCommitments(
   const clauses: string[] = [];
   const params: (string | number)[] = [];
   if (options.state !== undefined) {
-    clauses.push("state = ?");
+    clauses.push("c.state = ?");
     params.push(options.state);
   }
   if (options.direction !== undefined) {
-    clauses.push("direction = ?");
+    clauses.push("c.direction = ?");
     params.push(options.direction);
   }
   if (options.person !== undefined) {
-    clauses.push("person = ?");
-    params.push(options.person);
+    // Resolve the query through identities first, so "what did I promise
+    // Tanaka" also finds the row recorded against `slack:U123` (Issue #443).
+    // The raw match stays as an OR branch: a commitment whose person string
+    // never resolved to an identity must still be findable by its exact text.
+    const personId = resolveQueryPersonId(sqlite, options.person);
+    if (personId !== null) {
+      clauses.push("(c.person_id = ? OR c.person = ?)");
+      params.push(personId, options.person);
+    } else {
+      clauses.push("c.person = ?");
+      params.push(options.person);
+    }
   }
-  pushTimeRange(clauses, params, "updated_at", options.updated);
+  pushTimeRange(clauses, params, "c.updated_at", options.updated);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(options.limit ?? DEFAULT_LIST_LIMIT);
+  // `person_name` is the canonical display name when the row resolved to a
+  // person; the raw `person` string stays authoritative for display, so a host
+  // can show "田中さん (Tanaka Taro)" without the join rewriting what was written.
   const rows = sqlite
     .query<CommitmentRow, (string | number)[]>(
-      `SELECT id, title, direction, state, due_date, person, created_at, updated_at
-         FROM commitments
+      `SELECT c.id, c.title, c.direction, c.state, c.due_date, c.person, c.person_id,
+              p.display_name AS person_name, c.created_at, c.updated_at
+         FROM commitments c
+         LEFT JOIN persons p ON p.id = c.person_id
          ${where}
-        ORDER BY updated_at DESC
+        ORDER BY c.updated_at DESC
         LIMIT ?`,
     )
     .all(...params);
@@ -748,6 +816,8 @@ export function listCommitments(
     state: r.state,
     dueDate: r.due_date,
     person: r.person,
+    personId: r.person_id,
+    personName: r.person_name !== null && r.person_name !== "" ? r.person_name : null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
@@ -1045,6 +1115,63 @@ interface PersonIdentityRow {
   observed_at: string;
 }
 
+/**
+ * A pair of persons whose display names normalize to the same string
+ * (Issue #443) — a *candidate* for `person.merge`, never an automatic one.
+ *
+ * Identity resolution (ADR-0022) is deliberately HITL: two people really can
+ * share a name, and a wrong merge silently attributes one human's promises and
+ * mentions to another. So this surfaces the pair and stops. Detection is
+ * deterministic (case / whitespace / width folding), not a similarity model —
+ * ADR-0006 keeps inference out of the store, and "same name after normalizing"
+ * is a fact the operator can verify at a glance.
+ */
+export interface PersonDuplicateCandidate {
+  /** The normalized name both persons share. */
+  normalizedName: string;
+  /** The persons sharing it, most-recently-updated first. */
+  persons: Array<{ id: string; displayName: string; identityCount: number }>;
+}
+
+/**
+ * Normalize a display name for duplicate detection: NFKC (so full-width and
+ * half-width forms agree), case-folded, and internal whitespace collapsed.
+ * Deliberately conservative — no honorific stripping, no romaji/kana bridging:
+ * every extra rule is a way to propose merging two different people.
+ */
+export function normalizePersonName(name: string): string {
+  return name.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Persons whose display names collide after normalization (Issue #443).
+ *
+ * The gap this fills: `person.merge` exists but nothing ever *tells* you there
+ * is something to merge, so a ledger quietly splits across "Tanaka" and
+ * "TANAKA " forever. Pure SELECT + in-memory grouping; proposes nothing.
+ */
+export function findDuplicatePersonCandidates(sqlite: Database): PersonDuplicateCandidate[] {
+  const rows = sqlite
+    .query<{ id: string; display_name: string; identity_count: number }, []>(
+      `SELECT id, display_name, identity_count
+         FROM persons
+        WHERE identity_count > 0 AND display_name <> ''
+        ORDER BY updated_at DESC, id ASC`,
+    )
+    .all();
+  const groups = new Map<string, PersonDuplicateCandidate["persons"]>();
+  for (const row of rows) {
+    const key = normalizePersonName(row.display_name);
+    if (key === "") continue;
+    const list = groups.get(key) ?? [];
+    list.push({ id: row.id, displayName: row.display_name, identityCount: row.identity_count });
+    groups.set(key, list);
+  }
+  return [...groups.entries()]
+    .filter(([, persons]) => persons.length > 1)
+    .map(([normalizedName, persons]) => ({ normalizedName, persons }));
+}
+
 export interface ListPersonsOptions {
   /**
    * Include persons with no identities (emptied by a merge). Default `false` —
@@ -1113,7 +1240,11 @@ export function listPersons(sqlite: Database, options: ListPersonsOptions = {}):
  * window is genuinely quiet — so the host can tell "Slack not connected" from
  * "nothing happened".
  */
-export type BriefWarningKey = "slack_not_configured" | "embedding_disabled" | "sync_stale";
+export type BriefWarningKey =
+  | "slack_not_configured"
+  | "embedding_disabled"
+  | "sync_stale"
+  | "commitment_scan_stale";
 
 /** A single completeness signal: a stable {@link BriefWarningKey} + a human note. */
 export interface BriefWarning {
@@ -1123,15 +1254,64 @@ export interface BriefWarning {
   message: string;
 }
 
-const BRIEF_WARNING_MESSAGE: Record<Exclude<BriefWarningKey, "sync_stale">, string> = {
+const BRIEF_WARNING_MESSAGE: Record<
+  Exclude<BriefWarningKey, "sync_stale" | "commitment_scan_stale">,
+  string
+> = {
   slack_not_configured: "Slack connector not configured — demand (@mention / DM) is always empty",
   embedding_disabled: `embedding backend off — recall-backed material degrades to FTS-only (${docsUrl(
     "guide/embedding.md",
   )})`,
 };
-// `sync_stale` carries which connectors are behind and by how long, so its
-// message is built per call (see `deriveBriefWarnings`) rather than being a
-// constant like the two above.
+// `sync_stale` and `commitment_scan_stale` carry which connectors / how much
+// material is behind, so their messages are built per call (see
+// `deriveBriefWarnings`) rather than being constants like the two above.
+
+/**
+ * Whether commitment extraction has fallen behind ingest (Issue #443).
+ *
+ * The commitment ledger is entirely pull: material arrives continuously, but a
+ * promise only enters the ledger when someone thinks to run a `commitment_scan`.
+ * Nothing ever says "you have three weeks of unscanned conversation", so the
+ * ledger drifts from silently-incomplete to useless without a single error.
+ *
+ * Comparing the newest scan proposal against the newest ingested source is a
+ * deterministic answer to "is there material nobody has looked at" — no
+ * inference (ADR-0006), just two MAX() values.
+ */
+export interface CommitmentScanStaleness {
+  /** When a `commitment` proposal was last generated (ISO 8601), or null if never. */
+  lastScanAt: string | null;
+  /** Newest ingested source observation (ISO 8601), or null when the store is empty. */
+  newestSourceAt: string | null;
+  /** Sources observed since the last scan (0 when current or nothing to scan). */
+  unscannedSources: number;
+}
+
+/**
+ * Derive {@link CommitmentScanStaleness}. Pure SELECT: two MAX() probes plus a
+ * count, so it is cheap enough to run alongside every brief.
+ */
+export function deriveCommitmentScanStaleness(sqlite: Database): CommitmentScanStaleness {
+  const scan = sqlite
+    .query<{ last: string | null }, []>(
+      "SELECT MAX(created_at) AS last FROM proposals WHERE kind = 'commitment'",
+    )
+    .get();
+  const newest = sqlite
+    .query<{ newest: string | null }, []>("SELECT MAX(observed_at) AS newest FROM sources")
+    .get();
+  const lastScanAt = scan?.last ?? null;
+  const newestSourceAt = newest?.newest ?? null;
+  if (newestSourceAt === null) return { lastScanAt, newestSourceAt, unscannedSources: 0 };
+  const counted =
+    lastScanAt === null
+      ? sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sources").get()
+      : sqlite
+          .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM sources WHERE observed_at > ?")
+          .get(lastScanAt);
+  return { lastScanAt, newestSourceAt, unscannedSources: counted?.n ?? 0 };
+}
 
 /** Inputs for {@link deriveBriefWarnings} — the config facts that gate categories. */
 export interface BriefCompleteness {
@@ -1146,6 +1326,11 @@ export interface BriefCompleteness {
    * warning (callers that cannot cheaply read `sync_runs` stay unchanged).
    */
   syncFreshness?: readonly SyncFreshness[];
+  /**
+   * Commitment-extraction staleness (Issue #443), from
+   * {@link deriveCommitmentScanStaleness}. Omitted ⇒ no warning.
+   */
+  commitmentScan?: CommitmentScanStaleness;
 }
 
 /**
@@ -1167,6 +1352,16 @@ export function deriveBriefWarnings(completeness: BriefCompleteness): BriefWarni
   if (completeness.syncFreshness !== undefined) {
     const stale = summarizeStaleSync(completeness.syncFreshness);
     if (stale !== null) warnings.push({ key: "sync_stale", message: stale });
+  }
+  const scan = completeness.commitmentScan;
+  if (scan !== undefined && scan.unscannedSources > 0) {
+    warnings.push({
+      key: "commitment_scan_stale",
+      message:
+        scan.lastScanAt === null
+          ? `commitment ledger never scanned — ${scan.unscannedSources} ingested source(s) have not been checked for promises`
+          : `commitment scan is behind — ${scan.unscannedSources} source(s) ingested since the last scan (${scan.lastScanAt})`,
+    });
   }
   return warnings;
 }

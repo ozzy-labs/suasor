@@ -133,6 +133,48 @@ function ensurePerson(sqlite: Database, personId: string, displayName: string, t
 }
 
 /** Recompute a person's identity_count from the identities table (replay-safe). */
+/**
+ * Resolve a free-form commitment `person` string to a canonical person id
+ * (ADR-0022, Issue #443), or `null` when it matches nothing known.
+ *
+ * The string is whatever the human (or the extraction) wrote — a Slack id, a
+ * bare handle, a display name — so three lookups are tried, most specific
+ * first. Each is an exact match on an already-normalized column; no fuzzy
+ * matching, because a wrong join here silently attributes someone else's
+ * promise to you, and that is worse than leaving the row unlinked.
+ *
+ * Deterministic under replay: it reads only projection state built from earlier
+ * events in the same order. An identity observed *after* the commitment leaves
+ * `person_id` NULL — the read layer's raw-string fallback covers that case
+ * without making the fold depend on the future.
+ */
+function resolvePersonId(sqlite: Database, person: string | null): string | null {
+  const value = person?.trim();
+  if (value === undefined || value === "") return null;
+  // 1. `<connector>:<handle>` — the identity key itself.
+  const byKey = sqlite
+    .query<{ person_id: string }, [string]>(
+      "SELECT person_id FROM person_identities WHERE identity_key = ?",
+    )
+    .get(value);
+  if (byKey !== null) return byKey.person_id;
+  // 2. A bare handle, unique across connectors (ambiguity → no link).
+  const byHandle = sqlite
+    .query<{ person_id: string }, [string]>(
+      "SELECT DISTINCT person_id FROM person_identities WHERE handle = ? LIMIT 2",
+    )
+    .all(value);
+  if (byHandle.length === 1 && byHandle[0] !== undefined) return byHandle[0].person_id;
+  // 3. A display name, again only when it identifies exactly one person.
+  const byName = sqlite
+    .query<{ id: string }, [string]>(
+      "SELECT id FROM persons WHERE display_name = ? AND identity_count > 0 LIMIT 2",
+    )
+    .all(value);
+  if (byName.length === 1 && byName[0] !== undefined) return byName[0].id;
+  return null;
+}
+
 function refreshIdentityCount(sqlite: Database, personId: string, ts: string): void {
   sqlite
     .query(
@@ -600,6 +642,12 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
       sqlite
         .query("UPDATE person_identities SET person_id = $tgt WHERE person_id = $src")
         .run({ $tgt: event.targetPersonId, $src: event.sourcePersonId });
+      // Cascade the ledger with the identities (Issue #443): a merge that left
+      // commitments pointing at the emptied person would split "what I owe them"
+      // across two halves of the same human — exactly what the merge undoes.
+      sqlite
+        .query("UPDATE commitments SET person_id = $tgt WHERE person_id = $src")
+        .run({ $tgt: event.targetPersonId, $src: event.sourcePersonId });
       refreshIdentityCount(sqlite, event.sourcePersonId, event.recordedAt);
       refreshIdentityCount(sqlite, event.targetPersonId, event.recordedAt);
       return;
@@ -619,6 +667,20 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
       sqlite
         .query("UPDATE person_identities SET person_id = $pid WHERE identity_key = $key")
         .run({ $pid: event.newPersonId, $key: key });
+      // Move the ledger rows that were linked *through this handle* — a split
+      // says "these were two people", so their promises follow the identity, not
+      // the emptied person. Rows linked through a different handle stay put.
+      sqlite
+        .query(
+          `UPDATE commitments SET person_id = $pid
+            WHERE person_id = $prev AND (person = $key OR person = $handle)`,
+        )
+        .run({
+          $pid: event.newPersonId,
+          $prev: previousPersonId,
+          $key: key,
+          $handle: event.handle,
+        });
       refreshIdentityCount(sqlite, previousPersonId, event.recordedAt);
       refreshIdentityCount(sqlite, event.newPersonId, event.recordedAt);
       return;
@@ -682,13 +744,14 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
       sqlite
         .query(
           `INSERT INTO commitments
-             (id, title, direction, state, due_date, person, created_at, updated_at)
-           VALUES ($id, $title, $dir, 'open', $due, $person, $ts, $ts)
+             (id, title, direction, state, due_date, person, person_id, created_at, updated_at)
+           VALUES ($id, $title, $dir, 'open', $due, $person, $personId, $ts, $ts)
            ON CONFLICT(id) DO UPDATE SET
              title      = excluded.title,
              direction  = excluded.direction,
              due_date   = excluded.due_date,
              person     = excluded.person,
+             person_id  = excluded.person_id,
              updated_at = excluded.updated_at`,
         )
         .run({
@@ -697,6 +760,9 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
           $dir: event.direction,
           $due: event.dueDate,
           $person: event.person,
+          // Canonical link (ADR-0022 / Issue #443); NULL when the written name
+          // matches no known identity — the raw string still displays.
+          $personId: resolvePersonId(sqlite, event.person ?? null),
           $ts: event.recordedAt,
         });
       for (const sourceId of event.sourceExternalIds) {

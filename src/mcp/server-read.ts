@@ -33,7 +33,9 @@ import {
   buildPriorities,
   DEFAULT_LIST_LIMIT,
   deriveBriefWarnings,
+  deriveCommitmentScanStaleness,
   expandGraph,
+  findDuplicatePersonCandidates,
   getSource,
   getSourceFull,
   listCommitments,
@@ -579,6 +581,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
             const f = freshness();
             return f !== undefined ? { syncFreshness: f } : {};
           })(),
+          // Ingested material nobody has scanned for promises (Issue #443):
+          // the ledger degrades silently, since a missed commitment produces no
+          // error — only an absence.
+          commitmentScan: deriveCommitmentScanStaleness(sqlite),
         }),
       });
       return jsonResult(brief);
@@ -882,7 +888,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "List resolved persons most-recently-updated first, each with the connector " +
         "author identities (github login / slack Uxxxx / …) bound to it (ADR-0022). " +
         "Initial resolution is 1 handle = 1 person; operators collapse duplicates via " +
-        "the person.merge / person.split write tools. Read-only. Returns " +
+        "the person.merge / person.split write tools. Also returns " +
+        "`duplicateCandidates`: persons whose display names collide after " +
+        "normalization (Issue #443) — merge *candidates* only, never applied " +
+        "automatically, since two people really can share a name. Read-only. Returns " +
         "`truncated: true` when more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
         includeEmpty: z
@@ -901,7 +910,14 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           limit: probeLimit,
         }),
       );
-      return jsonResult({ persons, truncated });
+      // Nothing else ever says "there is something to merge", so a ledger can
+      // stay split across "Tanaka" and "TANAKA " forever (Issue #443). Surfaced
+      // beside the list, applied by nobody but the operator (HITL, ADR-0004).
+      return jsonResult({
+        persons,
+        truncated,
+        duplicateCandidates: findDuplicatePersonCandidates(sqlite),
+      });
     },
   );
 }

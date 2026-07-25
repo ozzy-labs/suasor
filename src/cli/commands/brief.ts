@@ -76,7 +76,7 @@ export class BriefCommand extends Command {
       { emitEmbeddingDisabledHint },
       { deriveSyncFreshness, syncFreshnessInputs },
       { connectorNames },
-      { listSyncRuns },
+      { deriveCommitmentScanStaleness, listSyncRuns },
     ] = await Promise.all([
       import("../../config/index.ts"),
       import("../../db/index.ts"),
@@ -146,6 +146,9 @@ export class BriefCommand extends Command {
           listSyncRuns(store.connection.sqlite),
           inputs,
         ),
+        // Material ingested but never scanned for promises (Issue #443) — the
+        // commitment ledger is pull-only, so it degrades without any error.
+        commitmentScan: deriveCommitmentScanStaleness(store.connection.sqlite),
       });
       const brief = buildBrief(store.connection.sqlite, {
         since,
