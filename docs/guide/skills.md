@@ -21,7 +21,7 @@ suasor skills install --dry-run        # 書き込まず差分（created / updat
 
 展開は冪等。内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated`。`suasor init` は本コマンドを案内するのみで自動展開はしない。
 
-install 時、展開先の隣に `.suasor-skills.json`（展開した suasor の version と時刻）を残す。mirror 自体は SSOT とバイト一致を保つ必要がある（drift 検出）ため、stamp は mirror の**外**に置く。version が現在の suasor と食い違うと `suasor skills list` と `suasor mcp serve` の起動時に stderr へ 1 行だけ再 install を促す（`list` の結果自体は汚さない）。
+install 時、展開先 skill ディレクトリの直下に `.suasor-skills.json`（展開した suasor の version と時刻）を残す。mirror 自体は SSOT とバイト一致を保つ必要がある（drift 検出）ため、stamp は mirror の**外**に置く。version が現在の suasor と食い違うと `suasor skills list` と `suasor mcp serve` の起動時に stderr へ 1 行だけ再 install を促す（`list` の結果自体は汚さない）。
 
 ## 2. 起動（自然文トリガ）
 

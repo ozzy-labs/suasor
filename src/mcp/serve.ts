@@ -218,8 +218,14 @@ async function warnStaleSkillMirrors(log: (message: string) => void): Promise<vo
       import("../skills/index.ts"),
       import("../version.ts"),
     ]);
-    const stale = staleMirrorWarning(homedir(), VERSION);
-    if (stale !== null) log(`suasor mcp serve: ${stale.replace(/^warning: /, "").trimEnd()}`);
+    // Both scopes a host can be reading from: the user-scope install (the
+    // default) and a project-local one (`skills install --project`), since an
+    // MCP host is usually launched with the project as cwd.
+    const bases = [homedir(), process.cwd()].filter((b, i, all) => all.indexOf(b) === i);
+    for (const base of bases) {
+      const stale = staleMirrorWarning(base, VERSION);
+      if (stale !== null) log(`suasor mcp serve: ${stale.replace(/^warning: /, "").trimEnd()}`);
+    }
   } catch {
     // ignore — never fail a session over a staleness hint
   }
