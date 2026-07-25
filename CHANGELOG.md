@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.3.0](https://github.com/ozzy-labs/suasor/compare/v0.2.2...v0.3.0) (2026-07-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* mark the agent-surface renames as a breaking release ([#524](https://github.com/ozzy-labs/suasor/issues/524))
+
+### chore
+
+* mark the agent-surface renames as a breaking release ([#524](https://github.com/ozzy-labs/suasor/issues/524)) ([1331bde](https://github.com/ozzy-labs/suasor/commit/1331bde8fead72e28b76b201179dcf7b3a1b4861))
+
+
+### Features
+
+* **brief:** include open commitments in the bundle ([#516](https://github.com/ozzy-labs/suasor/issues/516)) ([421d454](https://github.com/ozzy-labs/suasor/commit/421d454a51b4e0b9180762483ef2520b4a41824c))
+* **doctor:** detect local roots that overlap an enabled API connector ([#517](https://github.com/ozzy-labs/suasor/issues/517)) ([2790934](https://github.com/ozzy-labs/suasor/commit/27909344847effe31be3f4557e0d7cb73aa9c2bf))
+* **priority:** replace the tier ladder with one hard tier plus a weighted score ([#502](https://github.com/ozzy-labs/suasor/issues/502)) ([929d1e9](https://github.com/ozzy-labs/suasor/commit/929d1e910ba13daeae40347ff8d349c8663e61b4))
+* **storage:** opt-in body retention reusing the forget redaction path ([#506](https://github.com/ozzy-labs/suasor/issues/506)) ([adf4a11](https://github.com/ozzy-labs/suasor/commit/adf4a1155c6fc4e1ac5399dd5cef5520df09928c))
+* **storage:** show where bodies live and how fast the store grows ([#504](https://github.com/ozzy-labs/suasor/issues/504)) ([b7a41f6](https://github.com/ozzy-labs/suasor/commit/b7a41f6303072d157918de569d2fb5b692bb9a95))
+
+
+### Bug Fixes
+
+* **commitment:** order the ledger by urgency, not by recency ([#511](https://github.com/ozzy-labs/suasor/issues/511)) ([92e3c3b](https://github.com/ozzy-labs/suasor/commit/92e3c3bea6a913a1f583b9b829f9d8203f15f95c))
+* **db:** set busy_timeout so concurrent writers wait instead of failing ([#510](https://github.com/ozzy-labs/suasor/issues/510)) ([875dd0c](https://github.com/ozzy-labs/suasor/commit/875dd0c7659b193f14bd6ad3ca5c4164dff43715))
+* **export:** dereference symlinks in the containment check ([#515](https://github.com/ozzy-labs/suasor/issues/515)) ([c9acf10](https://github.com/ozzy-labs/suasor/commit/c9acf10be111f902526ebfa75bad97016f8e580b))
+* **skills:** rename the merged review skill out of the ecosystem namespace ([#521](https://github.com/ozzy-labs/suasor/issues/521)) ([7dadb11](https://github.com/ozzy-labs/suasor/commit/7dadb11e8f91869eaae9f0878915a58737ae4455))
+
+
+### Performance
+
+* **projections:** replay the event log as a stream instead of an array ([#505](https://github.com/ozzy-labs/suasor/issues/505)) ([4293829](https://github.com/ozzy-labs/suasor/commit/42938296a37f233404edf9ae356bd89d24c7c621))
+
 ## [0.2.2](https://github.com/ozzy-labs/suasor/compare/v0.2.1...v0.2.2) (2026-07-25)
 
 
