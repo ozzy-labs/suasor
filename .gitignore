@@ -65,3 +65,6 @@ coverage/
 !.agents/skills/review/
 !.agents/skills/ship/
 !.agents/skills/test/
+
+# Archived agent WIP patches (local-only; never part of a change)
+.claude/wip-archive/
