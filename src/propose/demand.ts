@@ -1,5 +1,5 @@
 /**
- * Demand seen-state write tools — `demand.ack` / `demand.dismiss` (ADR-0041 /
+ * Demand seen-state services behind the `demand.mark` write tool (ADR-0041 /
  * docs/design/mcp-surface.md).
  *
  * Demand rows are *derived* (from ingested `slack_message` @mentions / DMs and

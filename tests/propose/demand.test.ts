@@ -1,5 +1,5 @@
 /**
- * Demand seen-state write tools (ADR-0041): demand.ack / demand.dismiss over the
+ * Demand seen-state services (ADR-0041), reached via the demand.mark tool, over the
  * derived demand rows, folding into the `demand_seen` projection so a handled /
  * irrelevant mention drops out of the default demand.list. Covers the
  * status-reporting contract (acked / dismissed / already_* / missing),

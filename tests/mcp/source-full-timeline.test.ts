@@ -1,5 +1,5 @@
 /**
- * Query layer for `source.get.full` + `activity.timeline` (Issue #279).
+ * Query layer for `source.get` (`include`) + `activity.timeline` (Issue #279).
  *
  * - getSourceFull bundles source.get + graph.related(out) + extraction_meta.
  * - buildActivityTimeline merges the source/task/decision entities provenance-
