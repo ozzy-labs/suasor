@@ -158,8 +158,14 @@ export const commitments = sqliteTable("commitments", {
   state: text("state").notNull().default("open"),
   /** Optional due date (ISO 8601); NULL when the commitment has none. */
   dueDate: text("due_date"),
-  /** Optional related person (free-form / person id); NULL when unknown. */
+  /** Optional related person as written (free-form); kept for display. */
   person: text("person"),
+  /**
+   * Canonical person (ADR-0022) the free-form `person` resolved to, or NULL when
+   * it matches no known identity. `person.merge` cascades over this column, so
+   * merging two identities merges the ledger with them (Issue #443).
+   */
+  personId: text("person_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

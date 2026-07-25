@@ -188,9 +188,11 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | 追加引数 | 戻り値キー |
 |---|---|
-| `includeEmpty?: boolean`（merge で identity が 0 になった person を含めるか。既定 `false`） | `{ "persons": [{ "id", "displayName", "identityCount", "createdAt", "updatedAt", "identities": [{ "connector", "handle", "displayName", "observedAt" }] }] }` |
+| `includeEmpty?: boolean`（merge で identity が 0 になった person を含めるか。既定 `false`） | `{ "persons": [...], "truncated", "duplicateCandidates": [{ "normalizedName", "persons": [{ "id", "displayName", "identityCount" }] }] }` |
 
 merge で空になった person は既定で除外（`identity_count > 0`）。`includeEmpty: true` で tombstone も列挙できる。
+
+**`duplicateCandidates`**（[#443](https://github.com/ozzy-labs/suasor/issues/443)）は display name を正規化（NFKC + 小文字化 + 空白畳み）して衝突した person の組。`person.merge` は存在するのに「統合すべきものがある」と**誰も言わない**ため、台帳が `Tanaka` と `TANAKA`（末尾空白）に割れたまま放置される — その欠落を埋める提示。**自動 merge は決してしない**（同名の別人は実在し、誤統合は他人の約束・mention を自分に紐づける）。検出は決定論（正規化一致のみ・類似度モデルではない、[ADR-0006](../adr/0006-ml-delegation.md)）で、運用者が一目で検証できる事実に限る。
 
 ### `brief`（[ADR-0017](../adr/0017-brief-period-bundle.md)）
 
@@ -600,12 +602,16 @@ commitment_scan (propose.generate → propose.apply)
    └───────────┘
 ```
 
-- **`commitment.list`（read）**: `open` / `resolved` / `dismissed` の state、`owed_by_me` / `owed_to_me` の direction、`person`（関連 person 完全一致 = 特定の相手の約束を追う）でフィルタ。`updated_at` の時間フィルタ可。`brief` / `next-actions` / `commitment-chase` skill が demand と並べて「やるべきこと」signal として取り込める。
+- **`commitment.list`（read）**: `open` / `resolved` / `dismissed` の state、`owed_by_me` / `owed_to_me` の direction、`person` でフィルタ。`updated_at` の時間フィルタ可。**`person` フィルタは person identity graph（[ADR-0022](../adr/0022-person-identity-resolution.md)）越しに一致する**（[#443](https://github.com/ozzy-labs/suasor/issues/443)）: person id / identity key（`slack:U123`）/ 素の handle / display name のどれで引いても、同一人物の別名で記録された約束がすべて出る。解決できない文字列は従来どおり生文字列の完全一致にフォールバックする。戻り値は `person`（記録どおりの生文字列・表示用）に加えて `personId` / `personName`（正規化された人物）を持つ。`brief` / `next-actions` / `commitment-chase` skill が demand と並べて「やるべきこと」signal として取り込める。
 - **`commitment.resolve`（write / HITL）**: `open` → `resolved`（`CommitmentResolved` append）。idempotent（既 `resolved` は no-op）。`dismissed` からは `invalid_state`（先に reopen）、該当なしは `missing`。
 - **`commitment.dismiss`（write / HITL）**: `open` → `dismissed`（誤検出/不要、`CommitmentDismissed` append）。idempotent。`resolved` からは `invalid_state`、該当なしは `missing`。
 - **`commitment.reopen`（write / HITL）**: `resolved` / `dismissed` → `open`（`CommitmentReopened` append）。既 `open` は no-op、該当なしは `missing`。
 
 commitment id は content 由来（`title` + `direction` + provenance）なので、同一 commitment の再抽出は台帳上 no-op（idempotent）で `resolved` / `dismissed` を `open` に蘇生させない。`dueDate` / `person` は可変 context として id に含めない。
+
+`person_id` は fold 時に解決して projection に保存する（生文字列は表示用に保持）。**曖昧なら解決しない** — 同名 2 人のどちらかを黙って選ぶより、未リンクのまま残す方が安全（誤リンクは他人の約束を自分の台帳に混ぜる）。`PersonsMerged` は台帳も cascade し（統合したのに約束が空になった person 側に残るのは、merge が解消しようとした分裂そのもの）、`PersonSplit` は**その handle 経由でリンクされた行だけ**を戻す。identity が commitment より後に観測された場合は `person_id` が NULL のまま残るが、`person` フィルタの生文字列分岐で引ける。
+
+**`commitment_scan_stale`**（[#443](https://github.com/ozzy-labs/suasor/issues/443)）: 台帳は完全に pull（誰かが `commitment_scan` を思いつくまで約束は入らない）で、取りこぼしはエラーではなく**不在**として現れるため気づけない。最新の commitment 提案時刻と最新の source 観測時刻を比べ、未スキャンの source 件数を brief / digest の completeness warning として出す（MAX 2 回 + COUNT の決定論。推論はしない）。
 
 ### `demand.ack` / `demand.dismiss`（確定・write / HITL・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)）
 

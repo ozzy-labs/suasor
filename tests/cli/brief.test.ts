@@ -238,7 +238,7 @@ describe("suasor brief", () => {
     // Default config: no [connectors.slack] + embedding disabled → both signals.
     const { code, out } = await run(["brief", "--since", "2020-01-01"]);
     expect(code).toBe(0);
-    expect(out).toContain("[⚠ slack_not_configured, embedding_disabled]");
+    expect(out).toContain("[⚠ slack_not_configured, embedding_disabled, commitment_scan_stale]");
   });
 
   test("--json includes the warnings array with stable keys (Issue #189)", async () => {
@@ -246,7 +246,7 @@ describe("suasor brief", () => {
     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
     expect(code).toBe(0);
     const keys = JSON.parse(out).warnings.map((w: { key: string }) => w.key);
-    expect(keys).toEqual(["slack_not_configured", "embedding_disabled"]);
+    expect(keys).toEqual(["slack_not_configured", "embedding_disabled", "commitment_scan_stale"]);
   });
 
   test("drops embedding_disabled once a backend is enabled (Issue #189)", async () => {
@@ -255,7 +255,7 @@ describe("suasor brief", () => {
     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
     expect(code).toBe(0);
     const keys = JSON.parse(out).warnings.map((w: { key: string }) => w.key);
-    expect(keys).toEqual(["slack_not_configured"]);
+    expect(keys).toEqual(["slack_not_configured", "commitment_scan_stale"]);
   });
 
   test("a configured connector that has never synced warns sync_stale (Issue #442)", async () => {
@@ -269,7 +269,7 @@ describe("suasor brief", () => {
     const warnings = JSON.parse(out).warnings as Array<{ key: string; message: string }>;
     // Slack is wired but nothing has ever landed — an empty bundle here is a
     // stopped pipeline, not a quiet day, and the brief now says so.
-    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
+    expect(warnings.map((w) => w.key)).toEqual(["sync_stale", "commitment_scan_stale"]);
     expect(warnings[0]?.message).toContain("slack (never synced)");
   });
 
@@ -282,8 +282,10 @@ describe("suasor brief", () => {
     await recordSyncRun("slack", new Date().toISOString());
     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
     expect(code).toBe(0);
-    expect(JSON.parse(out).warnings).toEqual([]);
-    expect(out).not.toContain("[⚠");
+    // Only the never-scanned commitment ledger remains (the seeded source has
+    // never been checked for promises) — sync and config are both clean.
+    const keys = (JSON.parse(out).warnings as Array<{ key: string }>).map((w) => w.key);
+    expect(keys).toEqual(["commitment_scan_stale"]);
   });
 
   test("a sync older than the cadence threshold warns with its age (Issue #442)", async () => {
@@ -298,7 +300,7 @@ describe("suasor brief", () => {
     const { code, out } = await run(["brief", "--since", "2020-01-01", "--json"]);
     expect(code).toBe(0);
     const warnings = JSON.parse(out).warnings as Array<{ key: string; message: string }>;
-    expect(warnings.map((w) => w.key)).toEqual(["sync_stale"]);
+    expect(warnings.map((w) => w.key)).toEqual(["sync_stale", "commitment_scan_stale"]);
     expect(warnings[0]?.message).toMatch(/slack \(5h old\)/);
   });
 });

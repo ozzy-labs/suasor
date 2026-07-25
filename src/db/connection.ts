@@ -140,11 +140,18 @@ export function initSchema(sqlite: Database): void {
       state       TEXT NOT NULL DEFAULT 'open',
       due_date    TEXT,
       person      TEXT,
+      -- Canonical person this commitment is with (ADR-0022), resolved from the
+      -- free-form person string at fold time; NULL when it matches no known
+      -- identity. The raw person column is kept verbatim for display — the
+      -- ledger must still read back the way the human wrote it (Issue #443).
+      person_id   TEXT,
       created_at  TEXT NOT NULL,
       updated_at  TEXT NOT NULL
     );
     -- commitment.list filters by state (open/resolved/dismissed); index it.
     CREATE INDEX IF NOT EXISTS idx_commitments_state ON commitments(state);
+    -- person.merge cascades over this, and commitment.list filters by it.
+    CREATE INDEX IF NOT EXISTS idx_commitments_person_id ON commitments(person_id);
     -- Demand seen-state (ADR-0041): durable "I've dealt with this" marker for a
     -- derived demand row, keyed by the source external_id (demand rows are derived
     -- from slack_message mentions/DMs + github_notification, not stored entities).
@@ -234,10 +241,13 @@ export function initSchema(sqlite: Database): void {
   ensureColumn(sqlite, "tasks", "published_destination", "TEXT");
   ensureColumn(sqlite, "tasks", "published_external_id", "TEXT");
   ensureColumn(sqlite, "tasks", "published_at", "TEXT");
+  // Canonical person link on legacy commitment tables (Issue #443).
+  ensureColumn(sqlite, "commitments", "person_id", "TEXT");
 
   // task.list filters overdue tasks by due_date (ADR-0028); index it. Created
   // after ensureColumn so the column exists on legacy tables too.
   sqlite.exec("CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);");
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_commitments_person_id ON commitments(person_id);");
 
   // FTS5 over source bodies. Trigram tokenizer captures Japanese/English
   // substrings without a CJK word segmenter (ADR-0005, docs/design/retrieval.md).

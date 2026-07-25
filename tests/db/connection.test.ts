@@ -161,22 +161,33 @@ describe("drizzle artifact ⇄ runtime schema parity", () => {
     "tasks",
   ] as const;
 
-  function parseDrizzleSql(sql: string): Map<string, Set<string>> {
-    const tables = new Map<string, Set<string>>();
-    // Split on the statement-breakpoint markers drizzle emits between CREATEs.
+  /**
+   * Fold one migration file into the accumulated schema. Later migrations are
+   * ALTER-based (`0004` adds `commitments.person_id`, Issue #443), so replaying
+   * only the initial CREATE set would compare the runtime against a schema
+   * frozen at 0000 — and every additive column since would read as drift.
+   */
+  function applyDrizzleSql(sql: string, tables: Map<string, Set<string>>): void {
+    // Split on the statement-breakpoint markers drizzle emits between statements.
     for (const stmt of sql.split("--> statement-breakpoint")) {
       const head = stmt.match(/CREATE TABLE `([^`]+)`\s*\(([\s\S]*)\)\s*;/);
       const table = head?.[1];
       const cols = head?.[2];
-      if (!table || cols === undefined) continue;
-      const columns = new Set<string>();
-      for (const line of cols.split("\n")) {
-        const col = line.trim().match(/^`([^`]+)`/);
-        if (col?.[1]) columns.add(col[1]);
+      if (table && cols !== undefined) {
+        const columns = new Set<string>();
+        for (const line of cols.split("\n")) {
+          const col = line.trim().match(/^`([^`]+)`/);
+          if (col?.[1]) columns.add(col[1]);
+        }
+        tables.set(table, columns);
+        continue;
       }
-      tables.set(table, columns);
+      const added = stmt.match(/ALTER TABLE `([^`]+)`\s+ADD\s+`([^`]+)`/i);
+      if (added?.[1] !== undefined && added[2] !== undefined) {
+        const existing = tables.get(added[1]);
+        if (existing !== undefined) existing.add(added[2]);
+      }
     }
-    return tables;
   }
 
   function runtimeColumns(sqlite: Database, table: string): Set<string> {
@@ -189,16 +200,22 @@ describe("drizzle artifact ⇄ runtime schema parity", () => {
   }
 
   test("the committed migration covers every drizzle-managed table with matching columns", async () => {
-    const { readFileSync } = await import("node:fs");
+    const { readdirSync, readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const sql = readFileSync(
-      join(import.meta.dir, "../../drizzle/0000_init_projections.sql"),
-      "utf8",
-    );
-    const artifact = parseDrizzleSql(sql);
+    const dir = join(import.meta.dir, "../../drizzle");
+    const artifact = new Map<string, Set<string>>();
+    // Apply the whole migration chain in order — the artifact is the *sum* of
+    // its files, not its first one.
+    for (const file of readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort()) {
+      applyDrizzleSql(readFileSync(join(dir, file), "utf8"), artifact);
+    }
 
     // Every drizzle-managed table is present in the artifact (no missing tables).
-    expect([...artifact.keys()].sort()).toEqual([...DRIZZLE_MANAGED].sort());
+    expect([...artifact.keys()].filter((t) => DRIZZLE_MANAGED.includes(t as never)).sort()).toEqual(
+      [...DRIZZLE_MANAGED].sort(),
+    );
 
     // Each table's column set matches the runtime DDL exactly (no missing/extra).
     const sqlite = new Database(":memory:");
