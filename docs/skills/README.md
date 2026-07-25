@@ -51,7 +51,7 @@
 | [`source-forget`](source-forget/SKILL.md) | 「あの誤取り込みを消して」「この source を忘れて」 | search / source.list → source.forget |
 | [`sync-now`](sync-now/SKILL.md) | 「最新を取り込んで」「Slack 同期して」「sync して」 | connector.sync |
 
-エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）で、suasor 開発に使う project skill として host dir に commit 済み（[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md)・更新は [dev-skills-refresh.md](dev-skills-refresh.md)）。
+エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）。**user-scope install（`npx @ozzylabs/skills install`）で利用する** — [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) の project-scope vendoring は 2026-07-04 に一部撤回された（当時の re-vendor 手順は [dev-skills-refresh.md](dev-skills-refresh.md) に歴史的記録として残る）。
 
 ## インストール
 
