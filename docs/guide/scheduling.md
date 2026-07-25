@@ -39,6 +39,8 @@ suasor sync --json                           # 件数・cursor・エラーを JS
 
 `suasor sync` は冪等なので重複起動しても安全だが、`flock` は無駄な並行実行（API rate limit 消費）を抑える。
 
+> **MCP サーバーと同時に走る場合**（常駐 `suasor mcp serve` + cron の `suasor sync`）は、DB 接続が `busy_timeout` を設定しているので**書き込みが重なっても待って成功する**（[#508](https://github.com/ozzy-labs/suasor/issues/508)）。上の `flock` は sync 同士の重複起動を抑えるためのもので、**sync ↔ MCP の競合には効かない** — そちらは接続側の待機で吸収する。
+
 ## launchd（macOS）
 
 `~/Library/LaunchAgents/com.suasor.sync.plist` を作成する。`StartInterval` は秒。`suasor` の絶対パスを使う（launchd は最小 PATH で起動する）。

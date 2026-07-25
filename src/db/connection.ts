@@ -336,12 +336,29 @@ export function readVecDim(sqlite: Database): number | null {
 }
 
 /**
+ * How long a connection waits for a competing writer before giving up
+ * (Issue #508). Chosen against the real contention pattern rather than as a
+ * round number: ingest commits one record at a time, so overlaps are brief;
+ * this is long enough to swallow them and short enough that a genuine deadlock
+ * still surfaces rather than hanging a session.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
+
+/**
  * Open a database, apply pragmas, load extensions, and initialize the schema.
  */
 export function openDatabase(options: OpenOptions): SuasorDb {
   const sqlite = new Database(options.path, { create: true });
   sqlite.exec("PRAGMA journal_mode = WAL;");
   sqlite.exec("PRAGMA foreign_keys = ON;");
+  // Wait for a competing writer instead of failing instantly (Issue #508).
+  // bun:sqlite defaults busy_timeout to 0, which breaks the deployment the docs
+  // actually recommend: a long-running `mcp serve` alongside a cron-fired
+  // `suasor sync` are separate OS processes on one file, so any write overlap
+  // raised a raw SQLITE_BUSY. The `flock` guidance in the scheduling guide only
+  // serializes sync-vs-sync — it cannot see the MCP server at all. Ingest commits
+  // per record, so contention windows are short and a few seconds absorbs them.
+  sqlite.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS};`);
 
   const enableVec = options.enableVec ?? true;
   if (enableVec) {
