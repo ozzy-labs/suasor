@@ -4,9 +4,12 @@
  */
 export {
   type BundledSkill,
+  embeddedSourceLabel,
   HOSTS,
   type Host,
   listBundledSkills,
+  listEmbeddedSkills,
+  readSkillSource,
   resolveSkillsSource,
   SCOPES,
   type Scope,
@@ -33,7 +36,12 @@ export {
   type InstallResult,
   installSkills,
   mirrorPath,
+  readStamp,
   type SkillState,
   type SkillStatus,
+  type SkillsStamp,
+  STAMP_FILE,
   skillStatuses,
+  staleMirrorWarning,
+  stampPath,
 } from "./install.ts";

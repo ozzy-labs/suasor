@@ -184,7 +184,17 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
     };
 
     server.connect(transport).then(
-      () => log("suasor mcp serve: listening on stdio (read tools + connector.sync; ADR-0004)."),
+      () => {
+        log("suasor mcp serve: listening on stdio (read tools + connector.sync; ADR-0004).");
+        // Skill mirrors written by another suasor version (Issue #445): the
+        // host is about to read skills that do not match this build, so say it
+        // once on stderr — same diagnostics channel as the config warnings,
+        // never the JSON-RPC stream. Deliberately **after** connect: the check
+        // touches the filesystem and its lazy import would otherwise stretch
+        // the boot await-chain a fast-closing host (or the boot test) races.
+        // Presence-gated in the helper, so an uninstalled host stays quiet.
+        void warnStaleSkillMirrors(log);
+      },
       (error) => {
         if (!closed) {
           closed = true;
@@ -194,4 +204,23 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
       },
     );
   });
+}
+
+/**
+ * Emit the one-line "installed skill mirrors are from another suasor version"
+ * warning, if any (Issue #445). Best-effort and fully swallowed: a diagnostic
+ * must never take down a live MCP session.
+ */
+async function warnStaleSkillMirrors(log: (message: string) => void): Promise<void> {
+  try {
+    const [{ homedir }, { staleMirrorWarning }, { VERSION }] = await Promise.all([
+      import("node:os"),
+      import("../skills/index.ts"),
+      import("../version.ts"),
+    ]);
+    const stale = staleMirrorWarning(homedir(), VERSION);
+    if (stale !== null) log(`suasor mcp serve: ${stale.replace(/^warning: /, "").trimEnd()}`);
+  } catch {
+    // ignore — never fail a session over a staleness hint
+  }
 }

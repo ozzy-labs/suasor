@@ -66,25 +66,44 @@ async function run(
 
 const UNSUPPORTED = "not available in the standalone binary";
 
-describe("skills commands — binary gate", () => {
+describe("skills commands — available in the binary (#445)", () => {
+  // The catalog is inlined as source (src/skills/embedded.ts), so these four
+  // verbs are no longer gated: the binary build must behave like a normal one.
   for (const args of [
-    ["skills", "install"],
-    ["skills", "list"],
     ["skills", "search", "brief"],
     ["skills", "info", "research"],
   ]) {
-    test(`${args.join(" ")}: binary build → exit 1 + dedicated error`, async () => {
+    test(`${args.join(" ")}: binary build → succeeds off the embedded catalog`, async () => {
       const { code, err } = await run(args, { binary: true });
-      expect(code).toBe(1);
-      expect(err).toContain(UNSUPPORTED);
-      expect(err).toContain("install.md#binary-scope");
-      expect(err).not.toContain("Cannot find module");
+      expect(code).toBe(0);
+      expect(err).not.toContain(UNSUPPORTED);
     });
   }
 
-  test("skills list: normal build runs (no binary error)", async () => {
-    const { err } = await run(["skills", "list"], { binary: false });
+  test("skills list: binary build reports state against the embedded catalog", async () => {
+    const { code, out, err } = await run(["skills", "list", "--host", dir], { binary: true });
+    expect(code).toBe(0);
     expect(err).not.toContain(UNSUPPORTED);
+    expect(out).toContain("research");
+  });
+
+  test("skills install --dry-run: binary build plans writes from the embedding", async () => {
+    const { code, out, err } = await run(["skills", "install", "--host", dir, "--dry-run"], {
+      binary: true,
+    });
+    expect(code).toBe(0);
+    expect(err).not.toContain(UNSUPPORTED);
+    expect(out).toContain("would write");
+  });
+
+  test("skills install: binary build writes real mirrors", async () => {
+    const { code, err } = await run(["skills", "install", "--host", dir, "--scope", "claude"], {
+      binary: true,
+    });
+    expect(code).toBe(0);
+    expect(err).not.toContain(UNSUPPORTED);
+    const { readStamp } = await import("../../src/skills/index.ts");
+    expect(readStamp(dir, "claude")).not.toBeNull();
   });
 });
 

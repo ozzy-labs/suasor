@@ -10,7 +10,8 @@
       "*.jsonc",
       "!**/node_modules",
       "!**/dist",
-      "!.claude/worktrees"
+      "!.claude/worktrees",
+      "!src/skills/embedded.ts"
     ],
     "ignoreUnknown": true
   },

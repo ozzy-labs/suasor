@@ -8,6 +8,13 @@
 > `.claude/skills/` / `.agents/skills/` に commit）と `skills-drift.sh` を廃止し、host dir は project skill
 > （vendored dev skill）の置き場に再定義した。assistant mirror は `.gitignore` 化（ローカル install のみ）。
 > 本 ADR の「アシスタント skill を提供し SSOT を `docs/skills/` に置く」中核判断は維持。
+>
+> **Amended by [Issue #445](https://github.com/ozzy-labs/suasor/issues/445):** ① 配信の既定スコープを
+> **user scope（`$HOME`）** にした（`--project` / `--host` で従来のプロジェクトスコープ）。② standalone binary
+> 向けに catalog を `src/skills/embedded.ts`（生成物・commit 済み）としてソースへ inline し、binary でも
+> skills 系 verb が全て動くようにした（`docs/skills/` が解決できればディスク優先・無ければ埋め込み）。
+> ③ install 時に `.suasor-skills.json` stamp を mirror の外に残し、version 不一致を `skills list` /
+> `mcp serve` が stderr で 1 行通知する。
 
 ## Context
 
@@ -18,7 +25,7 @@
 Suasor は **アシスタント skill 群（初期 15 想定）** を提供する:
 
 - **SSOT は `docs/skills/<name>/SKILL.md`**。発火条件は自然文（skill description）で表現
-- 配信は **Suasor パッケージ同梱 + `suasor skills install`**（`.claude/skills/` / `.agents/skills/` に展開）。展開された mirror は commit しない（[ADR-0035](0035-project-skills-vendor-dev-skills.md) で `.gitignore` 化したローカル install 物。当初の dogfood-commit 方針は撤回）
+- 配信は **Suasor パッケージ同梱 + `suasor skills install`**（既定は `~/.claude/skills/` / `~/.agents/skills/`＝user scope、`--project` でプロジェクト直下に展開）。展開された mirror は commit しない（[ADR-0035](0035-project-skills-vendor-dev-skills.md) で `.gitignore` 化したローカル install 物。当初の dogfood-commit 方針は撤回）
 - skill は read 系（personal-brief / next-actions / find-document / research 等）と **HITL write 系**（reply-draft / inbox-triage / source-extract / meeting-followup 等）に分かれ、write は [ADR-0004](0004-mcp-agent-boundary-and-hitl.md) の HITL 境界に従う（auto-apply なし）
 - エコシステム共通 dev skill（drive / lint / commit 等）は `@ozzylabs/skills` 経由で別供給（名前空間 disjoint）
 

@@ -9,14 +9,19 @@ Suasor は 32 個のアシスタント skill を同梱する（[ADR-0008](../adr
 SSOT は `docs/skills/<name>/SKILL.md`（パッケージ同梱）。`suasor skills install` で各エージェントの skill ディレクトリに展開する。
 
 ```bash
-suasor skills install                  # .claude/skills/ + .agents/skills/ へ展開（カレントプロジェクト）
+suasor skills install                  # ~/.claude/skills/ + ~/.agents/skills/ へ展開（user scope・既定）
+suasor skills install --project        # カレントプロジェクトの .claude/skills/ + .agents/skills/ へ展開
 suasor skills install --scope claude   # Claude Code（.claude/skills/）のみ
 suasor skills install --scope agents   # Codex / Copilot / Gemini（.agents/skills/）のみ
-suasor skills install --host /path/to/project   # 展開先プロジェクトを指定
+suasor skills install --host /path/to/project   # 展開先を明示指定（--project より優先）
 suasor skills install --dry-run        # 書き込まず差分（created / updated / unchanged）だけ確認
 ```
 
+**既定は user scope**（`$HOME` 配下）。skill は「どのプロジェクトで作業していても使いたい」ものなので、1 回入れれば全プロジェクトで発火する user scope を既定にしている。特定プロジェクトにだけ置きたい場合のみ `--project`（または `--host <path>`）を使う。
+
 展開は冪等。内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated`。`suasor init` は本コマンドを案内するのみで自動展開はしない。
+
+install 時、展開先の隣に `.suasor-skills.json`（展開した suasor の version と時刻）を残す。mirror 自体は SSOT とバイト一致を保つ必要がある（drift 検出）ため、stamp は mirror の**外**に置く。version が現在の suasor と食い違うと `suasor skills list` と `suasor mcp serve` の起動時に stderr へ 1 行だけ再 install を促す（`list` の結果自体は汚さない）。
 
 ## 2. 起動（自然文トリガ）
 
@@ -87,9 +92,11 @@ mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と
 
 `suasor skills info <name>` の `boundary` 行を見る。`read (autonomous)` は自律実行可、`write (HITL)` は候補生成までで適用はユーザー承認が必須（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
-### standalone binary で `skills` コマンドが使えない
+### standalone binary の skill
 
-`skills install` / `list` / `search` / `info` は同梱 `docs/skills` を読むため、バンドル単体実行（`docs/skills` 非同梱）では明示エラーで弾かれる。npm パッケージ経由か repo から実行する。
+standalone binary でも `skills install` / `list` / `search` / `info` は **npm / Docker と同じく全 32 skill で動く**（Issue #445）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、SSOT は `src/skills/embedded.ts`（生成物・commit 済み）としてソースに inline してある。`docs/skills/` が実在する repo / npm 実行ではそちらをディスクから読み、無ければ埋め込みへフォールバックする。
+
+SSOT を編集したら `node scripts/generate-embedded-skills.mjs` で再生成する（忘れると `tests/skills/embedded.test.ts` の drift テストが落ちる）。
 
 ## 関連
 
