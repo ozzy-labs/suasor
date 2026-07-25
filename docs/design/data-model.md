@@ -31,6 +31,7 @@
   - `PersonSplit` — 1 identity を別 person へ分離（merge の逆操作・HITL）
   - `SlackChannelObserved` — Slack channel id の名前解決を記録（`channelId` / `teamId` / `displayName?` / `kind`（public / private / group / dm）、[ADR-0037](../adr/0037-slack-name-enrichment.md) / #354。sync が `slack_channels` へ last-write-wins で畳む。degrade 時は `displayName` 空＝id フォールバック）
   - `SlackTeamObserved` — Slack team / workspace id の名前解決を記録（`teamId` / `displayName?`、[ADR-0037](../adr/0037-slack-name-enrichment.md) / #361。sync 時に `auth.teams.list`（Grid）/ `auth.test`（単一）で解決し `slack_teams` へ last-write-wins で畳む。degrade 時は `displayName` 空＝id フォールバック）
+  - `SourceBodyDropped` — retention による本文削除（`externalId` / `reason`。**source 行は残し body だけ空にして `body_dropped_at` を刻む**。`SourceForgotten` が source ごと purge して tombstone を置くのと対照的で、こちらは再取り込みされれば本文が戻る。[ADR-0047](../adr/0047-storage-lifecycle.md) / [#498](https://github.com/ozzy-labs/suasor/issues/498)）
   - `CommitmentOpened` — commitment の確定登録（`commitmentId` / `title` / `direction`（owed_by_me / owed_to_me）/ `dueDate?` / `person?` + provenance、[ADR-0021](../adr/0021-commitment-ledger.md) / #91）
   - `CommitmentResolved` / `CommitmentDismissed` / `CommitmentReopened` — commitment の状態遷移（open ⇄ resolved / dismissed、HITL）
   - `DemandAcknowledged` / `DemandDismissed` — 導出 demand 行の seen-state（`externalId` のみ。`demand_seen` へ last-write-wins で畳む。`acked`＝対応済み / `dismissed`＝対応不要、HITL・[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)。ADR-0012 決定 4 の host 委譲 seen-marker を supersede＝状態を event ログに置く）

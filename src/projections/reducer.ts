@@ -234,6 +234,22 @@ export function applyEvent(sqlite: Database, event: DomainEvent, options: ApplyO
       }
       return;
     }
+    case "SourceBodyDropped": {
+      // Retention (ADR-0047 決定 2): blank the body but **keep the row** — the
+      // metadata, provenance links and embedding all survive, because the point
+      // is to bound storage, not to erase the record. `body_dropped_at` is what
+      // lets a reader say "removed by retention" instead of returning an empty
+      // string that looks like a source with nothing in it.
+      sqlite
+        .query(`UPDATE sources SET body = '', body_dropped_at = $ts WHERE external_id = $id`)
+        .run({ $id: event.externalId, $ts: event.recordedAt });
+      // The body is gone, so its index entry must go too — otherwise FTS keeps
+      // matching text that can no longer be shown.
+      if (!options.deferFts) {
+        sqlite.query("DELETE FROM sources_fts WHERE external_id = ?").run(event.externalId);
+      }
+      return;
+    }
     case "SourceForgotten": {
       // Forget (ADR-0026): delete the event-derived projection rows so a
       // `projections rebuild` (truncate + replay) keeps the source absent —

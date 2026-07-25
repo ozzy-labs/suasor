@@ -69,6 +69,7 @@ import {
   SourceUnforgetCommand,
 } from "./commands/source.ts";
 import { StoreInfoCommand } from "./commands/store-info.ts";
+import { StoreRetentionCommand } from "./commands/store-retention.ts";
 import { SyncAllCommand, SyncStatusCommand } from "./commands/sync-all.ts";
 import { ValidateConfigCommand } from "./commands/validate-config.ts";
 
@@ -103,6 +104,7 @@ export function registeredCommandClasses(): CommandClass[] {
     ValidateConfigCommand,
     DoctorCommand,
     StoreInfoCommand,
+    StoreRetentionCommand,
     ExportBackupCommand,
     ExtractionStatusCommand,
     ExtractionListPendingCommand,

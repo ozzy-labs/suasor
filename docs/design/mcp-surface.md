@@ -234,6 +234,8 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 
 CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json` では同じ `warnings` 配列をバンドルに含める。
 
+> **`bodyDroppedAt`**（[#498](https://github.com/ozzy-labs/suasor/issues/498) / [ADR-0047](../adr/0047-storage-lifecycle.md)）: retention が本文を落とした時刻。`null` なら本文は健在。**非 null + 空 `body` は「storage を抑えるために削除した」であって「本文が元々無い」ではない** — 空文字だけを黙って返すのは [ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer" に反するため明示する。メタデータ・provenance link・embedding は残っているので、source 自体は引き続き発見できる。
+
 ### `sync.status`（確定・read・#442）
 
 取り込み鮮度の read tool（`readOnlyHint: true`）。`sync_runs`（[ADR-0033](../adr/0033-sync-run-history.md)）は全 run を記録してきたが、読むのは `suasor sync status` だけで、**エージェントには自分のデータが止まっていることを知る手段が無かった** — PATH の通らない cron 行に凍結された store から、自信を持って先週の答えを返してしまう。

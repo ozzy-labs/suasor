@@ -64,7 +64,11 @@ export function initSchema(sqlite: Database): void {
       body        TEXT NOT NULL,
       fingerprint TEXT NOT NULL,
       observed_at TEXT NOT NULL,
-      meta        TEXT NOT NULL DEFAULT '{}'
+      meta        TEXT NOT NULL DEFAULT '{}',
+      -- When the retention policy dropped this body (ADR-0047 決定 2); NULL when
+      -- the body is intact. Distinguishes "removed to bound storage" from "this
+      -- source genuinely has no text", which an empty string alone cannot.
+      body_dropped_at TEXT
     );
     -- Forget tombstones (ADR-0026 R1-1): one row per forgotten externalId. Folded
     -- from SourceForgotten (insert) / SourceUnforgotten (delete). Ingest consults
@@ -243,6 +247,8 @@ export function initSchema(sqlite: Database): void {
   ensureColumn(sqlite, "tasks", "published_at", "TEXT");
   // Canonical person link on legacy commitment tables (Issue #443).
   ensureColumn(sqlite, "commitments", "person_id", "TEXT");
+  // Retention marker on legacy source tables (Issue #498 / ADR-0047).
+  ensureColumn(sqlite, "sources", "body_dropped_at", "TEXT");
 
   // task.list filters overdue tasks by due_date (ADR-0028); index it. Created
   // after ensureColumn so the column exists on legacy tables too.

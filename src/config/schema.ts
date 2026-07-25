@@ -29,6 +29,22 @@ export const StorageConfig = z.object({
    * retention, which is deliberately opt-in and off by default.
    */
   sizeWarnBytes: z.number().int().positive().nullable().default(null),
+  /**
+   * Body retention ([ADR-0047](../../docs/adr/0047-storage-lifecycle.md) 決定 2).
+   * **Opt-in, off by default** — dropping a body removes it from full-text
+   * search permanently, and long-tail recall is the product's core value, so
+   * this must never happen because nobody chose it.
+   */
+  retention: z
+    .object({
+      /**
+       * Drop the bodies of sources observed more than this many days ago.
+       * `null` (default) = never drop anything.
+       */
+      bodyMaxAgeDays: z.number().int().positive().nullable().default(null),
+    })
+    .passthrough()
+    .default(() => ({ bodyMaxAgeDays: null })),
 });
 export type StorageConfig = z.infer<typeof StorageConfig>;
 
