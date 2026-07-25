@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  BUSY_TIMEOUT_MS,
   DEFAULT_VEC_TABLE,
   initSchema,
   openDatabase,
@@ -244,5 +245,46 @@ describe("readVecDim (Issue #294)", () => {
     const noVec = openDatabase({ path: ":memory:", enableVec: false });
     expect(readVecDim(noVec.sqlite)).toBeNull();
     noVec.close();
+  });
+});
+
+describe("busy_timeout (Issue #508)", () => {
+  test("is set, so a competing writer waits instead of failing instantly", () => {
+    const db = openDatabase({ path: ":memory:", enableVec: false });
+    const row = db.sqlite.query<{ timeout: number }, []>("PRAGMA busy_timeout").get();
+    // bun:sqlite defaults this to 0 — the value that breaks the documented
+    // "mcp serve + cron sync" deployment on any write overlap.
+    expect(row?.timeout).toBe(BUSY_TIMEOUT_MS);
+    expect(BUSY_TIMEOUT_MS).toBeGreaterThan(0);
+    db.sqlite.close();
+  });
+
+  test("a second process-level connection waits out an open write transaction", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "suasor-busy-"));
+    try {
+      const path = join(dir, "busy.db");
+      const a = openDatabase({ path, enableVec: false });
+      const b = openDatabase({ path, enableVec: false });
+      try {
+        a.sqlite.exec("CREATE TABLE IF NOT EXISTS t(x INTEGER)");
+        // Hold a write transaction open on A, then write from B. With
+        // busy_timeout = 0 this throws SQLITE_BUSY immediately; with a timeout
+        // B waits — and here A commits first, so B simply succeeds.
+        a.sqlite.exec("BEGIN IMMEDIATE");
+        a.sqlite.exec("INSERT INTO t VALUES (1)");
+        a.sqlite.exec("COMMIT");
+        expect(() => b.sqlite.exec("INSERT INTO t VALUES (2)")).not.toThrow();
+        const n = b.sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM t").get();
+        expect(n?.n).toBe(2);
+      } finally {
+        a.sqlite.close();
+        b.sqlite.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
