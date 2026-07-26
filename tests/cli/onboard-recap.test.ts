@@ -164,6 +164,66 @@ describe("renderRecap — pre-sync config warnings", () => {
 });
 
 /**
+ * Vectors the first sync did not write (Issue #547). The gap outlives the run —
+ * a later `suasor sync` only embeds new or changed sources — so the recap states
+ * it and names `suasor embeddings drain`, the command that closes it. It is not
+ * a failure: `suasor sync` exits 0 on both a disabled backend and a best-effort
+ * embed miss, and the wizard must not invent a failure the sync does not have.
+ */
+describe("renderRecap — embeddings the first sync did not write", () => {
+  const base = { connectors: [ok()], synced: true, syncExitCode: 0 };
+
+  test("a disabled backend → the count, the permanence, and the drain command", () => {
+    const input = {
+      ...base,
+      embeddings: { ingested: 12, embedded: 0, backendDisabled: true },
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("embeddings: [embedding].backend is disabled");
+    expect(text).toContain("12 source(s) this sync ingested have no vectors");
+    expect(text).toContain("A later sync only embeds new or changed sources");
+    expect(text).toContain("suasor embeddings drain");
+    expect(text).toContain("guide/embedding.md");
+    // The default install is FTS-first (ADR-0005), so this is a statement about
+    // the corpus — not a broken setup, and not an exit-worthy one.
+    expect(text).toContain("Setup complete.");
+    expect(recapHasFailure(input)).toBe(false);
+  });
+
+  test("a partly-embedded run → the remainder, not the disabled-backend sentence", () => {
+    const input = {
+      ...base,
+      embeddings: { ingested: 12, embedded: 5, backendDisabled: false },
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("embeddings: 5 of 12 ingested source(s) embedded");
+    expect(text).toContain("the other 7 have no vector");
+    expect(text).toContain("suasor embeddings drain");
+    // A sidecar that did not answer is a different claim from a backend nobody
+    // configured, so the two never share a sentence.
+    expect(text).not.toContain("is disabled");
+    expect(recapHasFailure(input)).toBe(false);
+  });
+
+  test("everything embedded (field absent) → byte-for-byte the old block", () => {
+    expect(renderRecap(base)).not.toContain("embeddings:");
+    expect(renderRecap(base)).toContain("Setup complete.");
+  });
+
+  test("a real failure still wins the verdict line", () => {
+    const input = {
+      ...base,
+      syncExitCode: 1,
+      embeddings: { ingested: 3, embedded: 0, backendDisabled: true },
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("embeddings: [embedding].backend is disabled");
+    expect(text).toContain("Setup finished with errors");
+    expect(recapHasFailure(input)).toBe(true);
+  });
+});
+
+/**
  * Account mode (ADR-0050 / Issue #538): the recap has to name the account, and
  * every recovery command it prints has to carry `--account` — without it the
  * command either refuses as ambiguous or verifies the wrong account.

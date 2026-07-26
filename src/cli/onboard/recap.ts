@@ -10,6 +10,26 @@
  * a non-zero exit code (any `auth test` failed, or the first sync exited > 0) for
  * cron / CI parity — the recap itself never touches process state.
  */
+import { docsUrl } from "../doc-ref.ts";
+
+/**
+ * What the first sync left without a vector (Issue #547).
+ *
+ * Reported because the gap **outlives the run**: `syncConnector` offers the
+ * embedder only the sources it observed or updated, so a source ingested without
+ * a vector is never embedded by any later `suasor sync` — and the first sync is
+ * the one that ingests the backlog. `suasor embeddings drain` is the command that
+ * closes it (it embeds exactly the sources with no vector), and naming it here is
+ * the same treatment `suasor projections rebuild` gives the vec0 table it drops.
+ */
+export interface EmbeddingRecap {
+  /** Sources this sync ingested (observed + updated) — the embed candidates. */
+  readonly ingested: number;
+  /** How many of them got a vector (`0` when no backend is configured). */
+  readonly embedded: number;
+  /** Whether `[embedding].backend` was disabled (vs configured but failing). */
+  readonly backendDisabled: boolean;
+}
 
 /** One connector's outcome as the recap needs it (a projection of `ConnectorReport`). */
 export interface RecapConnector {
@@ -63,6 +83,17 @@ export interface RecapInput {
    * not start failing runs that `suasor sync` exits 0 on.
    */
   readonly configWarnings?: readonly string[];
+  /**
+   * The vectors the first sync did not write (Issue #547). Absent when the sync
+   * was skipped, ingested nothing, or embedded everything it ingested.
+   *
+   * Not part of {@link recapHasFailure}, on the same grounds as
+   * {@link configWarnings}: a disabled embedding backend is the documented
+   * FTS-first default (ADR-0005) and a sidecar failure is best-effort by design,
+   * so `suasor sync` exits 0 on both and the wizard must not invent a failure the
+   * sync does not have. Stating the gap is the point; failing on it is not.
+   */
+  readonly embeddings?: EmbeddingRecap;
 }
 
 /** Whether the run should exit non-zero: any auth-test failure, or a failed sync. */
@@ -123,6 +154,31 @@ function configPhrase(c: RecapConnector): string {
 }
 
 /**
+ * The `embeddings …` clause: what has no vector, and the one command that fixes
+ * it. The two cases are rendered as different sentences because they are
+ * different claims — "you never asked for vectors" is a configuration state the
+ * operator may well intend, while "the sidecar did not answer" is a failure that
+ * already printed on stderr. Folding them into one line would give both the same
+ * weight.
+ */
+function embeddingPhrase(e: EmbeddingRecap): string {
+  if (e.backendDisabled) {
+    return (
+      `[embedding].backend is disabled, so the ${e.ingested} source(s) this sync ingested have ` +
+      "no vectors — full-text search covers them, semantic search does not. A later sync only " +
+      "embeds new or changed sources, so after enabling a backend run " +
+      `\`suasor embeddings drain\` once to cover these (${docsUrl("guide/embedding.md")})`
+    );
+  }
+  const pending = e.ingested - e.embedded;
+  return (
+    `${e.embedded} of ${e.ingested} ingested source(s) embedded — the other ${pending} have no ` +
+    "vector and a later sync will not retry them (it only embeds new or changed sources); " +
+    "run `suasor embeddings drain` once the sidecar is reachable"
+  );
+}
+
+/**
  * Render the closing recap block. Deterministic and side-effect-free; the caller
  * writes it to stdout (human-readable output only) and uses {@link recapHasFailure}
  * for the exit code.
@@ -154,6 +210,13 @@ export function renderRecap(input: RecapInput): string {
       `  config: ${configWarnings.length} pre-sync warning(s) for ${configWarnings.join(", ")} — ` +
         "see the `warning:` line(s) on stderr",
     );
+  }
+
+  // Stated, never inferred from the config: the sync's own counters are what say
+  // whether a vector was written, and they are also what the wizard would have to
+  // contradict to claim the corpus is searchable semantically.
+  if (input.embeddings) {
+    lines.push(`  embeddings: ${embeddingPhrase(input.embeddings)}.`);
   }
 
   const authFailed = input.connectors.some((c) => c.authTest === "failed");

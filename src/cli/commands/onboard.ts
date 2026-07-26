@@ -35,13 +35,19 @@ import {
   renderMcpSnippet,
   resolveMcpInvocation,
 } from "../onboard/mcp-snippet.ts";
-import { type RecapConnector, recapHasFailure, renderRecap } from "../onboard/recap.ts";
+import {
+  type EmbeddingRecap,
+  type RecapConnector,
+  recapHasFailure,
+  renderRecap,
+} from "../onboard/recap.ts";
 import {
   type DigestJobRef,
   renderDigestSchedulerLines,
   renderSchedulerSnippet,
 } from "../onboard/scheduler.ts";
 import { renderConnectorMenu, resolveSelection } from "../onboard/select.ts";
+import { createProgress } from "../progress.ts";
 import { readSecretLine } from "../read-secret.ts";
 
 /** One connector's per-step onboarding outcome (for `--json`). */
@@ -162,6 +168,13 @@ interface OnboardReport {
   scheduler: string;
   /** Names of configured [digest.jobs] surfaced in the scheduler step (ADR-0040). */
   digestJobs: string[];
+  /**
+   * What the first sync left without a vector (Issue #547), or `null` when every
+   * ingested source was embedded (or nothing was ingested / the sync was
+   * skipped). The machine-readable counterpart of the recap's `embeddings:` line
+   * — `--json` suppresses the recap, and this gap must not be human-only.
+   */
+  embeddings: EmbeddingRecap | null;
 }
 
 export class OnboardCommand extends Command {
@@ -459,11 +472,13 @@ export class OnboardCommand extends Command {
     let synced = false;
     let syncExitCode: number | null = null;
     let configWarnings: readonly string[] = [];
+    let embeddings: EmbeddingRecap | null = null;
     if (!this.skipSync) {
       const result = await this.firstSync(connectors);
       synced = true;
       syncExitCode = result.code;
       configWarnings = result.configWarnings;
+      embeddings = result.embeddings;
       if (!this.json) stdout.write(result.summary);
     }
 
@@ -580,7 +595,13 @@ export class OnboardCommand extends Command {
         ...(verb !== undefined ? { discoverySkippedVerb: verb } : {}),
       };
     });
-    const recapInput = { connectors: recap, synced, syncExitCode, configWarnings };
+    const recapInput = {
+      connectors: recap,
+      synced,
+      syncExitCode,
+      configWarnings,
+      ...(embeddings !== null ? { embeddings } : {}),
+    };
     if (!this.json) {
       stdout.write(`\n${renderRecap(recapInput)}\n`);
     }
@@ -592,6 +613,7 @@ export class OnboardCommand extends Command {
         syncExitCode,
         scheduler: scheduler.kind,
         digestJobs: digestJobs.map((j) => j.name),
+        embeddings,
       };
       stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     }
@@ -1065,22 +1087,51 @@ export class OnboardCommand extends Command {
    * Run the first `suasor sync` over the selected connectors via the shared
    * service.
    *
+   * The wizard's sync **is** a `suasor sync`, so it ingests like one: the
+   * embedder, the extractor and the two extraction caps come from the same config
+   * and are wired to the same sinks as `src/cli/commands/sync-all.ts` (Issue
+   * #547). Passing them is not a nicety — `syncConnector` skips a
+   * fingerprint-unchanged source *before* extraction and *before* embedding, so a
+   * source the first pass ingests without a vector is one no later `suasor sync`
+   * ever embeds. The first pass is also the one that ingests the whole backlog,
+   * so leaving it out left semantic search permanently blind to exactly the
+   * corpus onboarding brought in, with `suasor embeddings drain` as an
+   * undiscoverable manual repair.
+   *
    * `configWarnings` carries the labels (`google (account 'work')`) of the slices
    * the pre-sync advisories fired for, for the closing recap — **not** their text:
    * the text is printed by the sync itself, through `onWarn`, exactly where and
    * how `suasor sync` prints it. The labels come from the run's own
    * `preSyncAdvisories`, so the recap can never disagree with what was printed.
+   *
+   * `embeddings` reports what the run left without a vector (see
+   * {@link EmbeddingRecap}), read from the run's own counters rather than
+   * re-derived: with no backend configured that is every ingested source, and
+   * with a backend whose sidecar failed it is the difference the best-effort
+   * embed left behind. Either way the gap outlives the run, so the recap states
+   * it and names the one command that closes it.
    */
-  private async firstSync(
-    connectors: string[],
-  ): Promise<{ code: number; summary: string; configWarnings: string[] }> {
-    const [{ loadConfig }, { Store }, { loadConnector }, { runBulkSync, selectEnabledConnectors }] =
-      await Promise.all([
-        import("../../config/index.ts"),
-        import("../../db/index.ts"),
-        import("../../connectors/index.ts"),
-        import("../../connectors/sync-all.ts"),
-      ]);
+  private async firstSync(connectors: string[]): Promise<{
+    code: number;
+    summary: string;
+    configWarnings: string[];
+    embeddings: EmbeddingRecap | null;
+  }> {
+    const [
+      { loadConfig },
+      { Store },
+      { loadConnector },
+      { runBulkSync, selectEnabledConnectors },
+      { createEmbedderResolved },
+      { createExtractor },
+    ] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../connectors/index.ts"),
+      import("../../connectors/sync-all.ts"),
+      import("../../retrieval/embedding/index.ts"),
+      import("../../extraction/index.ts"),
+    ]);
 
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
@@ -1089,6 +1140,7 @@ export class OnboardCommand extends Command {
         code: 1,
         summary: "sync: storage.dbPath is not configured.\n",
         configWarnings: [],
+        embeddings: null,
       };
     }
     // Only the connectors we just enabled (intersect with the enabled set so an
@@ -1100,8 +1152,26 @@ export class OnboardCommand extends Command {
         code: 0,
         summary: "sync: no enabled connectors to ingest (skipped first sync).\n",
         configWarnings: [],
+        embeddings: null,
       };
     }
+
+    // Same construction as `suasor sync`: `null` when the backend is disabled
+    // (the FTS-first default, ADR-0005) — the wizard then costs exactly what it
+    // did before, because nothing is sent anywhere. `onTruncate` counts bodies
+    // capped to `[embedding].maxInputChars` so the deterministic truncation is
+    // reported here too, rather than only under `suasor sync`.
+    let truncatedCount = 0;
+    const embedder = await createEmbedderResolved(config.embedding, {
+      onTruncate: () => {
+        truncatedCount += 1;
+      },
+    });
+    const extractor = createExtractor(config.extraction);
+    // TTY-gated (a no-op on a pipe / CI, so `--json` and captured output are
+    // unaffected): with a sidecar wired the first pass is the long one, and a
+    // wizard that goes silent for minutes reads as hung.
+    const progress = createProgress(this.context.stderr, "sync");
 
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
@@ -1119,16 +1189,45 @@ export class OnboardCommand extends Command {
         // prefix, same position (before any connector runs) as
         // `src/cli/commands/sync-all.ts`.
         syncOptions: {
+          embedder,
+          extractor,
+          extractionMaxBytes: config.extraction.maxBytes,
+          extractionMaxTextChars: config.extraction.maxTextChars,
+          onProgress: () => progress.tick(),
           onWarn: (message) => {
+            progress.finish();
             this.context.stderr.write(`warning: ${message}\n`);
           },
+          onEmbedError: (error) =>
+            this.context.stderr.write(`warning: embedding skipped: ${error.message}\n`),
+          onExtractError: (error) =>
+            this.context.stderr.write(`warning: extraction skipped: ${error.message}\n`),
         },
       });
-      const lines = result.results.map((entry) =>
-        entry.ok && entry.outcome
-          ? `${entry.connector}: ${entry.outcome.observed} observed, ${entry.outcome.updated} updated.`
-          : `${entry.connector}: failed (${entry.error}).`,
-      );
+      progress.finish();
+
+      if (truncatedCount > 0) {
+        this.context.stderr.write(
+          `warning: ${truncatedCount} long document(s) truncated to ` +
+            `${config.embedding.maxInputChars} chars before embedding ` +
+            `(recall covers the head only; see ${docsUrl("guide/embedding.md")})\n`,
+        );
+      }
+
+      // The counts `suasor sync` prints, for the same reason it prints them: the
+      // embedded / extracted columns are how an operator sees that the optional
+      // layers ran at all. The `embedded` / `extracted` clauses are omitted when
+      // the corresponding backend is disabled — a `0 embedded` on a disabled
+      // backend would read as a failure of something that was never asked to run.
+      const lines = result.results.map((entry) => {
+        if (!(entry.ok && entry.outcome)) return `${entry.connector}: failed (${entry.error}).`;
+        const o = entry.outcome;
+        return (
+          `${entry.connector}: ${o.observed} observed, ${o.updated} updated, ` +
+          `${o.unchanged} unchanged${embedder ? `, ${o.embedded} embedded` : ""}` +
+          `${extractor ? `, ${o.extracted} extracted` : ""}.`
+        );
+      });
       const summary = `${lines.join("\n")}\nsync: ${result.succeeded} succeeded, ${result.failed} failed.\n`;
       // The labels the recap points at are read back from the run itself, not
       // re-derived: one slice can raise both advisories, and only the run knows
@@ -1139,7 +1238,23 @@ export class OnboardCommand extends Command {
         const label = advisoryLabel(advisory.connector, advisory.account);
         if (!configWarnings.includes(label)) configWarnings.push(label);
       }
-      return { code: result.failed > 0 ? 1 : 0, summary, configWarnings };
+      // What this run left without a vector. `observed + updated` is exactly the
+      // set `syncConnector` offers the embedder (unchanged sources are skipped
+      // before it), so `embedded < ingested` is the count that stays pending —
+      // whether because no backend was configured or because the best-effort
+      // embed could not reach the sidecar. A connector that threw contributes
+      // nothing: it reported no counters, and a number nobody measured is not one
+      // to state.
+      const ingested = result.results.reduce(
+        (n, entry) => n + (entry.outcome ? entry.outcome.observed + entry.outcome.updated : 0),
+        0,
+      );
+      const embedded = result.results.reduce((n, entry) => n + (entry.outcome?.embedded ?? 0), 0);
+      const embeddings: EmbeddingRecap | null =
+        ingested > 0 && embedded < ingested
+          ? { ingested, embedded, backendDisabled: embedder === null }
+          : null;
+      return { code: result.failed > 0 ? 1 : 0, summary, configWarnings, embeddings };
     } finally {
       store.close();
     }

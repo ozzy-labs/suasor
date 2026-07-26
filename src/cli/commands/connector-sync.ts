@@ -14,6 +14,7 @@
 import { Command, type CommandClass, Option } from "clipanion";
 import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
 import { standaloneGate } from "../build-target.ts";
+import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
 
 /** A `suasor <name> sync` command bound to one connector name. */
@@ -206,7 +207,7 @@ class ConnectorSyncCommand extends Command {
         this.context.stderr.write(
           `warning: ${name}: ${truncatedCount} long document(s) truncated to ` +
             `${config.embedding.maxInputChars} chars before embedding ` +
-            "(recall covers the head only; see docs/guide/embedding.md)\n",
+            `(recall covers the head only; see ${docsUrl("guide/embedding.md")})\n`,
         );
       }
 

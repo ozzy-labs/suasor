@@ -1271,6 +1271,8 @@ describe("onboard first sync (pre-sync advisories)", () => {
   });
 
   test("a complete slice keeps the old output (no warning line, `Setup complete.`)", async () => {
+    // (embedding stays disabled and the directory is empty, so nothing is
+    // ingested and the #547 embeddings clause has nothing to report either)
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-sync-"));
     try {
       await run(["init"], { configDir: dir });
@@ -1287,6 +1289,168 @@ describe("onboard first sync (pre-sync advisories)", () => {
       expect(out).not.toContain("pre-sync warning");
       expect(out).toContain("Setup complete.");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The wizard's first sync ingests like `suasor sync` (Issue #547).
+ *
+ * `firstSync` passed no embedder and no extractor, so the first pass — the one
+ * that ingests the whole backlog — wrote no vectors and left Office/PDF bodies
+ * name-only. `syncConnector` skips a fingerprint-unchanged source *before* both
+ * stages, so nothing it missed was ever picked up by a later `suasor sync`: the
+ * install stayed semantically blind to exactly the corpus onboarding brought in,
+ * with `suasor embeddings drain` as an undiscoverable manual repair.
+ *
+ * Driven with `local` (no credential, no network) against sidecars stubbed on an
+ * ephemeral port, so both stages are exercised end to end without a real
+ * ollama / markitdown.
+ */
+describe("onboard first sync (embedding + extraction)", () => {
+  /**
+   * A config dir holding one ingestable file and `config.toml`, written **before**
+   * `init` — the store's vec0 table is sized from `[embedding].dim` when the DB is
+   * first created, so a config that lands after `init` would be sizing nothing.
+   * `sections` is appended below the `[connectors.local]` slice; `filename` is the
+   * one file under the ingest root.
+   */
+  async function seed(dir: string, sections: string, filename = "note.md"): Promise<void> {
+    const roots = join(dir, "notes");
+    mkdirSync(roots);
+    await Bun.write(join(roots, filename), "hello world");
+    await Bun.write(
+      join(dir, "config.toml"),
+      `[connectors.local]\nroots = ["${roots}"]\n${sections}`,
+    );
+    await run(["init"], { configDir: dir });
+  }
+
+  test("no embedding backend → the recap states the gap and names `embeddings drain`", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-embed-"));
+    try {
+      await seed(dir, "");
+      const { code, out } = await run(["onboard", "--connector", "local", "--skip-auth"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("local: 1 observed");
+      // No backend was configured, so no `embedded` column is printed at all —
+      // a `0 embedded` would read as a failure of something never asked to run.
+      expect(out).not.toContain("embedded,");
+      expect(out).toContain("embeddings: [embedding].backend is disabled");
+      expect(out).toContain("1 source(s) this sync ingested have no vectors");
+      expect(out).toContain("suasor embeddings drain");
+      // FTS-first is the documented default, so this is a statement about the
+      // corpus rather than a broken setup: the verdict and exit code stand.
+      expect(out).toContain("Setup complete.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--json carries the same gap (the recap is human-readable only)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-embed-"));
+    try {
+      await seed(dir, "");
+      const { code, out } = await run(
+        ["onboard", "--connector", "local", "--skip-auth", "--json"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as {
+        embeddings: { ingested: number; embedded: number; backendDisabled: boolean } | null;
+      };
+      expect(report.embeddings).toEqual({ ingested: 1, embedded: 0, backendDisabled: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an embedding backend → the first sync embeds, and the recap says nothing", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests += 1;
+        return new Response(JSON.stringify({ embeddings: [[1, 2, 3]] }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-embed-"));
+    try {
+      await seed(
+        dir,
+        '[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\ndim = 3\n' +
+          `baseUrl = "http://localhost:${server.port}"\n`,
+      );
+      const { code, out } = await run(["onboard", "--connector", "local", "--skip-auth"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      // The sidecar was actually called: the embedder reached `syncConnector`.
+      expect(requests).toBe(1);
+      expect(out).toContain("local: 1 observed, 0 updated, 0 unchanged, 1 embedded.");
+      // Every ingested source has a vector → no gap to report.
+      expect(out).not.toContain("embeddings:");
+      expect(out).toContain("Setup complete.");
+    } finally {
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreachable sidecar → the miss is reported as a gap, not swallowed", async () => {
+    // Port 1 is unbound → connection refused, the best-effort degrade path.
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-embed-"));
+    try {
+      await seed(
+        dir,
+        '[embedding]\nbackend = "ollama"\nmodel = "bge-m3"\ndim = 3\n' +
+          'baseUrl = "http://localhost:1"\nmaxRetries = 1\n',
+      );
+      const { code, out, err } = await run(["onboard", "--connector", "local", "--skip-auth"], {
+        configDir: dir,
+      });
+      // Best-effort by design (ADR-0005): ingest succeeded, FTS covers the file.
+      expect(code).toBe(0);
+      expect(err).toContain("warning: embedding skipped:");
+      // …but the vector is still missing, and no later sync retries it.
+      expect(out).toContain("embeddings: 0 of 1 ingested source(s) embedded");
+      expect(out).toContain("suasor embeddings drain");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an extraction backend → the sidecar runs and the configured caps apply", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ text: "a considerably longer extracted body" }), {
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-embed-"));
+    try {
+      await seed(
+        dir,
+        '[extraction]\nbackend = "markitdown"\n' +
+          `baseUrl = "http://localhost:${server.port}"\nmaxTextChars = 8\n`,
+        "spec.docx",
+      );
+      const { code, out, err } = await run(["onboard", "--connector", "local", "--skip-auth"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("1 extracted.");
+      // The cap that fired is `[extraction].maxTextChars`, not the 5 MB default a
+      // caller gets for free — i.e. the configured limits were forwarded too.
+      expect(err).toContain("extraction truncated (36 > 8 chars): spec.docx");
+    } finally {
+      server.stop(true);
       rmSync(dir, { recursive: true, force: true });
     }
   });
