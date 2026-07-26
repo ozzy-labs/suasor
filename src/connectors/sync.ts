@@ -108,8 +108,10 @@ export interface SyncOptions {
    * name-only.
    */
   extractor?: Extractor | null;
-  /** Max bytes for both the input file and the stored extracted text (ADR-0024 §5). */
+  /** Max **input** bytes; a larger file is never sent to the sidecar (ADR-0024 §5). */
   extractionMaxBytes?: number;
+  /** Max **extracted-text** characters; a longer body is truncated with a warning. */
+  extractionMaxTextChars?: number;
   /** Called when extraction fails (best-effort; ingest still succeeds name-only). */
   onExtractError?: (error: Error) => void;
   /**
@@ -129,7 +131,7 @@ const DEFAULT_EXTRACTION_MAX_BYTES = 5_000_000;
  * `null` ⇒ no meta written (extractor absent, record not extractable, or a
  * transient failure that should be retried next sync).
  */
-type ExtractionState = "extracted" | "unsupported" | "too_large" | null;
+type ExtractionState = "extracted" | "truncated" | "unsupported" | "too_large" | null;
 
 /**
  * Resolve the effective body for a record: the sidecar-extracted text when
@@ -145,6 +147,11 @@ async function extractBody(
   if (!extractor || !record.extractable)
     return { body: record.body, extracted: false, state: null };
   const maxBytes = options.extractionMaxBytes ?? DEFAULT_EXTRACTION_MAX_BYTES;
+  // Two limits over two unrelated quantities (Issue #529): input bytes decide
+  // whether we send the file at all, extracted characters decide how much text
+  // we keep. They were one knob, so admitting a large scanned PDF also raised
+  // the stored-text cap for everything.
+  const maxTextChars = options.extractionMaxTextChars ?? DEFAULT_EXTRACTION_MAX_BYTES;
   const { filename, byteSize, readBytes } = record.extractable;
   if (byteSize > maxBytes) {
     options.onWarn?.(`extraction skipped (${byteSize} > ${maxBytes} bytes): ${filename}`);
@@ -153,9 +160,24 @@ async function extractBody(
   try {
     const text = await extractor.extract(await readBytes(), filename);
     if (text === null) return { body: record.body, extracted: false, state: "unsupported" };
-    const capped = text.length > maxBytes ? text.slice(0, maxBytes) : text;
+    // Truncation used to be the one silent leg here — the skip path warns, but a
+    // document cut mid-sentence was stored as a complete `extracted` body, so a
+    // search that found nothing in the missing half looked like an honest miss
+    // (ADR-0007 "no silent wrong answer").
+    const truncated = text.length > maxTextChars;
+    if (truncated) {
+      options.onWarn?.(
+        `extraction truncated (${text.length} > ${maxTextChars} chars): ${filename} — ` +
+          "the tail is not searchable; raise [extraction].maxTextChars to keep it",
+      );
+    }
+    const capped = truncated ? text.slice(0, maxTextChars) : text;
     // Keep name discoverability (parity with text-file bodies: name + content).
-    return { body: `${filename}\n\n${capped}`, extracted: true, state: "extracted" };
+    return {
+      body: `${filename}\n\n${capped}`,
+      extracted: true,
+      state: truncated ? "truncated" : "extracted",
+    };
   } catch (cause) {
     options.onExtractError?.(cause instanceof Error ? cause : new Error(String(cause)));
     return { body: record.body, extracted: false, state: null }; // transient → retry

@@ -39,16 +39,25 @@ mcp_tools_write: []
 ### mode=log（既定）
 
 1. `decision.list`（`recordedAfter` / `recordedBefore`、トピック絞りは結果側で）で対象期間の決定を引く
-2. 各決定について `graph.related` で背景 source / 先行決定を 1 hop 辿る
+2. 各決定について `graph.related` で**背景 source** を 1 hop 辿る（decision→source の `derived_from` のみ。決定どうしを直接つなぐ辺は無い — 下記「先行決定の辿りかた」）
 3. **時系列に並べ、変遷（何が何を置き換えたか）が分かる形**でまとめる
 
 ### mode=rationale
 
 1. `decision.list` で対象の決定を特定する（曖昧なら候補を提示して選んでもらう）
-2. `graph.related` で provenance を辿る — **その決定の根拠になった source と、先行する決定**
+2. `graph.related` で provenance を辿る — **その決定の根拠になった source**
 3. `source.get` で根拠 source の本文を読む
 4. `search` で当時の議論を補強する
-5. **決定 + 経緯 + 根拠 source + 先行決定**を組み立てて返す。却下された選択肢が記録されていればそれも示す
+5. **決定 + 経緯 + 根拠 source**（+ 辿れた場合の先行決定）を組み立てて返す。却下された選択肢が記録されていればそれも示す
+
+### 先行決定の辿りかた（辺が無いことを前提にする）
+
+reducer が張る決定まわりの辺は **decision → source の `derived_from` だけ**で、**決定どうしを直接つなぐ辺は存在しない**。したがって「先行決定」は次のどちらかでしか辿れない:
+
+1. **共有 source 経由の 2 hop** — 決定の根拠 source から `graph.related` を逆向きに辿り、同じ source を根拠に持つ別の決定を見る。同じ議論から複数の決定が出た場合にだけ当たる
+2. **手で張った `manual_link`** — `link.add`（write / HITL）で決定間に明示的に張られていれば `graph.related` に出る
+
+**1 hop で何も返らないことを「先行決定は無い」と言い換えてはならない**（[ADR-0007](../../adr/0007-connector-contract.md) の "no silent wrong answer"）。辿れなかったときは「provenance link には記録が無い」と述べ、必要なら `search` で当時の議論を補う。
 
 ## 制約
 

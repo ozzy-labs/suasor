@@ -44,7 +44,8 @@ Suasor は抽出契約（`POST {baseUrl}/extract`）を実装する**参照サ�
 backend = "markitdown"
 # baseUrl = "http://localhost:8929"   # /extract が付加される（serve の bind 先と一致させる）
 # allowRemote = false                 # 非 loopback baseUrl のとき true 必須（Issue #436）
-# maxBytes = 5000000                  # サイズ上限（下記 2 段で意味が異なる）
+# maxBytes = 5000000                  # 入力バイト数の上限（超過は fetch せず name-only）
+# maxTextChars = 5000000              # 抽出テキストの文字数上限（超過は打ち切り + 警告）
 # version = "1"                       # extractor version（bump で再抽出。下記）
 ```
 
@@ -123,11 +124,11 @@ suasor google sync
 suasor extraction status
 # 出力例:
 #   extraction: backend=markitdown version=1
-#     extracted: 18  stale: 0  pending: 2  unsupported: 1  too-large: 0
+#     extracted: 18  truncated: 0  stale: 0  pending: 2  unsupported: 1  too-large: 0
 #     run the owning connector's sync (e.g. `suasor local sync` / `suasor box sync` / `suasor google sync`) to (re)extract pending / stale sources
 ```
 
-- `extracted` 現 version で抽出済み / `stale` 別 version（次 sync で再抽出）/ `pending` extractable だが未試行 / `unsupported` サイドカーが非対応 / `too-large` `maxBytes` 超過
+- `extracted` 現 version で抽出済み / `truncated` 抽出はしたが `maxTextChars` で末尾を落とした / `stale` 別 version（次 sync で再抽出）/ `pending` extractable だが未試行 / `unsupported` サイドカーが非対応 / `too-large` `maxBytes` 超過
 - カバレッジは `local_file` / `box_file` / `ms365_file`（OneDrive）/ `google_drive` の各 source type を横断して集計する（共通基盤、#241 / #243 / #242）
 - `suasor doctor` も backend / version を 1 行で表示し、`stale` / `pending` が残っていれば保守ヒント（`extraction version drift: N` / `pending extractions: N` — owning connector の sync を促す）を WARN で出す
 
@@ -152,7 +153,8 @@ suasor extraction list-pending --limit 20
 
 - `box` / `ms-graph`（OneDrive）/ `google`(Drive) の API 実体は本 connector で抽出対応済み（[ADR-0034](../adr/0034-api-connector-extraction.md)）。`local`（OS 同期フォルダ）にあるものは `local` でもカバーできる
 - スプレッドシート等は text 化で表構造が落ちる（まず text/Markdown 化・構造化抽出は将来）。Google Sheets も export 経由で xlsx → text 化のため同様
-- `maxBytes` 超過ファイルは name-only のまま（Box / OneDrive / Drive binary は `size` メタで fetch 前に判定。Google ネイティブは fetch 前サイズが取れず抽出後の text 上限のみ適用）
-- **`maxBytes` は 2 段で意味が異なる**（`src/connectors/sync.ts` の `extractBody`）:
-  - **pre-fetch guard**（fetch 前）: ファイルの**バイト数**（`byteSize`）を `maxBytes` と比較し、超過なら fetch せず `too_large`。これは実バイト基準。
-  - **post-extraction cap**（抽出後）: 抽出した text が長い場合 `text.slice(0, maxBytes)` で打ち切る。`slice` は **UTF-16 code unit 長**で切るため、日本語等の multibyte 文字では**実バイト数より小さい位置**で切れる（≒ 文字数上限であって byte 上限ではない）。安全側（より短く切る）に倒れるので store/FTS が膨らむことはないが、「N バイトちょうどまで残る」ことは期待できない。将来的に byte ベースへ揃える余地あり（TODO）。
+- `maxBytes` 超過ファイルは name-only のまま（Box / OneDrive / Drive binary は `size` メタで fetch 前に判定。Google ネイティブは fetch 前サイズが取れず `maxTextChars` のみが効く）
+- **上限は 2 つあり、別々の量を測る**（`src/connectors/sync.ts` の `extractBody`。[#529](https://github.com/ozzy-labs/suasor/issues/529) で分離）:
+  - **`maxBytes`（入力バイト数）**: ファイルの `byteSize` が超過なら **sidecar に送らず** `too_large`。実バイト基準。
+  - **`maxTextChars`（抽出テキスト長）**: 抽出した text が超過なら打ち切り、**警告を出して state を `truncated`** にする。`slice` は **UTF-16 code unit 長**なので、日本語等では実バイト数より小さい位置で切れる（＝文字数上限であって byte 上限ではない）。
+  - **1 つの knob だった頃の問題**: 画像主体の巨大 PDF（テキストは僅か）を通すために上限を上げると、**全ドキュメントの保存テキスト上限も一緒に上がった**。逆に絞ると、よく圧縮された小さな docx が文書の途中で切れた。しかもその打ち切りは **無警告で state は `extracted`** だったため、落ちた後半を検索して 0 件でも「元々無い」と区別がつかなかった（[ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer"）。

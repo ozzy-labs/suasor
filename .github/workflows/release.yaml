@@ -110,8 +110,10 @@ jobs:
         run: bun install
       - name: Compile
         # Connector SDKs that pull heavy/native deps are kept external (matches
-        # package.json `compile`); the standalone binary ships core + a few
-        # native bits (sqlite-vec / keyring). See docs/guide/install.md caveat.
+        # package.json `compile`); the standalone binary ships core + sqlite-vec.
+        # The keychain (@napi-rs/keyring) is external too, so `auth set` is
+        # unavailable there — secrets come from the env override. See
+        # docs/guide/install.md caveat.
         run: |
           asset="suasor-${{ matrix.target }}"
           if [ "${{ matrix.target }}" = "bun-windows-x64" ]; then

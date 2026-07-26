@@ -39,6 +39,13 @@ export interface ExtractionStatus {
     extracted: number;
     /** Recorded as unsupported by the sidecar (won't retry until version bump). */
     unsupported: number;
+    /**
+     * Extracted, but the text exceeded `[extraction].maxTextChars` and the tail
+     * was dropped (Issue #529). Counted apart from `extracted` because the body
+     * is searchable only up to the cut — a full-text miss in the tail is not
+     * evidence the phrase is absent.
+     */
+    truncated: number;
     /** Skipped as oversized (ADR-0024 §5). */
     tooLarge: number;
     /** Extracted at a different version → re-extract on next sync (drift). */
@@ -67,11 +74,13 @@ export function extractionStatus(
 
   let extracted = 0;
   let unsupported = 0;
+  let truncated = 0;
   let tooLarge = 0;
   let stale = 0;
   for (const row of metaRows) {
     if (row.version !== config.version) stale += 1;
     else if (row.state === "extracted") extracted += 1;
+    else if (row.state === "truncated") truncated += 1;
     else if (row.state === "unsupported") unsupported += 1;
     else if (row.state === "too_large") tooLarge += 1;
   }
@@ -101,7 +110,7 @@ export function extractionStatus(
   return {
     backend: config.backend,
     version: config.version,
-    totals: { extracted, unsupported, tooLarge, stale, pending },
+    totals: { extracted, truncated, unsupported, tooLarge, stale, pending },
   };
 }
 

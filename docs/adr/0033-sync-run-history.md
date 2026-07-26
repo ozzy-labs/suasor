@@ -46,6 +46,7 @@ event-sourced（[ADR-0002](0002-event-sourced-architecture.md)）に沿えば、
 - event 種別が 2 つ増える（`SyncRunStarted` / `SyncRunEnded`）。sync 1 回ごとに 2 event 追記され、event log が増える（件数は connector × sync 回数で、cursor event と同程度の増加に留まる）
 - next run（次回予定）は表示しない（OS スケジューラ委譲の帰結）。鮮度は「最終 sync からの経過」で代替する
 - `ConnectorSyncCompleted` と `SyncRunEnded` が両方 append され、count が二重に記録される（cursor 用 / 鮮度用で読者が別なので冗長は許容）
+- **本 ADR の "history" は event log にしか無い。** `sync_runs` projection も `suasor sync status` も `sync.status`（[#442](https://github.com/ozzy-labs/suasor/issues/442)）も **connector ごとの最新 1 件**しか返す面を持たない。したがって「今週 GitHub は断続的に失敗していたか」は、鮮度 API では答えられず event log を直接読むしかない。過去の run は `SyncRunStarted` / `SyncRunEnded` として**恒久的に残っている**ので失われてはいない — 欠けているのは read 面だけであり、必要になった時点で projection ではなく event を集計する read tool として足せる（毎回スキャンを避けたいという上記の却下理由は、常時表示の鮮度ビューにのみ当てはまる）
 
 ## Alternatives Considered
 

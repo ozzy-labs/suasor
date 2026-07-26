@@ -390,6 +390,20 @@ export class SlackConversationsCommand extends Command {
           identity.isEnterpriseInstall && !this.teamId
             ? await listTeams(token, { onProgress: () => progress.tick() })
             : [];
+        // Enumeration is best-effort and never throws, so "org token, but only
+        // one workspace came back" is indistinguishable from a real single-
+        // workspace org unless we say so. Staying quiet here reinstates the
+        // pre-#350 bug — channels from every other workspace simply missing —
+        // with nothing on screen to suggest the list is partial (ADR-0007).
+        if (identity.isEnterpriseInstall && !this.teamId && gridTeams.length <= 1) {
+          this.context.stderr.write(
+            "warning: Enterprise Grid workspace enumeration returned " +
+              `${gridTeams.length === 0 ? "nothing" : "one workspace"}; sweeping only ` +
+              `'${identity.team ?? identity.teamId}'. Other workspaces' channels are NOT listed. ` +
+              "Usually a non-org-level token or a missing scope — or genuinely a single-workspace " +
+              "org. Pass --team-id <T…> to target one explicitly.\n",
+          );
+        }
         const sweepTeams: SweepTeam[] =
           gridTeams.length > 1
             ? gridTeams

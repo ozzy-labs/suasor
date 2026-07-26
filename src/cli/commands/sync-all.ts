@@ -208,6 +208,7 @@ export class SyncAllCommand extends Command {
           embedder,
           extractor,
           extractionMaxBytes: config.extraction.maxBytes,
+          extractionMaxTextChars: config.extraction.maxTextChars,
           onProgress: () => progress.tick(),
           onWarn: (message) => {
             progress.finish();

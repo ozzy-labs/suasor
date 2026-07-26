@@ -115,7 +115,7 @@ export interface McpServerDeps {
       connectors: Record<string, Record<string, unknown>>;
       embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
       /** `[extraction]` section; enables Office/PDF body extraction at ingest (ADR-0024). */
-      extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
+      extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes" | "maxTextChars">;
       /** `[export]` section; `draft.export` writes into `dir` (ADR-0025) + composition (#138). */
       export?: Pick<ExportConfig, "dir" | "composition">;
       /** `[tasks]` section; task.publish / task.act egress to the external home (ADR-0036). */

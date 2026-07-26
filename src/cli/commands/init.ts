@@ -58,7 +58,8 @@ backend = "disabled"   # disabled | markitdown — Office/PDF body extraction si
 # Run the bundled sidecar with \`suasor extraction serve\` (needs the markitdown CLI on PATH).
 # baseUrl = "http://localhost:8929"   # markitdown sidecar (/extract is appended)
 # allowRemote = false                 # opt in to a non-loopback sidecar (egress; Issue #436)
-# maxBytes = 5000000                  # cap on extracted text; larger inputs stay name-only
+# maxBytes = 5000000                  # cap on INPUT bytes; larger files stay name-only
+# maxTextChars = 5000000              # cap on EXTRACTED text; longer bodies are cut (with a warning)
 # version = "1"                       # extractor version; bump to re-extract on next sync
 
 [export]

@@ -137,14 +137,42 @@ describe("syncConnector — extraction (ADR-0024)", () => {
     expect(errors[0]).toBeInstanceOf(ExtractionError);
   });
 
-  test("caps extracted text at extractionMaxBytes", async () => {
+  test("caps extracted text at extractionMaxTextChars", async () => {
     const out = await syncConnector(store, fakeConnector([docRecord("d1", "big.pdf", "B")]), {
       extractor: fakeExtractor({ "big.pdf": "x".repeat(500) }),
-      extractionMaxBytes: 50,
+      extractionMaxTextChars: 50,
     });
     expect(out.extracted).toBe(1);
     // filename + "\n\n" + 50 capped chars.
     expect(bodyOf("d1")).toBe(`big.pdf\n\n${"x".repeat(50)}`);
+  });
+
+  test("the input-byte limit no longer governs how much text is kept", async () => {
+    const out = await syncConnector(store, fakeConnector([docRecord("d1", "small.docx", "B")]), {
+      extractor: fakeExtractor({ "small.docx": "x".repeat(500) }),
+      // A small, well-compressed file: it passes the byte guard, and its text
+      // must not be cut just because the *input* limit is low (Issue #529).
+      extractionMaxBytes: 50,
+    });
+    expect(out.extracted).toBe(1);
+    expect(bodyOf("d1")).toBe(`small.docx\n\n${"x".repeat(500)}`);
+  });
+
+  test("truncation warns and is recorded apart from a complete extraction", async () => {
+    const warnings: string[] = [];
+    await syncConnector(store, fakeConnector([docRecord("d1", "long.pdf", "B")]), {
+      extractor: fakeExtractor({ "long.pdf": "x".repeat(500) }),
+      extractionMaxTextChars: 50,
+      onWarn: (m) => warnings.push(m),
+    });
+    // This was the one silent leg: the skip path warned, but a document cut
+    // mid-way was stored as a complete `extracted` body, so a search miss in
+    // the dropped tail looked like an honest "not there".
+    expect(warnings.some((w) => w.includes("long.pdf") && w.includes("truncated"))).toBe(true);
+    const state = store.connection.sqlite
+      .query<{ state: string }, [string]>("SELECT state FROM extraction_meta WHERE external_id = ?")
+      .get("d1")?.state;
+    expect(state).toBe("truncated");
   });
 
   test("unchanged records are not re-extracted (readBytes not called)", async () => {

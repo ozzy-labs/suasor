@@ -24,7 +24,8 @@ export class ExtractionStatusCommand extends Command {
     description: "Show document-extraction coverage (extracted / stale / pending).",
     details: `
       Reports the active [extraction] backend / version and per-state counts from
-      the extraction_meta sidecar (ADR-0024): extracted, unsupported, too-large,
+      the extraction_meta sidecar (ADR-0024): extracted, truncated (text cut at
+      [extraction].maxTextChars), unsupported, too-large,
       stale (recorded version differs → re-extracted on the next sync), and
       pending (extractable sources never attempted, e.g. extraction newly
       enabled — run the owning connector's sync, e.g. \`suasor local sync\` /
@@ -71,8 +72,8 @@ export class ExtractionStatusCommand extends Command {
         `extraction: backend=${status.backend} version=${status.version}\n`,
       );
       this.context.stdout.write(
-        `  extracted: ${t.extracted}  stale: ${t.stale}  pending: ${t.pending}  ` +
-          `unsupported: ${t.unsupported}  too-large: ${t.tooLarge}\n`,
+        `  extracted: ${t.extracted}  truncated: ${t.truncated}  stale: ${t.stale}  ` +
+          `pending: ${t.pending}  unsupported: ${t.unsupported}  too-large: ${t.tooLarge}\n`,
       );
       if (status.backend === "disabled") {
         this.context.stdout.write(
