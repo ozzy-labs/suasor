@@ -237,6 +237,10 @@ class ConnectorAuthTestCommand extends Command {
     }
 
     if (this.json) {
+      // Nothing verified → no JSON at all, the pre-ADR-0050 behaviour. Emitting
+      // an empty `{accounts:{}}` would look like a successful probe that found
+      // no accounts, when in fact every probe failed (the errors went to stderr).
+      if (reports.length === 0) return 1;
       // Shape is stable per config: a single unnamed account keeps the bare
       // report object every existing consumer reads; a declared `accounts` table
       // yields one entry per account, keyed by name.

@@ -199,21 +199,26 @@ export function probeConfigPath(connector: string, probe: AccountSecretProbe): s
  * the account they had. It is deliberately reported in **two confidence levels**,
  * because only one of them is a fact:
  *
- * - `credentialStored: true` — a credential for the unnamed default account is
+ * - probe resolves `true` — a credential for the unnamed default account is
  *   still in the keychain / env. That is evidence the account existed, so the
  *   message says the ingest stopped.
- * - `credentialStored: false` — nothing distinguishes "never had a default
+ * - probe resolves `false` — nothing distinguishes "never had a default
  *   account" from "had one and removed the credential too". The message states
  *   the rule and does not assert anything about this install's history.
+ *
+ * `credentialStored` is a **callback**, not a value: the probe reads the OS
+ * keychain, and the overwhelmingly common case returns `null` below without
+ * needing it. Taking it eagerly would make every `doctor` run pay a keychain
+ * read per connector for a check that almost never fires.
  *
  * Returns `null` when the situation does not apply (no `accounts` table, or one
  * that declares `default`).
  */
-export function demotedDefaultAccountNotice(
+export async function demotedDefaultAccountNotice(
   name: string,
   slice: ConnectorConfig,
-  credentialStored: boolean,
-): { severity: "warn" | "info"; message: string } | null {
+  credentialStored: () => Promise<boolean>,
+): Promise<{ severity: "warn" | "info"; message: string } | null> {
   const accounts = accountSlices(slice);
   if (!accounts.some((account) => account.declared)) return null;
   if (accounts.some((account) => account.isDefault)) return null;
@@ -224,7 +229,7 @@ export function demotedDefaultAccountNotice(
   const fix =
     `add [connectors.${name}.accounts.default] (it may be empty — it inherits the flat ` +
     `keys) to ingest it alongside the named accounts`;
-  return credentialStored
+  return (await credentialStored())
     ? {
         severity: "warn",
         message: `a credential is stored for the unnamed default account, but ${rule}, so it is no longer synced — ${fix}`,

@@ -438,15 +438,15 @@ export class DoctorCommand extends Command {
           }
           // A default account demoted to inheritance defaults (ADR-0050). The
           // stored-credential probe is what separates the two confidence levels,
-          // so resolve it here rather than guessing from config alone.
-          const defaultCredential = await Promise.all(
-            secrets.map((secret) => resolveSecret(name, secret)),
-          );
-          const notice = demotedDefaultAccountNotice(
-            name,
-            slice,
-            defaultCredential.some((value) => value !== null),
-          );
+          // so resolve it rather than guessing from config alone — but lazily:
+          // the notice does not apply to most configs, and an eager probe would
+          // charge every doctor run a keychain read per connector for it.
+          const notice = await demotedDefaultAccountNotice(name, slice, async () => {
+            const resolved = await Promise.all(
+              secrets.map((secret) => resolveSecret(name, secret)),
+            );
+            return resolved.some((value) => value !== null);
+          });
           if (notice !== null) demotedDefaults.push({ name, ...notice });
         }
         if (secrets.length === 0) continue; // needs no auth (e.g. web)
