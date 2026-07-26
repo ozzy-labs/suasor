@@ -18,9 +18,22 @@
  *      (a build artefact, an installed skill mirror, `../` out of the tree) opens
  *      locally and 404s for everyone reading the docs on GitHub, which is the
  *      same silent failure wearing a different hat;
- *   2. the `#fragment` of a link that points at *another* Markdown file
+ *   2. absolute links into *this* repository's tree on the default branch
+ *      (`REPO_BLOB_BASE_URL`, src/shared/doc-ref.ts). The prefix is stripped and
+ *      the rest is resolved as a repository path, so these are checked exactly
+ *      like relative links — no network needed. They exist because a doc that
+ *      ships on its own cannot use a relative link (see 4);
+ *   3. the `#fragment` of a link that points at *another* Markdown file
  *      (same-file fragments are already MD051's job — see below);
- *   3. the literal argument of every `docsUrl("...")` call under `src/`.
+ *   4. that no relative link escapes a **shipped doc root** — a `docs/…` entry of
+ *      `package.json`'s `files`, i.e. a directory distributed without the rest of
+ *      the repository. `docs/skills` is one: the npm package, the standalone
+ *      binary and `suasor skills install` all carry the skill bodies with no
+ *      `docs/adr` anywhere near them (ADR-0008 / ADR-0010, Issue #548), so
+ *      `../../adr/0008-….md` resolves in the repo, passes check 1, and points at
+ *      nothing in every channel a user actually reads it from. Absolute URLs
+ *      (check 2) are the form that works in both places, and they are checked;
+ *   5. the literal argument of every `docsUrl("...")` call under `src/`.
  *      `docsUrl()` (src/shared/doc-ref.ts) turns a repo doc path into a GitHub
  *      blob URL that the CLI / config / MCP layers print to users. It is a
  *      different *mechanism* from a Markdown link but the identical *failure*:
@@ -33,8 +46,20 @@
  *      URL builder, and failing on that would be a wrong verdict.
  *
  * What is NOT checked, and why
- *   - Absolute URLs (`https://…`, `mailto:`): verifying them needs the network,
- *     which would make the lint job non-hermetic and flaky.
+ *   - Absolute URLs to anywhere but this repository's default-branch tree
+ *     (`https://…`, `mailto:`, and GitHub issue / PR / other-repo links):
+ *     verifying them needs the network, which would make the lint job
+ *     non-hermetic and flaky. A `blob/main/…` URL into this repository is the
+ *     one case that needs no network, and it is checked (see 2).
+ *   - Repository URLs in any other shape than `REPO_BLOB_BASE_URL/<path>`:
+ *     `tree/…` directory links, `raw.githubusercontent.com`, and permalinks
+ *     pinned to a commit SHA are left to the external-URL rule above. None are
+ *     used in the repo today, and a SHA permalink is *meant* to outlive the
+ *     working tree, so resolving it against the working tree would be wrong.
+ *   - Whether a *shipped* doc's absolute URL is reachable **today**: the target
+ *     is resolved against the working tree, not against `main`. A link added in
+ *     the same PR as its target is correct here and 404s until the PR merges.
+ *     That is the intended trade — the alternative is a network call.
  *   - Same-file `#fragment` links: already enforced by MD051 in
  *     `bun run lint:md`. Re-implementing GitHub's heading slugger here would put
  *     a second, drifting answer next to a question that is already answered.
@@ -75,6 +100,10 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 // cannot drift while they are the same install. (Resolution is exercised by
 // tests/scripts/check-doc-links.test.ts, which spawns this script.)
 import { lint } from "markdownlint/sync";
+// The one spelling of "our own repository on the default branch", shared with
+// the runtime `docsUrl()` builder so a rename of the org/repo/branch cannot make
+// the writer and this checker disagree about which URLs are ours to resolve.
+import { REPO_BLOB_BASE_URL } from "../src/shared/doc-ref.ts";
 
 /** Tracked Markdown that is deliberately not checked (see the header comment). */
 const IGNORED_MARKDOWN = new Set(["CHANGELOG.md"]);
@@ -121,20 +150,65 @@ function decodeDestination(value) {
 
 /**
  * Split a link destination into its path and fragment halves, or `null` for the
- * destinations this script does not own: absolute URLs, protocol-relative URLs,
- * and fragment-only links (MD051's job).
+ * destinations this script does not own: external absolute URLs,
+ * protocol-relative URLs, and fragment-only links (MD051's job).
+ *
+ * `origin` says how to resolve the path half: `"relative"` — against the linking
+ * file (a leading `/` means the repository root, as GitHub renders it);
+ * `"repo-url"` — an absolute `REPO_BLOB_BASE_URL/…` link, already repository-
+ * rooted. The distinction is not cosmetic: only `"relative"` links are subject
+ * to the shipped-doc-root rule, since a repo URL is precisely the form that
+ * survives being shipped away from the repository.
  */
 function splitDestination(destination) {
   const raw = destination.trim();
   if (raw.length === 0) return null;
   if (raw.startsWith("#")) return null; // same-file fragment → MD051
   if (raw.startsWith("//")) return null; // protocol-relative → external
-  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null; // https:, mailto:, …
-  const hash = raw.indexOf("#");
-  const path = decodeDestination(hash === -1 ? raw : raw.slice(0, hash));
-  const fragment = hash === -1 ? "" : decodeDestination(raw.slice(hash + 1));
+  let origin = "relative";
+  let rest = raw;
+  if (raw === REPO_BLOB_BASE_URL || raw.startsWith(`${REPO_BLOB_BASE_URL}/`)) {
+    origin = "repo-url";
+    rest = raw.slice(REPO_BLOB_BASE_URL.length).replace(/^\/+/, "");
+    if (rest.length === 0 || rest.startsWith("#")) return null; // the tree root
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    return null; // https: elsewhere, mailto:, … — needs the network
+  }
+  const hash = rest.indexOf("#");
+  const path = decodeDestination(hash === -1 ? rest : rest.slice(0, hash));
+  const fragment = hash === -1 ? "" : decodeDestination(rest.slice(hash + 1));
   if (path.length === 0) return null;
-  return { path, fragment };
+  return { path, fragment, origin };
+}
+
+/**
+ * Doc directories that `package.json` ships on their own (`files` entries under
+ * `docs/`), read from the repository under test rather than hardcoded so adding
+ * a second one cannot silently escape the rule below.
+ *
+ * `docs/skills` is the live case: the npm package, the standalone binary
+ * (`src/skills/embedded.ts`) and `suasor skills install` all deliver skill
+ * bodies with no `docs/adr` next to them, so a relative link out of the root is
+ * dead everywhere but a source checkout (ADR-0008 / ADR-0010, Issue #548).
+ * Returns `[]` when there is no readable `package.json` — the rule then does not
+ * apply, which is the honest answer for a tree that ships nothing.
+ */
+function shippedDocRoots(root) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  return files
+    .filter((entry) => typeof entry === "string" && entry.startsWith("docs/"))
+    .map((entry) => entry.replace(/\/+$/, ""));
+}
+
+/** The shipped doc root `path` sits inside, or `null` when it is in none. */
+function enclosingShippedRoot(roots, path) {
+  return roots.find((docRoot) => path === docRoot || path.startsWith(`${docRoot}/`)) ?? null;
 }
 
 /**
@@ -271,17 +345,38 @@ function main(root) {
   };
 
   // 1. Markdown link targets, collecting the fragments of the ones that resolve.
+  const docRoots = shippedDocRoots(root);
   const linksByTargetFile = new Map();
   for (const link of collectDestinations(root, markdown)) {
     const split = splitDestination(link.destination);
     if (split === null) continue;
-    const absolute = split.path.startsWith("/")
-      ? join(root, split.path.slice(1))
+    const rootRelative = split.origin === "repo-url" || split.path.startsWith("/");
+    const absolute = rootRelative
+      ? join(root, split.path.replace(/^\/+/, ""))
       : resolve(root, dirname(link.file), split.path);
     const shown = relative(root, absolute) || ".";
     const rejected = rejectTarget(shown, absolute);
     if (rejected !== null) {
       failures.push({ ...link, link: link.destination, target: shown, reason: rejected });
+      continue;
+    }
+    // The target exists in the repository — but a doc that ships on its own
+    // takes the repository with it only as far as its own root goes.
+    const targetPath = shown.split(sep).join("/");
+    const sourceRoot =
+      split.origin === "relative" ? enclosingShippedRoot(docRoots, link.file) : null;
+    if (sourceRoot !== null && enclosingShippedRoot(docRoots, targetPath) === null) {
+      failures.push({
+        ...link,
+        link: link.destination,
+        target: shown,
+        reason:
+          `${sourceRoot}/ is distributed on its own (package.json "files"), so outside a ` +
+          "source checkout — the npm package, the standalone binary, an installed skill " +
+          `mirror — ${targetPath} is not there and this link resolves nowhere. Write it as ` +
+          `${REPO_BLOB_BASE_URL}/${targetPath}, which resolves in both places and is ` +
+          "still checked here (ADR-0008 / ADR-0010, Issue #548)",
+      });
       continue;
     }
     if (split.fragment.length === 0) continue;
@@ -368,8 +463,9 @@ function main(root) {
   console.error(`\n✖ check-doc-links: ${failures.length} broken link(s)\n`);
   for (const failure of failures) console.error(`${formatFailure(failure)}\n`);
   console.error(
-    "Fix the link, or the rename that orphaned it. Absolute URLs and same-file\n" +
-      "#fragments are out of scope here — see the header of scripts/check-doc-links.mjs.",
+    "Fix the link, or the rename that orphaned it. URLs outside this repository\n" +
+      "and same-file #fragments are out of scope here — see the header of\n" +
+      "scripts/check-doc-links.mjs.",
   );
   return 1;
 }

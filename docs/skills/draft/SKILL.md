@@ -22,11 +22,11 @@ mcp_tools_write: []
 
 # draft
 
-read-only な下書きの単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。**kind** で何を書くかを決める。text を返すだけで **persist も外部投稿もしない**。
+read-only な下書きの単一入口（[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md)）。**kind** で何を書くかを決める。text を返すだけで **persist も外部投稿もしない**。
 
 以前は `announcement-draft` と `handoff-draft` に分かれていたが、どちらも「取り込み済みの材料を集めてホスト LLM が文章を組む」で、違うのは**集める材料と tone** だけだった。
 
-> write（HITL）系の下書きは統合対象外 — 返信下書きは [reply-draft](../reply-draft/SKILL.md)、計画は [plan-draft](../plan-draft/SKILL.md)。read と write を 1 本にすると承認境界が壊れる（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md) / [ADR-0046](../../adr/0046-agent-surface-contraction.md) 決定 1）。
+> write（HITL）系の下書きは統合対象外 — 返信下書きは [reply-draft](../reply-draft/SKILL.md)、計画は [plan-draft](../plan-draft/SKILL.md)。read と write を 1 本にすると承認境界が壊れる（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md) / [ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md) 決定 1）。
 
 ## いつ発火するか
 
@@ -37,7 +37,7 @@ read-only な下書きの単一入口（[ADR-0046](../../adr/0046-agent-surface-
 
 ## 何をするか（MCP tool flow）
 
-すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ### kind=announcement
 
@@ -56,5 +56,5 @@ read-only な下書きの単一入口（[ADR-0046](../../adr/0046-agent-surface-
 ## 制約
 
 - **text-only**。persist しない・propose 経路を持たない・外部 SaaS に投稿しない（ユーザーが手で貼る）
-- 文章の生成はホスト LLM 側。本 skill は材料の集め方のみを定める（[ADR-0006](../../adr/0006-ml-delegation.md)）
+- 文章の生成はホスト LLM 側。本 skill は材料の集め方のみを定める（[ADR-0006](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0006-ml-delegation.md)）
 - 材料が薄いときは「材料が足りない」と言う。埋めるために推測で書かない

@@ -20,7 +20,7 @@ mcp_tools_write: []
 
 # commitment-chase
 
-相手が負う約束（`owed_to_me`）のうち**期限超過**のものを surface し、催促文ドラフトを組み立てる read skill。[commitment-review](../commitment-review/SKILL.md) が「自分が負う約束の受動的な台帳管理」なのに対し、本 skill は「相手への能動的な催促」を補完する対の skill（[ADR-0021](../../adr/0021-commitment-ledger.md) の台帳を read で合成）。**新 MCP tool は不要**で、既存 read tool の合成で実現する（[ADR-0008](../../adr/0008-assistant-skills.md) の skill 設計）。
+相手が負う約束（`owed_to_me`）のうち**期限超過**のものを surface し、催促文ドラフトを組み立てる read skill。[commitment-review](../commitment-review/SKILL.md) が「自分が負う約束の受動的な台帳管理」なのに対し、本 skill は「相手への能動的な催促」を補完する対の skill（[ADR-0021](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0021-commitment-ledger.md) の台帳を read で合成）。**新 MCP tool は不要**で、既存 read tool の合成で実現する（[ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md) の skill 設計）。
 
 ## いつ発火するか
 
@@ -30,11 +30,11 @@ mcp_tools_write: []
 
 ## 何をするか（MCP tool flow）
 
-すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。副作用なし・エージェント自律 OK。**専用 tool は追加しない**（既存合成、[ADR-0008](../../adr/0008-assistant-skills.md)）。
+すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。副作用なし・エージェント自律 OK。**専用 tool は追加しない**（既存合成、[ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md)）。
 
-1. `commitment.list`（`state=open`, `direction=owed_to_me`）で相手が負う未解決の約束を引く。**既定で緊急度順**（期限超過が先頭・超過が長い順 → 期日が近い順 → 期日なし）で返り、各行に read 時派生の `overdue` が付く（[#509](https://github.com/ozzy-labs/suasor/issues/509)）。超過分だけ欲しいときは `overdue: true` で絞る。各 commitment は `title` / `dueDate?` / `person?`（記録どおりの生文字列）/ `personId?` / `personName?`（person identity graph で解決した正規化人物・[ADR-0022](../../adr/0022-person-identity-resolution.md)）/ `updated_at`（[ADR-0021](../../adr/0021-commitment-ledger.md)）
+1. `commitment.list`（`state=open`, `direction=owed_to_me`）で相手が負う未解決の約束を引く。**既定で緊急度順**（期限超過が先頭・超過が長い順 → 期日が近い順 → 期日なし）で返り、各行に read 時派生の `overdue` が付く（[#509](https://github.com/ozzy-labs/suasor/issues/509)）。超過分だけ欲しいときは `overdue: true` で絞る。各 commitment は `title` / `dueDate?` / `person?`（記録どおりの生文字列）/ `personId?` / `personName?`（person identity graph で解決した正規化人物・[ADR-0022](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0022-person-identity-resolution.md)）/ `updated_at`（[ADR-0021](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0021-commitment-ledger.md)）
 2. 期限超過（`dueDate` が現在時刻より過去）の約束をホスト側で抽出する。overdue 判定は read 時のホスト側合成（`dueDate < now`）で行う。`dueDate` を持たない約束は催促対象外（期限がないため）として別枠で軽く触れるに留める
-3. `graph.related`（各 commitment id 起点、`direction=in`）で約束の出所 source を辿り、`source.get` で本文を補って「誰に・何を・いつ約束してもらったか」を再構成する（provenance、[ADR-0018](../../adr/0018-knowledge-graph-traversal.md)）
+3. `graph.related`（各 commitment id 起点、`direction=in`）で約束の出所 source を辿り、`source.get` で本文を補って「誰に・何を・いつ約束してもらったか」を再構成する（provenance、[ADR-0018](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0018-knowledge-graph-traversal.md)）
 4. ホスト LLM が期限超過の約束ごとに催促文ドラフトを **text-only** で組み立てて提示する。並び替えは不要（基線が既に緊急度順）。まとめる単位は **`personId`（あれば）** — 同一人物の Slack / GitHub 別名で記録された約束が別人として 2 通に割れないようにする。`personId` が無い行は生の `person` 文字列でまとめる。緊急度（超過日数）順に並べる
 
 > 特定の相手だけ追うときは `commitment.list` の `person` フィルタを使う。identity graph 越しに一致するので、`slack:U123` / 素の handle / 表示名のどれで引いても同一人物の約束がすべて出る。
@@ -42,6 +42,6 @@ mcp_tools_write: []
 ## 制約
 
 - read-only。persist しない（イベントを書かない）。台帳の状態遷移（resolve / dismiss）は [commitment-review](../commitment-review/SKILL.md) skill へ HITL 橋渡しする
-- **egress なし**。催促文は text-only ドラフトで返すだけで、外部 SaaS へ送信しない。ユーザーが内容を確認して手で送る（[ADR-0003](../../adr/0003-local-first-and-content-minimization.md) / HITL）
-- overdue は現在時刻依存のためホスト側の read 時合成。台帳の `dueDate` は不変 context として扱い、id には含めない（[ADR-0021](../../adr/0021-commitment-ledger.md)）
+- **egress なし**。催促文は text-only ドラフトで返すだけで、外部 SaaS へ送信しない。ユーザーが内容を確認して手で送る（[ADR-0003](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0003-local-first-and-content-minimization.md) / HITL）
+- overdue は現在時刻依存のためホスト側の read 時合成。台帳の `dueDate` は不変 context として扱い、id には含めない（[ADR-0021](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0021-commitment-ledger.md)）
 - 本 skill は手順書のみで実処理を持たない

@@ -22,7 +22,7 @@ mcp_tools_write:
 
 # plan-draft
 
-起点（issue / 設計メモ / source）を「計画」に落とす HITL write skill。「計画する」動詞を担い、文脈を集めて task / decision 候補に**分解**し、承認分のみ保存する（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions`（既存 task の列挙）に対し、本 skill は**新しい計画の生成・分解**側。
+起点（issue / 設計メモ / source）を「計画」に落とす HITL write skill。「計画する」動詞を担い、文脈を集めて task / decision 候補に**分解**し、承認分のみ保存する（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions`（既存 task の列挙）に対し、本 skill は**新しい計画の生成・分解**側。
 
 ## いつ発火するか
 
@@ -31,7 +31,7 @@ mcp_tools_write:
 
 ## 何をするか（MCP tool flow）
 
-read で文脈を集め、計画本文は text-only、task/decision 化は HITL（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read で文脈を集め、計画本文は text-only、task/decision 化は HITL（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. 起点の文脈を集める: `source.get`（対象 issue/メモの本文）/ `search`（`mode=semantic`）・`search`（関連やりとり）/ `graph.related`（関連 decision・先行仕様）。広く調べるなら `find` skill を併用
 2. 分解方針・マイルストーン・順序/依存の**計画ドラフト本文を host LLM が構成して返す**（text-only・persist しない。draft / draft と同じ作法）
@@ -44,5 +44,5 @@ read で文脈を集め、計画本文は text-only、task/decision 化は HITL�
 - HITL。人の承認なしに `propose.apply` を呼ばない。auto-apply しない。計画ドラフト本文は persist しない
 - task 間の順序/依存は当面**計画本文のサマリで提示**し、task 自体は個別に作成する（順序メタを持つ専用 `plan` mode は将来拡張・別 issue）
 - 既存 task の状態確認/列挙は `next-actions`、完了遷移は `task-update` を使う
-- 計画ドラフト本文をファイルで欲しい場合は `draft.export`（HITL write）で `.md` / `.txt` にローカル書き出しできる（送信はしない・[ADR-0025](../../adr/0025-local-draft-export.md)）
+- 計画ドラフト本文をファイルで欲しい場合は `draft.export`（HITL write）で `.md` / `.txt` にローカル書き出しできる（送信はしない・[ADR-0025](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0025-local-draft-export.md)）
 - 本 skill は手順書のみで実処理を持たない

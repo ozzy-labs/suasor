@@ -18,7 +18,7 @@ mcp_tools_write:
 
 # inbox-triage
 
-未処理 inbox を仕分ける HITL write skill。各アイテムを task 化 / decision 記録 / dismiss する action 候補を提案し、承認分のみ適用する（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+未処理 inbox を仕分ける HITL write skill。各アイテムを task 化 / decision 記録 / dismiss する action 候補を提案し、承認分のみ適用する（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ## いつ発火するか
 
@@ -26,7 +26,7 @@ mcp_tools_write:
 
 ## 何をするか（MCP tool flow）
 
-read で集めて、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read で集めて、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. `inbox.list`（`state=open`）で未処理アイテムを集める。各 item は `source_external_id` / `state` / `updated_at`
 2. `propose.generate`（mode=`inbox_triage`）で各アイテムへの action 候補を生成する。候補は次のいずれか:
@@ -46,5 +46,5 @@ read で集めて、write は HITL。**auto-apply 経路は存在しない**（[
 ## 制約
 
 - HITL。人の承認なしに `propose.apply` / `task.create` / `inbox.add` / `inbox.triage` を呼ばない。auto-apply しない。`propose.list` は read（候補確認）、`propose.reject` は却下の記録
-- `inbox.state` の語彙: `open` / `snoozed` / `done` / `dismissed`（[data-model.md](../../design/data-model.md)）。`inbox.triage` は `open` → `done`（task/decision）/ `dismissed`（discard）の遷移のみ
+- `inbox.state` の語彙: `open` / `snoozed` / `done` / `dismissed`（[data-model.md](https://github.com/ozzy-labs/suasor/blob/main/docs/design/data-model.md)）。`inbox.triage` は `open` → `done`（task/decision）/ `dismissed`（discard）の遷移のみ
 - 本 skill は手順書のみで実処理を持たない

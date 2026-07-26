@@ -20,7 +20,7 @@ mcp_tools_write:
 
 # task-update
 
-task の lifecycle 状態を遷移させる HITL write skill。`task.create` が task を開き（`proposed`）`task.list` が読むのに対し、本 skill は `in_progress` / `completed` / `dropped` への前進（および再開）を担う（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `brief` が読む `state` を実際に動かす経路。
+task の lifecycle 状態を遷移させる HITL write skill。`task.create` が task を開き（`proposed`）`task.list` が読むのに対し、本 skill は `in_progress` / `completed` / `dropped` への前進（および再開）を担う（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。`next-actions` / `brief` が読む `state` を実際に動かす経路。
 
 ## いつ発火するか
 
@@ -31,7 +31,7 @@ task の lifecycle 状態を遷移させる HITL write skill。`task.create` が
 
 ## 何をするか（MCP tool flow）
 
-read で特定して、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read で特定して、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. `task.list`（`state` で絞り可、`updatedAfter` / `updatedBefore` で期間絞り）で対象 task を特定する。各 task は `id` / `title` / `state` / `updated_at`
 2. どの task をどの状態にするか**ユーザーに提示して確認を取る**（native framing: ホスト側で人の承認を促す）

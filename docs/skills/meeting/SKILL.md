@@ -24,7 +24,7 @@ mcp_tools_write: []
 
 # meeting
 
-会議まわりの read 系単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。**phase** で会議の前後を切り替える。read-only。pair: 会議直後の action item 抽出（write / HITL）は [meeting-followup](../meeting-followup/SKILL.md)。
+会議まわりの read 系単一入口（[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md)）。**phase** で会議の前後を切り替える。read-only。pair: 会議直後の action item 抽出（write / HITL）は [meeting-followup](../meeting-followup/SKILL.md)。
 
 以前は `meeting-prep`（前）と `action-item-status`（後）に分かれていた。どちらも「あの会議まわりで何がある / どうなった」であり、違いは**時間の向き**だけである。
 
@@ -37,12 +37,12 @@ mcp_tools_write: []
 
 ## 何をするか（MCP tool flow）
 
-すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ### phase=prep
 
-1. `source.list` で対象の calendar event を引く。**`startsAfter` / `startsBefore`（イベント自身の開始時刻）で絞る** — `observedAfter` / `observedBefore` は**更新時刻**の窓なので別の問いに答えてしまう（3 か月前に予約された明日の会議が落ち、昨日タイトルを直した先月の会議が入る。[ADR-0044](../../adr/0044-calendar-proximity-signals.md) 決定 2 / [#490](https://github.com/ozzy-labs/suasor/issues/490)）
-   - 「次の会議」「そろそろ何かある?」のように**対象を指定されていない**ときは `demand.list`（`source="calendar"`）を使う。準備が要る予定（`meeting_prep`: 24 時間以内 かつ 議題 / 添付 / 自分が organizer）と直前の予定（`meeting_soon`: 120 分以内）だけが、開始が近い順に返る。辞退済み・任意参加・終日予定は除外済み（[ADR-0044](../../adr/0044-calendar-proximity-signals.md) 決定 4）
+1. `source.list` で対象の calendar event を引く。**`startsAfter` / `startsBefore`（イベント自身の開始時刻）で絞る** — `observedAfter` / `observedBefore` は**更新時刻**の窓なので別の問いに答えてしまう（3 か月前に予約された明日の会議が落ち、昨日タイトルを直した先月の会議が入る。[ADR-0044](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0044-calendar-proximity-signals.md) 決定 2 / [#490](https://github.com/ozzy-labs/suasor/issues/490)）
+   - 「次の会議」「そろそろ何かある?」のように**対象を指定されていない**ときは `demand.list`（`source="calendar"`）を使う。準備が要る予定（`meeting_prep`: 24 時間以内 かつ 議題 / 添付 / 自分が organizer）と直前の予定（`meeting_soon`: 120 分以内）だけが、開始が近い順に返る。辞退済み・任意参加・終日予定は除外済み（[ADR-0044](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0044-calendar-proximity-signals.md) 決定 4）
 2. `source.get`（`externalId`）で event 本文・議題を取る
 3. `search` で過去の関連やりとりを引く
 4. `graph.related` で関連 decisions / sources を辿る

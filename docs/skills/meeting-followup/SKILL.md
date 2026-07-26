@@ -21,7 +21,7 @@ mcp_tools_write:
 
 # meeting-followup
 
-会議後に action items を抽出する HITL write skill（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。pair: 会議前は [meeting](../meeting/SKILL.md)。
+会議後に action items を抽出する HITL write skill（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。pair: 会議前は [meeting](../meeting/SKILL.md)。
 
 ## いつ発火するか
 
@@ -30,12 +30,12 @@ mcp_tools_write:
 
 ## 何をするか（MCP tool flow）
 
-read で集め、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read で集め、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. `source.list`（calendar の `sourceType`、`observedBefore=now` で直近）で対象会議を集める
 2. `source.get`（`externalId`）で議事録 / 関連やりとりを読む
-3. `search`（`mode=semantic`） で会議トピックの関連 context を引く（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](../../adr/0005-fts-first-retrieval-embedding-sidecar.md)）
-4. `propose.generate`（mode=`meeting_followup`）で task / decision 候補を生成する（`TaskProposed` / `DecisionRecorded` 候補に対応、[data-model.md](../../design/data-model.md)）
+3. `search`（`mode=semantic`） で会議トピックの関連 context を引く（embedding 無効時は `signal: embedding_disabled` を見て `search`（FTS）へフォールバック、[ADR-0005](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0005-fts-first-retrieval-embedding-sidecar.md)）
+4. `propose.generate`（mode=`meeting_followup`）で task / decision 候補を生成する（`TaskProposed` / `DecisionRecorded` 候補に対応、[data-model.md](https://github.com/ozzy-labs/suasor/blob/main/docs/design/data-model.md)）
 5. `propose.list`（`state=pending`）で生成済み候補を一覧し、**ユーザーに提示して確認を取る**（native framing: ホスト側で人の承認を促す。[Issue #89](https://github.com/ozzy-labs/suasor/issues/89)）
 6. ユーザーが承認した候補のみ `propose.apply` で保存する（idempotent）。**不要な候補は `propose.reject`（任意で理由）で却下する**（却下は記録され、再 apply されない）
 

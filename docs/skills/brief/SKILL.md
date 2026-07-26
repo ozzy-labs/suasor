@@ -26,7 +26,7 @@ mcp_tools_write: []
 
 # brief
 
-状況サマリの単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。**期間 × 読み手 × 観点**の 3 つで振る舞いを決める。read-only。
+状況サマリの単一入口（[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md)）。**期間 × 読み手 × 観点**の 3 つで振る舞いを決める。read-only。
 
 以前は `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` の 5 本に分かれていたが、ユーザーから見ればすべて「まとめて」であり、違うのはパラメータだけだった（「今週どうなってる」の一言で 5 本が競合していた）。
 
@@ -44,7 +44,7 @@ mcp_tools_write: []
 
 ## 何をするか（MCP tool flow）
 
-すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。副作用なし・エージェント自律 OK。
+すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。副作用なし・エージェント自律 OK。
 
 ### 1. パラメータを決める
 
@@ -56,7 +56,7 @@ mcp_tools_write: []
 
 **focus=summary**（既定）
 
-1. `brief`（`since` / `until`）で期間バンドルを取る（要約文は生成しない＝[ADR-0006](../../adr/0006-ml-delegation.md) の ML 委譲。組み立てはホスト LLM）。**open commitment もバンドルに入る**（非時間軸・緊急度順・[#513](https://github.com/ozzy-labs/suasor/issues/513)）ので、`commitment.list` を別途叩く必要はない
+1. `brief`（`since` / `until`）で期間バンドルを取る（要約文は生成しない＝[ADR-0006](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0006-ml-delegation.md) の ML 委譲。組み立てはホスト LLM）。**open commitment もバンドルに入る**（非時間軸・緊急度順・[#513](https://github.com/ozzy-labs/suasor/issues/513)）ので、`commitment.list` を別途叩く必要はない
 2. 補強が要れば `priority.list`（いま何が優先か）/ `task.list`（`updatedAfter`）/ `decision.list`（`recordedAfter`）/ `inbox.list`（`state=open`）/ `demand.list`（`observedAfter`）/ `search`（トピック関連 context）
 
 **focus=review**（棚卸し）
@@ -77,7 +77,7 @@ mcp_tools_write: []
 
 ### 3. 打切りを必ず確認する
 
-[ADR-0007](../../adr/0007-connector-contract.md)「no silent wrong answer」。`brief` は各 section を `limit`（既定 50）で打ち切ると `truncated.<section>` を `true` で返す。**多忙な期間ほどバンドルが黙って過小申告する**合図なので、`true` の section があれば要約を鵜呑みにせず、窓を狭めて取り直すか、対応する list tool でページングする。
+[ADR-0007](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0007-connector-contract.md)「no silent wrong answer」。`brief` は各 section を `limit`（既定 50）で打ち切ると `truncated.<section>` を `true` で返す。**多忙な期間ほどバンドルが黙って過小申告する**合図なので、`true` の section があれば要約を鵜呑みにせず、窓を狭めて取り直すか、対応する list tool でページングする。
 
 ### 4. 鮮度の警告を伝える
 
@@ -91,7 +91,7 @@ mcp_tools_write: []
 
 - read-only。persist しない（イベントを書かない）
 - 要約の生成はホスト LLM 側。本 skill は手順書のみで実処理を持たない
-- 順位付けが要る場面では `priority.list` の基線を消費する（散文で順位を作り直さない）。根拠は各行の `explanation` を示す（`score` の数値は出さない・[ADR-0045](../../adr/0045-priority-ranking-model.md) 決定 4）
-- demand の表示は `channelName` / `userName`（ローカル join した人間可読名・[ADR-0037](../../adr/0037-slack-name-enrichment.md)）を優先し、`null` のときだけ生 id に fallback する
+- 順位付けが要る場面では `priority.list` の基線を消費する（散文で順位を作り直さない）。根拠は各行の `explanation` を示す（`score` の数値は出さない・[ADR-0045](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0045-priority-ranking-model.md) 決定 4）
+- demand の表示は `channelName` / `userName`（ローカル join した人間可読名・[ADR-0037](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0037-slack-name-enrichment.md)）を優先し、`null` のときだけ生 id に fallback する
 - 時間窓は各 projection の自然な timestamp（task/inbox=`updated_at`、decision=`recorded_at`、source=`observed_at`）。下限 inclusive / 上限 exclusive
-- `brief` の `demand` に **calendar は入らない**（[ADR-0044](../../adr/0044-calendar-proximity-signals.md)）。近接は「窓」ではなく「いま」に対する量であり、窓の対象列は予定の**更新時刻**なので、含めると「その期間に編集された予定」を答えてしまう。これから始まる予定が要るときは `priority.list`（`starting_soon` / `prep`）か `demand.list`（`source="calendar"`）を別に引く
+- `brief` の `demand` に **calendar は入らない**（[ADR-0044](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0044-calendar-proximity-signals.md)）。近接は「窓」ではなく「いま」に対する量であり、窓の対象列は予定の**更新時刻**なので、含めると「その期間に編集された予定」を答えてしまう。これから始まる予定が要るときは `priority.list`（`starting_soon` / `prep`）か `demand.list`（`source="calendar"`）を別に引く

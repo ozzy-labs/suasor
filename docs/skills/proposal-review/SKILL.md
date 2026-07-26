@@ -20,7 +20,7 @@ mcp_tools_write:
 
 # proposal-review
 
-各 skill（reply-draft / source-extract / meeting-followup / inbox-triage / commitment-review）が貯めた `pending` 候補をまとめてレビューし、承認/却下する HITL write skill。`propose.*` ライフサイクル（[Issue #89](https://github.com/ozzy-labs/suasor/issues/89)）の「出口」= 承認キューに当たる（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+各 skill（reply-draft / source-extract / meeting-followup / inbox-triage / commitment-review）が貯めた `pending` 候補をまとめてレビューし、承認/却下する HITL write skill。`propose.*` ライフサイクル（[Issue #89](https://github.com/ozzy-labs/suasor/issues/89)）の「出口」= 承認キューに当たる（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ## いつ発火するか
 
@@ -29,7 +29,7 @@ mcp_tools_write:
 
 ## 何をするか（MCP tool flow）
 
-read で集めて、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read で集めて、write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 1. `propose.list`（`state=pending`）で承認待ち候補を一覧する。`kind`（`task` / `decision` / `reply_draft` / `triage` / `commitment`）や `updated_at` 時間窓で絞り込める。各行は `candidateId` / `mode` / `kind` / `summary` / `createdAt`。既に却下した候補とその理由を振り返るときは `state=rejected` で一覧する（各行の `reason` に却下理由が入る、[#197](https://github.com/ozzy-labs/suasor/issues/197)）
 2. 候補を kind / mode 別に整理し、**ユーザーに提示して 1 件ずつ（または一括で）承認 / 却下の判断を取る**（native framing: ホスト側で人の承認を促す）

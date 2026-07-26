@@ -22,9 +22,9 @@ mcp_tools_write: []
 
 # source-review
 
-取り込み済み素材（document / PR / 版の差分）をレビューする単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。
+取り込み済み素材（document / PR / 版の差分）をレビューする単一入口（[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md)）。
 
-> **名前について**: `review` ではなく `source-review` なのは、`@ozzylabs/skills` の dev skill `review`（コードレビュー）と**名前空間を分けるため**（[ADR-0008](../../adr/0008-assistant-skills.md)・[#520](https://github.com/ozzy-labs/suasor/issues/520)）。同じ host dir に install されるので、名前が衝突すると一方が他方を上書きして壊す。**target** で振る舞いを決める。read-only。
+> **名前について**: `review` ではなく `source-review` なのは、`@ozzylabs/skills` の dev skill `review`（コードレビュー）と**名前空間を分けるため**（[ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md)・[#520](https://github.com/ozzy-labs/suasor/issues/520)）。同じ host dir に install されるので、名前が衝突すると一方が他方を上書きして壊す。**target** で振る舞いを決める。read-only。
 
 以前は `doc-review` / `doc-diff` / `pr-review` の 3 本に分かれていたが、ユーザーの「レビューして」からはどれが発火すべきか判別できなかった。違いは**何を見るか**だけである。
 
@@ -40,7 +40,7 @@ mcp_tools_write: []
 
 ## 何をするか（MCP tool flow）
 
-すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。**外部への投稿は行わない**（PR コメント投稿は egress なので本 skill の範囲外。ユーザーが手で貼る）。
+すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。**外部への投稿は行わない**（PR コメント投稿は egress なので本 skill の範囲外。ユーザーが手で貼る）。
 
 ### target=document
 
@@ -57,7 +57,7 @@ mcp_tools_write: []
 
 ### target=diff
 
-1. `source.history`（`externalId`）で event log から本文の版を引く（[ADR-0002](../../adr/0002-event-sourced-architecture.md) — 全版が残る）
+1. `source.history`（`externalId`）で event log から本文の版を引く（[ADR-0002](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0002-event-sourced-architecture.md) — 全版が残る）
 2. 直近 2 版、または期間指定の前後版を突き合わせる
 3. 変更点を要約する（何が追加 / 削除 / 変更されたか）
 
