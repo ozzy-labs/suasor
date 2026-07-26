@@ -229,7 +229,7 @@ async function runOneConnector(
  * slice that cannot address its API at all (ADR-0049 / Issue #478). Two lines,
  * not one — they differ in severity and remedy.
  */
-async function emitNoopWarnings(options: BulkSyncOptions): Promise<void> {
+async function emitPreSyncAdvisories(options: BulkSyncOptions): Promise<void> {
   const onWarn = options.syncOptions?.onWarn;
   if (!onWarn) return;
   // Lazy-imported to keep this module's top level import-clean (the schemas pull
@@ -322,7 +322,7 @@ export async function runBulkSync(store: Store, options: BulkSyncOptions): Promi
   // Pre-sync no-op advisory (Issue #187): warn for enabled-but-empty slices before
   // any connector runs, in `names` order, so the advisory is deterministic and not
   // interleaved with concurrent progress output.
-  await emitNoopWarnings(options);
+  await emitPreSyncAdvisories(options);
 
   const continueOnError = options.continueOnError ?? true;
   return continueOnError ? runBoundedPool(store, options) : runSerialFailFast(store, options);

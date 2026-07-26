@@ -39,8 +39,11 @@ export function googleProbeSpecs(
   if (resources.has("gmail")) {
     specs.push({
       resource: "gmail",
-      what: "Gmail profile",
-      url: "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      // The message list, not `users/me/profile`: the profile call is satisfied
+      // by narrower scopes, so it would report REACHABLE for a credential that
+      // cannot list a single message.
+      what: "Gmail message list",
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1",
     });
   }
   if (resources.has("calendar")) {

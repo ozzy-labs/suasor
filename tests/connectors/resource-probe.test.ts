@@ -159,4 +159,20 @@ describe("msGraphProbeSpecs — targets the configured user", () => {
     const [spec] = msGraphProbeSpecs(new Set(["mail"]), "me");
     expect(spec?.url).toContain("/users/me/");
   });
+
+  test("teams probes getAllMessages, the endpoint sync uses, not the cheaper /chats", () => {
+    // /chats needs only Chat.ReadBasic.All; getAllMessages needs Chat.Read.All
+    // plus protected-API consent. Probing the cheap one would report REACHABLE
+    // for a credential that cannot read a single message.
+    const [spec] = msGraphProbeSpecs(new Set(["teams"]), "u@x.test");
+    expect(spec?.url).toContain("/chats/getAllMessages");
+  });
+});
+
+describe("probe targets match what sync actually reads", () => {
+  test("gmail probes the message list, not the narrower-scoped profile call", () => {
+    const [spec] = googleProbeSpecs(new Set(["gmail"]), "primary");
+    expect(spec?.url).toContain("/messages");
+    expect(spec?.url).not.toContain("/profile");
+  });
 });

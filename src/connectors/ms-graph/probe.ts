@@ -58,8 +58,12 @@ export function msGraphProbeSpecs(
   if (resources.has("teams")) {
     specs.push({
       resource: "teams",
-      what: `Teams chats of "${user}"`,
-      url: `${GRAPH_BASE}/users/${u}/chats?$top=1&$select=id`,
+      // `getAllMessages`, not the plain `/chats` collection: they sit behind
+      // different permissions (Chat.Read.All + protected-API consent vs
+      // Chat.ReadBasic.All), so probing the cheaper one would report REACHABLE
+      // for a credential that cannot actually read a single message.
+      what: `Teams chat messages of "${user}"`,
+      url: `${GRAPH_BASE}/users/${u}/chats/getAllMessages?$top=1`,
     });
   }
   return specs;
