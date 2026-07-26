@@ -60,15 +60,30 @@ export interface DiscoveryResult {
  *
  * Present only when the scope is a **set of ids**, because that is the shape a
  * "visible but not configured" difference is defined over. A connector whose
- * scope is a single value (google's `calendarId`) states {@link driftNote}
- * instead, so `--new` refuses with a reason rather than emitting a diff that
- * would flag every non-selected item as drift.
+ * scope is a single value states {@link driftNote} instead, so `--new` refuses
+ * with a reason rather than emitting a diff that would flag every non-selected
+ * item as drift. (No connector is in that position today — google left it when
+ * `calendarId` became `calendarIds`, ADR-0051 — but the opt-out stays declarable
+ * so the next single-valued scope has to say so rather than silently lack the
+ * verb.)
  */
 export interface DiscoveryScope {
   /** Config key inside `[connectors.<name>]` holding the configured ids. */
   readonly key: string;
   /** Short note pasted above the `--new` config fragment (the id format). */
   readonly idNote: string;
+  /**
+   * Ids the connector ingests when the key is **absent** — i.e. the schema
+   * default (google's `calendarIds` defaults to `["primary"]`). Omitted when the
+   * schema default is the empty list, which is every other connector.
+   *
+   * The diff is about what is actually ingested, not about what is literally
+   * written: without this, `google calendars --new` would report `primary` as
+   * "visible but not configured" on a config that has been ingesting it all
+   * along. An **explicit** `[]` still means empty — that is a deliberate "none",
+   * not an omission.
+   */
+  readonly defaultIds?: readonly string[];
   /**
    * Canonicalize an id before comparing config against the API (both sides).
    * Defaults to trim + lowercase. Notion overrides it because the same database
@@ -149,9 +164,14 @@ function defaultNormalizeId(value: string): string {
  * Read a connector slice's configured id list for a {@link DiscoveryScope}.
  * Non-array / non-string entries are ignored (the slice is already schema-checked
  * upstream; this stays lenient rather than throwing inside a diagnostic).
+ *
+ * An **absent** key resolves to {@link DiscoveryScope.defaultIds} — what the
+ * connector actually ingests in that case — so the diff never reports an id as
+ * "not configured" while sync is quietly reading it.
  */
 export function configuredIds(config: Record<string, unknown>, scope: DiscoveryScope): string[] {
   const raw = config[scope.key];
+  if (raw === undefined) return [...(scope.defaultIds ?? [])];
   if (!Array.isArray(raw)) return [];
   return raw.filter((v): v is string => typeof v === "string");
 }
@@ -219,14 +239,17 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
     verb: "calendars",
     summary: "List calendars the token can see and print a paste-ready config block.",
     itemNoun: "calendar",
-    // No `scope`: `[connectors.google].calendarId` selects **one** calendar, so
-    // "visible but not configured" would flag every other calendar the account
-    // can see as drift — noise, not signal. The half that does matter for google
-    // (the configured id no longer resolving) is answered by the reachability
-    // probe in `google auth test` (ADR-0049), which reads that exact id.
-    driftNote:
-      "google ingests a single calendarId, so there is no configured *set* to diff — " +
-      "run `suasor google auth test` to verify the configured calendarId still resolves",
+    // ADR-0051 made the ingest scope a *set* (`calendarIds`), which is what a
+    // drift diff is defined over — so google joins the generic `--new` instead
+    // of declaring why it cannot (ADR-0049 決定 3 opted it out precisely because
+    // a single `calendarId` had no configured set to diff).
+    scope: {
+      key: "calendarIds",
+      idNote: "calendars are calendar ids — the # comment is just a label",
+      // Unlike every other scope key, an absent `calendarIds` is not "nothing":
+      // it is the schema default, and sync reads it.
+      defaultIds: ["primary"],
+    },
     async discover({ secret, config, filter, onProgress }) {
       const refreshToken = await secret("refreshToken");
       if (!refreshToken) throw new Error("no google refreshToken configured");

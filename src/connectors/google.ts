@@ -14,12 +14,16 @@
  *   (Docs/Sheets/Slides) have no md5, so the monotonic `version` is used instead.
  * - **identity** — `google:<resource>:<id>` (cross-source-unique, resource-
  *   prefixed, ADR-0007), or `google:<account>:<resource>:<id>` for a named
- *   account (ADR-0050). `source_type` is one of `google_drive`, `gmail_message`,
+ *   account (ADR-0050). Calendar events additionally carry the calendar id
+ *   (`google:calendar:<calendarId>:<eventId>`) **when more than one calendar is
+ *   configured** (ADR-0051): one meeting has the same event id in every calendar
+ *   it appears on, so two configured calendars would otherwise fight over a
+ *   single source. `source_type` is one of `google_drive`, `gmail_message`,
  *   `google_calendar`.
  * - **multi-account** — `[connectors.google.accounts.<account>]` ingests a
  *   personal and a work Google account in one pass (ADR-0050), each with its own
  *   credential (`connector:google:<account>:refreshToken`), its own
- *   `calendarId` / `resources`, and per-account error isolation. A config with no
+ *   `calendarIds` / `resources`, and per-account error isolation. A config with no
  *   `accounts` table is exactly one unprefixed `default` account — the
  *   pre-ADR-0050 behaviour, byte for byte.
  * - **extraction** — Drive Office/PDF files carry an `extractable` handle so the
@@ -39,6 +43,7 @@
  */
 import { extname } from "node:path";
 import { z } from "zod";
+import { ConfigError } from "../config/error.ts";
 import { EXTRACTABLE_EXTENSIONS } from "../extraction/index.ts";
 import type {
   Connector,
@@ -72,8 +77,19 @@ export type GoogleResource = z.infer<typeof GoogleResource>;
 const GoogleAccountSettings = z.object({
   /** OAuth client id of the desktop / web app. */
   clientId: z.string().min(1).default(""),
-  /** Calendar id to read events from (default the primary calendar). */
-  calendarId: z.string().min(1).default("primary"),
+  /**
+   * Calendar ids to read events from (ADR-0051). A list, not a single id: one
+   * Google account routinely owns several calendars that matter (your own plus a
+   * team / project calendar you were added to), and the previous single
+   * `calendarId` made every one of them but the chosen one unreachable — with no
+   * way to say so, because "the calendars I ingest" was not a set.
+   *
+   * Defaults to the account's primary calendar, i.e. the previous default.
+   * Explicitly `[]` means "no calendar events", which the manifest's
+   * {@link ConnectorManifest.noopWarning} reports when `calendar` is in
+   * `resources` (a silent 0-event ingest is the ADR-0007 failure).
+   */
+  calendarIds: z.array(z.string().min(1)).default(["primary"]),
   /** Resource families to ingest. */
   resources: z.array(GoogleResource).default(["drive", "gmail", "calendar"]),
   /**
@@ -102,6 +118,69 @@ export const GoogleConnectorConfig = GoogleAccountSettings.extend({
 export type GoogleConnectorConfig = z.infer<typeof GoogleConnectorConfig>;
 
 export const GOOGLE_CONNECTOR_NAME = "google";
+
+/** The removed single-calendar key, replaced by `calendarIds` (ADR-0051). */
+const LEGACY_CALENDAR_KEY = "calendarId";
+
+/** Whether a value is a plain object (a TOML table). */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Config paths still carrying the removed `calendarId` key: the flat slice and
+ * every `accounts.<account>` table (both spellings exist in the wild since
+ * ADR-0050).
+ */
+function legacyCalendarPaths(config: ConnectorConfig): { path: string; value: unknown }[] {
+  const raw = isRecord(config) ? config : {};
+  const found: { path: string; value: unknown }[] = [];
+  if (raw[LEGACY_CALENDAR_KEY] !== undefined) {
+    found.push({ path: `[connectors.google]`, value: raw[LEGACY_CALENDAR_KEY] });
+  }
+  const accounts = raw.accounts;
+  if (isRecord(accounts)) {
+    for (const name of Object.keys(accounts).sort()) {
+      const table = accounts[name];
+      if (isRecord(table) && table[LEGACY_CALENDAR_KEY] !== undefined) {
+        found.push({
+          path: `[connectors.google.accounts.${name}]`,
+          value: table[LEGACY_CALENDAR_KEY],
+        });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Fail fast when the config slice still uses the removed singular `calendarId`
+ * (ADR-0051), naming the exact `calendarIds` line to write in its place.
+ *
+ * Deliberately **not** an implicit `calendarId` → `calendarIds` promotion. The
+ * two keys would then coexist with an unstated precedence (which wins if both are
+ * set? does a flat `calendarId` still inherit into an account that sets
+ * `calendarIds`?), and every answer to that makes an existing config mean
+ * something the operator never wrote — the one outcome this migration must not
+ * have. A one-line mechanical edit, surfaced at load, is cheaper than a silent
+ * reinterpretation (same call as ADR-0042 決定 9 for Slack's removed shape).
+ */
+export function rejectLegacyGoogleConfig(config: ConnectorConfig): void {
+  const found = legacyCalendarPaths(config);
+  if (found.length === 0) return;
+  throw new ConfigError("legacy google calendarId config (replaced by ADR-0051)", [
+    `connectors.google: '${LEGACY_CALENDAR_KEY}' was replaced by the plural 'calendarIds' — ` +
+      found
+        .map(({ path, value }) => {
+          const id = typeof value === "string" && value.length > 0 ? value : "primary";
+          return `in ${path} write calendarIds = ["${id}"]`;
+        })
+        .join("; ") +
+      `. Listing more than one id ingests every calendar in the list; ` +
+      `run \`suasor google calendars\` to enumerate the visible ones. ` +
+      `See docs/adr/0051-ingest-scope-defaults.md.`,
+  ]);
+}
 
 /**
  * The operator's own addresses from a connector slice, lowercased and
@@ -359,6 +438,7 @@ function toRecord(
   item: GoogleItem,
   client: GoogleClientLike,
   account: AccountSlice,
+  calendarId: string | null,
 ): SourceRecord {
   const body =
     item.title && item.detail ? `${item.title}\n\n${item.detail}` : item.title || item.detail;
@@ -370,7 +450,12 @@ function toRecord(
     // per mailbox and one meeting carries the same Calendar event id in every
     // attendee's copy, so two accounts would otherwise write one flip-flopping
     // source. `default` stays unprefixed so an existing install's lineage holds.
-    externalId: `google:${accountIdPrefix(account)}${resource}:${item.id}`,
+    // The same argument applies *within* one account once several calendars are
+    // configured (ADR-0051), and `calendarId` is non-null exactly then — a single
+    // configured calendar keeps the pre-ADR-0051 id.
+    externalId:
+      `google:${accountIdPrefix(account)}${resource}:` +
+      `${calendarId === null ? "" : `${calendarId}:`}${item.id}`,
     sourceType: SOURCE_TYPE[resource],
     body,
     observedAt: item.observedAt,
@@ -380,6 +465,9 @@ function toRecord(
       // Only for an explicitly declared account: a single-account install keeps
       // exactly the meta it already has (no rewrite of existing rows).
       ...(account.declared ? { account: account.name } : {}),
+      // Likewise only in multi-calendar mode, where the id is namespaced anyway
+      // so every such record is new and carries this from creation.
+      ...(calendarId === null ? {} : { calendarId }),
       ...(item.calendar !== undefined ? item.calendar : {}),
       ...(item.mail !== undefined ? item.mail : {}),
     },
@@ -396,7 +484,13 @@ function toRecord(
  * lazy-loaded.
  */
 export interface GoogleClientLike {
-  listPage(resource: GoogleResource, pageToken?: string): Promise<GooglePage>;
+  /**
+   * List one page of a resource family. `calendarId` names which calendar to
+   * read and is supplied **only** for `resource === "calendar"` (ADR-0051): the
+   * connector walks each configured calendar separately, so the id is a
+   * per-call argument rather than client state.
+   */
+  listPage(resource: GoogleResource, pageToken?: string, calendarId?: string): Promise<GooglePage>;
   /** Download one binary Drive file's raw bytes (read-only, ADR-0034 §d). */
   downloadFile(fileId: string): Promise<Uint8Array>;
   /** Export one Google-native Drive file to `mimeType` (Office) bytes (read-only). */
@@ -407,7 +501,6 @@ export interface GoogleClientLike {
 export type GoogleClientFactory = (auth: {
   clientId: string;
   refreshToken: string;
-  calendarId: string;
 }) => Promise<GoogleClientLike> | GoogleClientLike;
 
 /**
@@ -415,11 +508,7 @@ export type GoogleClientFactory = (auth: {
  * refresh token and normalizing each resource's listing into `GoogleItem`s. Kept
  * out of the top level so registration stays import-clean (ADR-0007).
  */
-const defaultGoogleClientFactory: GoogleClientFactory = async ({
-  clientId,
-  refreshToken,
-  calendarId,
-}) => {
+const defaultGoogleClientFactory: GoogleClientFactory = async ({ clientId, refreshToken }) => {
   const { google } = await import("googleapis");
   const auth = new google.auth.OAuth2({ clientId });
   auth.setCredentials({ refresh_token: refreshToken });
@@ -428,7 +517,7 @@ const defaultGoogleClientFactory: GoogleClientFactory = async ({
   const calendar = google.calendar({ version: "v3", auth });
 
   return {
-    async listPage(resource, pageToken) {
+    async listPage(resource, pageToken, calendarId) {
       if (resource === "drive") {
         const res = await drive.files.list({
           pageSize: 50,
@@ -490,6 +579,13 @@ const defaultGoogleClientFactory: GoogleClientFactory = async ({
       // Without timeMin/timeMax `singleEvents` expands the *entire* history of
       // every recurring series; the window bounds that to what a secretary can
       // act on (past for follow-up, future for prep).
+      //
+      // No `?? "primary"` fallback: the connector always names the calendar it
+      // is walking (ADR-0051), and quietly reading a different calendar than the
+      // one configured is exactly the silent wrong answer ADR-0007 forbids.
+      if (calendarId === undefined) {
+        throw new Error("google connector: listPage('calendar') requires a calendarId");
+      }
       const now = Date.now();
       const res = await calendar.events.list({
         calendarId,
@@ -560,6 +656,62 @@ export interface GoogleConnectorOptions {
 /** One resolved Google account: its raw slice plus its parsed settings. */
 interface GoogleAccount extends AccountSlice {
   readonly settings: GoogleAccountSettings;
+}
+
+/**
+ * One isolated unit of work inside an account: a resource family, and — for
+ * `calendar` — which of the configured calendars this unit walks (ADR-0051).
+ *
+ * Expanding calendars into units rather than looping inside the `calendar` unit
+ * is what keeps a single mistyped calendar id from taking every other calendar
+ * down with it: the existing per-resource isolation (`per-resource.ts`) already
+ * gives "one failed unit is warned and skipped, all-failed throws", and this
+ * reuses it instead of growing a third isolation layer.
+ */
+export interface GoogleUnit {
+  readonly resource: GoogleResource;
+  /** Calendar to read (`calendar` units only; `null` for drive / gmail). */
+  readonly fetchCalendarId: string | null;
+  /**
+   * Calendar id to namespace external ids and `meta` with, or `null` to keep the
+   * pre-ADR-0051 unnamespaced form. Non-null **exactly** in multi-calendar mode
+   * (see {@link toRecord}) — which is what makes a single-calendar install's
+   * ingested lineage survive this change untouched.
+   */
+  readonly namespace: string | null;
+  /** Isolation label: `calendar[<id>]` only in multi-calendar mode. */
+  readonly label: string;
+}
+
+/**
+ * Expand an account's `resources` into isolated units, splitting `calendar` into
+ * one unit per configured calendar id.
+ *
+ * The single-calendar case is deliberately indistinguishable from the
+ * pre-ADR-0051 shape — no namespace, label `calendar` — so existing installs keep
+ * their external ids, their `meta` and their warning text unchanged. Duplicate
+ * ids are collapsed: listing a calendar twice is a config typo, not a request to
+ * ingest it twice.
+ */
+export function googleUnits(settings: GoogleAccountSettings): GoogleUnit[] {
+  const units: GoogleUnit[] = [];
+  for (const resource of settings.resources) {
+    if (resource !== "calendar") {
+      units.push({ resource, fetchCalendarId: null, namespace: null, label: resource });
+      continue;
+    }
+    const ids = [...new Set(settings.calendarIds)];
+    const multi = ids.length > 1;
+    for (const id of ids) {
+      units.push({
+        resource,
+        fetchCalendarId: id,
+        namespace: multi ? id : null,
+        label: multi ? `calendar[${id}]` : "calendar",
+      });
+    }
+  }
+  return units;
 }
 
 /**
@@ -645,31 +797,36 @@ class GoogleConnector implements Connector {
     const client = await this.clientFactory({
       clientId: account.settings.clientId,
       refreshToken,
-      calendarId: account.settings.calendarId,
     });
 
     // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
     // resource family failing (e.g. Drive 403) records a warn and is skipped
     // while the rest stream; only an all-resources failure throws — which the
-    // account layer above then isolates to this account (ADR-0050).
-    const fetchResource = (resource: GoogleResource): AsyncIterable<SourceRecord> =>
+    // account layer above then isolates to this account (ADR-0050). Calendars are
+    // units of the same layer (ADR-0051), so one unreadable calendar does not
+    // take the readable ones down with it.
+    const fetchUnit = (unit: GoogleUnit): AsyncIterable<SourceRecord> =>
       (async function* () {
         let pageToken: string | undefined;
         do {
-          const page = await client.listPage(resource, pageToken);
+          const page = await client.listPage(
+            unit.resource,
+            pageToken,
+            unit.fetchCalendarId ?? undefined,
+          );
           for (const item of page.items) {
-            yield toRecord(resource, item, client, account);
+            yield toRecord(unit.resource, item, client, account, unit.namespace);
           }
           pageToken = page.nextPageToken;
         } while (pageToken);
       })();
 
     yield* syncResourcesIsolated(
-      account.settings.resources,
+      googleUnits(account.settings),
       ctx,
-      (resource) => resource,
+      (unit) => unit.label,
       "resource",
-      fetchResource,
+      fetchUnit,
       (result) => {
         if (result.partialFailure) this.resourcePartial = true;
         for (const line of result.summaryLines ?? []) {
@@ -712,6 +869,10 @@ export function createGoogleConnector(
   config: ConnectorConfig,
   options: GoogleConnectorOptions = {},
 ): Connector {
+  // The removed singular `calendarId` gets the mechanical migration message
+  // rather than a bare strict-mode "Unrecognized key" (ADR-0051; the same shape
+  // ADR-0042 決定 9 gave Slack's removed multi-workspace keys).
+  rejectLegacyGoogleConfig(config ?? {});
   // Validate the whole slice first (account names, env-override collisions,
   // per-account typos) so those errors surface here and not as a confusing
   // failure inside one account's settings. The result is deliberately
@@ -738,6 +899,7 @@ export const manifest: ConnectorManifest = {
     body: [
       "enabled = true",
       '# clientId = "<oauth-client-id>"  # required for auth',
+      '# calendarIds = ["primary"]       # every calendar to ingest (`suasor google calendars`)',
       "# A second Google account (personal + work) goes in its own table:",
       "#   [connectors.google.accounts.work]   # see docs/guide/connectors.md (ADR-0050)",
     ],
@@ -748,6 +910,16 @@ export const manifest: ConnectorManifest = {
     if (cfg.resources.length === 0) {
       return "resources unset — nothing to ingest (set resources in config)";
     }
+    // A per-family no-op: the other families still ingest, so this is not the
+    // whole-connector "nothing to ingest" case — but an emptied `calendarIds`
+    // with `calendar` still in `resources` ingests zero events with no error at
+    // all, which is the silent-0 failure this advisory exists for (ADR-0051).
+    if (cfg.resources.includes("calendar") && cfg.calendarIds.length === 0) {
+      return (
+        "resources includes 'calendar' but calendarIds is empty — no calendar events " +
+        'will be ingested (list the calendar ids, e.g. calendarIds = ["primary"])'
+      );
+    }
     return null;
   },
   genericAuth: true,
@@ -755,6 +927,7 @@ export const manifest: ConnectorManifest = {
   surfacesChannels: false,
   surfacesTeams: false,
   // Personal + work Google accounts in one install (ADR-0050): the ingest scope
-  // is account-relative (`calendarId = "primary"`), so the account has to be named.
+  // is account-relative (`calendarIds = ["primary"]`), so the account has to be
+  // named.
   multiAccount: true,
 };

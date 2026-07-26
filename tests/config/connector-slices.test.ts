@@ -53,6 +53,30 @@ describe("loadConfig — connector slice validation (valid slices pass)", () => 
     ).rejects.toThrow(/remove 'workspaces'/);
   });
 
+  test("google: the plural calendarIds shape passes (ADR-0051)", async () => {
+    const cfg = await loadWithConnectors({
+      google: { clientId: "c", calendarIds: ["primary", "team@group.calendar"] },
+    });
+    expect(cfg.connectors.google).toEqual({
+      clientId: "c",
+      calendarIds: ["primary", "team@group.calendar"],
+    });
+  });
+
+  test("google: the removed singular calendarId fails with the migration line (ADR-0051)", async () => {
+    // Not a strict-mode "Unrecognized key": the error has to carry the exact
+    // replacement, because that is the whole migration.
+    await expect(loadWithConnectors({ google: { calendarId: "work@x" } })).rejects.toThrow(
+      /calendarIds = \["work@x"\]/,
+    );
+  });
+
+  test("google: a per-account calendarId is caught too, pointing at that table", async () => {
+    await expect(
+      loadWithConnectors({ google: { accounts: { work: { calendarId: "w@x" } } } }),
+    ).rejects.toThrow(/\[connectors\.google\.accounts\.work\]/);
+  });
+
   test("local: a correct roots/extensions slice (existing root) passes", async () => {
     const cfg = await loadWithConnectors({ local: { roots: [realRoot], maxBytes: 2048 } });
     expect(cfg.connectors.local).toEqual({ roots: [realRoot], maxBytes: 2048 });

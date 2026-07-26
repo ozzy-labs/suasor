@@ -172,7 +172,8 @@ describe("DISCOVERY_SPECS.google.discover probe (injected secret + transport)", 
     );
     expect(result.calendars.map((c) => c.id)).toEqual(["work@acme.com"]);
     const block = renderConfigBlock(result).join("\n");
-    expect(block).toContain('calendarId = "work@acme.com"  # Acme Work, UTC');
+    expect(block).toContain("calendarIds = [");
+    expect(block).toContain('  "work@acme.com",  # Acme Work, UTC');
     expect(block).not.toContain("noise@x.com");
   });
 });

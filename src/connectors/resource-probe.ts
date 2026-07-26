@@ -16,7 +16,7 @@
  * - `unreachable` — the API returned a definite negative for that resource
  *   (401 / 403 = permission, 404 = the configured id does not exist for this
  *   credential). Also a fact, and the ADR-0007 "no silent wrong answer" case:
- *   a mistyped `calendarId` / `user` ingests nothing, silently, today.
+ *   a mistyped `calendarIds` entry / `user` ingests nothing, silently, today.
  * - `unknown` — anything else (transport failure, timeout, 5xx). Reported as
  *   `unknown`, **never** collapsed into `reachable`, because an unverified
  *   premise is exactly what a health check exists to surface (same discipline as
@@ -113,6 +113,29 @@ export function apiErrorDetail(body: Record<string, unknown>): string {
     if (parts.length > 0) return parts.join(": ");
   }
   return "";
+}
+
+/**
+ * Rows for resources that were **not probed at all** because the config does not
+ * say what to probe (ADR-0051): ms-graph with no `user`, google with an emptied
+ * `calendarIds`.
+ *
+ * The verdict is `unknown`, and deliberately so. The three-valued vocabulary of
+ * ADR-0049 keys on whether the fact was established, not on whether the network
+ * was reached — "we never asked" is an unverified premise exactly like a timeout,
+ * and rounding it to `reachable` (or hiding the row entirely, which reads as "no
+ * such resource") is the collapse the vocabulary exists to prevent. The `reason`
+ * says why, so the row is actionable rather than merely inconclusive.
+ */
+export function unprobedResources(
+  resources: readonly string[],
+  reason: string,
+): ResourceReachability[] {
+  return resources.map((resource) => ({
+    resource,
+    state: "unknown" as const,
+    detail: `not probed: ${reason}`,
+  }));
 }
 
 /**

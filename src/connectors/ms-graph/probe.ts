@@ -7,9 +7,12 @@
  * permissions server-side and never enumerates them, so every readiness row was
  * `N/A (scopes not enumerated)` (Issue #194). A read-only GET per configured
  * resource replaces that N/A with a fact — and it is scoped to the configured
- * `user`, so the app-only footgun (`user = "me"` is the schema default but is
- * *not* resolvable without a signed-in user) surfaces as a 404 here instead of
- * as an empty sync.
+ * `user`, so a mistyped UPN surfaces as a 404 here instead of as an empty sync.
+ *
+ * `user` is required and non-empty by the time these specs are built (ADR-0051
+ * removed the `"me"` default, which was only ever resolvable on a delegated
+ * token and 404'd under the app-only flow this connector uses). The caller
+ * reports an unset `user` as an unprobed row rather than probing a placeholder.
  *
  * Import-clean (ADR-0007): no Graph SDK / MSAL — plain URLs handed to the shared
  * `fetch`-only probe runner.
@@ -26,13 +29,15 @@ const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
  *
  * @param resources configured `[connectors.ms-graph].resources` entries.
  * @param user configured `[connectors.ms-graph].user` (the mailbox / drive the
- *   app-only credential reads).
+ *   app-only credential reads). Must be non-empty; an empty value yields no
+ *   specs rather than a probe of some invented placeholder.
  */
 export function msGraphProbeSpecs(
   resources: ReadonlySet<string>,
   user: string,
 ): ResourceProbeSpec[] {
-  const u = encodeURIComponent(user.length > 0 ? user : "me");
+  if (user.length === 0) return [];
+  const u = encodeURIComponent(user);
   const specs: ResourceProbeSpec[] = [];
   if (resources.has("mail")) {
     specs.push({

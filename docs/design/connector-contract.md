@@ -59,7 +59,7 @@ run 終端で `ConnectorSyncCompleted`（resume cursor + count）を append。ap
 
 registry は併せて name → **lazy config-slice schema loader** を保持し、`loadConnectorConfigSchema(name)` で connector の `*ConnectorConfig` Zod スキーマ（`[connectors.<name>]` slice 用）を遅延取得する。`loadConfig` がこれを使って各 slice を **load 時に strict 検証**し、typo（`repos`→`repo` 等）・型不一致を `ConfigError` で fail-fast する（[config](config.md)）。connector モジュール自身は top-level が import-clean（`zod` + contract 型のみ）なので、スキーマ参照で重い SDK は pull しない。スキーマ未登録の connector は lenient（root の open record のまま）で段階導入できる。
 
-**multi-account**（[ADR-0050](../adr/0050-multi-account-connectors.md)）: 取り込みスコープがアカウント相対の名前（google の `calendarId = "primary"`、ms-graph の `user = "me"`）で書かれる connector は、`[connectors.<name>.accounts.<account>]` で複数アカウントを 1 pass で取り込む。共通実装は `src/connectors/multi-account.ts`（account 解決 + flat キー継承 / per-account secret 命名 / per-account externalId prefix / per-account エラー隔離）、対応可否は manifest の `multiAccount` が宣言し completeness test が config schema と突き合わせる。`accounts` テーブルの無い config は `default` という 1 アカウントに解決され、secret 名も externalId も**無印のまま**（既存 install は無移行）。
+**multi-account**（[ADR-0050](../adr/0050-multi-account-connectors.md)）: 取り込みスコープがアカウント相対の名前（google の `calendarIds = ["primary"]`、ms-graph の `user = "someone@contoso.com"`）で書かれる connector は、`[connectors.<name>.accounts.<account>]` で複数アカウントを 1 pass で取り込む。共通実装は `src/connectors/multi-account.ts`（account 解決 + flat キー継承 / per-account secret 命名 / per-account externalId prefix / per-account エラー隔離）、対応可否は manifest の `multiAccount` が宣言し completeness test が config schema と突き合わせる。`accounts` テーブルの無い config は `default` という 1 アカウントに解決され、secret 名も externalId も**無印のまま**（既存 install は無移行）。
 
 ## 規約
 

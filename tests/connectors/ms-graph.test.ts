@@ -68,7 +68,14 @@ describe("MsGraphConnectorConfig", () => {
   test("defaults resources to mail + calendar", () => {
     const c = MsGraphConnectorConfig.parse({});
     expect(c.resources).toEqual(["mail", "calendar"]);
-    expect(c.user).toBe("me");
+  });
+
+  test("user has no default — 'me' was app-only-invalid (ADR-0051)", () => {
+    // The old default `"me"` is only resolvable on a delegated token; this
+    // connector is app-only, so Graph read it as a literal id and 404'd. An
+    // empty value is what `requiredSettings` + doctor report on, instead of
+    // shipping a default that cannot work.
+    expect(MsGraphConnectorConfig.parse({}).user).toBe("");
   });
 });
 
@@ -521,12 +528,25 @@ describe("MS Graph connector — guards", () => {
     );
   });
 
-  test("throws when tenantId/clientId missing", async () => {
+  test("throws when tenantId/clientId/user missing", async () => {
     const connector = createMsGraphConnector(
       { resources: ["mail"] },
       { clientFactory: () => fakeGraph({}).client },
     );
-    await expect(collect(connector.sync(ctx()))).rejects.toThrow(/tenantId and clientId/);
+    await expect(collect(connector.sync(ctx()))).rejects.toThrow(
+      /tenantId, clientId and user are required/,
+    );
+  });
+
+  test("an unset user fails as config, naming the key and why there is no 'me'", async () => {
+    // Pre-ADR-0051 this reached Graph as `/users/me/...` and came back 404 per
+    // resource — a permission-shaped error for what is a config omission.
+    const connector = createMsGraphConnector(
+      { tenantId: "t", clientId: "c", resources: ["mail"] },
+      { clientFactory: () => fakeGraph({}).client },
+    );
+    await expect(collect(connector.sync(ctx()))).rejects.toThrow(/user is required in config/);
+    await expect(collect(connector.sync(ctx()))).rejects.toThrow(/no signed-in user/);
   });
 
   test("no resources yields nothing (and never builds a client)", async () => {
@@ -563,6 +583,7 @@ describe("MS Graph connector — multi-account (ADR-0050 / #441)", () => {
       {
         tenantId: "shared-tenant",
         clientId: "shared-client",
+        user: "me@personal.example",
         resources: ["mail"],
         accounts: { default: {}, work: { tenantId: "work-tenant", user: "me@work.example" } },
       },
@@ -589,7 +610,7 @@ describe("MS Graph connector — multi-account (ADR-0050 / #441)", () => {
     ]);
     // clientId inherited, tenantId / user overridden, secrets per account.
     expect(seen).toEqual([
-      { tenantId: "shared-tenant", clientSecret: "s-default", user: "me" },
+      { tenantId: "shared-tenant", clientSecret: "s-default", user: "me@personal.example" },
       { tenantId: "work-tenant", clientSecret: "s-work", user: "me@work.example" },
     ]);
   });
@@ -599,6 +620,7 @@ describe("MS Graph connector — multi-account (ADR-0050 / #441)", () => {
     const connector = createMsGraphConnector(
       {
         clientId: "cid",
+        user: "u@x.test",
         resources: ["mail"],
         // `beta` inherits no tenantId — the sync would otherwise fail with a
         // message that does not say which of the two accounts is broken.
@@ -613,7 +635,7 @@ describe("MS Graph connector — multi-account (ADR-0050 / #441)", () => {
       connector.sync(ctx({ secret: async () => "s", onWarn: (m) => warns.push(m) })),
     );
     expect(records.map((r) => r.externalId)).toEqual(["msgraph:alpha:mail:a1"]);
-    expect(warns.join("\n")).toContain("beta (ms-graph connector: tenantId and clientId");
+    expect(warns.join("\n")).toContain("beta (ms-graph connector: tenantId is required");
     expect(warns.join("\n")).toContain("account 'beta'");
     expect((await connector.finalize?.())?.partialFailure).toBe(true);
   });

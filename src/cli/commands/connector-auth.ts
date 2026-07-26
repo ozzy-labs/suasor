@@ -328,7 +328,7 @@ function makeAuthTestCommand(name: string): CommandClass {
         probes each configured 'resources' entry with one read-only GET and
         prints a separate 'resources (live probe):' block
         (REACHABLE / UNREACHABLE / UNKNOWN, ADR-0049). This is what catches a
-        mistyped calendarId or user, and an app permission that was never granted
+        mistyped calendarIds entry or user, and an app permission that was never granted
         — neither of which a scope check can see. Pass --no-probe to skip it.
         A probe that cannot establish the fact reports UNKNOWN; it is never
         reported as reachable.

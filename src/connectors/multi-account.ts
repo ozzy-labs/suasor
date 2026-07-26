@@ -12,8 +12,9 @@
  *
  * That collapse does **not** transfer to google / ms-graph, and this module is
  * where the difference is encoded: their ingest scope is written in
- * *account-relative* names — `calendarId = "primary"`, `user = "me"`,
- * `resources = ["gmail"]` — which denote a different object per credential. An
+ * *account-relative* names — `calendarIds = ["primary"]`,
+ * `user = "someone@contoso.com"`, `resources = ["gmail"]` — which denote a
+ * different object per credential (a UPN names a user *inside a tenant*). An
  * unnamed pool would have no way to say *whose* `primary`. So these connectors
  * keep the named account, and this module lifts exactly the parts of the
  * ADR-0014 pattern that survive that reasoning:

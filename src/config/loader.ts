@@ -164,18 +164,35 @@ async function readFileLayer(configDir: string): Promise<Layer> {
  * `ConfigError`, each path prefixed `connectors.<name>` so the message points at
  * the exact field.
  */
+/**
+ * Connectors that removed a config shape and replaced it with a different one,
+ * mapped to the check that turns the stale shape into a migration instruction.
+ *
+ * A table rather than an `if` chain per connector, and **lazy** rather than a
+ * manifest field: `manifest.ts` eagerly imports every connector module and is
+ * deliberately kept off the config / registry / MCP-serve path (see its module
+ * header), so declaring this there would drag all of them onto config load.
+ */
+const LEGACY_SHAPE_REJECTORS: Record<
+  string,
+  () => Promise<(slice: Record<string, unknown>) => void>
+> = {
+  slack: async () => (await import("../connectors/slack.ts")).rejectLegacySlackConfig,
+  google: async () => (await import("../connectors/google.ts")).rejectLegacyGoogleConfig,
+};
+
 async function validateConnectorSlices(
   connectors: Record<string, Record<string, unknown>>,
 ): Promise<void> {
   const issues: string[] = [];
   for (const [name, slice] of Object.entries(connectors)) {
-    // Slack's removed ADR-0014 multi-workspace shape gets the mechanical
-    // migration message instead of a bare strict-mode "Unrecognized key"
-    // (ADR-0042 決定 9 — the friendly error IS the migration path).
-    if (name === "slack") {
+    // A removed config shape gets the connector's own mechanical migration
+    // message instead of a bare strict-mode "Unrecognized key" — the friendly
+    // error IS the migration path (ADR-0042 決定 9, ADR-0051).
+    const loadRejector = LEGACY_SHAPE_REJECTORS[name];
+    if (loadRejector) {
       try {
-        const { rejectLegacySlackConfig } = await import("../connectors/slack.ts");
-        rejectLegacySlackConfig(slice);
+        (await loadRejector())(slice);
       } catch (error) {
         if (error instanceof ConfigError) {
           issues.push(...error.issues);
