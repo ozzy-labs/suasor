@@ -32,6 +32,7 @@ import {
   buildBrief,
   buildPriorities,
   DEFAULT_LIST_LIMIT,
+  DEMAND_SOURCES,
   deriveBriefWarnings,
   deriveCommitmentScanStaleness,
   expandGraph,
@@ -415,11 +416,17 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     {
       title: "List demand",
       description:
-        "List connector-neutral, unread-worthy demand signals — newest first, derived " +
-        "(read-only, FTS-first, no extra fetch) from ingested sources (ADR-0041): Slack " +
-        "@mentions of you + DMs (source `slack`, kind `mention`/`dm`, ADR-0012) and " +
-        "demand-worthy github notifications (source `github`, kind = the notification " +
-        "reason: review_requested / mention / team_mention / assign / author). Slack rows " +
+        "List connector-neutral, unread-worthy demand signals — derived (read-only, " +
+        "FTS-first, no extra fetch) from ingested sources (ADR-0041): Slack @mentions of " +
+        "you + DMs (source `slack`, kind `mention`/`dm`, ADR-0012), demand-worthy github " +
+        "notifications (source `github`, kind = the notification reason: review_requested / " +
+        "mention / team_mention / assign / author), unanswered mail threads addressed to " +
+        "you (source `email`, kind `to`/`cc`, ADR-0043 — replying resolves them, no ack " +
+        "needed) and upcoming meetings (source `calendar`, kind `meeting_soon` ≤2h / " +
+        "`meeting_prep` ≤24h with an agenda, attachments or you organizing; ADR-0044 — " +
+        "declined, optional-only and all-day events are excluded, and they leave the list " +
+        "when they start). Calendar rows lead the list ordered by start time (soonest " +
+        "first); everything else follows newest-observed-first. Slack rows " +
         "carry `channelName` / `userName` / `teamName` joined locally from the " +
         "slack_channels / person_identities / slack_teams projections (ADR-0037), or `null` " +
         "when unresolved / for github (fall back to `meta`); never live-fetched. Returns " +
@@ -436,14 +443,15 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           .optional()
           .describe("Your Slack user id (Uxxxx) for @mention detection; falls back to config."),
         source: z
-          .enum(["slack", "github"])
+          .enum(DEMAND_SOURCES)
           .optional()
-          .describe("Restrict to a single connector (default: both)."),
+          .describe("Restrict to a single source family (default: all four)."),
         kinds: z
           .array(z.string().min(1))
           .optional()
           .describe(
-            "Restrict to these kinds (Slack mention/dm, or a github reason; default: all).",
+            "Restrict to these kinds (Slack mention/dm, a github reason, email to/cc, " +
+              "calendar meeting_soon/meeting_prep; default: all).",
           ),
         includeSeen: z
           .boolean()
