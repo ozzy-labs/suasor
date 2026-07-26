@@ -1134,6 +1134,29 @@ describe("suasor onboard — --account (multi-account, ADR-0050 / Issue #538)", 
     }
   });
 
+  test("recognises an account declared in a spelling the header scan cannot see", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // `[connectors.box.accounts."work"]` is valid TOML declaring account
+      // `work`, but it is not the literal header the line scan matches.
+      // Appending on top of it would leave two tables for one account, and
+      // whichever the parser then resolves is a scope the operator never chose.
+      const configPath = join(dir, "config.toml");
+      const base =
+        '[connectors.box]\nenabled = true\n\n[connectors.box.accounts."work"]\nfolders = ["77"]\n';
+      await Bun.write(configPath, base);
+      const { code, out } = await run(
+        ["onboard", "--connector", "box", "--account", "work", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      expect(out).toContain("[connectors.box.accounts.work] already in config.toml");
+      expect(await Bun.file(configPath).text()).toBe(base);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("stores the token under the account's own keychain name", async () => {
     const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
     const keychain = memoryKeychain();

@@ -141,6 +141,16 @@ interface AccountPlan {
   readonly connectorConfigured: boolean;
   /** The config already declares an `accounts` table for this connector. */
   readonly accountsDeclared: boolean;
+  /**
+   * The config already declares **this** account.
+   *
+   * Read from the parsed config, not from the header line scan, because the two
+   * disagree on the spellings TOML allows: `[connectors.box.accounts."work"]`
+   * declares account `work` and the scan does not see it. Appending on top of
+   * that would leave two tables for one account, and whichever the parser then
+   * resolves is a value the operator did not choose.
+   */
+  readonly accountDeclared: boolean;
 }
 
 /** The full `--json` report. */
@@ -708,11 +718,10 @@ export class OnboardCommand extends Command {
     for (const connector of connectors) {
       const slice = connectorsConfig[connector];
       const segment = multi.accountEnvSegment(account);
-      const clash = multi
-        .accountSlices(slice)
-        .find(
-          (a) => a.declared && a.name !== account && multi.accountEnvSegment(a.name) === segment,
-        );
+      const declared = multi.accountSlices(slice).filter((a) => a.declared);
+      const clash = declared.find(
+        (a) => a.name !== account && multi.accountEnvSegment(a.name) === segment,
+      );
       if (clash) {
         return {
           error:
@@ -723,6 +732,7 @@ export class OnboardCommand extends Command {
       plans.set(connector, {
         connectorConfigured: slice !== undefined,
         accountsDeclared: multi.hasDeclaredAccounts(slice),
+        accountDeclared: declared.some((a) => a.name === account),
       });
     }
     return { plans };
@@ -941,7 +951,11 @@ export class OnboardCommand extends Command {
       }
     }
 
-    if (configAppend.hasConnectorAccountSlice(toml, connector, account)) {
+    // Already declared → leave it alone. The parsed-config answer
+    // (`plan.accountDeclared`) is checked as well as the header scan because the
+    // two disagree on `[connectors.box.accounts."work"]`, and appending there
+    // would produce two tables for one account.
+    if (plan.accountDeclared || configAppend.hasConnectorAccountSlice(toml, connector, account)) {
       if (dirty) await Bun.write(configPath, toml);
       return { appended: false, source: "skipped", defaultAccount, baseAppended };
     }
