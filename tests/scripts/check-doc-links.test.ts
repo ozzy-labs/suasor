@@ -170,8 +170,8 @@ describe("check-doc-links.mjs — absolute links into this repository (#548)", (
         "",
         "[issue](https://github.com/ozzy-labs/suasor/issues/548)",
         "[other repo](https://github.com/ozzy-labs/handbook/blob/main/adr/0028-x.md)",
-        `[permalink](https://github.com/ozzy-labs/suasor/blob/deadbeef/docs/gone.md)`,
-        `[tree](https://github.com/ozzy-labs/suasor/tree/main/docs/gone)`,
+        "[permalink](https://github.com/ozzy-labs/suasor/blob/deadbeef/docs/gone.md)",
+        "[tree](https://github.com/ozzy-labs/suasor/tree/main/docs/gone)",
         "",
       ].join("\n"),
     });
@@ -214,6 +214,19 @@ describe("check-doc-links.mjs — shipped doc roots (#548)", () => {
       "docs/design/cli.md": "# CLI\n\n[adr](../adr/0008-a.md)\n",
       "docs/adr/0008-a.md": "# A\n",
     });
+    expect(exitCode).toBe(0);
+  });
+
+  test("reports a globbed shipped root as unverified instead of half-reading it", () => {
+    // npm accepts globs in `files`; expanding them here would decide the rule on
+    // a guess. Saying so out loud is the only answer that is not a wrong one.
+    const { exitCode, stdout } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["docs/skills/*"] }),
+      "docs/skills/x/SKILL.md": "# X\n\n[adr](../../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(stdout).toContain("unverified:");
+    expect(stdout).toContain('"docs/skills/*" is a glob');
     expect(exitCode).toBe(0);
   });
 

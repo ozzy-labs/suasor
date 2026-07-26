@@ -190,20 +190,26 @@ function splitDestination(destination) {
  * (`src/skills/embedded.ts`) and `suasor skills install` all deliver skill
  * bodies with no `docs/adr` next to them, so a relative link out of the root is
  * dead everywhere but a source checkout (ADR-0008 / ADR-0010, Issue #548).
- * Returns `[]` when there is no readable `package.json` — the rule then does not
- * apply, which is the honest answer for a tree that ships nothing.
+ * Returns no roots when there is no readable `package.json` — the rule then does
+ * not apply, which is the honest answer for a tree that ships nothing.
+ *
+ * `files` entries may be globs. Those are **not** interpreted: a half-understood
+ * glob would decide the rule silently and wrongly. They come back in
+ * `unsupported` so the run reports them as `unverified` instead.
  */
 function shippedDocRoots(root) {
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   } catch {
-    return [];
+    return { roots: [], unsupported: [] };
   }
   const files = Array.isArray(manifest.files) ? manifest.files : [];
-  return files
-    .filter((entry) => typeof entry === "string" && entry.startsWith("docs/"))
-    .map((entry) => entry.replace(/\/+$/, ""));
+  const docEntries = files.filter((entry) => typeof entry === "string" && entry.startsWith("docs/"));
+  return {
+    roots: docEntries.filter((entry) => !/[*?[\]{}!]/.test(entry)).map((e) => e.replace(/\/+$/, "")),
+    unsupported: docEntries.filter((entry) => /[*?[\]{}!]/.test(entry)),
+  };
 }
 
 /** The shipped doc root `path` sits inside, or `null` when it is in none. */
@@ -345,7 +351,13 @@ function main(root) {
   };
 
   // 1. Markdown link targets, collecting the fragments of the ones that resolve.
-  const docRoots = shippedDocRoots(root);
+  const { roots: docRoots, unsupported: globbedDocRoots } = shippedDocRoots(root);
+  for (const entry of globbedDocRoots) {
+    unverified.push(
+      `package.json "files" — the shipped doc root "${entry}" is a glob, which this ` +
+        "script does not expand, so links out of it are not checked (Issue #548)",
+    );
+  }
   const linksByTargetFile = new Map();
   for (const link of collectDestinations(root, markdown)) {
     const split = splitDestination(link.destination);
