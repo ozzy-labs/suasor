@@ -3,8 +3,8 @@
 - Status: Accepted
 - Date: 2026-06-20
 - Deciders: Suasor maintainers
-- Related: [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（`auth set` / `auth test` 運用 verb）, [ADR-0014](0014-slack-multi-workspace.md)（Slack multi-workspace）, [ADR-0030](0030-connector-discovery-verbs.md)（discovery verb）, [ADR-0027](0027-bulk-sync-orchestration.md)（`suasor sync` 一括取り込み・OS スケジューラ委譲）, [ADR-0003](0003-local-first-and-content-minimization.md) / [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（local-first / HITL）
-- Tracks: #160 / Epic #153 / #384（Slack onboarding bridge）
+- Related: [ADR-0007](0007-connector-contract.md)（connector 契約）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（`auth set` / `auth test` 運用 verb）, [ADR-0014](0014-slack-multi-workspace.md)（Slack multi-workspace）, [ADR-0030](0030-connector-discovery-verbs.md)（discovery verb）, [ADR-0027](0027-bulk-sync-orchestration.md)（`suasor sync` 一括取り込み・OS スケジューラ委譲）, [ADR-0050](0050-multi-account-connectors.md)（multi-account・本 ADR のフローに `--account` を足す）, [ADR-0003](0003-local-first-and-content-minimization.md) / [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（local-first / HITL）
+- Tracks: #160 / Epic #153 / #384（Slack onboarding bridge）/ #538（2 つ目の account）
 
 ## Context
 
@@ -39,11 +39,27 @@
    - **`DISCOVERY_SPECS` には登録しない**: データ駆動の汎用 discovery verb 表面と既存 `slack conversations` が二重化するため、onboard 側の special-case に留める（[ADR-0030](0030-connector-discovery-verbs.md) の discovery table は非 Slack 用のまま）。
    - **multi-workspace は対象外**: `[connectors.slack.workspaces.<alias>]` を検出したら、onboard の単一 stdin 前提では N 個の per-workspace token を曖昧なく運べないため、bridge せず `suasor slack auth set --workspace <alias>` の手動導線（`auth test` / `conversations` / `sync`）を案内して従来フォールバックする（config は非破壊・未変更）。recap は当該 connector を manual-pending として要約し、「Setup needs manual steps」で締める。
 
+   **2 つ目の account（`--account <name>`、[ADR-0050](0050-multi-account-connectors.md) / [#538](https://github.com/ozzy-labs/suasor/issues/538)）。** 「個人 Gmail と仕事 Gmail の両方」は ADR-0050 が挙げた主要ユースケースそのものなのに、2 つ目の account は config 手編集が要る状態だった（[#441](https://github.com/ozzy-labs/suasor/issues/441) が意図的にスコープ外にした）。ウィザードは**初回フローの分岐**としてこれを担う（別コマンドを作らない）: `--account` を付けると step 2-4 が account 軸に切り替わり、step 5-7（sync / scheduler / MCP）は共通のまま流れる。**新しい認証・追記機構は増やさない**（責務境界 1）:
+
+   - **(a) 対象の導出**: `--account` を受け付けるのは manifest が `multiAccount` を宣言した connector のみ（[ADR-0007](0007-connector-contract.md) の manifest capability）。**CLI 側に connector 名を列挙しない** — 次に multi-account になる connector が無言で漏れないようにするため。
+   - **(b) token**: 既存 `auth set --account` と同じ `accountSecretName` 経由で `connector:<name>:<account>:<secret>`（`default` は無印）へ保存する。
+   - **(c) auth test / discovery**: どちらも**その account の credential**と、**その account が実際に見る設定**（flat キー継承後）で走らせる。flat slice を default account の token で検査すると、新しい account が一度も使わない資格情報について `ok` と報告してしまう。discovery の id も同様に account 相対（別 account の folder / calendar id は何も指さない・ADR-0050 決定 1）。
+   - **(d) config**: `[connectors.<name>.accounts.<account>]` を決定 3 と同じ非破壊 append で書く。`enabled` は connector 単位でしか読まれないので account テーブルには**書かない**（設定できるのに誰も読まない面を作らない）。connector の slice がまだ無ければ先に flat slice（`enabled = true`）を書く。
+   - **(e) 書き込み前に refuse する**: `multiAccount` でない connector / account 名の charset 違反 / 既設定 account との env override segment 衝突（`work-a` と `work_a`）。後ろ 2 つは、書いた後で **config が load できなくなる**（ADR-0050 決定 2 の refinement が弾く）ため、ウィザードが自分で壊した config を残さないよう事前に判定する。
+
+   **flat キー降格の扱い（ADR-0050 決定 2 の非対称）。** 既存 flat config に**最初の named account** を足す瞬間、flat キーは継承の既定値に降格し、それ自体は取り込まれなくなる。この降格を起こしているのはウィザード自身なので、後から `doctor` に発見させるのでは遅い。**doctor の 2 段の確信度をそのまま写す**:
+
+   - 無印 default の credential が**解決できる** → その account は実在した証拠がある → `[connectors.<name>.accounts.default]`（空テーブル・flat を継承）も一緒に書き、**取り込みを止めない**。既存 keychain / env / source lineage は無印のままなので、この追記は挙動を変えず「止まらない」だけを足す。
+   - 解決できない → 「元々 default account が無かった」と「あったが credential も消した」を**区別できない** → **書かず**、規則だけ述べる。書いてしまうと credential を持たない account が 1 つ増え、毎 sync で warn 付き skip + `partialFailure`（exit 非 0、ADR-0050 決定 4）を生む。判定不能を推測で埋めない側に倒す。
+
+   既に `accounts` テーブルがある config（3 つ目以降の追加）では降格が起きないので、ウィザードは何も言わない（既存の欠落は `doctor` の恒常的な検査が持ち場）。
+
 3. **config 自動追記の安全性（既存値を壊さない）。** 純粋関数 `appendConnectorSlice(toml, connector, defaults)` を SSOT とする:
    - 対象 connector の `[connectors.X]` セクションが**既に存在する**場合は**追記しない**（冪等。`enabled = false` を含む既存ユーザー設定を勝手に書き換えない）
    - 存在しない場合のみ、ファイル末尾に最小 slice（`[connectors.X]` + `enabled = true` + connector 既定キーのコメント雛形）を append する
    - **行ベース append のみで TOML を再シリアライズしない。** Bun の TOML パーサは round-trip でコメント・整形・キー順を失うため、既存ファイルのテキストは一切触らず末尾追記に限定する。これにより手書きのコメントや他セクションが保全される
    - 純粋関数なので入力 TOML 文字列 → 出力 TOML 文字列としてユニットテスト可能（非破壊 / 新規追記 / 冪等を直接検証）
+   - **per-account テーブルも同じ 3 性質を 1 階層下で満たす**（`appendConnectorAccountSlice`・[ADR-0050](0050-multi-account-connectors.md) / [#538](https://github.com/ozzy-labs/suasor/issues/538)）: `[connectors.<name>.accounts.<account>]` の行スキャン検出 → 不在時のみ末尾 append → 既存テーブルは書き換えない。flat 検出（`hasConnectorSlice`）は nested table に一致しないので、account 用の検出は別に持つ
 
 4. **非対話 / headless / `--json` でも壊れない。**
    - **非 TTY**（パイプ / CI）では対話プロンプトを出さず、`--connector` 指定が必須。未指定なら明確なエラーで終了する（無音で誤動作しない、[ADR-0007](0007-connector-contract.md) の "no silent wrong answer"）
@@ -63,6 +79,7 @@
 - 既存 verb の再利用に徹するため新規の認証・取り込みロジックを増やさず、import-clean を維持
 - config 追記が純粋関数 + 末尾 append 限定なので、既存ユーザー設定（コメント・他セクション）を壊さず冪等
 - 非対話 / headless / binary 配布でも壊れない設計（env override・`--skip-auth`・`--json`）
+- **2 つ目の account が config 手編集を要求しなくなる**（`--account`・[#538](https://github.com/ozzy-labs/suasor/issues/538)）。しかも「足したら 1 つ目が静かに止まる」という [ADR-0050](0050-multi-account-connectors.md) 決定 2 の代償を、それを引き起こす当のコマンドが（証拠がある場合に限って）先回りで塞ぐ
 
 ### Negative / Trade-offs
 
@@ -76,3 +93,6 @@
 - **config 全体を TOML パーサで round-trip 再生成して追記** — 却下。Bun の TOML パーサはコメント・整形・キー順を保持せず、既存の手書き設定を破壊する。末尾 append + 既存セクション検出で非破壊にする
 - **`init` に統合（`suasor init` がそのまま connector もセットアップ）** — 却下。`init` は config + DB の冪等初期化に責務を限定する。connector 選択・token 入力・sync を含む対話フローは別コマンドに分離する方が責務が明確
 - **token 含めフル自動で config に書き込む** — 却下。secret は config.toml に書かない（keychain / env override、NFR-PRV-4）。config には `enabled` と非機密キーのみ
+- **2 つ目の account を専用コマンド（`suasor account add` 等）にする** — 却下（[#538](https://github.com/ozzy-labs/suasor/issues/538)）。必要な手順（token → `auth test` → config 追記 → sync）は初回セットアップと**同一**で、違うのは保存先の名前空間だけ。別コマンドにすると同じオーケストレーションが 2 本になり、片方だけ discovery / recap / `--json` を得る drift を招く
+- **`--account` 省略時に「既存 account を検出して 2 つ目を促す」対話にする** — 却下。既存 flat config への `onboard` は現在「slice はそのまま」で完了する冪等操作であり、そこに account 追加を勝手に差し込むと、再実行しただけの利用者に config 変更を提案することになる。account の追加は**明示 opt-in**（フラグ）に留める
+- **`[connectors.<name>.accounts.default]` を常に書く（credential の有無を見ない）** — 却下。credential を持たない account は毎 sync で warn 付き skip + exit 非 0（[ADR-0050](0050-multi-account-connectors.md) 決定 4）になるため、「元々 default account が無かった」install に恒常的な赤を植えることになる。証拠がある側だけ書く

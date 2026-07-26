@@ -22,7 +22,11 @@ import { describe, expect, test } from "bun:test";
 import { authConnectorNames } from "../../src/connectors/auth-specs.ts";
 import { channelMetaConnectors } from "../../src/connectors/channel.ts";
 import { discoveryConnectorNames } from "../../src/connectors/discovery-specs.ts";
-import { connectorManifest, manifestConnectorNames } from "../../src/connectors/manifest.ts";
+import {
+  connectorManifest,
+  manifestConnectorNames,
+  multiAccountConnectorNames,
+} from "../../src/connectors/manifest.ts";
 import {
   connectorBundledInBinary,
   connectorNames,
@@ -159,6 +163,17 @@ describe("connector manifest — completeness (parametrized over connectorNames(
       });
     });
   }
+
+  test("multiAccountConnectorNames() is derived from the declarations, not a list", () => {
+    // The `--account` surfaces (the auth verbs' refusal, `onboard --account`)
+    // name the supported set from here, so a connector that adopts multi-account
+    // joins them by flipping its own manifest flag — not by someone remembering
+    // a hand-written list (Issue #538).
+    expect(multiAccountConnectorNames()).toEqual(
+      manifestConnectorNames().filter((name) => connectorManifest(name)?.multiAccount === true),
+    );
+    expect(multiAccountConnectorNames().length).toBeGreaterThan(0);
+  });
 });
 
 describe("connector manifest — central credential enforcement (ADR-0007, #440)", () => {

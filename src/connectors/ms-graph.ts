@@ -691,6 +691,7 @@ export const manifest: ConnectorManifest = {
       '# user = "someone@contoso.com" # required: whose mailbox / drive to read (UPN or object id)',
       "# A second tenant / mailbox goes in its own table:",
       "#   [connectors.ms-graph.accounts.work]  # see docs/guide/connectors.md (ADR-0050)",
+      "#   `suasor onboard --connector ms-graph --account work` writes it for you",
     ],
   },
   requiredSettings: [

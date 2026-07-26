@@ -6,9 +6,14 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  accountBodyFromBlock,
+  appendConnectorAccountSlice,
   appendConnectorBlock,
   appendConnectorSlice,
+  connectorAccountTemplate,
+  connectorDefaultAccountTemplate,
   connectorSliceTemplate,
+  hasConnectorAccountSlice,
   hasConnectorSlice,
 } from "../../src/cli/onboard/config-append.ts";
 
@@ -159,5 +164,65 @@ describe("connectorSliceTemplate", () => {
 
   test("an unknown connector falls back to an enabled-only slice", () => {
     expect(connectorSliceTemplate("mystery").body).toEqual(["enabled = true"]);
+  });
+});
+
+/**
+ * Per-account tables (ADR-0050, Issue #538): the same three properties one level
+ * down, plus the one thing the account table must *not* carry.
+ */
+describe("appendConnectorAccountSlice — per-account table", () => {
+  test("appends [connectors.box.accounts.work] with the given body", () => {
+    const base = "[connectors.box]\nenabled = true\n";
+    const { toml, appended } = appendConnectorAccountSlice(base, "box", "work", ["# note"]);
+    expect(appended).toBe(true);
+    expect(toml).toContain("\n\n[connectors.box.accounts.work]\n# note\n");
+    // The connector's own slice is untouched.
+    expect(toml).toContain("[connectors.box]\nenabled = true\n");
+  });
+
+  test("leaves an account the operator already wrote untouched (idempotent)", () => {
+    const base = '[connectors.box.accounts.work]\nfolders = ["9911"]\n';
+    const { toml, appended } = appendConnectorAccountSlice(base, "box", "work", ["# note"]);
+    expect(appended).toBe(false);
+    expect(toml).toBe(base);
+  });
+
+  test("a different account's table does not count as this one's", () => {
+    const base = "[connectors.box.accounts.personal]\n";
+    expect(hasConnectorAccountSlice(base, "box", "personal")).toBe(true);
+    expect(hasConnectorAccountSlice(base, "box", "work")).toBe(false);
+    // ... and the flat check still does not match a nested table (unchanged).
+    expect(hasConnectorSlice(base, "box")).toBe(false);
+  });
+});
+
+describe("accountBodyFromBlock — discovery block → account table body", () => {
+  test("drops the flat header and keeps the discovered ids", () => {
+    const block = ["[connectors.box]", "enabled = true", "folders = [", '  "9911",', "]"];
+    expect(accountBodyFromBlock("box", block)).toEqual(["folders = [", '  "9911",', "]"]);
+  });
+
+  test("drops `enabled`, which is read per connector and never per account", () => {
+    // A per-account `enabled` would be a key an operator can set and nothing
+    // reads — `selectEnabledConnectors` only ever looks at the connector level.
+    const body = accountBodyFromBlock("google", ["[connectors.google]", "enabled  =  false"]);
+    expect(body).toEqual([]);
+  });
+});
+
+describe("account table templates", () => {
+  test("the fallback template warns that inherited scope ids are another account's", () => {
+    const body = connectorAccountTemplate("box").join("\n");
+    expect(body).toContain("[connectors.box]");
+    expect(body).toContain("account-relative");
+    // Comments only: the wizard never guesses this account's ingest scope.
+    expect(connectorAccountTemplate("box").every((line) => line.startsWith("#"))).toBe(true);
+  });
+
+  test("the preserved-default template is comments only (it inherits everything)", () => {
+    const lines = connectorDefaultAccountTemplate("google");
+    expect(lines.every((line) => line.startsWith("#"))).toBe(true);
+    expect(lines.join("\n")).toContain("[connectors.google]");
   });
 });

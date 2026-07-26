@@ -915,6 +915,7 @@ export const manifest: ConnectorManifest = {
       '# calendarIds = ["primary"]       # every calendar to ingest (`suasor google calendars`)',
       "# A second Google account (personal + work) goes in its own table:",
       "#   [connectors.google.accounts.work]   # see docs/guide/connectors.md (ADR-0050)",
+      "#   `suasor onboard --connector google --account work` writes it for you",
     ],
   },
   requiredSettings: [{ key: "clientId", hint: "OAuth client id of the desktop / web app" }],

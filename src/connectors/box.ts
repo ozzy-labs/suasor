@@ -424,6 +424,7 @@ export const manifest: ConnectorManifest = {
       '# folders = ["0"]          # Box folder ids to ingest (root は "0")',
       "# A second Box account (personal + work) goes in its own table:",
       "#   [connectors.box.accounts.work]      # see docs/guide/connectors.md (ADR-0050)",
+      "#   `suasor onboard --connector box --account work` writes it for you",
     ],
   },
   noopWarning(slice) {

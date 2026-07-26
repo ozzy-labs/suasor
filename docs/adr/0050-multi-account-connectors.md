@@ -57,6 +57,8 @@ self_addresses = ["me@work.example", "team@work.example"]
 
 **flat キーが `accounts` 併存時に「取り込まれる account」ではなくなる**点は意図的な非対称であり、その代償（既存 flat config に named account を足すと flat 側の取り込みが止まる）は**放置しない** — 決定 5 で doctor が名指しする。
 
+> **追記（2026-07-27・[#538](https://github.com/ozzy-labs/suasor/issues/538)）**: `suasor onboard --account <name>`（[ADR-0029](0029-onboarding-wizard.md)）が 2 つ目の account を扱うようになったので、**降格を起こす当のコマンド**が先回りで塞ぐ経路も加わった: 既存 flat config に最初の named account を足すとき、無印 default の credential が解決できるなら `[connectors.<name>.accounts.default]` を一緒に書く。解決できないなら**書かず**規則だけ述べる（credential 無し account を 1 つ増やすと決定 4 により毎 sync が warn 付き skip + exit 非 0 になるため）。これは決定 5 の 2 段の確信度をそのまま写したもので、**決定は無変更** — doctor は引き続き恒常的な検出器であり、ウィザードは自分が起こした降格だけを扱う。
+
 ### 3. secret / identity: `default` account だけ**無印**（既存 install を壊さない）
 
 | | `default` account | 名前付き account |

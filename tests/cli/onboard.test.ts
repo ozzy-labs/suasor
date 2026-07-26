@@ -857,3 +857,373 @@ describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", () 
     }
   });
 });
+
+/**
+ * `suasor onboard --account <name>` — the second-account path (ADR-0050, Issue
+ * #538). No keychain / no network unless a test stubs `fetch`: the credential is
+ * supplied through the account's own env override (the same name `auth set
+ * --account` writes to), so the wizard's own glue is what is under test.
+ */
+describe("suasor onboard — --account (multi-account, ADR-0050 / Issue #538)", () => {
+  const realFetch = globalThis.fetch;
+  const ACCOUNT_ENVS = ["SUASOR_CONNECTOR_BOX_TOKEN", "SUASOR_CONNECTOR_BOX_WORK_TOKEN"];
+  const saved = new Map<string, string | undefined>();
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    for (const key of ACCOUNT_ENVS) {
+      const prev = saved.get(key);
+      if (prev === undefined) delete process.env[key];
+      else process.env[key] = prev;
+    }
+    saved.clear();
+  });
+
+  /** Set an env override for the duration of one test (restored in afterEach). */
+  function setEnv(key: string, value: string): void {
+    if (!saved.has(key)) saved.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+
+  /** One `GET /2.0/folders/0/items` page with the given subfolders (no marker). */
+  function stubBoxFolders(folders: { id: string; name: string }[]): void {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ entries: folders.map((f) => ({ type: "folder", ...f })) }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+  }
+
+  test("refuses a connector that declares no per-account configuration", async () => {
+    // github's ingest scope is `owner/repo` — globally unique, so the manifest
+    // declares multiAccount: false and --account has nothing to name.
+    const { code, err } = await run([
+      "onboard",
+      "--connector",
+      "github",
+      "--account",
+      "work",
+      "--skip-auth",
+      "--skip-sync",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("--account does not apply to github");
+    // The supported set is derived from the manifests, not listed in the CLI.
+    expect(err).toContain("box");
+    expect(err).toContain("google");
+    expect(err).toContain("ms-graph");
+  });
+
+  test("refuses an account name outside the account charset", async () => {
+    const { code, err } = await run([
+      "onboard",
+      "--connector",
+      "box",
+      "--account",
+      "work.mail",
+      "--skip-auth",
+      "--skip-sync",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("invalid account name 'work.mail'");
+  });
+
+  test("refuses a name whose env override would collide with a configured account", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // `work-a` and `work_a` are different accounts that normalize to the same
+      // SUASOR_CONNECTOR_BOX_WORK_A_TOKEN. Writing the table first and finding out
+      // at the next load would leave a config.toml the wizard itself broke.
+      await Bun.write(
+        join(dir, "config.toml"),
+        "[connectors.box]\nenabled = true\n\n[connectors.box.accounts.work-a]\n",
+      );
+      const { code, err } = await run(
+        ["onboard", "--connector", "box", "--account", "work_a", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(1);
+      expect(err).toContain("both map to the env override segment 'WORK_A'");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).not.toContain("accounts.work_a");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh config gets the connector slice plus the account table", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "box", "--account", "work", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      // `enabled` lives on the connector, so the account table alone would enable
+      // nothing — the flat slice is written first.
+      expect(toml).toContain("[connectors.box]");
+      expect(toml).toContain("enabled = true");
+      expect(toml).toContain("[connectors.box.accounts.work]");
+      expect(out).toContain("appended [connectors.box.accounts.work]");
+      // Nothing was demoted: there was no account here before this run.
+      expect(toml).not.toContain("accounts.default");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the already-syncing account when its credential proves it existed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // A credential for the *unnamed* default account is the evidence that
+    // account was really ingesting (ADR-0050 決定 5's warn level).
+    setEnv("SUASOR_CONNECTOR_BOX_TOKEN", "default-token");
+    try {
+      await Bun.write(
+        join(dir, "config.toml"),
+        '[connectors.box]\nenabled = true\nfolders = ["0"]\n',
+      );
+      const { code, out } = await run(
+        [
+          "onboard",
+          "--connector",
+          "box",
+          "--account",
+          "work",
+          "--skip-auth",
+          "--skip-sync",
+          "--json",
+        ],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as {
+        connectors: { account?: string; defaultAccount?: string }[];
+      };
+      expect(report.connectors[0]?.account).toBe("work");
+      expect(report.connectors[0]?.defaultAccount).toBe("preserved");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.box.accounts.default]");
+      expect(toml).toContain("[connectors.box.accounts.work]");
+      // The pre-existing flat keys are untouched (they are now the inherited
+      // defaults, and `accounts.default` is what keeps ingesting them).
+      expect(toml).toContain('folders = ["0"]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("states the rule but writes nothing when no default credential is stored", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      await Bun.write(join(dir, "config.toml"), "[connectors.box]\nenabled = true\n");
+      const { code, out, err } = await run(
+        [
+          "onboard",
+          "--connector",
+          "box",
+          "--account",
+          "work",
+          "--skip-auth",
+          "--skip-sync",
+          "--json",
+        ],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { defaultAccount?: string }[] };
+      expect(report.connectors[0]?.defaultAccount).toBe("unknown");
+      // "was ingesting" and "never was" are indistinguishable here, so the wizard
+      // says so instead of guessing — and does not write an account that would
+      // then be a credential-less warned skip on every sync.
+      expect(err).toContain("cannot be told from here");
+      expect(err).toContain("[connectors.box.accounts.default]");
+      // The discovery re-run advice has to name the account: with two accounts
+      // configured, `suasor box folders` alone is refused as ambiguous.
+      expect(err).toContain("suasor box folders --account work");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).not.toContain("accounts.default");
+      expect(toml).toContain("[connectors.box.accounts.work]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("adding a third account does not re-litigate the demotion", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    setEnv("SUASOR_CONNECTOR_BOX_TOKEN", "default-token");
+    try {
+      // An `accounts` table already exists, so this run is not what demotes the
+      // flat keys — doctor owns the standing report, the wizard only reports the
+      // demotion it causes itself.
+      await Bun.write(
+        join(dir, "config.toml"),
+        "[connectors.box]\nenabled = true\n\n[connectors.box.accounts.personal]\n",
+      );
+      const { code, out, err } = await run(
+        [
+          "onboard",
+          "--connector",
+          "box",
+          "--account",
+          "work",
+          "--skip-auth",
+          "--skip-sync",
+          "--json",
+        ],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { defaultAccount?: string }[] };
+      expect(report.connectors[0]?.defaultAccount).toBe("not-applicable");
+      expect(err).not.toContain("cannot be told from here");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).not.toContain("accounts.default");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--account default spells out the first account without demoting anything", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      await Bun.write(join(dir, "config.toml"), "[connectors.box]\nenabled = true\n");
+      const { code, out } = await run(
+        [
+          "onboard",
+          "--connector",
+          "box",
+          "--account",
+          "default",
+          "--skip-auth",
+          "--skip-sync",
+          "--json",
+        ],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out) as { connectors: { defaultAccount?: string }[] };
+      expect(report.connectors[0]?.defaultAccount).toBe("not-applicable");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.box.accounts.default]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("is idempotent: a second run leaves the account table untouched", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const args = [
+        "onboard",
+        "--connector",
+        "box",
+        "--account",
+        "work",
+        "--skip-auth",
+        "--skip-sync",
+      ];
+      await run(args, { configDir: dir });
+      const first = await Bun.file(join(dir, "config.toml")).text();
+      const { code, out } = await run(args, { configDir: dir });
+      expect(code).toBe(0);
+      expect(out).toContain("[connectors.box.accounts.work] already in config.toml");
+      expect(await Bun.file(join(dir, "config.toml")).text()).toBe(first);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("recognises an account declared in a spelling the header scan cannot see", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      // `[connectors.box.accounts."work"]` is valid TOML declaring account
+      // `work`, but it is not the literal header the line scan matches.
+      // Appending on top of it would leave two tables for one account, and
+      // whichever the parser then resolves is a scope the operator never chose.
+      const configPath = join(dir, "config.toml");
+      const base =
+        '[connectors.box]\nenabled = true\n\n[connectors.box.accounts."work"]\nfolders = ["77"]\n';
+      await Bun.write(configPath, base);
+      const { code, out } = await run(
+        ["onboard", "--connector", "box", "--account", "work", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      expect(out).toContain("[connectors.box.accounts.work] already in config.toml");
+      expect(await Bun.file(configPath).text()).toBe(base);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stores the token under the account's own keychain name", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    const keychain = memoryKeychain();
+    // Offline: every probe this run would make fails at the transport, so the
+    // test never leaves the machine (the assertion is where the token landed).
+    globalThis.fetch = (async () => {
+      throw new Error("offline test");
+    }) as unknown as typeof fetch;
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "box", "--account", "work", "--skip-sync"],
+        { configDir: dir, stdin: ttyTokenStdin("work-token\n"), keychain },
+      );
+      // The auth probe cannot reach Box, so the run reports a failed `auth test`
+      // (exit 1) — expected, and not what this test is about.
+      expect(code).toBe(1);
+      expect(out).toContain("for account 'work'");
+      expect(
+        keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("box", "work:token")}`),
+      ).toBe("work-token");
+      // Never under the unnamed default's name — that is the mix-up ADR-0050
+      // exists to prevent (the wrong mailbox syncs and nothing says so).
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("box", "token")}`)).toBe(
+        undefined,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("discovery runs as the new account and its ids land in the account table", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    // Only the *work* account has a credential; the ids it enumerates are its
+    // own, which is the whole point — a folder id from another account addresses
+    // nothing here.
+    setEnv("SUASOR_CONNECTOR_BOX_WORK_TOKEN", "work-token");
+    stubBoxFolders([{ id: "9911", name: "Work Docs" }]);
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "box", "--account", "work", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      expect(out).toContain("discovered 1 item(s)");
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.box.accounts.work]");
+      expect(toml).toContain('"9911"');
+      expect(toml).toContain("folders = [");
+      // `enabled` stays a connector-level switch: exactly one occurrence, in the
+      // flat slice, never copied into the account table where nothing reads it.
+      expect(toml.match(/enabled = true/g)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the recap names the account", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { code, out } = await run(
+        ["onboard", "--connector", "box", "--account", "work", "--skip-auth", "--skip-sync"],
+        { configDir: dir },
+      );
+      expect(code).toBe(0);
+      expect(out).toContain("box (account 'work')");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
