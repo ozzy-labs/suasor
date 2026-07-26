@@ -1259,7 +1259,7 @@ describe("onboard first sync (pre-sync advisories)", () => {
       // The recap points at it without restating it, and the closing verdict is
       // no longer a bare "Setup complete." over a connector that ingests nothing.
       expect(out).toContain("config: 1 pre-sync warning(s) for local");
-      expect(out).toContain("pre-sync config warning(s) above are unresolved");
+      expect(out).toContain("pre-sync config warning(s) are unresolved");
       expect(out).not.toContain("Setup complete.");
       // Still a warning, not a failure: the sync itself succeeded (0 observed),
       // so the exit code is the one `suasor sync` gives for this config (#187).

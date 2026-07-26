@@ -123,10 +123,8 @@ describe("renderRecap — pre-sync config warnings", () => {
     };
     const text = renderRecap(input);
     expect(text).toContain("config: 1 pre-sync warning(s) for ms-graph");
-    expect(text).toContain("see the `warning:` line(s) above");
-    expect(text).toContain(
-      "Setup complete, but 1 pre-sync config warning(s) above are unresolved.",
-    );
+    expect(text).toContain("see the `warning:` line(s) on stderr");
+    expect(text).toContain("Setup complete, but 1 pre-sync config warning(s) are unresolved.");
     // The advisory's own wording stays with its single emitter (the sync).
     expect(text).not.toContain("required setting");
     // A warning is not a failure: #187 / ADR-0049 both leave the exit code alone.

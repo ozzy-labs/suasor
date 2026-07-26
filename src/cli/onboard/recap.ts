@@ -142,15 +142,17 @@ export function renderRecap(input: RecapInput): string {
     );
   }
 
-  // Pointer, not a restatement: the `warning:` lines above carry what each
-  // advisory says and how to fix it, and those two advisories differ in both
-  // severity and remedy ("runs and ingests nothing" vs "cannot reach its API"),
-  // so folding them into one recap sentence would flatten that difference.
+  // Pointer, not a restatement: the `warning:` lines carry what each advisory
+  // says and how to fix it, and those two advisories differ in both severity and
+  // remedy ("runs and ingests nothing" vs "cannot reach its API"), so folding
+  // them into one recap sentence would flatten that difference. The pointer names
+  // the *stream* rather than saying "above": the recap is stdout and the
+  // advisories are stderr, so "above" is only true when both are on a terminal.
   const configWarnings = input.configWarnings ?? [];
   if (configWarnings.length > 0) {
     lines.push(
       `  config: ${configWarnings.length} pre-sync warning(s) for ${configWarnings.join(", ")} — ` +
-        "see the `warning:` line(s) above",
+        "see the `warning:` line(s) on stderr",
     );
   }
 
@@ -168,7 +170,7 @@ export function renderRecap(input: RecapInput): string {
     // closing with a bare "Setup complete." would be the wizard's own version of
     // it.
     lines.push(
-      `Setup complete, but ${configWarnings.length} pre-sync config warning(s) above are unresolved.`,
+      `Setup complete, but ${configWarnings.length} pre-sync config warning(s) are unresolved.`,
     );
   } else {
     lines.push("Setup complete.");
