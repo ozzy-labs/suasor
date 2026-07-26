@@ -94,3 +94,4 @@ mcp_tools_write: []
 - 順位付けが要る場面では `priority.list` の基線を消費する（散文で順位を作り直さない）。根拠は各行の `explanation` を示す（`score` の数値は出さない・[ADR-0045](../../adr/0045-priority-ranking-model.md) 決定 4）
 - demand の表示は `channelName` / `userName`（ローカル join した人間可読名・[ADR-0037](../../adr/0037-slack-name-enrichment.md)）を優先し、`null` のときだけ生 id に fallback する
 - 時間窓は各 projection の自然な timestamp（task/inbox=`updated_at`、decision=`recorded_at`、source=`observed_at`）。下限 inclusive / 上限 exclusive
+- `brief` の `demand` に **calendar は入らない**（[ADR-0044](../../adr/0044-calendar-proximity-signals.md)）。近接は「窓」ではなく「いま」に対する量であり、窓の対象列は予定の**更新時刻**なので、含めると「その期間に編集された予定」を答えてしまう。これから始まる予定が要るときは `priority.list`（`starting_soon` / `prep`）か `demand.list`（`source="calendar"`）を別に引く

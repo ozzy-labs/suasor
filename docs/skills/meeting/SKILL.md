@@ -14,6 +14,7 @@ pairs:
 mcp_tools_read:
   - source.list
   - source.get
+  - demand.list
   - search
   - graph.related
   - task.list
@@ -41,6 +42,7 @@ mcp_tools_write: []
 ### phase=prep
 
 1. `source.list` で対象の calendar event を引く。**`startsAfter` / `startsBefore`（イベント自身の開始時刻）で絞る** — `observedAfter` / `observedBefore` は**更新時刻**の窓なので別の問いに答えてしまう（3 か月前に予約された明日の会議が落ち、昨日タイトルを直した先月の会議が入る。[ADR-0044](../../adr/0044-calendar-proximity-signals.md) 決定 2 / [#490](https://github.com/ozzy-labs/suasor/issues/490)）
+   - 「次の会議」「そろそろ何かある?」のように**対象を指定されていない**ときは `demand.list`（`source="calendar"`）を使う。準備が要る予定（`meeting_prep`: 24 時間以内 かつ 議題 / 添付 / 自分が organizer）と直前の予定（`meeting_soon`: 120 分以内）だけが、開始が近い順に返る。辞退済み・任意参加・終日予定は除外済み（[ADR-0044](../../adr/0044-calendar-proximity-signals.md) 決定 4）
 2. `source.get`（`externalId`）で event 本文・議題を取る
 3. `search` で過去の関連やりとりを引く
 4. `graph.related` で関連 decisions / sources を辿る

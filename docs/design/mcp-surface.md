@@ -152,20 +152,24 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 - **Slack**（`source: "slack"`）: `source_type='slack_message'` かつ（DM = channel id が `D` 始まり）または（mention = `body LIKE '%<@uid>%'`）。`kind: "mention"|"dm"`。`channelName` / `userName` / `teamName` をローカル projection から join（[ADR-0037](../adr/0037-slack-name-enrichment.md)、live fetch なし）。
 - **GitHub**（`source: "github"`）: `source_type='github_notification'` かつ `meta.reason` が demand 相当（`review_requested` / `mention` / `team_mention` / `assign` / `author`）。`kind` = その reason。slack enrichment は `null`。
+- **Email**（`source: "email"`）: 自分宛て（To/Cc）かつ未返信のスレッド代表 1 行。`kind: "to"|"cc"`（[ADR-0043](../adr/0043-email-demand-signals.md)、後述）。
+- **Calendar**（`source: "calendar"`）: `meta.start` と注入可能な `now` から**read 時に派生**する近接予定。`kind: "meeting_soon"`（開始 120 分以内）/ `"meeting_prep"`（24 時間以内かつ議題・添付・自分が organizer のいずれか）（[ADR-0044](../adr/0044-calendar-proximity-signals.md) 決定 3/4、後述）。
 
 **seen-state**（ADR-0041、ADR-0012 決定 4 を supersede）: 既定は **未処理（un-acked）のみ**返す。`demand.mark`（`state`）（write）で `demand_seen` に印を付けた行、および GitHub 側で既読の notification（`meta.unread=false`）は既定で除外され「未処理」が真になる。`includeSeen: true` で全件を `seenState`（`acked` / `dismissed` / `read` / null）付きで返す。
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
-| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"` / `kinds?: string[]`（slack `mention`/`dm` または github reason）/ `includeSeen?: boolean` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
+| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
 
 `selfUserId` も config も無いと slack mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は github mention notification のみ）。
+
+**並び順**: calendar 行が**開始時刻の昇順で先頭**、続いて他 source が `observed_at` の降順。鮮度と近接は別軸であり、1 つのキーに畳むとどちらかを誤って報告する。calendar を先頭に置くのは、`limit` の打切りが「20 分後に始まる会議」を落とさないようにするため。
 
 ### `priority.list`（[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md) 決定 3）
 
 決定論的 cross-entity scorer。open/in_progress な tasks + open commitments + un-acked demand を**固定 comparator**で 1 本のランク付きリストに合成する（実体は `src/mcp/queries.ts` の `buildPriorities`、`readOnlyHint: true`）。順位の基線はコードが持ち（skill 散文ではない）、同一入力に対し順序が一定になる（テストで固定）。
 
-順序モデル（[ADR-0045](../adr/0045-priority-ranking-model.md)）: **hard tier 1 つ + 重み付きスコア**。hard tier は「開始 30 分以内の会議」のみ（壁時計が他のすべての考慮を無効化する唯一の領域・[ADR-0044](../adr/0044-calendar-proximity-signals.md) 実装時に有効化）。それ以外は `overdue`（超過日数）/ `aging`（未返信日数・[ADR-0043](../adr/0043-email-demand-signals.md)）/ `unacked_demand`（鮮度）/ `due_soon`（期日接近）/ `prep`（会議準備）/ `priority` を**重み付きで合成した単一スコア**で比較する。
+順序モデル（[ADR-0045](../adr/0045-priority-ranking-model.md)）: **hard tier 1 つ + 重み付きスコア**。hard tier は「開始 30 分以内の会議」のみ（壁時計が他のすべての考慮を無効化する唯一の領域・[ADR-0044](../adr/0044-calendar-proximity-signals.md) の calendar demand で有効。tier は**順序の上書き**であってスコアの代替ではないので、hard tier の行も `prep` と同じ連続スコアを持つ）。それ以外は `overdue`（超過日数）/ `aging`（未返信日数・[ADR-0043](../adr/0043-email-demand-signals.md)）/ `unacked_demand`（鮮度）/ `due_soon`（期日接近）/ `prep`（会議準備）/ `priority` を**重み付きで合成した単一スコア**で比較する。
 
 **tier ラダーからスコアへ移した理由**は程度を比較できなかったこと — 旧実装では「1 日超過」と「3 週間超過」が同格で、`starting_soon` の窓が 120 分だったため **110 分後の会議が 3 週間放置のタスクより上**に出ていた。またスコアなら、mention の鮮度（新しいほど高い）とメールの未返信日数（古いほど高い）という**逆符号の時間項**が 1 本のモデルに共存できる（tier では 2 段必要だった）。
 
@@ -245,6 +249,12 @@ CLI（`suasor brief`）はヘッダに `[⚠ <key>, ...]` を付記し、`--json
 > **返信すれば ack なしで消える**（自分の返信が sync で入ると述語が破れる）。**新着で再浮上する**（代表行が変わる）。newsletter は `List-Id` / `List-Unsubscribe` という**機械的事実**で除外し、bcc / 配信は「To/Cc に自分がいる」条件で構造的に除外する。`self_addresses` 未設定なら**常に空**（`doctor` が警告する）。
 >
 > ランキングでは `to` のみが **aging**（古いほど高い）で、`cc` は mention と同じく減衰する（[ADR-0045](../adr/0045-priority-ranking-model.md)）。
+>
+> **calendar demand**（[ADR-0044](../adr/0044-calendar-proximity-signals.md) / [#490](https://github.com/ozzy-labs/suasor/issues/490)）: `source` に `calendar` が加わった（google / outlook 双方）。`meeting_soon`（≤120 分）と `meeting_prep`（≤24 時間 かつ 議題 or 添付 or organizer）の**窓を分ける**のが要点で、準備は前夜に出ないと行動できず、出席の催促は 24 時間前では邪魔になる。両方に該当する予定は `meeting_soon` として 1 行のみ。
+>
+> 除外は **`declined`**（明示的な意思表示を覆さない）/ **optional・非参加者**（最上位が任意参加で埋まる）/ **終日予定**（00:00 開始に近接の意味が無い）。**ack 不要で、開始すれば窓から外れる**（`demand.mark` は「準備済み」の脱出口として引き続き有効）。
+>
+> ランキングでは開始 **30 分以内**のみが hard tier（`starting_soon`）で、それ以外は `prep` 項として 24 時間で 0 になる連続スコアになる（[ADR-0045](../adr/0045-priority-ranking-model.md) 決定 1 が ADR-0044 決定 5 の 2 tier 案を改訂）。**`brief` は calendar demand を含まない** — brief は「窓」の束であり、窓の対象列は更新時刻なので、含めると「先週編集された予定」を答えてしまう。
 
 ### `sync.status`（確定・read・#442）
 

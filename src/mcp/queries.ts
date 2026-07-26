@@ -899,12 +899,49 @@ export function listCommitments(
 }
 
 /**
- * Connector-neutral demand source grouping (ADR-0041 / ADR-0043 決定 4).
- * `email` covers both Gmail and Outlook: the user's mental model is "mail", not
- * "which provider" — and the originating connector is still visible in each
- * row's `sourceType` (`gmail_message` / `ms365_mail`).
+ * Every demand source, and the default when no `source` filter is given
+ * (ADR-0041 / ADR-0043 決定 4 / ADR-0044 決定 4). `email` covers both Gmail and
+ * Outlook and `calendar` both Google Calendar and Outlook Calendar: the user's
+ * mental model is "mail" and "my calendar", not "which provider" — and the
+ * originating connector stays visible in each row's `sourceType`
+ * (`gmail_message` / `ms365_mail`, `google_calendar` / `ms365_calendar`).
+ *
+ * The MCP tool derives its `source` enum from this tuple, so a source added
+ * here cannot be left unselectable at the surface (as `email` briefly was).
  */
-export type DemandSource = "slack" | "github" | "email";
+export const DEMAND_SOURCES = ["slack", "github", "email", "calendar"] as const;
+
+/** Connector-neutral demand source grouping — one of {@link DEMAND_SOURCES}. */
+export type DemandSource = (typeof DEMAND_SOURCES)[number];
+
+/** Calendar `source_type`s carrying the neutral calendar meta shape. */
+const CALENDAR_SOURCE_TYPES = "('google_calendar', 'ms365_calendar')";
+
+/**
+ * The `meeting_soon` window (ADR-0044 決定 4): "you are about to be in this
+ * meeting". Kept at 120 minutes — ADR-0045 narrowed the *hard ranking tier* to
+ * {@link STARTING_SOON_MINUTES}, not the kind itself, so `demand.list` still
+ * answers "what am I walking into this afternoon".
+ */
+export const MEETING_SOON_MINUTES = 120;
+
+/**
+ * The `meeting_prep` window (ADR-0044 決定 4): "prepare this tonight". The two
+ * windows are deliberately different — preparation surfaced 20 minutes ahead is
+ * useless, and "time to head out" surfaced 20 hours ahead is noise. Folding them
+ * into one threshold makes one of the two behaviours worthless.
+ */
+export const MEETING_PREP_MINUTES = 24 * 60;
+
+/**
+ * `now` shifted by whole minutes, as a UTC ISO 8601 instant. Comparable
+ * lexicographically against `meta.start`, which both connectors normalize
+ * through `Date#toISOString` (ADR-0044 決定 1b) — so the window predicates stay
+ * plain string comparisons in SQL, with no date functions and no timezone.
+ */
+function isoPlusMinutes(now: string, minutes: number): string {
+  return new Date(new Date(now).getTime() + minutes * 60_000).toISOString();
+}
 
 /**
  * Seen-state of a demand row (ADR-0041). `acked` / `dismissed` come from the
@@ -944,11 +981,12 @@ export const GITHUB_DEMAND_REASONS = [
  * Slack-only `SlackDemandRecord`.
  */
 export interface DemandRecord extends SourceRecord {
-  /** Which connector the demand came from (`slack` / `github`). */
+  /** Which connector family the demand came from. */
   source: DemandSource;
   /**
-   * Fine-grained classification: Slack `mention` / `dm`, or a github
-   * notification `reason` (e.g. `review_requested`).
+   * Fine-grained classification: Slack `mention` / `dm`, a github notification
+   * `reason` (e.g. `review_requested`), email `to` / `cc`, or calendar
+   * `meeting_soon` / `meeting_prep`.
    */
   kind: string;
   /**
@@ -988,13 +1026,28 @@ export interface ListDemandOptions {
    * unanswered" is underivable without knowing who "me" is.
    */
   selfAddresses?: string[];
-  /** Restrict to a single connector (`slack` / `github`); default: both. */
-  source?: DemandSource;
   /**
-   * Restrict to these kinds (matched against `kind`: Slack `mention` / `dm`, or a
-   * github `reason`). Default: every demand kind.
+   * Restrict to one source, or to a set of them. Default: every source in
+   * {@link DEMAND_SOURCES}. The array form exists so a caller can *exclude* a
+   * source it cannot interpret — `buildBrief` passes the three observation-time
+   * sources because a period bundle has no room for a now-relative one
+   * (a meeting starting in two hours is not something that "happened last week").
+   */
+  source?: DemandSource | readonly DemandSource[];
+  /**
+   * Restrict to these kinds (matched against `kind`: Slack `mention` / `dm`, a
+   * github `reason`, email `to` / `cc`, calendar `meeting_soon` /
+   * `meeting_prep`). Default: every demand kind.
    */
   kinds?: string[];
+  /**
+   * Reference "now" for calendar proximity (ISO 8601), injectable so the
+   * derivation is deterministic under test (ADR-0028 / ADR-0044 決定 3);
+   * defaults to the wall clock. Never stored — a meeting's urgency is read from
+   * `meta.start` against this clock, not baked into a projection that goes stale
+   * in minutes and breaks replay invariance (ADR-0002).
+   */
+  now?: string;
   /** Window over `observed_at`. */
   observed?: TimeRange;
   /**
@@ -1036,6 +1089,16 @@ function nameOrNull(value: string | null): string | null {
  *   - **GitHub** (`source: "github"`): `github_notification` threads whose
  *     `meta.reason` is demand-worthy ({@link GITHUB_DEMAND_REASONS}); `kind` is
  *     the reason (e.g. `review_requested`). No slack enrichment (those are null).
+ *   - **Calendar** (`source: "calendar"`, ADR-0044 決定 4): meetings starting
+ *     within {@link MEETING_SOON_MINUTES} (`kind: "meeting_soon"`) or needing
+ *     preparation within {@link MEETING_PREP_MINUTES} (`kind: "meeting_prep"`),
+ *     derived at read time from `meta.start` against an injectable `now`.
+ *
+ * Rows come back newest-observed-first, **except calendar rows, which lead the
+ * list ordered by start time, soonest first**. Freshness and proximity are
+ * genuinely different axes and interleaving them by one key would misreport one
+ * of the two; leading with calendar also keeps an imminent meeting from being
+ * the row that `limit` cuts off.
  *
  * By default only **outstanding** (un-acked) demand is returned: rows with a
  * `demand_seen` marker (written by `demand.mark`, ADR-0041) — or a github
@@ -1049,9 +1112,16 @@ export function listDemand(sqlite: Database, options: ListDemandOptions = {}): D
   const kinds = options.kinds;
   const branches: string[] = [];
   const branchParams: string[] = [];
+  const wanted = new Set<DemandSource>(
+    options.source === undefined
+      ? DEMAND_SOURCES
+      : typeof options.source === "string"
+        ? [options.source]
+        : options.source,
+  );
 
   // Slack branch: DM and/or @mention predicates (gated by `kinds` + selfUserIds).
-  if (options.source !== "github") {
+  if (wanted.has("slack")) {
     const wantsDm = kinds === undefined || kinds.includes("dm");
     const wantsMention = kinds === undefined || kinds.includes("mention");
     const orClauses: string[] = [];
@@ -1093,7 +1163,7 @@ export function listDemand(sqlite: Database, options: ListDemandOptions = {}): D
   // replying self-resolving: the moment my reply is ingested the predicate
   // breaks and the row leaves demand, with no ack required — unlike Slack,
   // where acking is the only exit.
-  if (options.source !== "slack" && options.source !== "github") {
+  if (wanted.has("email")) {
     const selfAddresses = (options.selfAddresses ?? []).filter((a) => a.length > 0);
     const wantsTo = kinds === undefined || kinds.includes("to");
     const wantsCc = kinds === undefined || kinds.includes("cc");
@@ -1153,10 +1223,68 @@ export function listDemand(sqlite: Database, options: ListDemandOptions = {}): D
     }
   }
 
+  // Calendar branch (ADR-0044 決定 3/4): meetings I am about to be in, or that I
+  // have to prepare tonight — derived at read time from `meta.start` against an
+  // injectable `now`, never written to a projection.
+  //
+  // Two windows, not one: `meeting_soon` (≤120min) is "head out", `meeting_prep`
+  // (≤24h, and only when there is something to prepare) is "do this tonight".
+  // A meeting inside both is emitted once, as the stronger `meeting_soon`.
+  //
+  // Unlike every other demand source this one needs no ack: the event leaves the
+  // window when it starts. `demand.mark` still works as an escape hatch for
+  // "already prepared".
+  if (wanted.has("calendar")) {
+    const now = options.now ?? new Date().toISOString();
+    const soonHorizon = isoPlusMinutes(now, MEETING_SOON_MINUTES);
+    const prepHorizon = isoPlusMinutes(now, MEETING_PREP_MINUTES);
+    const wantsSoon = kinds === undefined || kinds.includes("meeting_soon");
+    const wantsPrep = kinds === undefined || kinds.includes("meeting_prep");
+    const start = "json_extract(sources.meta, '$.start')";
+    // "There is something to prepare" — an agenda, attachments, or my own
+    // meeting. Without it, every routine standup in the next 24h becomes demand.
+    const preparable =
+      "(json_extract(sources.meta, '$.hasAgenda') IS 1" +
+      " OR json_extract(sources.meta, '$.hasAttachments') IS 1" +
+      " OR json_extract(sources.meta, '$.role') = 'organizer')";
+    const kindClauses: string[] = [];
+    const kindParams: string[] = [];
+    if (wantsSoon) {
+      kindClauses.push(`${start} <= ?`);
+      kindParams.push(soonHorizon);
+    }
+    if (wantsPrep) {
+      kindClauses.push(`(${start} > ? AND ${preparable})`);
+      kindParams.push(soonHorizon);
+    }
+    if (kindClauses.length > 0) {
+      branches.push(
+        `SELECT sources.external_id, sources.source_type, sources.body, sources.fingerprint,
+                sources.observed_at, sources.meta,
+                'calendar' AS source,
+                CASE WHEN ${start} <= ? THEN 'meeting_soon' ELSE 'meeting_prep' END AS kind,
+                NULL AS channel_name, NULL AS user_name, NULL AS team_name
+           FROM sources
+          WHERE sources.source_type IN ${CALENDAR_SOURCE_TYPES}
+            -- not started yet, and no further out than the prep horizon
+            AND ${start} >= ?
+            AND ${start} <= ?
+            -- an all-day event "starts" at 00:00, so proximity says nothing
+            AND json_extract(sources.meta, '$.allDay') IS NOT 1
+            -- declining is an explicit answer; never re-raise it as demand
+            AND COALESCE(json_extract(sources.meta, '$.response'), 'none') <> 'declined'
+            -- optional attendance must not occupy the top of the list
+            AND json_extract(sources.meta, '$.role') IN ('organizer', 'required')
+            AND (${kindClauses.join(" OR ")})`,
+      );
+      branchParams.push(soonHorizon, now, prepHorizon, ...kindParams);
+    }
+  }
+
   // GitHub branch: notification threads whose reason is demand-worthy (and, when
   // `kinds` is set, intersected with it). No slack name enrichment (NULLs align
   // the UNION columns).
-  if (options.source !== "slack") {
+  if (wanted.has("github")) {
     const reasons =
       kinds === undefined
         ? [...GITHUB_DEMAND_REASONS]
@@ -1211,7 +1339,9 @@ export function listDemand(sqlite: Database, options: ListDemandOptions = {}): D
          FROM (${branches.join(" UNION ALL ")}) AS d
          LEFT JOIN demand_seen ds ON ds.external_id = d.external_id
         ${where}
-        ORDER BY d.observed_at DESC, d.external_id DESC
+        ORDER BY CASE WHEN d.source = 'calendar' THEN 0 ELSE 1 END,
+                 CASE WHEN d.source = 'calendar' THEN json_extract(d.meta, '$.start') END ASC,
+                 d.observed_at DESC, d.external_id DESC
         LIMIT ?`,
     )
     .all(...params);
@@ -1554,8 +1684,9 @@ export interface Brief {
   inbox: InboxRecord[];
   /**
    * Outstanding (un-acked) demand observed in the window (ADR-0041): Slack
-   * @mentions / DMs + demand-worthy github notifications. Seen (acked / dismissed
-   * / github-read) rows are excluded.
+   * @mentions / DMs + demand-worthy github notifications + unanswered mail. Seen
+   * (acked / dismissed / github-read) rows are excluded, and so is calendar
+   * demand — it is relative to *now*, not to the window (see `buildBrief`).
    */
   demand: DemandRecord[];
   /**
@@ -1633,9 +1764,15 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
     listCommitments(sqlite, { state: "open", limit: probeLimit }),
   );
   // Outstanding (un-acked) demand only — a seen mention no longer clutters the
-  // brief (ADR-0041). Neutral: Slack @mention/DM + github notifications.
+  // brief (ADR-0041). Neutral: Slack @mention/DM + github notifications + email.
+  // Calendar is deliberately excluded: its demand is relative to *now*, while a
+  // brief is a bundle of a *window*, and the window filter here is `observed_at`
+  // — an event's modification time. Including it would answer "which meetings
+  // were edited last week", which is nobody's question. Upcoming meetings reach
+  // the host through `priority.list` / `demand.list` instead.
   const demand = listWithTruncation(effLimit, (probeLimit) =>
     listDemand(sqlite, {
+      source: ["slack", "github", "email"],
       observed: window,
       ...(selfUserIds ? { selfUserIds } : {}),
       ...(selfAddresses !== undefined && selfAddresses.length > 0 ? { selfAddresses } : {}),
@@ -1665,12 +1802,17 @@ export function buildBrief(sqlite: Database, options: BuildBriefOptions = {}): B
 // --- Deterministic cross-entity priority scorer (ADR-0041 決定 3) ---------------
 
 /**
- * The rule tier that placed a priority row — its "why it ranked here" (ADR-0041):
- *   - `overdue`        — an overdue task / commitment (the strongest signal, top)
+ * Why a priority row ranked where it did (ADR-0041 / ADR-0045 決定 4). With one
+ * exception these name the **scoring term that contributed most**, not a tier:
+ *   - `starting_soon`  — the one hard tier: a meeting inside
+ *                        {@link STARTING_SOON_MINUTES}, which nothing outranks
+ *   - `overdue`        — days past due on a task / commitment (strongest term)
+ *   - `aging`          — days a mail addressed to me has gone unanswered
  *   - `unacked_demand` — an outstanding @mention / DM / notification (freshness)
- *   - `due_soon`       — has an upcoming due date (nearest first)
- *   - `priority`       — no due date, but a priority (high > normal > low)
- *   - `recency`        — none of the above; most-recently-updated
+ *   - `prep`           — closeness of a meeting to prepare for (ADR-0044)
+ *   - `due_soon`       — an upcoming due date (nearest first)
+ *   - `priority`       — a declared task priority (high > normal > low)
+ *   - `recency`        — no term applied at all; most-recently-updated
  */
 export type PriorityReason =
   | "starting_soon"
@@ -1795,6 +1937,8 @@ const SATURATION = {
   freshness: 7,
   /** Only the next two weeks of due dates pull rank. */
   dueSoon: 14,
+  /** A meeting a full day out is as far away as proximity gets (ADR-0044). */
+  prep: 1,
 } as const;
 
 /**
@@ -1809,6 +1953,19 @@ export const STARTING_SOON_MINUTES = 30;
 function daysBetween(from: string, to: string): number {
   const ms = new Date(to).getTime() - new Date(from).getTime();
   return Number.isFinite(ms) ? Math.max(0, ms / (24 * 60 * 60 * 1000)) : 0;
+}
+
+/** Minutes between two ISO timestamps (negative → 0; unparseable → 0). */
+function minutesBetween(from: string, to: string): number {
+  const ms = new Date(to).getTime() - new Date(from).getTime();
+  return Number.isFinite(ms) ? Math.max(0, ms / 60_000) : 0;
+}
+
+/** 「開始まで 40 分」/「開始まで 6 時間」— minutes while they still read naturally. */
+function untilStartPhrase(minutes: number): string {
+  return minutes < 60
+    ? `開始まで ${Math.round(minutes)} 分`
+    : `開始まで ${Math.round(minutes / 60)} 時間`;
 }
 
 /** Internal ranked row carrying its score and the term that dominated it. */
@@ -2015,10 +2172,50 @@ export function buildPriorities(
   // Outstanding (un-acked) demand — a seen mention is already filtered out.
   const selfAddresses = options.selfAddresses ?? [];
   for (const d of listDemand(sqlite, {
+    now,
     ...(selfUserIds.length > 0 ? { selfUserIds } : {}),
     ...(selfAddresses.length > 0 ? { selfAddresses } : {}),
     limit: PRIORITY_CANDIDATE_CAP,
   })) {
+    // Calendar demand is ranked by proximity, not by when the row was observed
+    // (that is the event's *modification* time — ADR-0044 決定 1c).
+    if (d.source === "calendar") {
+      const start = typeof d.meta.start === "string" ? d.meta.start : null;
+      if (start === null) continue;
+      const minutes = minutesBetween(now, start);
+      // Proximity is one continuous ramp across both kinds, so approaching a
+      // meeting never makes it score *less* and there is no second cliff to
+      // explain. It is scored even inside the hard tier: a row ranked first
+      // while reporting `score: 0` would read as a bug to anyone inspecting it.
+      const { score } = scoreOf([
+        {
+          reason: "prep",
+          value: WEIGHTS.prep * (1 - ramp(minutes / (24 * 60), SATURATION.prep)),
+          explanation: untilStartPhrase(minutes),
+        },
+      ]);
+      // The one hard tier (ADR-0045 決定 1) is an ordering override on top of
+      // that score, not a score of its own. A meeting is the only thing here
+      // that cannot be moved: an overdue task can be done an hour from now, a
+      // meeting 20 minutes out happens in 20 minutes or not at all.
+      const imminent = minutes <= STARTING_SOON_MINUTES;
+      candidates.push({
+        tier: imminent ? 0 : 1,
+        entity: "demand",
+        id: d.externalId,
+        title: demandTitle(d.body),
+        overdue: false,
+        dueDate: null,
+        priority: null,
+        score,
+        reason: imminent ? "starting_soon" : "prep",
+        explanation: imminent ? `${Math.round(minutes)} 分後に開始` : untilStartPhrase(minutes),
+        startsAt: imminent ? start : null,
+        recencyKey: d.observedAt,
+        record: d,
+      });
+      continue;
+    }
     const age = daysBetween(d.observedAt, now);
     // Two time terms with opposite signs (ADR-0045 決定 2): a mention decays as
     // it ages, an unanswered email addressed to me gets worse. The tier ladder

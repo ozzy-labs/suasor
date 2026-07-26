@@ -70,7 +70,7 @@ calendar の取り込みは google / ms-graph の両方に存在するが、「*
 - **`optional` のみ** — 任意参加を「まもなく始まる」で割り込ませると、tier がゴミで埋まる（[ADR-0043](0043-email-demand-signals.md) と同じ懸念）
 - **終日予定** — 「00:00 に始まる」ので proximity の意味を成さない。終日の予定に準備物がある場合は将来課題
 
-**ack は不要で、時間が解決する。** 予定は `end` を過ぎれば窓から自然に外れる（[ADR-0043](0043-email-demand-signals.md) の「返信すれば消える」と同型の自己解決）。`demand.ack` / `demand.dismiss` は「準備は済んだ」を明示したい場合の脱出口として引き続き効く。
+**ack は不要で、時間が解決する。** 予定は**開始した時点**で窓から外れる（上表の下限が `now <= start` であることの帰結。会議に入ってからの催促は行動を変えない。[ADR-0043](0043-email-demand-signals.md) の「返信すれば消える」と同型の自己解決）。`demand.ack` / `demand.dismiss` は「準備は済んだ」を明示したい場合の脱出口として引き続き効く。
 
 ### 決定 5: `starting_soon` を順序の最上位 tier にする
 
