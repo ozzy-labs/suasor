@@ -260,25 +260,54 @@ describe("per-account advisories (ADR-0050 / #441)", () => {
 });
 
 describe("demotedDefaultAccountNotice — the flat slice becoming defaults (ADR-0050)", () => {
-  test("silent when there is no accounts table, or when it declares default", () => {
-    expect(demotedDefaultAccountNotice("google", { clientId: "c" }, true)).toBeNull();
+  /** Credential probe that records whether it was consulted at all. */
+  function probe(stored: boolean): (() => Promise<boolean>) & { calls: () => number } {
+    let calls = 0;
+    const fn = async () => {
+      calls += 1;
+      return stored;
+    };
+    return Object.assign(fn, { calls: () => calls });
+  }
+
+  test("silent when there is no accounts table, or when it declares default", async () => {
+    // And without touching the keychain: the probe is a callback precisely so
+    // the common case costs no secret read per connector per doctor run.
+    const flat = probe(true);
+    expect(await demotedDefaultAccountNotice("google", { clientId: "c" }, flat)).toBeNull();
+    expect(flat.calls()).toBe(0);
+
+    const declared = probe(true);
     expect(
-      demotedDefaultAccountNotice("google", { accounts: { default: {}, work: {} } }, true),
+      await demotedDefaultAccountNotice(
+        "google",
+        { accounts: { default: {}, work: {} } },
+        declared,
+      ),
     ).toBeNull();
+    expect(declared.calls()).toBe(0);
   });
 
-  test("warns when a credential for the unnamed default is still stored", () => {
-    const notice = demotedDefaultAccountNotice("google", { accounts: { work: {} } }, true);
+  test("warns when a credential for the unnamed default is still stored", async () => {
+    const notice = await demotedDefaultAccountNotice(
+      "google",
+      { accounts: { work: {} } },
+      probe(true),
+    );
     expect(notice?.severity).toBe("warn");
     expect(notice?.message).toContain("no longer synced");
     expect(notice?.message).toContain("[connectors.google.accounts.default]");
   });
 
-  test("only informs when nothing shows the default account ever existed", () => {
+  test("only informs when nothing shows the default account ever existed", async () => {
     // Without a stored credential, "was ingesting" and "never was" are
     // indistinguishable — so the notice states the rule and asserts nothing
     // about this install's history.
-    const notice = demotedDefaultAccountNotice("google", { accounts: { work: {} } }, false);
+    const notice = await demotedDefaultAccountNotice(
+      "google",
+      { accounts: { work: {} } },
+      probe(false),
+    );
     expect(notice?.severity).toBe("info");
     expect(notice?.message).not.toContain("no longer synced");
     expect(notice?.message).toContain("inherited defaults");

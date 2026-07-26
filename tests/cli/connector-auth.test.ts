@@ -438,6 +438,15 @@ describe("auth verbs — per-account targeting", () => {
     expect(err).not.toContain("account '");
   });
 
+  test("--json emits nothing when no account verified (pre-ADR-0050 behaviour)", async () => {
+    // An empty `{"accounts":{}}` would read as a successful probe that found no
+    // accounts, when in fact every probe failed (errors went to stderr).
+    const { code, out, err } = await withConfig(TWO_ACCOUNTS, ["google", "auth", "test", "--json"]);
+    expect(code).toBe(1);
+    expect(out).toBe("");
+    expect(err).toContain("no google refreshToken configured");
+  });
+
   test("the account flag is documented on both verbs", async () => {
     for (const verb of ["set", "test"]) {
       const { code, out } = await run(["google", "auth", verb, "--help"]);
