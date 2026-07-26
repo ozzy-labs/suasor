@@ -179,9 +179,31 @@ describe("check-doc-links.mjs — absolute links into this repository (#548)", (
   });
 });
 
-describe("check-doc-links.mjs — shipped doc roots (#548)", () => {
+describe("check-doc-links.mjs — shipped roots (#548)", () => {
   /** A manifest that ships `docs/skills` on its own, as the real one does. */
   const manifest = JSON.stringify({ files: ["dist/index.js", "docs/skills"] });
+
+  test("applies to any shipped directory, not only ones under docs/", () => {
+    // The rule follows what is distributed, not where it happens to live.
+    const { exitCode, stderr } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["templates"] }),
+      "templates/note.md": "# Note\n\n[adr](../docs/adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("templates/ is distributed on its own");
+  });
+
+  test("a files entry naming a single file is not a root", () => {
+    // `dist/index.js` and friends are files; treating them as roots would flag
+    // links they cannot possibly contain.
+    const { exitCode } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["docs/guide/install.md"] }),
+      "docs/guide/install.md": "# Install\n\n[adr](../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(0);
+  });
 
   test("fails on a relative link that escapes the shipped root, naming the URL to use", () => {
     const { exitCode, stderr } = runOnFixture({

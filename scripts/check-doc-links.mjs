@@ -25,9 +25,9 @@
  *      ships on its own cannot use a relative link (see 4);
  *   3. the `#fragment` of a link that points at *another* Markdown file
  *      (same-file fragments are already MD051's job — see below);
- *   4. that no relative link escapes a **shipped doc root** — a `docs/…` entry of
- *      `package.json`'s `files`, i.e. a directory distributed without the rest of
- *      the repository. `docs/skills` is one: the npm package, the standalone
+ *   4. that no relative link escapes a **shipped root** — a directory entry of
+ *      `package.json`'s `files`, i.e. one distributed without the rest of the
+ *      repository. `docs/skills` is the live one: the npm package, the standalone
  *      binary and `suasor skills install` all carry the skill bodies with no
  *      `docs/adr` anywhere near them (ADR-0008 / ADR-0010, Issue #548), so
  *      `../../adr/0008-….md` resolves in the repo, passes check 1, and points at
@@ -181,10 +181,13 @@ function splitDestination(destination) {
   return { path, fragment, origin };
 }
 
+/** Characters that make a `package.json` `files` entry a glob rather than a path. */
+const GLOB_CHARACTERS = /[*?[\]{}!]/;
+
 /**
- * Doc directories that `package.json` ships on their own (`files` entries under
- * `docs/`), read from the repository under test rather than hardcoded so adding
- * a second one cannot silently escape the rule below.
+ * Directories `package.json` ships on their own — the `files` entries that are
+ * tracked directories — read from the repository under test rather than
+ * hardcoded, so adding a second one cannot silently escape the rule below.
  *
  * `docs/skills` is the live case: the npm package, the standalone binary
  * (`src/skills/embedded.ts`) and `suasor skills install` all deliver skill
@@ -193,28 +196,41 @@ function splitDestination(destination) {
  * Returns no roots when there is no readable `package.json` — the rule then does
  * not apply, which is the honest answer for a tree that ships nothing.
  *
- * `files` entries may be globs. Those are **not** interpreted: a half-understood
- * glob would decide the rule silently and wrongly. They come back in
- * `unsupported` so the run reports them as `unverified` instead.
+ * `files` entries may be globs. Those are **not** expanded: a half-understood
+ * glob would decide the rule silently and wrongly. A glob whose literal prefix
+ * could cover Markdown comes back in `unsupported` so the run reports it as
+ * `unverified`; one that cannot (`dist/*`) is dropped, since warning about it
+ * would be noise, not information.
  */
-function shippedDocRoots(root) {
+function shippedRoots(root, trackedDirectories, markdownFiles) {
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   } catch {
     return { roots: [], unsupported: [] };
   }
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
-  const docEntries = files.filter((entry) => typeof entry === "string" && entry.startsWith("docs/"));
-  return {
-    roots: docEntries.filter((entry) => !/[*?[\]{}!]/.test(entry)).map((e) => e.replace(/\/+$/, "")),
-    unsupported: docEntries.filter((entry) => /[*?[\]{}!]/.test(entry)),
-  };
+  const entries = (Array.isArray(manifest.files) ? manifest.files : [])
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => entry.replace(/^\.\//, "").replace(/\/+$/, ""));
+  const roots = [];
+  const unsupported = [];
+  for (const entry of entries) {
+    if (!GLOB_CHARACTERS.test(entry)) {
+      if (trackedDirectories.has(entry)) roots.push(entry);
+      continue;
+    }
+    const literalPrefix = entry.slice(0, entry.search(GLOB_CHARACTERS)).replace(/\/[^/]*$/, "");
+    const coversMarkdown =
+      literalPrefix.length === 0 ||
+      markdownFiles.some((file) => file.startsWith(`${literalPrefix}/`));
+    if (coversMarkdown) unsupported.push(entry);
+  }
+  return { roots, unsupported };
 }
 
-/** The shipped doc root `path` sits inside, or `null` when it is in none. */
+/** The shipped root `path` sits inside, or `null` when it is in none. */
 function enclosingShippedRoot(roots, path) {
-  return roots.find((docRoot) => path === docRoot || path.startsWith(`${docRoot}/`)) ?? null;
+  return roots.find((shipped) => path === shipped || path.startsWith(`${shipped}/`)) ?? null;
 }
 
 /**
@@ -351,11 +367,15 @@ function main(root) {
   };
 
   // 1. Markdown link targets, collecting the fragments of the ones that resolve.
-  const { roots: docRoots, unsupported: globbedDocRoots } = shippedDocRoots(root);
-  for (const entry of globbedDocRoots) {
+  const { roots: docRoots, unsupported: globbedRoots } = shippedRoots(
+    root,
+    tracked.directories,
+    markdown,
+  );
+  for (const entry of globbedRoots) {
     unverified.push(
-      `package.json "files" — the shipped doc root "${entry}" is a glob, which this ` +
-        "script does not expand, so links out of it are not checked (Issue #548)",
+      `package.json "files" — the shipped root "${entry}" is a glob, which this script ` +
+        "does not expand, so relative links out of it are not checked (Issue #548)",
     );
   }
   const linksByTargetFile = new Map();
