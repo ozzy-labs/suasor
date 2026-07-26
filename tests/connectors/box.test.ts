@@ -260,6 +260,221 @@ describe("Box connector — guards", () => {
   // the completeness test in `tests/connectors/manifest.test.ts`.
 });
 
+describe("Box connector — multi-account (ADR-0050 / #537)", () => {
+  /** A client factory routing each account's token to its own folder fixtures. */
+  function boxByToken(byToken: Record<string, Record<string, BoxPage[]>>): {
+    factory: (token: string) => BoxClientLike;
+    calls: Array<{ token: string; folderId: string }>;
+  } {
+    const calls: Array<{ token: string; folderId: string }> = [];
+    return {
+      factory: (token) => {
+        const pages = byToken[token] ?? {};
+        const cursors: Record<string, number> = {};
+        return {
+          async listFolder(folderId) {
+            calls.push({ token, folderId });
+            const list = pages[folderId];
+            if (!list) throw new Error(`404 folder ${folderId} not found for ${token}`);
+            const idx = cursors[folderId] ?? 0;
+            cursors[folderId] = idx + 1;
+            return list[idx] ?? { files: [] };
+          },
+          async downloadFile(fileId) {
+            return new TextEncoder().encode(`${token}:${fileId}`);
+          },
+        };
+      },
+      calls,
+    };
+  }
+
+  const accountSecrets = (table: Record<string, string>) => async (name: string) =>
+    table[name] ?? null;
+
+  test("the same folder id means a different folder per account (the reason for naming)", async () => {
+    // Box's root folder is id "0" in *every* account, so `folders = ["0"]` is
+    // only addressable once the account is named — the ADR-0050 決定 1 criterion.
+    const { factory, calls } = boxByToken({
+      "tok-personal": { "0": [{ files: [{ id: "p1", name: "personal.txt" }] }] },
+      "tok-work": { "0": [{ files: [{ id: "w1", name: "work.txt" }] }] },
+    });
+    const connector = createBoxConnector(
+      { folders: ["0"], accounts: { personal: {}, work: {} } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: accountSecrets({ "personal:token": "tok-personal", "work:token": "tok-work" }),
+        }),
+      ),
+    );
+    // Namespaced ids: without the prefix these two accounts' files would share
+    // one id space that Box does not document as collision-free, and a file
+    // collaborated into both accounts carries literally the same id in each.
+    expect(records.map((r) => r.externalId)).toEqual(["box:personal:file:p1", "box:work:file:w1"]);
+    expect(records.map((r) => (r.meta as { account?: string }).account)).toEqual([
+      "personal",
+      "work",
+    ]);
+    expect(calls).toEqual([
+      { token: "tok-personal", folderId: "0" },
+      { token: "tok-work", folderId: "0" },
+    ]);
+    expect((await connector.finalize?.())?.partialFailure).toBeUndefined();
+  });
+
+  test("flat keys are inherited defaults an account can override", async () => {
+    const { factory, calls } = boxByToken({
+      "tok-a": { "0": [{ files: [{ id: "a1", name: "a.txt" }] }] },
+      "tok-b": { "77": [{ files: [{ id: "b1", name: "b.txt" }] }] },
+    });
+    const connector = createBoxConnector(
+      { folders: ["0"], accounts: { a: {}, b: { folders: ["77"] } } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(ctx({ secret: accountSecrets({ "a:token": "tok-a", "b:token": "tok-b" }) })),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["box:a:file:a1", "box:b:file:b1"]);
+    expect(calls.map((c) => c.folderId)).toEqual(["0", "77"]);
+  });
+
+  test("a tokenless account is skipped with a warning, not a total failure", async () => {
+    const warns: string[] = [];
+    const { factory } = boxByToken({
+      "tok-a": { "0": [{ files: [{ id: "a1", name: "a.txt" }] }] },
+    });
+    const connector = createBoxConnector(
+      { folders: ["0"], accounts: { a: {}, b: {} } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({ secret: accountSecrets({ "a:token": "tok-a" }), onWarn: (m) => warns.push(m) }),
+      ),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["box:a:file:a1"]);
+    expect(warns.join("\n")).toContain("account 'b' skipped: no token configured");
+    const result = await connector.finalize?.();
+    // A configured account that ingested nothing is a partial failure (exit 1),
+    // not a clean run with fewer records (ADR-0050 決定 4).
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines).toContain("accounts: a=ok, b=skipped");
+  });
+
+  test("one account's folders all failing does not stop the other account", async () => {
+    const warns: string[] = [];
+    // `b`'s only folder is absent from its fixtures → listFolder throws for every
+    // folder of that account, so the per-folder layer rethrows and the account
+    // layer isolates it.
+    const { factory } = boxByToken({
+      "tok-a": { "0": [{ files: [{ id: "a1", name: "a.txt" }] }] },
+      "tok-b": {},
+    });
+    const connector = createBoxConnector(
+      { folders: ["0"], accounts: { a: {}, b: {} } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: accountSecrets({ "a:token": "tok-a", "b:token": "tok-b" }),
+          onWarn: (m) => warns.push(m),
+        }),
+      ),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["box:a:file:a1"]);
+    expect(warns.join("\n")).toContain("1 account OK, 1 not synced");
+    expect(warns.join("\n")).toContain("404 folder 0 not found for tok-b");
+    expect((await connector.finalize?.())?.summaryLines).toContain("accounts: a=ok, b=failed");
+  });
+
+  test("a per-folder failure inside a named account is attributed to it", async () => {
+    const warns: string[] = [];
+    const { factory } = boxByToken({
+      "tok-a": { "1": [{ files: [{ id: "a1", name: "a.txt" }] }] },
+    });
+    const connector = createBoxConnector(
+      { accounts: { a: { folders: ["1", "2"] } } },
+      { clientFactory: factory },
+    );
+    await collect(
+      connector.sync(
+        ctx({ secret: accountSecrets({ "a:token": "tok-a" }), onWarn: (m) => warns.push(m) }),
+      ),
+    );
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines).toContain(
+      "account 'a' folders: 1=ok, 2=failed (cursor preserved)",
+    );
+  });
+
+  test("each record's extraction handle downloads through its own account's client", async () => {
+    // The client is now built per account, and `readBytes` is called long after
+    // `sync()` returned (the extraction stage drives it) — so each record has to
+    // keep *its* account's client, not the last one built.
+    const { factory } = boxByToken({
+      "tok-a": { "0": [{ files: [{ id: "d1", name: "a.docx", size: 4, sha1: "s1" }] }] },
+      "tok-b": { "0": [{ files: [{ id: "d2", name: "b.docx", size: 4, sha1: "s2" }] }] },
+    });
+    const connector = createBoxConnector(
+      { folders: ["0"], accounts: { a: {}, b: {} } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(ctx({ secret: accountSecrets({ "a:token": "tok-a", "b:token": "tok-b" }) })),
+    );
+    const bytes = await Promise.all(records.map((r) => r.extractable?.readBytes()));
+    expect(bytes.map((b) => new TextDecoder().decode(b))).toEqual(["tok-a:d1", "tok-b:d2"]);
+  });
+
+  test("the credential requirement names one token per configured account", () => {
+    const connector = createBoxConnector({ accounts: { personal: {}, work: {} } });
+    expect(connector.credentials?.secretNames).toEqual(["personal:token", "work:token"]);
+    expect(connector.credentials?.missingMessage).toContain("for any account");
+    // The single-account message is untouched (ADR-0050 決定 3 back-compat).
+    expect(createBoxConnector({}).credentials?.missingMessage).toBe(
+      "box connector: no token configured " +
+        "(set SUASOR_CONNECTOR_BOX_TOKEN or store it in the OS keychain)",
+    );
+  });
+
+  test("a config with no accounts table is unchanged (id, meta, secret name)", async () => {
+    const asked: string[] = [];
+    const { client } = fakeBox({ "0": [{ files: [{ id: "11", name: "report.txt" }] }] });
+    const connector = createBoxConnector({ folders: ["0"] }, { clientFactory: () => client });
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => {
+            asked.push(name);
+            return name === "token" ? "dev-tok" : null;
+          },
+        }),
+      ),
+    );
+    expect(records[0]?.externalId).toBe("box:file:11");
+    expect(records[0]?.meta).not.toHaveProperty("account");
+    // The unprefixed secret name is what keeps an existing keychain entry alive.
+    expect(asked).toEqual(["token"]);
+    expect((await connector.finalize?.())?.partialFailure).toBeUndefined();
+  });
+
+  test("an account table is strict and its name charset is enforced", () => {
+    expect(() => BoxConnectorConfig.parse({ accounts: { work: { folder: ["0"] } } })).toThrow();
+    expect(() => BoxConnectorConfig.parse({ accounts: { "we.rk": {} } })).toThrow(
+      /invalid account name/,
+    );
+    // `work-a` and `work_a` both normalize to SUASOR_CONNECTOR_BOX_WORK_A_TOKEN.
+    expect(() => BoxConnectorConfig.parse({ accounts: { "work-a": {}, work_a: {} } })).toThrow(
+      /env override segment/,
+    );
+  });
+});
+
 /** Extractor that returns text from a table; `null` ⇒ unsupported. */
 function fakeExtractor(table: Record<string, string | null>): Extractor {
   return {

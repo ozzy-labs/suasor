@@ -31,6 +31,8 @@ google / ms-graph はここが構造的に違う。取り込みスコープが**
 
 同じ基準を全 connector に当てて manifest に `multiAccount` を宣言させる（[ADR-0007](0007-connector-contract.md) の completeness test が config schema と突き合わせる）。`github`（`owner/repo`）/ `notion`（database id）/ `jira`（`host` が site を名指す）/ `slack`（channel id）/ `web`・`local`（URL / 絶対パス）はいずれも **id 側が既に一意**なので `false`。`box` は folder id がアカウント相対なので**真の候補だが本 PR のスコープ外**で、`multiAccount: false` の宣言にその旨を注記する（無言の欠落にしない）。
 
+> **追記（2026-07-27・[#537](https://github.com/ozzy-labs/suasor/issues/537)）**: box を採用済みにした（`multiAccount: true`）。基準の当てはまりは Box 側の documented な事実で裏が取れている — **root folder は全アカウントで id `0`**（[Box API reference](https://developer.box.com/reference/get-folders-id/)）なので、`folders = ["0"]` は account を名指すまで「誰の root か」を言えない。externalId の名前空間化（決定 3）も box では別根拠で必須になる: **collaboration で共有されたファイルは複製ではなく同一オブジェクト**なので、個人 box と仕事 box の双方に共有された 1 ファイルは**両アカウントで同一の file id** を返す。加えて Box は file id の一意性スコープを規定しておらず、この id 族で規定がある唯一の id（root folder `0`）は account 相対なので、「file id は globally unique だろう」という**未検証の前提には依存しない**方針を採った（判定不能を推測で埋めない・[ADR-0049](0049-connector-readiness-parity.md) の規律）。したがって multi-account 対応 connector は **google / ms-graph / box** の 3 つである。
+
 ### 2. config: `[connectors.<name>.accounts.<account>]`、flat キーは**継承の既定値**
 
 ```toml
@@ -115,7 +117,7 @@ email demand（[ADR-0043](0043-email-demand-signals.md)）の「自分」は 1 �
 - **個人 + 仕事の mail / calendar / files を 1 install で取り込める**（本 issue の目的）。秘書の基質が構造的に半分しか入らない状態が解消する。
 - **既存 config・既存 credential・既存 source lineage は無改修で動く**（決定 3）。移行手順が要らない。
 - 「半分だけ設定できている」状態が **doctor / `auth test` / `connectors list` の全部で account 名付きで出る**。1 枚の token が connector 全体を健康に見せることが無くなる。
-- multi-account が **manifest capability + 共有モジュール**になったので、次の connector（box）は config schema 1 行 + `multiAccount: true` + sync のラップで足りる。completeness test が宣言漏れを落とす。
+- multi-account が **manifest capability + 共有モジュール**になったので、次の connector（box）は config schema 1 行 + `multiAccount: true` + sync のラップで足りる。completeness test が宣言漏れを落とす。**（[#537](https://github.com/ozzy-labs/suasor/issues/537) で実測: box の採用は `src/connectors/box.ts` だけの変更で済み、CLI（`--account`）・doctor・`connectors list` / `config show` の per-account 表示・credential probe は manifest 宣言だけで通った。この予測は当たった。）**
 
 ### Negative / Trade-offs
 

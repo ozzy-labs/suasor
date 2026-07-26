@@ -90,5 +90,5 @@ NNNN-kebab-case-title.md
 | 0047 | Storage lifecycle (visibility first + opt-in retention; no content-addressing) |
 | 0048 | At-rest protection (threat model; owner-only files + OS full-disk encryption, no app-level crypto) |
 | 0049 | Per-connector readiness / drift parity (resource reachability layer above scope; drift Layer 1 generalized onto the discovery registry) |
-| 0050 | Multi-account ingestion (`[connectors.<name>.accounts.<account>]` for google / ms-graph; account-relative scope needs a named account) |
+| 0050 | Multi-account ingestion (`[connectors.<name>.accounts.<account>]` for google / ms-graph / box; account-relative scope needs a named account) |
 | 0051 | Ingest-scope defaults (google `calendarIds` plural + per-calendar identity; ms-graph `user` loses the app-only-invalid `"me"` default) |
