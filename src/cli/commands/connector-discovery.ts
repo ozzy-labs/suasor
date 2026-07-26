@@ -183,45 +183,15 @@ class ConnectorDiscoveryCommand extends Command {
       return 0;
     }
 
-    if (diff.added.length === 0) {
-      this.context.stdout.write(
-        `no new ${spec.itemNoun}(s): every ${spec.itemNoun} visible to this credential is already in [connectors.${connector}].${scope.key}\n`,
-      );
-    } else {
-      this.context.stdout.write(
-        `${diff.added.length} new ${spec.itemNoun}(s) visible but not in config:\n`,
-      );
-      for (const item of diff.added) {
-        this.context.stdout.write(`  ${item.value}  (${item.label})\n`);
-      }
-      this.context.stdout.write("\n");
-      const { renderConnectorConfigBlock } = await import(
-        "../../connectors/onboard/config-block.ts"
-      );
-      const block = renderConnectorConfigBlock(
-        connector,
-        diff.added.map((item) => ({ value: item.value, label: item.label })),
-        { key: scope.key, idNote: scope.idNote },
-      );
-      for (const line of block) this.context.stdout.write(`${line}\n`);
-      this.context.stderr.write(
-        `next: merge the ids above into the existing [connectors.${connector}].${scope.key} list ` +
-          `(nothing was ingested or written), then run \`suasor ${connector} sync\`.\n`,
-      );
-    }
-
-    if (!diff.removedComputed) {
-      // Say so rather than print an empty "removed" section that reads as "none".
-      this.context.stdout.write(
-        "\nremoved: not checked (--filter / --root narrows the view, so an id that is out of view is indistinguishable from one that is gone)\n",
-      );
-    } else if (diff.removed.length > 0) {
-      this.context.stdout.write(
-        `\n${diff.removed.length} configured ${spec.itemNoun}(s) not visible to this credential ` +
-          "(renamed, deleted, or no longer permitted — they sync nothing):\n",
-      );
-      for (const id of diff.removed) this.context.stdout.write(`  ${id}\n`);
-    }
+    const { renderDriftReport } = await import("../drift-report.ts");
+    const { out, err } = renderDriftReport({
+      connector,
+      itemNoun: spec.itemNoun,
+      scope,
+      diff,
+    });
+    for (const line of out) this.context.stdout.write(`${line}\n`);
+    for (const line of err) this.context.stderr.write(`${line}\n`);
     return 0;
   }
 }
