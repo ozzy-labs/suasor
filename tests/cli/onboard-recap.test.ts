@@ -107,6 +107,65 @@ describe("renderRecap", () => {
 });
 
 /**
+ * Pre-sync config advisories (Issue #544). The first sync now emits them (an
+ * empty ingest scope #187, an unset required setting ADR-0049 / ADR-0051) exactly
+ * as `suasor sync` does; the recap's job is only to keep the closing verdict from
+ * reading "Setup complete." over one — never to restate the advisory text, and
+ * never to change the exit code.
+ */
+describe("renderRecap — pre-sync config warnings", () => {
+  test("names the labels it was raised for and qualifies the closing verdict", () => {
+    const input = {
+      connectors: [ok({ connector: "ms-graph", configSource: "template" as const })],
+      synced: true,
+      syncExitCode: 0,
+      configWarnings: ["ms-graph"],
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("config: 1 pre-sync warning(s) for ms-graph");
+    expect(text).toContain("see the `warning:` line(s) above");
+    expect(text).toContain(
+      "Setup complete, but 1 pre-sync config warning(s) above are unresolved.",
+    );
+    // The advisory's own wording stays with its single emitter (the sync).
+    expect(text).not.toContain("required setting");
+    // A warning is not a failure: #187 / ADR-0049 both leave the exit code alone.
+    expect(recapHasFailure(input)).toBe(false);
+  });
+
+  test("carries the account label so a per-account advisory is attributable", () => {
+    const text = renderRecap({
+      connectors: [ok({ connector: "google", account: "work" })],
+      synced: true,
+      syncExitCode: 0,
+      configWarnings: ["google (account 'work')"],
+    });
+    expect(text).toContain("config: 1 pre-sync warning(s) for google (account 'work')");
+  });
+
+  test("a real failure still wins the verdict line", () => {
+    const input = {
+      connectors: [ok()],
+      synced: true,
+      syncExitCode: 1,
+      configWarnings: ["github"],
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("config: 1 pre-sync warning(s) for github");
+    expect(text).toContain("Setup finished with errors");
+    expect(text).not.toContain("Setup complete");
+    expect(recapHasFailure(input)).toBe(true);
+  });
+
+  test("no warnings → the block and the verdict are byte-for-byte the old ones", () => {
+    const base = { connectors: [ok()], synced: true, syncExitCode: 0 };
+    expect(renderRecap({ ...base, configWarnings: [] })).toBe(renderRecap(base));
+    expect(renderRecap(base)).toContain("Setup complete.");
+    expect(renderRecap(base)).not.toContain("pre-sync warning");
+  });
+});
+
+/**
  * Account mode (ADR-0050 / Issue #538): the recap has to name the account, and
  * every recovery command it prints has to carry `--account` — without it the
  * command either refuses as ambiguous or verifies the wrong account.

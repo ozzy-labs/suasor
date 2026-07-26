@@ -414,6 +414,10 @@ describe("auth verbs — per-account targeting", () => {
     ]);
     expect(code).toBe(1);
     expect(err).toContain("no per-account configuration");
+    // The connectors that *do* accept it are named, the same way `onboard` names
+    // them (#544) — and derived from the manifests, never listed in the CLI.
+    expect(err).toContain("google");
+    expect(err).toContain("ms-graph");
   });
 
   test("auth test with no --account reports every account, not just the first", async () => {

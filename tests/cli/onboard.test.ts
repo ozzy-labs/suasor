@@ -7,7 +7,7 @@
  * tests focus on the wizard's own glue and its only new side effect.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -1222,6 +1222,70 @@ describe("suasor onboard — --account (multi-account, ADR-0050 / Issue #538)", 
       );
       expect(code).toBe(0);
       expect(out).toContain("box (account 'work')");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The wizard's first sync and the pre-sync advisories (Issue #544).
+ *
+ * `firstSync` used to pass an empty `syncOptions`, so `runBulkSync` had no
+ * `onWarn` to emit through and every pre-sync advisory it produces — an empty
+ * ingest scope (#187), an unset required setting (ADR-0049 / ADR-0051) — was
+ * dropped. The same config said nothing under `onboard` and said it loudly under
+ * `sync`, and the connector the wizard had just written was the one about to
+ * ingest nothing.
+ *
+ * Driven with `local`, the one connector with no credential and no network: the
+ * slice is pre-written (so onboard leaves it untouched and never runs discovery)
+ * and the first sync is a real one, ingesting from the filesystem.
+ */
+describe("onboard first sync (pre-sync advisories)", () => {
+  test("emits the same advisory `sync` emits, and the recap refuses to close clean", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-sync-"));
+    try {
+      await run(["init"], { configDir: dir });
+      // Enabled with no ingest target — the #187 no-op state, reached the way a
+      // fresh onboard reaches it: a slice written before its roots are.
+      await Bun.write(join(dir, "config.toml"), "[connectors.local]\nroots = []\n");
+      const { code, out, err } = await run(["onboard", "--connector", "local", "--skip-auth"], {
+        configDir: dir,
+      });
+      // stderr: the same framing as `suasor sync` / `suasor local sync`.
+      expect(err).toContain("warning: local:");
+      expect(err).toContain("nothing to ingest");
+      // The recap points at it without restating it, and the closing verdict is
+      // no longer a bare "Setup complete." over a connector that ingests nothing.
+      expect(out).toContain("config: 1 pre-sync warning(s) for local");
+      expect(out).toContain("pre-sync config warning(s) above are unresolved");
+      expect(out).not.toContain("Setup complete.");
+      // Still a warning, not a failure: the sync itself succeeded (0 observed),
+      // so the exit code is the one `suasor sync` gives for this config (#187).
+      expect(out).toContain("0 observed");
+      expect(code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a complete slice keeps the old output (no warning line, `Setup complete.`)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-sync-"));
+    try {
+      await run(["init"], { configDir: dir });
+      // A scope with a target (an empty directory is still a target): neither
+      // advisory applies, so the recap must render exactly as it did before.
+      const roots = join(dir, "notes");
+      mkdirSync(roots);
+      await Bun.write(join(dir, "config.toml"), `[connectors.local]\nroots = ["${roots}"]\n`);
+      const { code, out, err } = await run(["onboard", "--connector", "local", "--skip-auth"], {
+        configDir: dir,
+      });
+      expect(code).toBe(0);
+      expect(err).not.toContain("warning: local:");
+      expect(out).not.toContain("pre-sync warning");
+      expect(out).toContain("Setup complete.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

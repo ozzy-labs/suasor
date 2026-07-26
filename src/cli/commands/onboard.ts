@@ -23,9 +23,11 @@
  */
 import { Command, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
+import type { ConnectorConfig } from "../../connectors/contract.ts";
 import type { AccountSlice } from "../../connectors/multi-account.ts";
 import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
+import { noPerAccountConfigMessage } from "../connector-account.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { loadOnboardBridge, onboardBridgeNames } from "../onboard/bridges.ts";
 import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
@@ -452,13 +454,17 @@ export class OnboardCommand extends Command {
       reports.push(report);
     }
 
-    // 5. First sync.
+    // 5. First sync. Its pre-sync advisories go to stderr as they do for `suasor
+    // sync`; the labels they were raised for are carried to the recap (step 9) so
+    // the closing verdict cannot read "Setup complete." over an open one (#544).
     let synced = false;
     let syncExitCode: number | null = null;
+    let configWarnings: readonly string[] = [];
     if (!this.skipSync) {
       const result = await this.firstSync(connectors);
       synced = true;
       syncExitCode = result.code;
+      configWarnings = result.configWarnings;
       if (!this.json) stdout.write(result.summary);
     }
 
@@ -575,7 +581,7 @@ export class OnboardCommand extends Command {
         ...(verb !== undefined ? { discoverySkippedVerb: verb } : {}),
       };
     });
-    const recapInput = { connectors: recap, synced, syncExitCode };
+    const recapInput = { connectors: recap, synced, syncExitCode, configWarnings };
     if (!this.json) {
       stdout.write(`\n${renderRecap(recapInput)}\n`);
     }
@@ -695,12 +701,9 @@ export class OnboardCommand extends Command {
     }
     const unsupported = connectors.filter((n) => connectorManifest(n)?.multiAccount !== true);
     if (unsupported.length > 0) {
-      return {
-        error:
-          `--account does not apply to ${unsupported.join(", ")}: only a connector with a ` +
-          `[connectors.<name>.accounts.<account>] table accepts it ` +
-          `(${multiAccountConnectorNames().join(", ")})`,
-      };
+      // The same sentence the `auth` / discovery verbs refuse with (#544): one
+      // mistake, one answer, whichever verb the operator reached for.
+      return { error: noPerAccountConfigMessage(unsupported, multiAccountConnectorNames()) };
     }
     let connectorsConfig: Record<string, Record<string, unknown> | undefined>;
     try {
@@ -1059,8 +1062,18 @@ export class OnboardCommand extends Command {
     }
   }
 
-  /** Run the first `suasor sync` over the selected connectors via the shared service. */
-  private async firstSync(connectors: string[]): Promise<{ code: number; summary: string }> {
+  /**
+   * Run the first `suasor sync` over the selected connectors via the shared
+   * service.
+   *
+   * `configWarnings` carries the labels (`google (account 'work')`) of the slices
+   * the pre-sync advisories fired for, for the closing recap — **not** their text:
+   * the text is printed by the sync itself, through `onWarn`, exactly where and
+   * how `suasor sync` prints it.
+   */
+  private async firstSync(
+    connectors: string[],
+  ): Promise<{ code: number; summary: string; configWarnings: string[] }> {
     const [{ loadConfig }, { Store }, { loadConnector }, { runBulkSync, selectEnabledConnectors }] =
       await Promise.all([
         import("../../config/index.ts"),
@@ -1072,16 +1085,25 @@ export class OnboardCommand extends Command {
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
-      return { code: 1, summary: "sync: storage.dbPath is not configured.\n" };
+      return {
+        code: 1,
+        summary: "sync: storage.dbPath is not configured.\n",
+        configWarnings: [],
+      };
     }
     // Only the connectors we just enabled (intersect with the enabled set so an
     // append-skipped, enabled=false slice is honored).
     const enabled = new Set(selectEnabledConnectors(connectorNames(), config.connectors));
     const names = connectors.filter((n) => enabled.has(n));
     if (names.length === 0) {
-      return { code: 0, summary: "sync: no enabled connectors to ingest (skipped first sync).\n" };
+      return {
+        code: 0,
+        summary: "sync: no enabled connectors to ingest (skipped first sync).\n",
+        configWarnings: [],
+      };
     }
 
+    const configWarnings = await this.preSyncAdvisoryLabels(names, config.connectors);
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const result = await runBulkSync(store, {
@@ -1089,7 +1111,19 @@ export class OnboardCommand extends Command {
         connectors: config.connectors,
         loadConnector,
         continueOnError: true,
-        syncOptions: {},
+        // The wizard's sync is a `suasor sync` — so it warns like one (Issue
+        // #544). Without `onWarn` wired, `runBulkSync` drops the pre-sync
+        // advisories it emits for every other caller (an empty ingest scope,
+        // #187; a required setting left unset, ADR-0049 / ADR-0051), and the
+        // freshly onboarded connector that will never ingest stayed silent here
+        // while `suasor sync` said so loudly. Same stream, same `warning: `
+        // prefix, same position (before any connector runs) as
+        // `src/cli/commands/sync-all.ts`.
+        syncOptions: {
+          onWarn: (message) => {
+            this.context.stderr.write(`warning: ${message}\n`);
+          },
+        },
       });
       const lines = result.results.map((entry) =>
         entry.ok && entry.outcome
@@ -1097,10 +1131,44 @@ export class OnboardCommand extends Command {
           : `${entry.connector}: failed (${entry.error}).`,
       );
       const summary = `${lines.join("\n")}\nsync: ${result.succeeded} succeeded, ${result.failed} failed.\n`;
-      return { code: result.failed > 0 ? 1 : 0, summary };
+      return { code: result.failed > 0 ? 1 : 0, summary, configWarnings };
     } finally {
       store.close();
     }
+  }
+
+  /**
+   * Labels of the slices the first sync's pre-sync advisories are about, in
+   * `names` order and de-duplicated (one label even when a slice trips both
+   * advisories).
+   *
+   * Deliberately re-derived rather than captured from the `onWarn` stream above:
+   * `onWarn` also carries the run's other warnings (concurrency, per-connector),
+   * and telling them apart by arrival order would make the recap depend on when
+   * `runBulkSync` happens to emit what. Both advisories are pure functions of the
+   * config slice, so computing them here answers the same question without
+   * inventing a second source of truth — and the text still has exactly one
+   * emitter (the sync).
+   */
+  private async preSyncAdvisoryLabels(
+    names: readonly string[],
+    connectors: Record<string, ConnectorConfig | undefined>,
+  ): Promise<string[]> {
+    const { noopWarnings, missingSettingWarnings, advisoryLabel } = await import(
+      "../../connectors/noop-check.ts"
+    );
+    const labels: string[] = [];
+    for (const name of names) {
+      const slice = connectors[name] ?? {};
+      for (const advisory of [
+        ...noopWarnings(name, slice),
+        ...missingSettingWarnings(name, slice),
+      ]) {
+        const label = advisoryLabel(name, advisory.account);
+        if (!labels.includes(label)) labels.push(label);
+      }
+    }
+    return labels;
   }
 
   /**
