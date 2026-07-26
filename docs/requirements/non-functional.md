@@ -8,6 +8,9 @@
   - 旧版は「embedding/LLM はローカルサイドカーで完結できる（SHOULD）」だった。embedding 側は ollama で真だが、**LLM 側は Suasor から保証しようがない** — LLM は host であり、host の egress は Suasor の管轄外である。約束できない範囲を落とし、代わりに**検証可能で、より強い**性質に差し替えた（[#529](https://github.com/ozzy-labs/suasor/issues/529)）
   - embedding をローカル完結させたい場合は `[embedding].backend = "ollama"`（既定 loopback）を使う
 - **NFR-PRV-4 (MUST)** secrets（API トークン等）は OS keychain に格納（env override 可）
+- **NFR-PRV-5 (MUST)** ストア（DB・`-wal` / `-shm`・config・バックアップ）は**所有者のみ読み書き可**（`0600` / ディレクトリ `0700`）。**同一マシンの他ユーザーから読めてはならない**（[ADR-0048](../adr/0048-at-rest-protection.md) 決定 2）
+- **NFR-PRV-6 (SHOULD)** 盗難・紛失したディスクに対する保護は **OS のフルディスク暗号化**に委ねる（Suasor はアプリ内暗号化を行わない）。前提を検証しないまま置かないため、`suasor doctor` が判定可能な OS では状態を報告し、判定できない場合は **`unknown` と明示**する（[ADR-0048](../adr/0048-at-rest-protection.md) 決定 3）
+  - **守られない範囲を明示する**: FDE 無効のディスク盗難、およびユーザー自身のアカウントを奪取した攻撃者（同一 uid で動く以上、いかなるアプリ内暗号化でも鍵に到達される）。脅威モデル全体は [ADR-0048](../adr/0048-at-rest-protection.md) 決定 1 の表を参照
 
 ## ML / 依存
 
