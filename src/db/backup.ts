@@ -28,6 +28,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { FILE_MODE, restrictPath } from "./file-permissions.ts";
 
 /** Backup output formats. `sqlite` is the canonical single-file snapshot. */
 export type BackupFormat = "sqlite" | "tgz";
@@ -56,6 +57,11 @@ function sqlQuote(path: string): string {
  */
 function vacuumInto(sqlite: Database, destPath: string): void {
   sqlite.exec(`VACUUM INTO ${sqlQuote(destPath)};`);
+  // A backup is a full copy of every ingested body, so it needs the same
+  // owner-only mode as the live store (ADR-0048 / #529). SQLite creates the
+  // destination with the process umask, and a backup is more likely than the
+  // store to be written somewhere shared (a home dir, an archive folder).
+  restrictPath(destPath, FILE_MODE);
 }
 
 /**
@@ -130,6 +136,10 @@ export async function backupStore(
       const stderr = proc.stderr?.toString().trim() ?? "";
       throw new Error(`tar failed (exit ${proc.exitCode})${stderr ? `: ${stderr}` : ""}`);
     }
+    // `tar` writes the archive itself, so the `vacuumInto` tightening applied to
+    // the staged snapshot (which is discarded) does not reach the output. The
+    // archive holds the same full copy of every ingested body (ADR-0048 / #529).
+    restrictPath(dest, FILE_MODE);
     return { outPath: dest, format, sizeBytes: statSync(dest).size, events };
   } finally {
     rmSync(stage, { recursive: true, force: true });

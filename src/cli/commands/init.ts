@@ -91,22 +91,34 @@ export class InitCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig, resolveConfigDir }, { openDatabase }, { mkdir }, { join }] =
-      await Promise.all([
-        import("../../config/index.ts"),
-        import("../../db/index.ts"),
-        import("node:fs/promises"),
-        import("node:path"),
-      ]);
+    const [
+      { loadConfig, resolveConfigDir },
+      { openDatabase },
+      { DIR_MODE, FILE_MODE, restrictPath },
+      { mkdir },
+      { join },
+    ] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../db/index.ts"),
+      import("../../db/file-permissions.ts"),
+      import("node:fs/promises"),
+      import("node:path"),
+    ]);
 
     const configDir = resolveConfigDir(process.env);
-    await mkdir(configDir, { recursive: true });
+    // Owner-only from creation: the dir holds the store and the connector config
+    // (ADR-0048 / #529). `mkdir` mode is subject to umask, so tighten explicitly
+    // afterwards — and do it even when the dir already existed, which is the
+    // case that upgrades a store created before this was enforced.
+    await mkdir(configDir, { recursive: true, mode: DIR_MODE });
+    restrictPath(configDir, DIR_MODE);
 
     const configPath = join(configDir, "config.toml");
     const configFile = Bun.file(configPath);
     const configExists = await configFile.exists();
     if (!configExists || this.force) {
       await Bun.write(configPath, DEFAULT_CONFIG_TOML);
+      restrictPath(configPath, FILE_MODE);
       this.context.stdout.write(
         `${configExists ? "Overwrote" : "Wrote"} default config: ${configPath}\n`,
       );

@@ -175,6 +175,69 @@ export class DoctorCommand extends Command {
       }
     }
 
+    // 2b. at-rest posture (ADR-0048 / #529). Two checks, not one, because the
+    //    confidence differs: permissions are a fact Suasor reads back off disk,
+    //    while full-disk encryption is a premise the OS owns. Reporting them
+    //    together would let an `unknown` FDE verdict taint a permission result
+    //    that is certain.
+    if (config !== null && dbPath !== null) {
+      const { inspectPermissions, storePaths, formatMode, detectDiskEncryption } = await import(
+        "../../db/at-rest.ts"
+      );
+      const { PERMISSIONS_ENFORCEABLE } = await import("../../db/file-permissions.ts");
+
+      if (!PERMISSIONS_ENFORCEABLE) {
+        checks.push({
+          name: "storage.permissions",
+          status: "info",
+          detail:
+            "not applicable on this platform (Windows maps chmod to the read-only bit); " +
+            "rely on NTFS ACLs and full-disk encryption",
+        });
+      } else {
+        // The config dir is included because it is the one path Suasor does not
+        // re-tighten on every run: `openDatabase` re-applies the file mode at
+        // each open (so a store created before this existed is upgraded in
+        // place), but the directory is only set at `init`.
+        const found = [...storePaths(dbPath), configDir]
+          .map(inspectPermissions)
+          .filter((p) => p.mode !== null);
+        const exposed = found.filter((p) => p.worldReadable);
+        checks.push(
+          exposed.length === 0
+            ? {
+                name: "storage.permissions",
+                status: "ok",
+                detail: `owner-only (${found.map((p) => formatMode(p.mode ?? 0)).join(" / ")})`,
+              }
+            : {
+                // Every ingested body is in these files, so another local user
+                // reading them is the whole store, not a fragment.
+                name: "storage.permissions",
+                status: "warn",
+                detail:
+                  `readable by other users: ${exposed
+                    .map((p) => `${p.path} (${formatMode(p.mode ?? 0)})`)
+                    .join(", ")} — run \`chmod 600\` on files and \`chmod 700\` on the ` +
+                  "config dir; anything Suasor creates from now on is owner-only",
+              },
+        );
+      }
+
+      const fde = await detectDiskEncryption();
+      checks.push({
+        name: "storage.disk_encryption",
+        // `unknown` is a warn, not an ok: ADR-0048 leans on the OS for at-rest
+        // protection, so an unverified premise is exactly what to surface.
+        status: fde.state === "on" ? "ok" : "warn",
+        detail:
+          fde.state === "on"
+            ? fde.detail
+            : `${fde.detail}. The store is plaintext SQLite (ADR-0048): full-disk ` +
+              "encryption is what protects it from a lost or stolen disk",
+      });
+    }
+
     // 3. embedding — report the configured backend; disabled is informational.
     if (config !== null) {
       const { backend, model } = config.embedding;

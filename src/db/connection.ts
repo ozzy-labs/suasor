@@ -18,6 +18,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { getLoadablePath } from "sqlite-vec";
 import { createEventsTable } from "./events-table.ts";
+import { restrictDatabaseFiles } from "./file-permissions.ts";
 import * as schema from "./schema.ts";
 
 /** Default vec0 table name and embedding dimension (bge-m3 = 1024). */
@@ -369,6 +370,13 @@ export function openDatabase(options: OpenOptions): SuasorDb {
   if (enableVec) {
     initVecTable(sqlite, options.embeddingDim ?? DEFAULT_EMBEDDING_DIM);
   }
+
+  // Owner-only, at every open rather than at `init` alone: the file is created
+  // by whichever command opens it first. Done after schema init so the `-wal` /
+  // `-shm` sidecars exist to be restricted too — the WAL holds recently written
+  // pages verbatim, so leaving it world-readable leaks the newest content
+  // (ADR-0048 / #529). A fresh `.db` carries no user content until this point.
+  restrictDatabaseFiles(options.path);
 
   const orm = drizzle(sqlite, { schema });
   return {

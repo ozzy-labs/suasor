@@ -63,7 +63,7 @@ content-minimization / local-first（[ADR-0003](0003-local-first-and-content-min
 
 - **projection だけ purge（event は不変）** — 却下。event ログに本文が残り**真の forget にならない**（content-minimization に反する）
 - **event 行を物理削除** — 却下。replay の連続性・他 event の seq/cursor との整合を壊す。redaction（body 空白化）の方が surgical で replay-safe
-- **crypto-shredding（本文を暗号化し鍵破棄で forget）** — 却下（現状 over-engineering）。本文は平文ローカル保持（ADR-0003）で、redaction の方が単純
+- **crypto-shredding（本文を暗号化し鍵破棄で forget）** — 却下（現状 over-engineering）。本文は平文ローカル保持（ADR-0003）で、redaction の方が単純。**なお本 ADR のこの 1 行が、長らく at-rest 保護に関する唯一の言及だった** — forget の実装手段としての却下であって保護方針の検討ではないため、脅威モデルは [ADR-0048](0048-at-rest-protection.md) に分離して明文化した
 - **forget を持たない** — 却下。privacy-first を掲げる以上、必須
 - **（R1）派生 content は「消えていない一覧」の開示に留める（誠実化のみ）** — 却下。ユーザーがこの機能に求める結果は一覧ではなく**消えていること**（「機密だから purge して」が flagship トリガー）。列挙は必須とした上で cascade redaction まで提供する
 - **（R1）tombstone を持たず「connector スコープから外してから forget」を運用で要求** — 却下。どの surface もその前提条件を検査・通知しておらず、cron 定常運用では forget が無人で巻き戻る。構造で防ぐ

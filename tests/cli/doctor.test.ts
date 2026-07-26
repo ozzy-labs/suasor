@@ -202,6 +202,8 @@ describe("suasor doctor", () => {
     expect(report.checks.map((c) => c.name)).toEqual([
       "config",
       "database",
+      "storage.permissions",
+      "storage.disk_encryption",
       "embedding",
       "store.growth",
       "extraction",
@@ -608,8 +610,9 @@ describe("suasor doctor", () => {
   // longer pushes the detail column out of alignment for the shorter rows.
   test("check-name column pads to the widest name so detail stays aligned (#388)", async () => {
     await run(["init"]);
-    // Enabling slack with no channels adds `connectors.noop` (15) — the widest
-    // name in this run — which a fixed pad(11) would have mis-aligned against.
+    // Enabling slack with no channels adds `connectors.noop`; the widest name in
+    // this run is `storage.disk_encryption` (23), which a fixed pad(11) would
+    // have mis-aligned against.
     await writeConfig("[connectors.slack]\nenabled = true\n");
     const { out } = await run(["doctor"]); // human-readable (not --json)
     expect(out).toContain("connectors.noop");
@@ -625,8 +628,8 @@ describe("suasor doctor", () => {
     });
     // Every row's detail column is identical → aligned, with no drift.
     expect(new Set(detailCols).size).toBe(1);
-    // Column == prefix + widest-name-width (`connectors.noop`, 15) + 1 separator.
-    expect(detailCols[0]).toBe(PREFIX + 15 + 1);
+    // Column == prefix + widest-name-width (`storage.disk_encryption`, 23) + 1.
+    expect(detailCols[0]).toBe(PREFIX + "storage.disk_encryption".length + 1);
   });
 
   test("sync freshness: an enabled connector that never synced is a warning (#442)", async () => {
