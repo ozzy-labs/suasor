@@ -7,9 +7,10 @@
  * backend lands later. The trade-off is that an operator can set a value that
  * looks honored but is not — e.g. `embedding.backend = "openai"` parses cleanly
  * yet, with no API key resolved, `createEmbedder` returns `null` (recall degrades
- * to FTS); and `[llm].backend` parses yet nothing in the runtime ever reads it
- * (ML is delegated to the host LLM per ADR-0006). That gap is exactly the
- * "configurable but quietly disabled" footgun.
+ * to FTS). That gap is exactly the "configurable but quietly disabled" footgun.
+ * The retired `[llm]` section is the same footgun taken to its conclusion — it
+ * was never read by anything — so its presence is reported as something to
+ * delete rather than as a setting that did not take effect.
  *
  * This module surfaces those gaps as **warnings** (not errors): the degrade
  * behavior is intentional and kept as-is, but the operator is told their setting
@@ -51,7 +52,8 @@ const EXTERNAL_EMBEDDING_BACKENDS = new Set(["openai", "voyage"]);
  */
 export interface ConfigWarningInput {
   embedding: { backend: string; baseUrl?: string; allowRemote?: boolean };
-  llm: { backend: string };
+  /** `[llm]` — retired; its mere presence is warned about (ADR-0006 決定 4). */
+  llm?: Record<string, unknown>;
   /** `[extraction]` — inspected for a remote (non-loopback) sidecar disclosure. */
   extraction?: { backend: string; baseUrl?: string; allowRemote?: boolean };
   /** `[export]` — its `.composition` sidecar is inspected for a remote disclosure. */
@@ -69,9 +71,9 @@ export interface ConfigWarningInput {
  *   keychain/env, never config. Without one no embedder is built and recall
  *   degrades to FTS — surfaced as a readiness warning so the operator knows to
  *   set the key. With a key present this is silent (the backend works).
- * - `[llm].backend != disabled`: schema-accepted but never read by the runtime —
- *   inference is delegated to the host LLM (ADR-0006 ML delegation), so the
- *   setting has no effect today.
+ * - `[llm]` present at all: the section is retired and read by nothing. Suasor
+ *   never calls an LLM — the host is the LLM (ADR-0004 / ADR-0006 決定 4) — so
+ *   the fix is to delete the section, not to change its value.
  * - a **remote (non-loopback) content-egressing sidecar** (`[export].composition`
  *   pandoc / `[extraction]` markitdown / `[embedding]` ollama) with a non-loopback
  *   `baseUrl`: the loader only admits these when `<section>.allowRemote = true`
@@ -81,7 +83,7 @@ export interface ConfigWarningInput {
  *
  * Implemented / inert values produce no warning: `embedding.backend` of
  * `ollama` (built, local) or `disabled` (intended off), an external backend with
- * a key resolved, `[llm].backend = disabled` (the default, nothing dropped), and
+ * a key resolved, no `[llm]` section at all, and
  * a loopback sidecar `baseUrl` (local, no egress).
  *
  * @returns warnings in a stable order (embedding, llm, then remote sidecars in
@@ -110,13 +112,18 @@ export function collectConfigWarnings(config: ConfigWarningInput): ConfigWarning
     });
   }
 
-  if (config.llm.backend !== "disabled") {
+  // `[llm]` is retired (ADR-0006 決定 4). It is `.optional()` with no default, so
+  // "defined" means the file actually carries the section — the notice therefore
+  // fires only for configs written against the old template, and disappears the
+  // moment the operator deletes it. Staying silent instead would leave someone
+  // who set `backend = "anthropic"` believing they had configured something.
+  if (config.llm !== undefined) {
     warnings.push({
-      key: "llm.backend",
+      key: "llm",
       message:
-        `[llm] backend "${config.llm.backend}" is set but unused at runtime ` +
-        "(inference is delegated to the host LLM, ADR-0006); the setting has no effect. " +
-        "See docs/design/config.md.",
+        "[llm] is retired and ignored: Suasor never calls an LLM — the host is the LLM " +
+        "(ADR-0004 / ADR-0006). Delete the section from your config. " +
+        `See ${docsUrl("design/config.md")}.`,
     });
   }
 

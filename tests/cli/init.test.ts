@@ -92,9 +92,10 @@ describe("suasor init", () => {
     const { code } = await run(["init"]);
     expect(code).toBe(0);
     const seeded = readFileSync(join(dir, "config.toml"), "utf8");
-    // [llm].backend is documented as accepted-but-unused (host-delegated, ADR-0006).
-    expect(seeded).toContain("NOT read by the runtime");
-    expect(seeded).toContain("ADR-0006");
+    // The retired [llm] section is not seeded at all (ADR-0006 決定 4 / #529):
+    // a section whose only documentation is an apology for doing nothing has no
+    // business being written into every new config.
+    expect(seeded).not.toContain("[llm]");
     // The embedding dim comment lists the per-backend model dimensions so a backend
     // switch does not silently degrade recall.
     expect(seeded).toContain("text-embedding-3-small=1536");

@@ -52,9 +52,6 @@ export type StorageConfig = z.infer<typeof StorageConfig>;
 export const EmbeddingBackend = z.enum(["disabled", "ollama", "openai", "voyage"]);
 export type EmbeddingBackend = z.infer<typeof EmbeddingBackend>;
 
-export const LlmBackend = z.enum(["disabled", "anthropic", "openai", "ollama"]);
-export type LlmBackend = z.infer<typeof LlmBackend>;
-
 /** Document-extraction backends (ADR-0024). `markitdown` is the implemented sidecar. */
 export const ExtractionBackend = z.enum(["disabled", "markitdown"]);
 export type ExtractionBackend = z.infer<typeof ExtractionBackend>;
@@ -187,12 +184,19 @@ export const EmbeddingConfig = z
   .passthrough();
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfig>;
 
-/** `[llm]` — optional delegation target (ADR-0006). */
-export const LlmConfig = z
-  .object({
-    backend: LlmBackend.default("disabled"),
-  })
-  .passthrough();
+/**
+ * `[llm]` — **retired** (ADR-0006 決定 4). Kept only so an existing config that
+ * still carries the section keeps parsing, and so `collectConfigWarnings` can
+ * tell the operator to delete it.
+ *
+ * Suasor never calls an LLM: the host *is* the LLM (ADR-0004). The section used
+ * to accept `anthropic` / `openai` / `ollama` — real-looking choices that no
+ * code read — and `suasor init` wrote it into every config. Deliberately shaped
+ * with **no fields and no default**: no field means nothing here can look
+ * configurable, and no default means `config.llm === undefined` exactly when the
+ * file omits it, which is what makes the deletion notice self-clearing.
+ */
+export const LlmConfig = z.object({}).passthrough();
 export type LlmConfig = z.infer<typeof LlmConfig>;
 
 /**
@@ -489,7 +493,8 @@ export type DigestConfig = z.infer<typeof DigestConfig>;
 export const Config = z.object({
   storage: StorageConfig.default(() => StorageConfig.parse({})),
   embedding: EmbeddingConfig.default(() => EmbeddingConfig.parse({})),
-  llm: LlmConfig.default(() => LlmConfig.parse({})),
+  /** Retired; present only to be warned about (see {@link LlmConfig}). */
+  llm: LlmConfig.optional(),
   extraction: ExtractionConfig.default(() => ExtractionConfig.parse({})),
   export: ExportConfig.default(() => ExportConfig.parse({})),
   tasks: TasksConfig.default(() => TasksConfig.parse({})),

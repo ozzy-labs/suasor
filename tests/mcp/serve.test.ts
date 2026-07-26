@@ -16,12 +16,13 @@ import {
 
 /**
  * A `Config` shaped just enough for `serveMcp` (dbPath + embedding + llm). The
- * `embedding.backend` / `llm.backend` overrides drive the config-warning check;
+ * `embedding.backend` override and a leftover `[llm]` section drive the
+ * config-warning check;
  * both default to a no-warning value.
  */
 function fakeConfig(
   dbPath: string | null,
-  overrides: { embeddingBackend?: string; llmBackend?: string } = {},
+  overrides: { embeddingBackend?: string; llmSection?: Record<string, unknown> } = {},
 ): Config {
   return {
     storage: { dbPath },
@@ -33,7 +34,7 @@ function fakeConfig(
       baseUrl: "http://localhost:11434",
       model: "bge-m3",
     },
-    llm: { backend: overrides.llmBackend ?? "disabled" },
+    ...(overrides.llmSection !== undefined ? { llm: overrides.llmSection } : {}),
   } as unknown as Config;
 }
 
@@ -81,7 +82,7 @@ function options(args: {
   connect?: (transport: Transport) => Promise<void>;
   onOpen?: () => void;
   embeddingBackend?: string;
-  llmBackend?: string;
+  llmSection?: Record<string, unknown>;
 }): ServeOptions {
   const connect = args.connect ?? (() => Promise.resolve());
   const server: ServeServer = { connect };
@@ -97,7 +98,7 @@ function options(args: {
       Promise.resolve(
         fakeConfig(args.dbPath, {
           embeddingBackend: args.embeddingBackend,
-          llmBackend: args.llmBackend,
+          llmSection: args.llmSection,
         }),
       ),
     openStore: () => {
@@ -149,7 +150,7 @@ describe("serveMcp boot glue", () => {
         dbPath: ":memory:",
         transport,
         embeddingBackend: "openai",
-        llmBackend: "openai",
+        llmSection: { backend: "openai" },
       }),
       log: (m) => logs.push(m),
     });
@@ -161,7 +162,9 @@ describe("serveMcp boot glue", () => {
     expect(logs.some((l) => l.includes("config warning") && l.includes("embedding.backend"))).toBe(
       true,
     );
-    expect(logs.some((l) => l.includes("config warning") && l.includes("llm.backend"))).toBe(true);
+    expect(logs.some((l) => l.includes("config warning") && l.includes("[llm] is retired"))).toBe(
+      true,
+    );
   });
 
   test("emits no config warning when backends are implemented / inert (#235)", async () => {
@@ -172,7 +175,6 @@ describe("serveMcp boot glue", () => {
         dbPath: ":memory:",
         transport,
         embeddingBackend: "ollama",
-        llmBackend: "disabled",
       }),
       log: (m) => logs.push(m),
     });

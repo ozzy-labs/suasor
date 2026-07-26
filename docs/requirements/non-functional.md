@@ -4,7 +4,9 @@
 
 - **NFR-PRV-1 (MUST)** 取り込んだ本文・メタデータは手元のプライベートストアに保持。勝手に外部送信しない（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）
 - **NFR-PRV-2 (MUST)** 送信・書き込みは人の承認を要する（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）
-- **NFR-PRV-3 (SHOULD)** embedding/LLM はローカルサイドカー（Ollama 等）で完結できる（egress なし）（[ADR-0006](../adr/0006-ml-delegation.md)）
+- **NFR-PRV-3 (MUST)** **Suasor 自身は本文を LLM に送らない。** 生成は host（MCP クライアント）が行い（[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) / [ADR-0006](../adr/0006-ml-delegation.md) 決定 4）、Suasor から本文が出る経路は embedding / extraction サイドカーに限られる。いずれも既定 loopback で、非 loopback は `allowRemote` の明示 opt-in が無ければ loader が拒否する（[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）
+  - 旧版は「embedding/LLM はローカルサイドカーで完結できる（SHOULD）」だった。embedding 側は ollama で真だが、**LLM 側は Suasor から保証しようがない** — LLM は host であり、host の egress は Suasor の管轄外である。約束できない範囲を落とし、代わりに**検証可能で、より強い**性質に差し替えた（[#529](https://github.com/ozzy-labs/suasor/issues/529)）
+  - embedding をローカル完結させたい場合は `[embedding].backend = "ollama"`（既定 loopback）を使う
 - **NFR-PRV-4 (MUST)** secrets（API トークン等）は OS keychain に格納（env override 可）
 
 ## ML / 依存

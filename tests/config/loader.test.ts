@@ -51,7 +51,9 @@ describe("loadConfig precedence (init args > env > file > defaults)", () => {
   test("defaults apply when nothing is set", async () => {
     const cfg = await loadConfig({ env: {}, configDir: "/cfg", fileLayer: {} });
     expect(cfg.embedding.backend).toBe("disabled");
-    expect(cfg.llm.backend).toBe("disabled");
+    // `[llm]` is retired: absent from the file ⇒ absent from the config, which
+    // is what makes the deletion notice fire only for old configs (ADR-0006).
+    expect(cfg.llm).toBeUndefined();
     // null dbPath resolves to <configDir>/suasor.db
     expect(cfg.storage.dbPath).toBe(join("/cfg", "suasor.db"));
     expect(cfg.connectors).toEqual({});
@@ -96,12 +98,23 @@ describe("loadConfig precedence (init args > env > file > defaults)", () => {
 
   test("deep merge keeps untouched sibling fields", async () => {
     const cfg = await loadConfig({
-      env: { SUASOR_LLM__BACKEND: "anthropic" },
+      env: { SUASOR_EXTRACTION__BACKEND: "markitdown" },
       configDir: "/cfg",
       fileLayer: { embedding: { backend: "ollama" } },
     });
     expect(cfg.embedding.backend).toBe("ollama");
-    expect(cfg.llm.backend).toBe("anthropic");
+    expect(cfg.extraction.backend).toBe("markitdown");
+  });
+
+  test("a retired [llm] section still parses, and stays visible to warn about", async () => {
+    // An existing config written against the old init template must not start
+    // failing; the section is simply carried through and reported.
+    const cfg = await loadConfig({
+      env: {},
+      configDir: "/cfg",
+      fileLayer: { llm: { backend: "anthropic" } },
+    });
+    expect(cfg.llm).toEqual({ backend: "anthropic" });
   });
 });
 

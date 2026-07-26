@@ -10,11 +10,15 @@ import { docsUrl } from "../../src/shared/doc-ref.ts";
 
 /** A baseline input with everything implemented / inert (no warnings expected). */
 function input(
-  overrides: Partial<{ embedding: string; llm: string; embeddingApiKeyPresent: boolean }> = {},
+  overrides: Partial<{
+    embedding: string;
+    llm: Record<string, unknown>;
+    embeddingApiKeyPresent: boolean;
+  }> = {},
 ): ConfigWarningInput {
   return {
     embedding: { backend: overrides.embedding ?? "disabled" },
-    llm: { backend: overrides.llm ?? "disabled" },
+    ...(overrides.llm !== undefined ? { llm: overrides.llm } : {}),
     ...(overrides.embeddingApiKeyPresent !== undefined
       ? { embeddingApiKeyPresent: overrides.embeddingApiKeyPresent }
       : {}),
@@ -23,7 +27,7 @@ function input(
 
 describe("collectConfigWarnings", () => {
   test("no warnings for implemented / inert values (ollama, disabled)", () => {
-    expect(collectConfigWarnings(input({ embedding: "ollama", llm: "disabled" }))).toEqual([]);
+    expect(collectConfigWarnings(input({ embedding: "ollama" }))).toEqual([]);
   });
 
   test("no warnings for the all-disabled default", () => {
@@ -61,22 +65,32 @@ describe("collectConfigWarnings", () => {
     expect(collectConfigWarnings(input({ embedding: "ollama" }))).toEqual([]);
   });
 
-  for (const backend of ["anthropic", "openai", "ollama"] as const) {
-    test(`warns when [llm].backend = ${backend} (set but unused at runtime)`, () => {
-      const warnings = collectConfigWarnings(input({ llm: backend }));
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]?.key).toBe("llm.backend");
-      expect(warnings[0]?.message).toContain(backend);
-    });
-  }
+  test("tells the operator to delete a retired [llm] section", () => {
+    const warnings = collectConfigWarnings(input({ llm: { backend: "anthropic" } }));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.key).toBe("llm");
+    // The point is deletion, not "your value was ignored" — no value here was
+    // ever honoured, so naming the backend would imply it nearly worked.
+    expect(warnings[0]?.message).toContain("retired");
+    expect(warnings[0]?.message).toContain("the host is the LLM");
+  });
 
-  test("does not warn for [llm].backend = disabled (default, nothing dropped)", () => {
-    expect(collectConfigWarnings(input({ llm: "disabled" }))).toEqual([]);
+  test("fires on an empty [llm] table too — presence is the trigger", () => {
+    // `[llm]` alone (or the old template's `backend = "disabled"`) is still a
+    // dead section to remove; keying on a non-default value would leave the
+    // most common leftover unreported.
+    expect(collectConfigWarnings(input({ llm: {} }))).toHaveLength(1);
+  });
+
+  test("says nothing when the section is absent", () => {
+    expect(collectConfigWarnings(input())).toEqual([]);
   });
 
   test("collects both warnings in a stable order (embedding before llm)", () => {
-    const warnings = collectConfigWarnings(input({ embedding: "voyage", llm: "anthropic" }));
-    expect(warnings.map((w) => w.key)).toEqual(["embedding.backend", "llm.backend"]);
+    const warnings = collectConfigWarnings(
+      input({ embedding: "voyage", llm: { backend: "anthropic" } }),
+    );
+    expect(warnings.map((w) => w.key)).toEqual(["embedding.backend", "llm"]);
   });
 });
 
@@ -84,7 +98,6 @@ describe("collectConfigWarnings — remote sidecar disclosure (Issue #436)", () 
   test("discloses a remote (non-loopback) composition sidecar", () => {
     const warnings = collectConfigWarnings({
       embedding: { backend: "disabled" },
-      llm: { backend: "disabled" },
       export: {
         composition: {
           backend: "pandoc",
@@ -103,14 +116,12 @@ describe("collectConfigWarnings — remote sidecar disclosure (Issue #436)", () 
   test("discloses remote extraction and ollama embedding sidecars", () => {
     const extraction = collectConfigWarnings({
       embedding: { backend: "disabled" },
-      llm: { backend: "disabled" },
       extraction: { backend: "markitdown", baseUrl: "http://sidecar:8929", allowRemote: true },
     });
     expect(extraction.map((w) => w.key)).toEqual(["extraction.baseUrl"]);
 
     const embedding = collectConfigWarnings({
       embedding: { backend: "ollama", baseUrl: "http://sidecar:11434", allowRemote: true },
-      llm: { backend: "disabled" },
     });
     expect(embedding.map((w) => w.key)).toEqual(["embedding.baseUrl"]);
   });
@@ -119,7 +130,6 @@ describe("collectConfigWarnings — remote sidecar disclosure (Issue #436)", () 
     expect(
       collectConfigWarnings({
         embedding: { backend: "ollama", baseUrl: "http://localhost:11434" },
-        llm: { backend: "disabled" },
         extraction: { backend: "markitdown", baseUrl: "http://127.0.0.1:8929" },
         export: { composition: { backend: "pandoc", baseUrl: "http://localhost:8930" } },
       }),
@@ -129,13 +139,12 @@ describe("collectConfigWarnings — remote sidecar disclosure (Issue #436)", () 
   test("a remote openai baseUrl is not a sidecar disclosure (only the key warning)", () => {
     const warnings = collectConfigWarnings({
       embedding: { backend: "openai", baseUrl: "https://api.openai.com" },
-      llm: { backend: "disabled" },
     });
     // Only the existing external-backend key-readiness warning, no *.baseUrl entry.
     expect(warnings.map((w) => w.key)).toEqual(["embedding.backend"]);
   });
 
-  test("orders sidecar disclosures after embedding/llm, in config order", () => {
+  test("orders sidecar disclosures after the embedding / llm entries, in config order", () => {
     const warnings = collectConfigWarnings({
       embedding: { backend: "ollama", baseUrl: "http://sidecar:11434", allowRemote: true },
       llm: { backend: "anthropic" },
@@ -145,7 +154,7 @@ describe("collectConfigWarnings — remote sidecar disclosure (Issue #436)", () 
       },
     });
     expect(warnings.map((w) => w.key)).toEqual([
-      "llm.backend",
+      "llm",
       "embedding.baseUrl",
       "extraction.baseUrl",
       "export.composition.baseUrl",

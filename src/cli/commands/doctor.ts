@@ -119,9 +119,9 @@ export class DoctorCommand extends Command {
     // 1b. config warnings — keys accepted by the schema but silently dropped at
     //    runtime (ADR-0007 silent-error eradication): an external embedding
     //    backend (openai/voyage) with no API key resolved (→ recall falls back to
-    //    FTS) or a set-but-unused [llm] backend (inference is delegated to the
-    //    host LLM). Degrade behavior is unchanged; this just makes the no-op
-    //    visible. The external-backend key is resolved here (keychain/env).
+    //    FTS) or a leftover retired [llm] section (Suasor never calls an LLM —
+    //    the host is the LLM). Degrade behavior is unchanged; this just makes
+    //    the no-op visible. The external-backend key is resolved here (keychain/env).
     if (config !== null) {
       const { collectConfigWarnings } = await import("../../config/index.ts");
       const { resolveEmbeddingApiKeyPresent } = await import("../../retrieval/embedding/index.ts");
