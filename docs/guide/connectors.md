@@ -26,9 +26,9 @@ An empty *scope* still syncs (0 observed). A missing **required non-secret setti
 
 It is a separate line from the empty-scope warning above, on purpose: the severities and the remedies differ, and a slice can legitimately have a full ingest scope and no way to authenticate.
 
-## Multi-account ingestion (google / ms-graph)
+## Multi-account ingestion (google / ms-graph / box)
 
-Most operators' mail, calendar and files are split across a **personal** and a **work** account. `google` and `ms-graph` ingest both in one pass via `[connectors.<name>.accounts.<account>]` ([ADR-0050](../adr/0050-multi-account-connectors.md), [#441](https://github.com/ozzy-labs/suasor/issues/441)):
+Most operators' mail, calendar and files are split across a **personal** and a **work** account. `google`, `ms-graph` and `box` ingest both in one pass via `[connectors.<name>.accounts.<account>]` ([ADR-0050](../adr/0050-multi-account-connectors.md), [#441](https://github.com/ozzy-labs/suasor/issues/441), [#537](https://github.com/ozzy-labs/suasor/issues/537)):
 
 ```toml
 [connectors.google]
@@ -96,7 +96,7 @@ warning: google (account 'work'): required setting(s) not set: clientId (…) �
          reach its API until they are set in [connectors.google.accounts.work]
 ```
 
-`box` folder ids are account-relative too, so it is a genuine candidate for the same treatment; it is deliberately out of scope for now, and its manifest says so rather than staying silently absent.
+`box` works the same way ([#537](https://github.com/ozzy-labs/suasor/issues/537)) — see [Box](#box) for its own keys. It is the same criterion: the root folder of **every** Box account is id `0`, so `folders = ["0"]` cannot say whose root it means until the account is named.
 
 ## Drift: what the credential can see that config does not list
 
@@ -416,7 +416,7 @@ A name that matches two different channels (e.g. `#general` in two workspaces) e
 Ingests Microsoft 365 (Outlook mail / Calendar / OneDrive / Teams) (`@microsoft/microsoft-graph-client` + `@azure/msal-node`, app-only client-credential flow).
 
 - **token**: the App registration's client secret. env override `SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET`, keychain account `connector:ms-graph:clientSecret`
-- **multi-account**: add `[connectors.ms-graph.accounts.<account>]` to ingest more than one tenant / mailbox in one pass (per-account `clientSecret`, `tenantId`, `clientId`, `user`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph)
+- **multi-account**: add `[connectors.ms-graph.accounts.<account>]` to ingest more than one tenant / mailbox in one pass (per-account `clientSecret`, `tenantId`, `clientId`, `user`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph--box)
 - **config**:
 
 ```toml
@@ -455,7 +455,7 @@ resources = ["mail", "calendar"]        # mail | calendar | files | teams
 Ingests Google Workspace (Drive / Gmail / Calendar) (`googleapis`, OAuth2 refresh token).
 
 - **token**: OAuth refresh token (read scope for the target APIs). env override `SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN`, keychain account `connector:google:refreshToken`
-- **multi-account**: add `[connectors.google.accounts.<account>]` to ingest a personal *and* a work account in one pass (per-account credential, `calendarId`, `resources`, `self_addresses`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph)
+- **multi-account**: add `[connectors.google.accounts.<account>]` to ingest a personal *and* a work account in one pass (per-account credential, `calendarId`, `resources`, `self_addresses`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph--box)
 - **config**:
 
 ```toml
@@ -511,7 +511,26 @@ Ingests files under a folder (`box-typescript-sdk-gen`).
 folders = ["0"]                          # target folder ids (root is "0")
 ```
 
-- **identity**: `box:file:<id>` / **source_type**: `box_file`
+- **multi-account**: add `[connectors.box.accounts.<account>]` to ingest a personal *and* a work Box account in one pass (per-account `token`, `folders`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph--box)
+
+```toml
+[connectors.box]
+enabled = true
+
+[connectors.box.accounts.personal]
+folders = ["0"]                          # "0" is *this* account's root
+
+[connectors.box.accounts.work]
+folders = ["224466"]
+```
+
+```bash
+suasor box auth set --account work       # → keychain connector:box:work:token
+suasor box auth test                     # tests every configured account
+```
+
+- **identity**: `box:file:<id>` — `box:<account>:file:<id>` for a named account / **source_type**: `box_file`
+  - The account prefix is **required for correctness**, for two independent reasons. A Box *collaboration* does not copy: a file shared into both of your accounts is the same object with the **same** file id in each, so without the prefix the two accounts would write one source row and it would keep whichever account's attribution ran first. And Box does not document a uniqueness scope for ids at all — the one id in this family that *is* documented, the root folder `0`, is explicitly per account ([Box API reference](https://developer.box.com/reference/get-folders-id/)), so "file ids happen to be globally unique" is an assumption we decline to depend on rather than a guarantee we can quote
 - **delta detection**: uses the `sha1` (content hash) Box returns as the fingerprint to skip unchanged files. Being a content fingerprint, it **also detects content changes without a rename** and re-ingests / re-extracts. When `sha1` is absent it falls back to the SHA-256 of the body (= file name)
 - **onboarding** (Issue #85): `suasor box auth set` (save the access token to the keychain) / `suasor box auth test` (verify token validity via `GET /2.0/users/me` and print account login / name).
 - **discovery** ([ADR-0030](../adr/0030-connector-discovery-verbs.md), #192): `suasor box folders [--root <id>] [--filter S] [--json]`. It enumerates `GET /2.0/folders/<id>/items` (folder entries only, marker pagination) with `fetch` only (no SDK dependency, import-clean), draws a **tree** of id / name (`--root` defaults to the Box root `"0"`, one level directly under root), and prints a paste-ready `[connectors.box]` block (`folders = [...]`, each line a `# <name>` label). Specify the starting folder with `--root`, `--filter` is a substring match on name / id, and `--json` prints `{items, configBlock}` (the token is not printed). This avoids silent 0 counts from hand-copied folder id typos ([ADR-0007](../adr/0007-connector-contract.md)).

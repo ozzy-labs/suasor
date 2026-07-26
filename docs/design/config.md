@@ -192,7 +192,7 @@ notifications = "off"                     # off | all | repos（既定 off・per
 
 ## multi-account（`[connectors.<name>.accounts.<account>]`・ADR-0050 / #441）
 
-個人アカウントと仕事アカウントの mail / calendar / files を 1 install で取り込む。対応 connector は **`google` / `ms-graph`**（manifest の `multiAccount` が宣言し、completeness test が config schema と突き合わせる）。
+個人アカウントと仕事アカウントの mail / calendar / files を 1 install で取り込む。対応 connector は **`google` / `ms-graph` / `box`**（manifest の `multiAccount` が宣言し、completeness test が config schema と突き合わせる）。
 
 ```toml
 [connectors.google]
@@ -221,9 +221,9 @@ self_addresses = ["me@work.example"]
 | env override | `SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN` | `SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN` |
 | externalId | `google:<resource>:<id>` | `google:work:<resource>:<id>` |
 
-`default` を無印に保つのは**既存 install を無移行にする**ため（keychain / env / 取り込み済み source lineage がそのまま生きる）。名前付き account の externalId を名前空間化するのは **correctness 要件**で、Gmail の message id はメールボックス内でしか一意でなく、Calendar の event id は同じ会議が各出席者のカレンダーで同じ値を持つ（名前空間化しないと 1 件の会議が 1 本の source を取り合う）。**account の rename は identity の変更**であり、旧 id の source は残ったまま新 id で再取り込みになる。
+`default` を無印に保つのは**既存 install を無移行にする**ため（keychain / env / 取り込み済み source lineage がそのまま生きる）。名前付き account の externalId を名前空間化するのは **correctness 要件**で、Gmail の message id はメールボックス内でしか一意でなく、Calendar の event id は同じ会議が各出席者のカレンダーで同じ値を持つ（名前空間化しないと 1 件の会議が 1 本の source を取り合う）。box も同じで、collaboration で共有されたファイルは**両アカウントで同一の file id** を持つ（加えて Box は id の一意性スコープを規定しておらず、規定がある唯一の id＝root folder `0` は account 相対である）。**account の rename は identity の変更**であり、旧 id の source は残ったまま新 id で再取り込みになる。
 
-credential の保管は `suasor <connector> auth set --account <name>`、検証は `suasor <connector> auth test [--account <name>]`（省略時は全 account）。詳細は [cli design](cli.md) と [connectors guide](../guide/connectors.md#multi-account取り込みgoogle--ms-graph)。
+credential の保管は `suasor <connector> auth set --account <name>`、検証は `suasor <connector> auth test [--account <name>]`（省略時は全 account）。詳細は [cli design](cli.md) と [connectors guide](../guide/connectors.md#multi-account-ingestion-google--ms-graph--box)。
 
 ## `[connectors.google]` / `[connectors.ms-graph]` の `self_addresses`（#488）
 
