@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Relative-link existence check for the repository's Markdown (#543).
  *
@@ -67,16 +67,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-
-let lint;
-try {
-  ({ lint } = await import("markdownlint/sync"));
-} catch {
-  console.error(
-    "check-doc-links: cannot load `markdownlint` — run `bun install` before linting.",
-  );
-  process.exit(1);
-}
+// Deliberately markdownlint-cli2's own markdownlint rather than a separately
+// pinned copy: `lint:md` and this script must agree about MD051, and they
+// cannot drift while they are the same install. (Resolution is exercised by
+// tests/scripts/check-doc-links.test.ts, which spawns this script.)
+import { lint } from "markdownlint/sync";
 
 /** Tracked Markdown that is deliberately not checked (see the header comment). */
 const IGNORED_MARKDOWN = new Set(["CHANGELOG.md"]);

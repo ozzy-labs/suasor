@@ -1,7 +1,7 @@
 /**
  * `scripts/check-doc-links.mjs` — the relative-link existence gate (#543).
  *
- * The script is spawned exactly the way CI and lefthook run it (`node
+ * The script is spawned exactly the way CI and lefthook run it (`bun
  * scripts/check-doc-links.mjs` with the repo root as cwd), against throwaway git
  * fixtures. Spawning rather than importing is deliberate: the file list comes
  * from `git ls-files`, so the unit under test is "the script pointed at a
@@ -20,7 +20,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/check-doc-links.mjs", import.meta.url));
-const NODE = Bun.which("node");
+/** The Bun running these tests — the same runtime `bun run lint:links` uses. */
+const BUN = process.execPath;
 
 /** Write `files` (path → body) below `root`, creating parent directories. */
 function writeAll(root: string, files: Record<string, string>): void {
@@ -40,14 +41,13 @@ function runOnFixture(
   files: Record<string, string>,
   untracked: Record<string, string> = {},
 ): { exitCode: number; stdout: string; stderr: string } {
-  if (NODE === null) throw new Error("node not found on PATH");
   const root = mkdtempSync(join(tmpdir(), "suasor-doc-links-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: root });
     writeAll(root, files);
     execFileSync("git", ["add", "-A"], { cwd: root });
     writeAll(root, untracked);
-    const proc = Bun.spawnSync([NODE, SCRIPT], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync([BUN, SCRIPT], { cwd: root, stdout: "pipe", stderr: "pipe" });
     return {
       exitCode: proc.exitCode,
       stdout: proc.stdout.toString(),
