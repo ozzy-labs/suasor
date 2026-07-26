@@ -10,6 +10,15 @@
  * discovery leaf (no SDK — import-clean per ADR-0007) and returns the enumerated
  * items plus a paste-ready `[connectors.<name>]` config block.
  *
+ * Discovery **drift** (`--new`, ADR-0049) is defined on the same registry: each
+ * spec declares the config key its ingest scope lives in ({@link DiscoveryScope}),
+ * and {@link diffDiscovered} turns "everything the credential sees" into "the
+ * ids you have not configured yet". This is ADR-0039's Layer 1 lifted off Slack —
+ * the structural gap ("visible to the token, absent from config, therefore never
+ * ingested") is identical for github repos / notion databases / jira projects /
+ * box folders, and ADR-0030's own Alternatives rejected per-connector bespoke
+ * discovery paths for exactly this reason.
+ *
  * Import-clean: this module's top-level imports are limited to types only — the
  * leaf modules themselves are pulled at discovery time. (Each leaf is
  * `fetch`-only, so even importing them eagerly loads no SDK; keeping them lazy
@@ -44,6 +53,31 @@ export interface DiscoveryResult {
   readonly listing?: readonly string[];
 }
 
+/**
+ * How a connector's ingest scope is declared in config, for the generic drift
+ * diff (`<connector> <verb> --new`, ADR-0049 — ADR-0039 Layer 1 generalized off
+ * Slack onto this registry).
+ *
+ * Present only when the scope is a **set of ids**, because that is the shape a
+ * "visible but not configured" difference is defined over. A connector whose
+ * scope is a single value (google's `calendarId`) states {@link driftNote}
+ * instead, so `--new` refuses with a reason rather than emitting a diff that
+ * would flag every non-selected item as drift.
+ */
+export interface DiscoveryScope {
+  /** Config key inside `[connectors.<name>]` holding the configured ids. */
+  readonly key: string;
+  /** Short note pasted above the `--new` config fragment (the id format). */
+  readonly idNote: string;
+  /**
+   * Canonicalize an id before comparing config against the API (both sides).
+   * Defaults to trim + lowercase. Notion overrides it because the same database
+   * is legitimately written with or without the UUID dashes, and a formatting
+   * difference is not drift.
+   */
+  readonly normalizeId?: (value: string) => string;
+}
+
 /** A connector's discovery spec: which verb it adds + the probe that runs it. */
 export interface ConnectorDiscoverySpec {
   /** Connector name (CLI verb prefix), e.g. `github`. */
@@ -54,6 +88,13 @@ export interface ConnectorDiscoverySpec {
   readonly summary: string;
   /** Noun for the listing header (e.g. `repository`). */
   readonly itemNoun: string;
+  /** Config scope this connector's drift diff is defined over (see above). */
+  readonly scope?: DiscoveryScope;
+  /**
+   * Why `--new` is not offered, when {@link scope} is absent. Required in that
+   * case: an unexplained missing capability is the drift ADR-0030 warned about.
+   */
+  readonly driftNote?: string;
   /**
    * Whether this verb accepts a `--root <id>` option (a starting node for a
    * tree-shaped namespace, e.g. box folders). When set, the CLI exposes
@@ -83,6 +124,67 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/** The configured-vs-visible difference for one connector (ADR-0049). */
+export interface DiscoveryDiff {
+  /** Visible to the credential but absent from config (the actionable half). */
+  readonly added: readonly DiscoveryItem[];
+  /**
+   * Configured but absent from the enumeration — renamed, deleted, or no longer
+   * permitted. Empty and **not computed** when the enumeration was deliberately
+   * partial (`--filter` / `--root`): a narrowed view cannot distinguish "gone"
+   * from "out of view", and claiming otherwise would be the guess this whole
+   * layer exists to avoid.
+   */
+  readonly removed: readonly string[];
+  /** Whether {@link removed} was computed at all (false ⇒ partial view). */
+  readonly removedComputed: boolean;
+}
+
+/** Default id canonicalization for the drift diff: trim + lowercase. */
+function defaultNormalizeId(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Read a connector slice's configured id list for a {@link DiscoveryScope}.
+ * Non-array / non-string entries are ignored (the slice is already schema-checked
+ * upstream; this stays lenient rather than throwing inside a diagnostic).
+ */
+export function configuredIds(config: Record<string, unknown>, scope: DiscoveryScope): string[] {
+  const raw = config[scope.key];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((v): v is string => typeof v === "string");
+}
+
+/**
+ * Diff a discovery enumeration against the configured ids (ADR-0049; the
+ * connector-generic form of ADR-0039 Layer 1).
+ *
+ * Pure — no I/O, no config write. `--new` renders the result; nothing is ever
+ * ingested or auto-added, preserving the explicit-enumeration data-minimization
+ * model ADR-0039 made the SSOT.
+ *
+ * @param partialView the enumeration was narrowed (`--filter` / `--root`), so
+ *   `removed` is not computed. See {@link DiscoveryDiff.removed}.
+ */
+export function diffDiscovered(
+  items: readonly DiscoveryItem[],
+  configured: readonly string[],
+  scope: DiscoveryScope,
+  partialView = false,
+): DiscoveryDiff {
+  const normalize = scope.normalizeId ?? defaultNormalizeId;
+  const configuredSet = new Set(configured.map(normalize));
+  const visibleSet = new Set(items.map((item) => normalize(item.value)));
+  const added = items.filter((item) => !configuredSet.has(normalize(item.value)));
+  if (partialView) return { added, removed: [], removedComputed: false };
+  return {
+    added,
+    removed: configured.filter((id) => !visibleSet.has(normalize(id))),
+    removedComputed: true,
+  };
+}
+
 /** Connector → discovery spec (the SSOT for the generic discovery verbs). */
 export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
   github: {
@@ -90,6 +192,10 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
     verb: "repos",
     summary: "List repositories the token can see and print a paste-ready config block.",
     itemNoun: "repository",
+    scope: {
+      key: "repos",
+      idNote: "repos are 'owner/repo' full names — the # comment is just a visibility label",
+    },
     async discover({ secret, config, filter, onProgress }) {
       const token = await secret("token");
       if (!token) throw new Error("no github token configured");
@@ -113,6 +219,14 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
     verb: "calendars",
     summary: "List calendars the token can see and print a paste-ready config block.",
     itemNoun: "calendar",
+    // No `scope`: `[connectors.google].calendarId` selects **one** calendar, so
+    // "visible but not configured" would flag every other calendar the account
+    // can see as drift — noise, not signal. The half that does matter for google
+    // (the configured id no longer resolving) is answered by the reachability
+    // probe in `google auth test` (ADR-0049), which reads that exact id.
+    driftNote:
+      "google ingests a single calendarId, so there is no configured *set* to diff — " +
+      "run `suasor google auth test` to verify the configured calendarId still resolves",
     async discover({ secret, config, filter, onProgress }) {
       const refreshToken = await secret("refreshToken");
       if (!refreshToken) throw new Error("no google refreshToken configured");
@@ -150,6 +264,10 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
     verb: "folders",
     summary: "List subfolders under a root and print a paste-ready config block.",
     itemNoun: "folder",
+    scope: {
+      key: "folders",
+      idNote: "folders are Box folder ids — the # comment is just the folder name",
+    },
     acceptsRoot: true,
     async discover({ secret, filter, root, onProgress }) {
       const token = await secret("token");
@@ -173,6 +291,14 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
     verb: "databases",
     summary: "List databases the token can see and print a paste-ready config block.",
     itemNoun: "database",
+    scope: {
+      key: "databases",
+      idNote: "databases are Notion database ids — the # comment is just the title",
+      // Notion accepts a database id with or without the UUID dashes and the API
+      // echoes the dashed form; a config written in the compact form is the same
+      // database, not drift.
+      normalizeId: (value) => value.trim().toLowerCase().replaceAll("-", ""),
+    },
     async discover({ secret, filter, onProgress }) {
       const token = await secret("token");
       if (!token) throw new Error("no notion token configured");
@@ -194,6 +320,10 @@ export const DISCOVERY_SPECS: Record<string, ConnectorDiscoverySpec> = {
     verb: "projects",
     summary: "List projects the credential can see and print a paste-ready config block.",
     itemNoun: "project",
+    scope: {
+      key: "projects",
+      idNote: "projects are Jira project keys — the # comment is just the name",
+    },
     async discover({ secret, config, filter, onProgress }) {
       const token = await secret("token");
       if (!token) throw new Error("no jira token configured");

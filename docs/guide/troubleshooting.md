@@ -83,6 +83,7 @@ Each check carries `ok` / `info` / `warn` / `error`, and **a single `error` make
 - **database** — whether `storage.dbPath` exists and the core projection tables (`sources` / `tasks` / `sync_runs` / `decisions` / `inbox` / `proposals` / `commitments` / `links` / `persons` / `person_identities`) are present (it never creates the DB — diagnosis only). The check detail derives the table count dynamically from the set in `src/db/schema.ts`, so the count stays accurate when new projections are added.
 - **embedding** — the `[embedding].backend` setting (`disabled` is INFO). When a backend is enabled it also probes `embedding.dim` to check that **the model's output dimension matches `[embedding].dim`** (see "Dimension mismatch" below).
 - **connectors** — whether enabled connectors have credentials configured (missing is WARN). A *dangling credential* — `auth set` done but `[connectors.<name>]` not enabled — is also WARN.
+- **connectors.config** — an enabled connector missing a **required non-secret setting** (google `clientId`, ms-graph `tenantId` / `clientId`, jira `host`) is an **ERROR**: unlike an empty ingest scope, the connector cannot address its API at all and the sync fails with the vendor's own opaque message ([ADR-0049](../adr/0049-connector-readiness-parity.md)). Reported as its own line, never folded into the empty-scope WARN.
 - **maintenance** — surfaces drainable backlog such as `pending embeddings` / `stale embeddings` / `extraction version drift` as WARN (a maintenance hint; does not affect the exit code).
 
 ### `suasor store info --breakdown`
@@ -123,6 +124,8 @@ Aggregates the event log by `type` (`COUNT(*) GROUP BY type`, read-only) and pri
 
 3. **the connector is not enabled** — the `[connectors.<name>]` slice is missing or `enabled = false`. Check with `suasor doctor`'s connectors check (including the dangling-credential WARN) and `suasor connectors list`.
 4. **check whether a partial failure is hidden behind exit 0** — a connector with multiple ingest units inside it (Slack's token pool, etc.) reports a partial failure via `SyncOutcome.partialFailure` and **exits 1** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md)). Check the per-token summary in the human-readable output (`tokens: T0ACME "Acme"=ok, #2=dead ...`).
+5. **the configured id is not actually reachable** — a granted scope does not mean the id you wrote resolves. For google / ms-graph, `suasor <connector> auth test` probes each configured resource live and prints `REACHABLE` / `UNREACHABLE` / `UNKNOWN` ([ADR-0049](../adr/0049-connector-readiness-parity.md)); a mistyped `calendarId` or an app-only `user = "me"` shows up as `UNREACHABLE … HTTP 404`. `UNKNOWN` means the probe could not tell — it is not a pass.
+6. **what you expected to ingest was never in config** — Suasor only ingests ids you explicitly enumerate. `suasor <connector> <verb> --new` (github `repos` / notion `databases` / jira `projects` / box `folders`) shows exactly what the credential can see that config does not list, and what config lists that is no longer visible ([ADR-0049](../adr/0049-connector-readiness-parity.md)).
 
 ## Nothing in search (FTS is fine but recall is empty)
 

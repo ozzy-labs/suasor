@@ -201,6 +201,18 @@ email demand（自分宛ての未返信スレッド・[ADR-0043](../adr/0043-ema
 
 **API から自動導出しない**のは、エイリアス・旧アドレス・配布リスト（`team@`）も実務上「自分宛て」であり、プロフィール API が返す単一の主アドレスでは取りこぼすため。
 
+## connector の必須設定（`requiredSettings`・ADR-0049 / #478）
+
+一部の connector は、credential とは別に**非 secret の設定キー**が無いと API を名指しできない:
+
+| connector | 必須キー | 用途 |
+| --- | --- | --- |
+| `google` | `clientId` | desktop / web app の OAuth client id |
+| `ms-graph` | `tenantId` / `clientId` | Azure AD tenant（directory）id / app registration の client id |
+| `jira` | `host` | Jira site host（scheme なし。例 `example.atlassian.net`） |
+
+これらは schema 上 `.default("")` を持つため**空でも load を通る**（`enabled = true` だけの slice が `loadConfig` も `validate-config` も通過する）。従来はその状態が sync 時にベンダ側の不透明なエラーとして初めて現れていたので、`suasor doctor` が `connectors.config` の **ERROR** として先に surface する（[ADR-0049](../adr/0049-connector-readiness-parity.md) 決定 2）。取り込み対象が空（`connectors.noop`・WARN）とは**別の行**で、severity も対処も違う。宣言先は connector manifest の `requiredSettings`（`src/connectors/manifest.ts`）。
+
 ## `[sync]` — 取り込み鮮度の期待値（#442）
 
 ```toml

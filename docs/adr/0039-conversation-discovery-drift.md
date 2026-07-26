@@ -5,6 +5,7 @@
 - Deciders: Suasor maintainers
 - Related: [ADR-0003](0003-local-first-and-content-minimization.md)（local-first / external-content minimization — 明示列挙の上位原則）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP/HITL 境界 — config 追記は write=HITL）, [ADR-0007](0007-connector-contract.md)（connector 契約＝read 専用・`sync` 一本）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（Slack 運用 verb / `slack conversations` discovery / per-channel cursor / 集約 warn）, [ADR-0014](0014-slack-multi-workspace.md)（`[connectors.slack.workspaces.<alias>]` — per-workspace scope boundary）, [ADR-0019](0019-slack-fetch-rate-limit-retry.md)（`slackFetch` の 429/Retry-After — sweep もこの負荷特性に乗る）, [ADR-0038](0038-multi-workspace-shared-channel-dedup.md)（共有チャンネルの owner-wins dedup — new/removed diff の共有チャンネル配置）
 - Tracks: epic [#370](https://github.com/ozzy-labs/suasor/issues/370)（PR0＝本 ADR。`slack conversations --new` diff＝PR1、sync/doctor drift check＝PR2、`--apply` 追記＝PR3・任意）
+- Generalized by: [ADR-0049](0049-connector-readiness-parity.md)（本 ADR の **Layer 1 だけ**を [ADR-0030](0030-connector-discovery-verbs.md) の discovery registry 上で全 connector に一般化する = 汎用 `<connector> <verb> --new`。Layer 2（sync 時 sweep）/ Layer 3（doctor 検査）は、非 Slack ではコスト構造が違うため意図的に一般化しない — 理由は ADR-0049 決定 3）
 
 ## Context
 

@@ -602,6 +602,7 @@ export const manifest: ConnectorManifest = {
   sliceTemplate: {
     body: ["enabled = true", '# clientId = "<oauth-client-id>"  # required for auth'],
   },
+  requiredSettings: [{ key: "clientId", hint: "OAuth client id of the desktop / web app" }],
   noopWarning(slice) {
     const cfg = GoogleConnectorConfig.parse(slice ?? {});
     if (cfg.resources.length === 0) {

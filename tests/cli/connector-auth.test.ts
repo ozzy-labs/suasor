@@ -176,12 +176,40 @@ describe("suasor <connector> auth — wiring + arg validation (no network)", () 
     expect(err).toContain("no jira token configured");
     expect(err).toContain("jira auth set");
   });
+
+  // ADR-0049 / Issue #478: the reachability layer is on by default (the operator
+  // should not have to know to ask for the layer that answers "will this
+  // actually work"), with an explicit opt-out.
+  test("auth test documents the resource probe and its --no-probe opt-out", async () => {
+    const { code, out } = await run(["google", "auth", "test", "--help"]);
+    expect(code).toBe(0);
+    expect(out).toContain("--no-probe");
+    expect(out).toContain("UNKNOWN");
+  });
+
+  test("--no-probe is accepted (it fails only on the missing credential)", async () => {
+    const { code, err } = await run(["google", "auth", "test", "--no-probe"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no google refreshToken configured");
+  });
 });
 
 describe("AUTH_SPECS table (SSOT)", () => {
   test("covers exactly github / ms-graph / google / box / notion / jira (Slack keeps its own)", () => {
     expect(authConnectorNames()).toEqual(["box", "github", "google", "jira", "ms-graph", "notion"]);
     expect(AUTH_SPECS.slack).toBeUndefined();
+  });
+
+  test("the resource-gated connectors declare a reachability probe (ADR-0049)", () => {
+    // google / ms-graph are the `resources = [...]` connectors — the ones whose
+    // readiness a scope check cannot fully answer (ms-graph cannot answer it at
+    // all: client-credentials reports `.default`).
+    expect(AUTH_SPECS.google?.probesResources).toBe(true);
+    expect(AUTH_SPECS["ms-graph"]?.probesResources).toBe(true);
+    // The others have no per-resource notion; absence here is the honest state,
+    // not an oversight.
+    expect(AUTH_SPECS.github?.probesResources ?? false).toBe(false);
+    expect(AUTH_SPECS.box?.probesResources ?? false).toBe(false);
   });
 
   test("each spec stores the secret name the connector reads at sync time", () => {
