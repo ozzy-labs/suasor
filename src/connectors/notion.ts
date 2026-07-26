@@ -241,4 +241,7 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: true,
   surfacesChannels: false,
   surfacesTeams: false,
+  // A Notion database id names the object globally within the integration's
+  // workspace; there is no account-relative scope to disambiguate (ADR-0050).
+  multiAccount: false,
 };

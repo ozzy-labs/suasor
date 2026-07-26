@@ -409,4 +409,7 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: true,
   surfacesChannels: false,
   surfacesTeams: false,
+  // A Jira site is named by `host`, which already distinguishes two instances
+  // without an account layer (ADR-0050).
+  multiAccount: false,
 };

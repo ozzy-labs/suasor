@@ -21,11 +21,13 @@
  */
 import { Command, type CommandClass, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
+import type { AccountSlice } from "../../connectors/multi-account.ts";
 import { connectorBundledInBinary } from "../../connectors/registry.ts";
 import type { ResourceReachabilityState } from "../../connectors/resource-probe.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { secretEnvName } from "../../connectors/secrets.ts";
 import { standaloneGate } from "../build-target.ts";
+import { ambiguousAccountMessage, resolveConnectorAccounts } from "../connector-account.ts";
 import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
 /**
@@ -52,6 +54,11 @@ class ConnectorAuthSetCommand extends Command {
 
   token = Option.String("--token", { description: "Secret value (omit to read from stdin)." });
 
+  account = Option.String("--account", {
+    description:
+      "Account to store the credential for, on connectors with a [connectors.<name>.accounts.<account>] table (ADR-0050).",
+  });
+
   override async execute(): Promise<number> {
     const connector = (this.constructor as typeof ConnectorAuthSetCommand).connectorName;
     const { AUTH_SPECS } = await import("../../connectors/auth-specs.ts");
@@ -61,6 +68,24 @@ class ConnectorAuthSetCommand extends Command {
       return 1;
     }
 
+    const resolved = await resolveConnectorAccounts(connector, this.account, {
+      tolerateConfigError: true,
+    });
+    if (!resolved.ok) {
+      this.context.stderr.write(resolved.message);
+      return 1;
+    }
+    // `auth set` writes exactly one secret, so an ambiguous target is refused
+    // rather than resolved by picking one — storing a work token under the
+    // personal account's name is invisible until the wrong mailbox syncs.
+    if (resolved.accounts.length > 1) {
+      this.context.stderr.write(ambiguousAccountMessage(connector, resolved.accounts));
+      return 1;
+    }
+    const target = resolved.accounts[0] as AccountSlice;
+    const { accountSecretName } = await import("../../connectors/multi-account.ts");
+    const secretName = accountSecretName(target, spec.secretName);
+
     // `auth set` writes to the OS keychain (@napi-rs/keyring), which is external
     // to the standalone binary (ADR-0010). In the binary, secrets must come from
     // the env override instead — so gate keychain writes and point there.
@@ -69,7 +94,7 @@ class ConnectorAuthSetCommand extends Command {
       {
         hint:
           `set the secret via the env override instead: ` +
-          `${secretEnvName(connector, spec.secretName)}=<value>`,
+          `${secretEnvName(connector, secretName)}=<value>`,
       },
     );
     if (!setGate.ok) {
@@ -100,12 +125,15 @@ class ConnectorAuthSetCommand extends Command {
 
     const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
     const { storeSecret } = await import("../../connectors/secrets.ts");
-    await storeSecret(connector, spec.secretName, value, keychain ? { keychain } : {});
+    await storeSecret(connector, secretName, value, keychain ? { keychain } : {});
+    const forAccount = target.declared ? ` for account '${target.name}'` : "";
     this.context.stdout.write(
-      `Stored ${connector} ${spec.secretLabel} in the OS keychain ` +
-        `(service 'suasor', account 'connector:${connector}:${spec.secretName}').\n`,
+      `Stored ${connector} ${spec.secretLabel}${forAccount} in the OS keychain ` +
+        `(service 'suasor', account 'connector:${connector}:${secretName}').\n`,
     );
-    this.context.stdout.write(`next: verify it with \`suasor ${connector} auth test\`.\n`);
+    this.context.stdout.write(
+      `next: verify it with \`suasor ${connector} auth test${target.declared ? ` --account ${target.name}` : ""}\`.\n`,
+    );
     // A stored secret alone does not enable a connector: `[connectors.<name>]`
     // has to exist in the config for anything to read it. ADR-0029 called the
     // auth/config disconnect structurally fixed, but only the wizard path
@@ -129,6 +157,11 @@ class ConnectorAuthTestCommand extends Command {
   noProbe = Option.Boolean("--no-probe", false, {
     description:
       "Skip the per-resource reachability probe (google / ms-graph); report scope readiness only.",
+  });
+
+  account = Option.String("--account", {
+    description:
+      "Test only this account, on connectors with a [connectors.<name>.accounts.<account>] table (ADR-0050). Omit to test every configured account.",
   });
 
   override async execute(): Promise<number> {
@@ -155,55 +188,92 @@ class ConnectorAuthTestCommand extends Command {
       }
     }
 
-    const [{ loadConfig }, { makeSecretResolver }] = await Promise.all([
-      import("../../config/index.ts"),
-      import("../../connectors/secrets.ts"),
-    ]);
-    const config = await loadConfig();
-    const slice = (config.connectors[connector] ?? {}) as Record<string, unknown>;
-    const secret = makeSecretResolver(connector);
-
-    let report: Awaited<ReturnType<typeof spec.test>>;
-    try {
-      // The reachability probe defaults ON (ADR-0049): the whole point of the
-      // verb is "will this credential actually work", and the operator should not
-      // have to know to ask for the layer that answers it. It costs one extra
-      // read-only GET per configured resource on an explicit health command;
-      // --no-probe opts out for a scopes-only run.
-      report = await spec.test({ secret, config: slice, probe: !this.noProbe });
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const hint = message.startsWith(`no ${connector} `)
-        ? ` (run \`suasor ${connector} auth set\` or set the env override)`
-        : "";
-      this.context.stderr.write(`error: ${message}${hint}\n`);
+    const resolved = await resolveConnectorAccounts(connector, this.account, {
+      tolerateConfigError: false,
+    });
+    if (!resolved.ok) {
+      this.context.stderr.write(resolved.message);
       return 1;
+    }
+    const { accountSecretName } = await import("../../connectors/multi-account.ts");
+    const { makeSecretResolver } = await import("../../connectors/secrets.ts");
+
+    // Every configured account is tested unless one is named (ADR-0050). Testing
+    // only the first would report `ok` for an install whose work account has a
+    // dead credential — the same "one green line hides a broken half" shape the
+    // scope / reachability split exists to prevent.
+    const reports: Array<{
+      account: string | null;
+      report: Awaited<ReturnType<typeof spec.test>>;
+    }> = [];
+    let failed = false;
+    for (const account of resolved.accounts) {
+      const label = account.declared ? account.name : null;
+      const secret = (name: string) =>
+        makeSecretResolver(connector)(accountSecretName(account, name));
+      try {
+        // The reachability probe defaults ON (ADR-0049): the whole point of the
+        // verb is "will this credential actually work", and the operator should
+        // not have to know to ask for the layer that answers it. It costs one
+        // extra read-only GET per configured resource on an explicit health
+        // command; --no-probe opts out for a scopes-only run.
+        reports.push({
+          account: label,
+          report: await spec.test({ secret, config: account.slice, probe: !this.noProbe }),
+        });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        const hint = message.startsWith(`no ${connector} `)
+          ? ` (run \`suasor ${connector} auth set${label ? ` --account ${label}` : ""}\` or set the env override)`
+          : "";
+        // One account's failure is reported and the rest still run: the operator
+        // asked "are my credentials live", and stopping at the first dead one
+        // answers that question for only part of the install.
+        this.context.stderr.write(
+          `error: ${label ? `account '${label}': ` : ""}${message}${hint}\n`,
+        );
+        failed = true;
+      }
     }
 
     if (this.json) {
-      this.context.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-      return 0;
+      // Shape is stable per config: a single unnamed account keeps the bare
+      // report object every existing consumer reads; a declared `accounts` table
+      // yields one entry per account, keyed by name.
+      const payload =
+        reports.length === 1 && reports[0]?.account === null
+          ? reports[0].report
+          : {
+              accounts: Object.fromEntries(
+                reports.map(({ account, report }) => [account ?? "default", report]),
+              ),
+            };
+      this.context.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      return failed ? 1 : 0;
     }
 
-    this.context.stdout.write(`ok: ${connector} credential for ${report.principal}\n`);
-    this.context.stdout.write(`scopes: ${report.scopes ?? "(none reported)"}\n`);
-    if (report.features.length > 0) {
-      this.context.stdout.write("features:\n");
-      for (const f of report.features) {
-        this.context.stdout.write(`  ${f.label}: ${f.status}\n`);
+    for (const { account, report } of reports) {
+      if (account !== null) this.context.stdout.write(`account: ${account}\n`);
+      this.context.stdout.write(`ok: ${connector} credential for ${report.principal}\n`);
+      this.context.stdout.write(`scopes: ${report.scopes ?? "(none reported)"}\n`);
+      if (report.features.length > 0) {
+        this.context.stdout.write("features:\n");
+        for (const f of report.features) {
+          this.context.stdout.write(`  ${f.label}: ${f.status}\n`);
+        }
+      }
+      // Kept as its own block, never merged into `features:` — a scope row is a
+      // self-report about what was granted, a reachability row is what the API
+      // answered, and folding two confidence levels into one line lets the weaker
+      // one masquerade as the stronger (ADR-0049).
+      if (report.resources && report.resources.length > 0) {
+        this.context.stdout.write("resources (live probe):\n");
+        for (const r of report.resources) {
+          this.context.stdout.write(`  ${r.resource}: ${RESOURCE_LABEL[r.state]} — ${r.detail}\n`);
+        }
       }
     }
-    // Kept as its own block, never merged into `features:` — a scope row is a
-    // self-report about what was granted, a reachability row is what the API
-    // answered, and folding two confidence levels into one line lets the weaker
-    // one masquerade as the stronger (ADR-0049).
-    if (report.resources && report.resources.length > 0) {
-      this.context.stdout.write("resources (live probe):\n");
-      for (const r of report.resources) {
-        this.context.stdout.write(`  ${r.resource}: ${RESOURCE_LABEL[r.state]} — ${r.detail}\n`);
-      }
-    }
-    return 0;
+    return failed ? 1 : 0;
   }
 }
 

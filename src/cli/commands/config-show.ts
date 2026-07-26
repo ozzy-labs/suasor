@@ -21,12 +21,19 @@
  */
 
 import { Command, Option } from "clipanion";
-import { connectorNames, connectorSecretNames } from "../../connectors/registry.ts";
+import { connectorNames } from "../../connectors/registry.ts";
 
 /** A connector's credential presence (never the value, NFR-PRV-4). */
 interface CredentialPresence {
   /** Secret name the connector reads (e.g. `token`, `clientSecret`). */
   secret: string;
+  /**
+   * Declared account the credential belongs to, or omitted for a single-account
+   * connector (ADR-0050) — a multi-account connector has one credential per
+   * account, and reporting only the first would say "configured" for an install
+   * whose second account has none.
+   */
+  account?: string;
   /** Whether a value is resolvable via env override or the OS keychain. */
   configured: boolean;
 }
@@ -74,13 +81,19 @@ export class ConfigShowCommand extends Command {
       return 1;
     }
 
-    const [{ loadConfig, resolveConfigDir }, { maskSecrets }, { resolveSecret }, { join }] =
-      await Promise.all([
-        import("../../config/index.ts"),
-        import("../../config/mask.ts"),
-        import("../../connectors/secrets.ts"),
-        import("node:path"),
-      ]);
+    const [
+      { loadConfig, resolveConfigDir },
+      { maskSecrets },
+      { resolveSecret },
+      { accountSecretProbes, probeConfigPath },
+      { join },
+    ] = await Promise.all([
+      import("../../config/index.ts"),
+      import("../../config/mask.ts"),
+      import("../../connectors/secrets.ts"),
+      import("../../connectors/noop-check.ts"),
+      import("node:path"),
+    ]);
 
     let config: Awaited<ReturnType<typeof loadConfig>>;
     try {
@@ -99,16 +112,26 @@ export class ConfigShowCommand extends Command {
     const masked = maskSecrets(config) as Record<string, unknown>;
 
     // Per-connector credential presence: probe only whether a value resolves
-    // (env override or keychain), never read it (NFR-PRV-4).
+    // (env override or keychain), never read it (NFR-PRV-4). One row per
+    // configured account for a multi-account connector (ADR-0050).
     const credentials: Record<string, CredentialPresence[]> = {};
+    const paths: Record<string, string[]> = {};
     for (const name of connectorNames()) {
-      const secrets = connectorSecretNames(name);
-      if (secrets.length === 0) continue; // needs no auth (e.g. web / local)
+      const probes = accountSecretProbes(name, config.connectors[name] ?? {});
+      if (probes.length === 0) continue; // needs no auth (e.g. web / local)
       const presence: CredentialPresence[] = [];
-      for (const secret of secrets) {
-        presence.push({ secret, configured: (await resolveSecret(name, secret)) !== null });
+      const rendered: string[] = [];
+      for (const probe of probes) {
+        const configured = (await resolveSecret(name, probe.secret)) !== null;
+        presence.push({
+          secret: probe.base,
+          ...(probe.account !== null ? { account: probe.account } : {}),
+          configured,
+        });
+        rendered.push(`${probeConfigPath(name, probe)} = ${configured ? "set" : "unset"}`);
       }
       credentials[name] = presence;
+      paths[name] = rendered;
     }
 
     if (this.json) {
@@ -124,11 +147,8 @@ export class ConfigShowCommand extends Command {
     // Credential presence block: existence only, never the value.
     if (Object.keys(credentials).length > 0) {
       this.context.stdout.write("  credentials (presence only):\n");
-      for (const [name, presence] of Object.entries(credentials)) {
-        for (const { secret, configured } of presence) {
-          const mark = configured ? "set" : "unset";
-          this.context.stdout.write(`    connectors.${name}.${secret} = ${mark}\n`);
-        }
+      for (const rendered of Object.values(paths)) {
+        for (const line of rendered) this.context.stdout.write(`    ${line}\n`);
       }
     }
     return 0;

@@ -195,6 +195,8 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: false,
   surfacesChannels: false,
   surfacesTeams: false,
+  // Credential-free: urls are absolute and there is no account to name.
+  multiAccount: false,
   capabilityNotes: {
     genericAuth: "public pages only — no credential to store or test",
     genericDiscovery: "urls are user-supplied — no upstream namespace to enumerate",

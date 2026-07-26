@@ -548,3 +548,109 @@ describe("MS Graph connector — guards", () => {
   // centrally by the sync service (Issue #440) and covered for every connector by
   // the completeness test in `tests/connectors/manifest.test.ts`.
 });
+
+describe("MS Graph connector — multi-account (ADR-0050 / #441)", () => {
+  const mail = (id: string) => ({
+    id,
+    subject: `s-${id}`,
+    bodyPreview: "",
+    receivedDateTime: "2026-07-01T00:00:00Z",
+  });
+
+  test("each account uses its own tenant, user and client secret", async () => {
+    const seen: Array<{ tenantId: string; clientSecret: string; user: string }> = [];
+    const connector = createMsGraphConnector(
+      {
+        tenantId: "shared-tenant",
+        clientId: "shared-client",
+        resources: ["mail"],
+        accounts: { default: {}, work: { tenantId: "work-tenant", user: "me@work.example" } },
+      },
+      {
+        clientFactory: ({ tenantId, clientSecret, user }) => {
+          seen.push({ tenantId, clientSecret, user });
+          return fakeGraph({
+            [`/users/${user}/messages`]: [{ value: [mail(`m-${tenantId}`)] }],
+          }).client;
+        },
+      },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) =>
+            name === "clientSecret" ? "s-default" : name === "work:clientSecret" ? "s-work" : null,
+        }),
+      ),
+    );
+    expect(records.map((r) => r.externalId)).toEqual([
+      "msgraph:mail:m-shared-tenant",
+      "msgraph:work:mail:m-work-tenant",
+    ]);
+    // clientId inherited, tenantId / user overridden, secrets per account.
+    expect(seen).toEqual([
+      { tenantId: "shared-tenant", clientSecret: "s-default", user: "me" },
+      { tenantId: "work-tenant", clientSecret: "s-work", user: "me@work.example" },
+    ]);
+  });
+
+  test("an unaddressable account names itself and does not stop the others", async () => {
+    const warns: string[] = [];
+    const connector = createMsGraphConnector(
+      {
+        clientId: "cid",
+        resources: ["mail"],
+        // `beta` inherits no tenantId — the sync would otherwise fail with a
+        // message that does not say which of the two accounts is broken.
+        accounts: { alpha: { tenantId: "t-alpha" }, beta: {} },
+      },
+      {
+        clientFactory: ({ user }) =>
+          fakeGraph({ [`/users/${user}/messages`]: [{ value: [mail("a1")] }] }).client,
+      },
+    );
+    const records = await collect(
+      connector.sync(ctx({ secret: async () => "s", onWarn: (m) => warns.push(m) })),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["msgraph:alpha:mail:a1"]);
+    expect(warns.join("\n")).toContain("beta (ms-graph connector: tenantId and clientId");
+    expect(warns.join("\n")).toContain("account 'beta'");
+    expect((await connector.finalize?.())?.partialFailure).toBe(true);
+  });
+
+  test("a secretless account is skipped with a warning", async () => {
+    const warns: string[] = [];
+    const connector = createMsGraphConnector(
+      { ...baseConfig, resources: ["mail"], accounts: { alpha: {}, beta: {} } },
+      {
+        clientFactory: ({ user }) =>
+          fakeGraph({ [`/users/${user}/messages`]: [{ value: [mail("a1")] }] }).client,
+      },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "alpha:clientSecret" ? "s" : null),
+          onWarn: (m) => warns.push(m),
+        }),
+      ),
+    );
+    expect(warns.join("\n")).toContain("account 'beta' skipped: no clientSecret configured");
+    expect((await connector.finalize?.())?.summaryLines).toContain(
+      "accounts: alpha=ok, beta=skipped",
+    );
+  });
+
+  test("a config with no accounts table is unchanged, id and meta included", async () => {
+    const connector = createMsGraphConnector(
+      { ...baseConfig, resources: ["mail"] },
+      {
+        clientFactory: () => fakeGraph({ "/users/me/messages": [{ value: [mail("m1")] }] }).client,
+      },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.externalId).toBe("msgraph:mail:m1");
+    expect(records[0]?.meta).not.toHaveProperty("account");
+    expect((await connector.finalize?.())?.partialFailure).toBeUndefined();
+  });
+});

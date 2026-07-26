@@ -4,7 +4,10 @@
  * the google probe is exercised directly with an injected secret resolver + a
  * fake transport via the spec's lazy leaf import.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
 import { DISCOVERY_SPECS } from "../../src/connectors/discovery-specs.ts";
 import {
@@ -16,12 +19,18 @@ import {
 const SECRET_ENVS = [
   "SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN",
   "SUASOR_CONNECTOR_GOOGLE_CLIENTSECRET",
+  "SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN",
 ];
 
 /** Run the CLI capturing stdout/stderr (google secret envs cleared). */
-async function run(args: string[]): Promise<{ code: number; out: string; err: string }> {
+async function run(
+  args: string[],
+  configDir?: string,
+): Promise<{ code: number; out: string; err: string }> {
   const saved = SECRET_ENVS.map((k) => [k, process.env[k]] as const);
   for (const k of SECRET_ENVS) delete process.env[k];
+  const savedConfigDir = process.env.SUASOR_CONFIG_DIR;
+  if (configDir !== undefined) process.env.SUASOR_CONFIG_DIR = configDir;
   let out = "";
   let err = "";
   const cli = buildCli();
@@ -49,6 +58,10 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
+    if (configDir !== undefined) {
+      if (savedConfigDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
+      else process.env.SUASOR_CONFIG_DIR = savedConfigDir;
+    }
   }
 }
 
@@ -64,6 +77,63 @@ describe("suasor google calendars — CLI wiring (no network)", () => {
     expect(code).toBe(1);
     expect(err).toContain("no google refreshToken configured");
     expect(err).toContain("google auth set");
+  });
+});
+
+// ADR-0050 / #441: with several accounts configured, "which account's namespace
+// am I enumerating" has to be answered explicitly — pasting the personal
+// account's calendar ids under the work account is a silent mis-config.
+describe("suasor google calendars — per-account targeting (ADR-0050)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "suasor-gcal-acct-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function withAccounts(args: string[]): Promise<{ code: number; err: string }> {
+    await Bun.write(
+      join(dir, "config.toml"),
+      [
+        "[storage]",
+        `dbPath = "${dir}/x.db"`,
+        "[connectors.google]",
+        'clientId = "shared"',
+        "[connectors.google.accounts.personal]",
+        "[connectors.google.accounts.work]",
+        "",
+      ].join("\n"),
+    );
+    const { code, err } = await run(args, dir);
+    return { code, err };
+  }
+
+  test("refuses to guess which account to enumerate", async () => {
+    const { code, err } = await withAccounts(["google", "calendars"]);
+    expect(code).toBe(1);
+    expect(err).toContain("pass --account");
+    expect(err).toContain("personal, work");
+  });
+
+  test("--account resolves that account's credential (absent here → its own error)", async () => {
+    const { code, err } = await withAccounts(["google", "calendars", "--account", "work"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no google refreshToken configured");
+  });
+
+  test("an unknown account name is refused, listing the configured ones", async () => {
+    const { code, err } = await withAccounts(["google", "calendars", "--account", "wrok"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no account 'wrok'");
+  });
+
+  test("--account is refused on a connector with no per-account config", async () => {
+    const { code, err } = await run(["github", "repos", "--account", "work"]);
+    expect(code).toBe(1);
+    expect(err).toContain("no per-account configuration");
   });
 });
 

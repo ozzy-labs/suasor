@@ -120,19 +120,26 @@ class ConnectorSyncCommand extends Command {
     // otherwise just reports `0 observed`, leaving the user to inspect the DB to
     // realize the config never had a target. Warn (stderr) without changing the
     // exit code — the run still succeeds with 0 observed.
-    const { noopWarning, missingSettingWarning } = await import("../../connectors/noop-check.ts");
-    const noop = noopWarning(name, slice);
-    if (noop !== null) {
-      this.context.stderr.write(`warning: ${name}: ${noop}\n`);
+    // Both advisories are per account (ADR-0050): with several accounts
+    // configured, "one of them has no target" is exactly what a connector-level
+    // verdict would hide.
+    const { noopWarnings, missingSettingWarnings, advisoryLabel } = await import(
+      "../../connectors/noop-check.ts"
+    );
+    for (const advisory of noopWarnings(name, slice)) {
+      this.context.stderr.write(
+        `warning: ${advisoryLabel(name, advisory.account)}: ${advisory.message}\n`,
+      );
     }
     // Pre-sync required-setting advisory (ADR-0049): the run is about to fail
     // with the vendor's own opaque error (an empty `clientId` / `host` cannot
     // address the API). Naming the missing key up front turns that into an
     // actionable line. Exit code unchanged — the real failure still comes from
     // the connector, so this never *causes* a failure it would not have had.
-    const missingSetting = missingSettingWarning(name, slice);
-    if (missingSetting !== null) {
-      this.context.stderr.write(`warning: ${name}: ${missingSetting}\n`);
+    for (const advisory of missingSettingWarnings(name, slice)) {
+      this.context.stderr.write(
+        `warning: ${advisoryLabel(name, advisory.account)}: ${advisory.message}\n`,
+      );
     }
 
     let connector: Awaited<ReturnType<typeof loadConnector>>;

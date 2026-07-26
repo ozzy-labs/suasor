@@ -324,3 +324,125 @@ describe("auth set — the config slice it does not write", () => {
     expect(out).not.toContain("no [connectors.github] section");
   });
 });
+
+/**
+ * `--account` on the auth verbs (ADR-0050 / Issue #441). No network: every case
+ * is decided before any probe runs.
+ */
+describe("auth verbs — per-account targeting", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "suasor-auth-acct-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function withConfig(
+    toml: string,
+    args: string[],
+    keychain = memoryKeychain(),
+  ): Promise<{ code: number; out: string; err: string; keychain: typeof keychain }> {
+    await Bun.write(join(dir, "config.toml"), `[storage]\ndbPath = "${dir}/x.db"\n${toml}`);
+    const result = await run(args, (async function* () {})(), keychain, dir);
+    return { ...result, keychain };
+  }
+
+  const TWO_ACCOUNTS = [
+    "[connectors.google]",
+    'clientId = "shared"',
+    "[connectors.google.accounts.personal]",
+    "[connectors.google.accounts.work]",
+    "",
+  ].join("\n");
+
+  test("auth set stores the credential under the account-scoped keychain name", async () => {
+    const { code, out, keychain } = await withConfig(TWO_ACCOUNTS, [
+      "google",
+      "auth",
+      "set",
+      "--account",
+      "work",
+      "--token",
+      "rt_work",
+    ]);
+    expect(code).toBe(0);
+    expect(
+      keychain.store.get(`${KEYCHAIN_SERVICE}/${keychainAccount("google", "work:refreshToken")}`),
+    ).toBe("rt_work");
+    // And it points at the matching verification command, account included.
+    expect(out).toContain("google auth test --account work");
+  });
+
+  test("auth set refuses to guess which account an ambiguous store is for", async () => {
+    // Storing the work token under the personal account's name is invisible
+    // until the wrong mailbox syncs — so the ambiguity is refused, not resolved.
+    const { code, err } = await withConfig(TWO_ACCOUNTS, [
+      "google",
+      "auth",
+      "set",
+      "--token",
+      "rt",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("pass --account");
+    expect(err).toContain("personal, work");
+  });
+
+  test("an unknown account name is refused, listing the configured ones", async () => {
+    const { code, err } = await withConfig(TWO_ACCOUNTS, [
+      "google",
+      "auth",
+      "test",
+      "--account",
+      "wrok",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("no account 'wrok'");
+    expect(err).toContain("personal, work");
+  });
+
+  test("--account is refused on a connector with no per-account config", async () => {
+    const { code, err } = await withConfig('[connectors.github]\nrepos = ["o/r"]\n', [
+      "github",
+      "auth",
+      "test",
+      "--account",
+      "work",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("no per-account configuration");
+  });
+
+  test("auth test with no --account reports every account, not just the first", async () => {
+    // Both credentials are absent, so both fail before any probe — the point is
+    // that *both* are attempted: stopping at the first would report the install
+    // as broken in one place while a second dead credential stayed invisible.
+    const { code, err } = await withConfig(TWO_ACCOUNTS, ["google", "auth", "test"]);
+    expect(code).toBe(1);
+    expect(err).toContain("account 'personal': no google refreshToken configured");
+    expect(err).toContain("account 'work': no google refreshToken configured");
+    expect(err).toContain("google auth set --account work");
+  });
+
+  test("a single-account config keeps its unlabelled message", async () => {
+    const { code, err } = await withConfig('[connectors.google]\nclientId = "c"\n', [
+      "google",
+      "auth",
+      "test",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("no google refreshToken configured");
+    expect(err).not.toContain("account '");
+  });
+
+  test("the account flag is documented on both verbs", async () => {
+    for (const verb of ["set", "test"]) {
+      const { code, out } = await run(["google", "auth", verb, "--help"]);
+      expect(code).toBe(0);
+      expect(out).toContain("--account");
+    }
+  });
+});

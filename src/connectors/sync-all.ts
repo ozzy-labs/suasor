@@ -227,20 +227,23 @@ async function runOneConnector(
  * Emit the pre-sync config advisories for each connector slice: the no-op
  * warning for an empty scope (Issue #187) and the required-setting warning for a
  * slice that cannot address its API at all (ADR-0049 / Issue #478). Two lines,
- * not one — they differ in severity and remedy.
+ * not one — they differ in severity and remedy. Both are emitted **per account**
+ * for a multi-account slice (ADR-0050 / Issue #441).
  */
 async function emitPreSyncAdvisories(options: BulkSyncOptions): Promise<void> {
   const onWarn = options.syncOptions?.onWarn;
   if (!onWarn) return;
   // Lazy-imported to keep this module's top level import-clean (the schemas pull
   // no heavy SDK, but the lazy import mirrors the connector lazy-load discipline).
-  const { noopWarning, missingSettingWarning } = await import("./noop-check.ts");
+  const { noopWarnings, missingSettingWarnings, advisoryLabel } = await import("./noop-check.ts");
   for (const name of options.names) {
     const slice = options.connectors[name] ?? {};
-    const noop = noopWarning(name, slice);
-    if (noop !== null) onWarn(`${name}: ${noop}`);
-    const missingSetting = missingSettingWarning(name, slice);
-    if (missingSetting !== null) onWarn(`${name}: ${missingSetting}`);
+    for (const advisory of noopWarnings(name, slice)) {
+      onWarn(`${advisoryLabel(name, advisory.account)}: ${advisory.message}`);
+    }
+    for (const advisory of missingSettingWarnings(name, slice)) {
+      onWarn(`${advisoryLabel(name, advisory.account)}: ${advisory.message}`);
+    }
   }
 }
 

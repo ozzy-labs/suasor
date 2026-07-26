@@ -26,6 +26,78 @@ An empty *scope* still syncs (0 observed). A missing **required non-secret setti
 
 It is a separate line from the empty-scope warning above, on purpose: the severities and the remedies differ, and a slice can legitimately have a full ingest scope and no way to authenticate.
 
+## Multi-account ingestion (google / ms-graph)
+
+Most operators' mail, calendar and files are split across a **personal** and a **work** account. `google` and `ms-graph` ingest both in one pass via `[connectors.<name>.accounts.<account>]` ([ADR-0050](../adr/0050-multi-account-connectors.md), [#441](https://github.com/ozzy-labs/suasor/issues/441)):
+
+```toml
+[connectors.google]
+clientId = "shared.apps.googleusercontent.com"   # inherited by every account
+resources = ["gmail", "calendar"]
+
+[connectors.google.accounts.personal]
+self_addresses = ["me@personal.example"]
+
+[connectors.google.accounts.work]
+calendarId = "me@work.example"                    # overrides the flat default
+resources = ["gmail", "calendar", "drive"]
+self_addresses = ["me@work.example"]
+```
+
+```bash
+suasor google auth set --account personal   # → keychain connector:google:personal:refreshToken
+suasor google auth set --account work       # → keychain connector:google:work:refreshToken
+suasor google auth test                     # tests every configured account
+suasor google auth test --account work      # or just one
+```
+
+- **Nothing changes for a single account.** With no `accounts` table the flat keys *are* one account, named `default`, whose keychain entry (`connector:google:refreshToken`), env override (`SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN`) and already-ingested external ids (`google:<resource>:<id>`) are untouched.
+- A named account is namespaced everywhere: keychain `connector:google:work:refreshToken`, env `SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN`, external id `google:work:<resource>:<id>`. The id prefix is **required for correctness** — Gmail message ids are unique only within a mailbox, and one meeting carries the same Calendar event id in every attendee's calendar, so without it two accounts would fight over a single source row.
+- Account names allow letters, digits, `_` and `-`. Two names that normalize to the same env override (`work-a` and `work_a`) are **rejected at load**.
+- Flat keys are inherited by every account that does not override them — one OAuth `clientId` for N accounts is the common case.
+
+### Adding an account to an existing single-account config
+
+Once an `accounts` table exists, the flat keys become **inherited defaults only** and are no longer an ingested account of their own. So if you are adding a second account to a config that was already syncing, declare the first one too:
+
+```toml
+[connectors.google]
+clientId = "shared.apps.googleusercontent.com"
+
+[connectors.google.accounts.default]   # empty table: inherits everything above,
+                                       # keeps the existing keychain entry and external ids
+[connectors.google.accounts.work]
+calendarId = "me@work.example"
+```
+
+If you forget, `suasor doctor` says so — and says it at the confidence the evidence supports:
+
+```text
+[WARN] connectors.accounts  google: a credential is stored for the unnamed default account, but the flat
+                            [connectors.google] keys are inherited defaults for 'work', not an ingested
+                            account of their own, so it is no longer synced — add
+                            [connectors.google.accounts.default] …
+```
+
+That is a `warn` because a stored default-account credential is evidence the account really existed. With no such credential the same situation is reported as `info`: "was ingesting" and "never was" are indistinguishable from config alone, and doctor does not guess.
+
+**Renaming an account changes identity.** The account name is part of the external id, so a rename re-ingests that account's sources under new ids and leaves the old ones behind (clean them up with `suasor source list` → `suasor source forget` if you want them gone).
+
+### What is per account
+
+- **credential** — each account resolves its own secret. `doctor`, `connectors list` and `config show` report presence **per account**, so one stored token can no longer make the whole connector look configured.
+- **error isolation** — one account's revoked token or misconfigured tenant does not stop the others. A tokenless account is a **warned skip**; a failing one is isolated. The pass throws only when *every* account failed.
+- **exit code** — a skipped or failed account makes the run a partial failure (**exit 1**), so cron / CI can gate on "half the mail is not syncing". An account with `resources = []` is a plain no-op and keeps exit 0.
+- **`auth test`** — scope readiness and the reachability probe run per account, under an `account: <name>` heading. With `--account` omitted every account is tested and a failure in one does not stop the rest.
+- **`self_addresses`** — **unioned** across accounts. "Me" is one person with two mailboxes, so a thread to your work address is your demand whichever account ingested it.
+
+```text
+warning: google (account 'work'): required setting(s) not set: clientId (…) — the connector cannot
+         reach its API until they are set in [connectors.google.accounts.work]
+```
+
+`box` folder ids are account-relative too, so it is a genuine candidate for the same treatment; it is deliberately out of scope for now, and its manifest says so rather than staying silently absent.
+
 ## Drift: what the credential can see that config does not list
 
 After the initial setup, new repositories / databases / projects / folders appear over time. Because Suasor only ingests what you **explicitly enumerate** (a deliberate data-minimization choice, [ADR-0039](../adr/0039-conversation-discovery-drift.md)), anything new is simply never ingested — and re-running the full discovery verb means eyeballing the whole list again to spot it.
@@ -344,6 +416,7 @@ A name that matches two different channels (e.g. `#general` in two workspaces) e
 Ingests Microsoft 365 (Outlook mail / Calendar / OneDrive / Teams) (`@microsoft/microsoft-graph-client` + `@azure/msal-node`, app-only client-credential flow).
 
 - **token**: the App registration's client secret. env override `SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET`, keychain account `connector:ms-graph:clientSecret`
+- **multi-account**: add `[connectors.ms-graph.accounts.<account>]` to ingest more than one tenant / mailbox in one pass (per-account `clientSecret`, `tenantId`, `clientId`, `user`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph)
 - **config**:
 
 ```toml
@@ -382,6 +455,7 @@ resources = ["mail", "calendar"]        # mail | calendar | files | teams
 Ingests Google Workspace (Drive / Gmail / Calendar) (`googleapis`, OAuth2 refresh token).
 
 - **token**: OAuth refresh token (read scope for the target APIs). env override `SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN`, keychain account `connector:google:refreshToken`
+- **multi-account**: add `[connectors.google.accounts.<account>]` to ingest a personal *and* a work account in one pass (per-account credential, `calendarId`, `resources`, `self_addresses`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph)
 - **config**:
 
 ```toml
