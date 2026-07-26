@@ -225,7 +225,7 @@ self_addresses = ["me@work.example"]
 
 同じ名前空間化は **1 アカウント内の複数カレンダー**にも要る（[ADR-0051](../adr/0051-ingest-scope-defaults.md) 決定 2）: `calendarIds` が 2 件以上なら calendar の externalId は `google:<account>:calendar:<calendarId>:<eventId>` になり、**1 件だけなら従来どおり無印**（`default` account を無印に保つのと同じ後方互換の理由）。
 
-credential の保管は `suasor <connector> auth set --account <name>`、検証は `suasor <connector> auth test [--account <name>]`（省略時は全 account）。詳細は [cli design](cli.md) と [connectors guide](../guide/connectors.md#multi-account-ingestion-google--ms-graph--box)。
+credential の保管は `suasor <connector> auth set --account <name>`、検証は `suasor <connector> auth test [--account <name>]`（省略時は全 account）。2 つ目の account はウィザードでも足せる（`suasor onboard --connector <name> --account <account>`・[ADR-0029](../adr/0029-onboarding-wizard.md) / [#538](https://github.com/ozzy-labs/suasor/issues/538)）: token 保存・`auth test`・discovery・account テーブル追記までを 1 コマンドで行い、**flat キー降格で 1 つ目が静かに止まる**ケースは（無印 default の credential が解決できるときに限り）`[connectors.<name>.accounts.default]` を併せて書いて防ぐ。詳細は [cli design](cli.md) と [connectors guide](../guide/connectors.md#multi-account-ingestion-google--ms-graph--box)。
 
 ## `[connectors.google]` / `[connectors.ms-graph]` の `self_addresses`（#488）
 

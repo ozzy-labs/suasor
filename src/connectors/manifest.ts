@@ -224,3 +224,16 @@ export function allConnectorManifests(): ConnectorManifest[] {
 export function manifestConnectorNames(): string[] {
   return Object.keys(MANIFESTS).sort();
 }
+
+/**
+ * Connector names declaring {@link ConnectorManifest.multiAccount} (sorted).
+ *
+ * Derived, never listed: every surface that has to name "the connectors with
+ * `[connectors.<name>.accounts.<account>]`" — the `--account` refusal message,
+ * the onboarding wizard's account mode — reads it from here, so the next
+ * connector that adopts multi-account joins those surfaces by flipping its own
+ * manifest flag rather than by someone remembering three call sites.
+ */
+export function multiAccountConnectorNames(): string[] {
+  return manifestConnectorNames().filter((name) => MANIFESTS[name]?.multiAccount === true);
+}

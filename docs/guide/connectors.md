@@ -56,6 +56,20 @@ suasor google auth test --account work      # or just one
 - Account names allow letters, digits, `_` and `-`. Two names that normalize to the same env override (`work-a` and `work_a`) are **rejected at load**.
 - Flat keys are inherited by every account that does not override them — one OAuth `clientId` for N accounts is the common case.
 
+### Adding an account with the wizard (recommended)
+
+`suasor onboard --account <name>` does all of the above for one account — token, `auth test`, discovery, and the config table ([#538](https://github.com/ozzy-labs/suasor/issues/538)):
+
+```bash
+suasor onboard --connector google --account work   # paste the work refresh token
+suasor onboard --connector box --account work --skip-auth   # token via SUASOR_CONNECTOR_BOX_WORK_TOKEN
+```
+
+- The token goes to that account's own keychain entry — the same place `suasor google auth set --account work` writes it, not a second storage path.
+- `auth test` and the discovery probe run **as that account**: its credential, and the settings it will actually see (its own keys over the inherited flat ones). Discovered ids land in `[connectors.google.accounts.work]`, because an id enumerated by your other account addresses nothing here.
+- It refuses **before writing anything** if the connector has no per-account configuration, if the name is outside `[A-Za-z0-9][A-Za-z0-9_-]*`, or if the name would collide with a configured account's env override (`work-a` vs `work_a`) — the last two would leave you with a `config.toml` that no longer loads.
+- If this is the first named account on a config that was already syncing, see the next section: the wizard also handles the first account, and tells you when it cannot.
+
 ### Adding an account to an existing single-account config
 
 Once an `accounts` table exists, the flat keys become **inherited defaults only** and are no longer an ingested account of their own. So if you are adding a second account to a config that was already syncing, declare the first one too:
@@ -80,6 +94,13 @@ If you forget, `suasor doctor` says so — and says it at the confidence the evi
 ```
 
 That is a `warn` because a stored default-account credential is evidence the account really existed. With no such credential the same situation is reported as `info`: "was ingesting" and "never was" are indistinguishable from config alone, and doctor does not guess.
+
+`suasor onboard --account work` splits the same way, at the moment it would cause the demotion:
+
+- a credential for the unnamed default account resolves → it writes `[connectors.<name>.accounts.default]` for you, so the account you already had keeps its credential, its external ids and its ingest;
+- no such credential → it writes nothing and says so on stderr. Adding an account with no credential would make every later `sync` skip it with a warning and exit non-zero, so the wizard does not create one on a guess. If that account should sync too, add the (possibly empty) table yourself.
+
+Adding a *third* account is not a demotion — an `accounts` table already exists — so the wizard stays quiet there and `doctor` remains the standing check.
 
 **Renaming an account changes identity.** The account name is part of the external id, so a rename re-ingests that account's sources under new ids and leaves the old ones behind (clean them up with `suasor source list` → `suasor source forget` if you want them gone).
 
@@ -128,6 +149,7 @@ In particular, it structurally resolves a common pitfall where **you save a toke
 suasor onboard --connector github            # interactive (TTY). token from stdin
 suasor onboard --connector github,slack --json   # non-interactive, machine-readable summary
 suasor onboard --connector box --skip-auth   # token via env override (headless / binary)
+suasor onboard --connector google --account work   # a second account (ADR-0050) — see Multi-account ingestion
 ```
 
 - On a **non-interactive terminal** (pipe / CI) `--connector` is required (it shows no prompt; "no silent wrong answer")

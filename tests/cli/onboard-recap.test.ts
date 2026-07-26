@@ -105,3 +105,64 @@ describe("renderRecap", () => {
     expect(recapHasFailure(input)).toBe(false);
   });
 });
+
+/**
+ * Account mode (ADR-0050 / Issue #538): the recap has to name the account, and
+ * every recovery command it prints has to carry `--account` — without it the
+ * command either refuses as ambiguous or verifies the wrong account.
+ */
+describe("renderRecap — --account runs", () => {
+  test("labels the connector with its account", () => {
+    const input = {
+      connectors: [ok({ connector: "google", account: "work" })],
+      synced: false,
+      syncExitCode: null,
+    };
+    expect(renderRecap(input)).toContain("google (account 'work'): auth ok");
+  });
+
+  test("the auth-test recovery command targets the account", () => {
+    const input = {
+      connectors: [ok({ connector: "google", account: "work", authTest: "failed" })],
+      synced: false,
+      syncExitCode: null,
+    };
+    expect(renderRecap(input)).toContain("suasor google auth test --account work");
+  });
+
+  test("the discovery re-run command carries --account (it is refused without one)", () => {
+    const input = {
+      connectors: [
+        ok({
+          connector: "box",
+          account: "work",
+          configSource: "template",
+          discoverySkippedVerb: "folders",
+        }),
+      ],
+      synced: false,
+      syncExitCode: null,
+    };
+    expect(renderRecap(input)).toContain("suasor box folders --account work");
+  });
+
+  test("the placeholder clause points at the account's own table", () => {
+    const input = {
+      connectors: [ok({ connector: "box", account: "work", configSource: "template" })],
+      synced: false,
+      syncExitCode: null,
+    };
+    expect(renderRecap(input)).toContain("edit [connectors.box.accounts.work] in config.toml");
+  });
+
+  test("a flat run is unchanged (no account clause anywhere)", () => {
+    const text = renderRecap({
+      connectors: [ok({ authTest: "failed" })],
+      synced: false,
+      syncExitCode: null,
+    });
+    expect(text).toContain("suasor github auth test`");
+    expect(text).not.toContain("--account");
+    expect(text).not.toContain("(account");
+  });
+});

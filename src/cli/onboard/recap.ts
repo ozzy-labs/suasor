@@ -14,6 +14,14 @@
 /** One connector's outcome as the recap needs it (a projection of `ConnectorReport`). */
 export interface RecapConnector {
   readonly connector: string;
+  /**
+   * The named account this run configured (`--account`, ADR-0050), or absent for
+   * the ordinary flat-slice run. Present, it renames every clause: the recovery
+   * command needs `--account <name>` (without it `auth test` on a multi-account
+   * config either refuses as ambiguous or tests the wrong account), and the
+   * config clause points at the account's own table.
+   */
+  readonly account?: string;
   /** `generic` (AUTH_SPECS verbs) vs `connector-specific` (slack's own flow). */
   readonly authFlow: "generic" | "connector-specific";
   /** Outcome of the `auth test` probe (or `skipped` under --skip-auth / no spec). */
@@ -46,11 +54,27 @@ export function recapHasFailure(input: RecapInput): boolean {
   return authFailed || syncFailed;
 }
 
+/**
+ * The connector label, matching `advisoryLabel` in
+ * `src/connectors/noop-check.ts` (`google (account 'work')`) so doctor, the sync
+ * warnings and this recap name an account the same way. Re-spelled rather than
+ * imported: that module pulls every connector manifest, and this file is on the
+ * CLI's top-level import path (NFR-PRF-1).
+ */
+function label(c: RecapConnector): string {
+  return c.account === undefined ? c.connector : `${c.connector} (account '${c.account}')`;
+}
+
+/** The `--account <name>` suffix for a recovery command (empty for a flat run). */
+function accountFlag(c: RecapConnector): string {
+  return c.account === undefined ? "" : ` --account ${c.account}`;
+}
+
 /** The `auth …` clause for one connector. */
 function authPhrase(c: RecapConnector): string {
   if (c.authTest === "ok") return "auth ok";
   if (c.authTest === "failed") {
-    return `auth test FAILED — token saved; fix it and re-run \`suasor ${c.connector} auth test\``;
+    return `auth test FAILED — token saved; fix it and re-run \`suasor ${c.connector} auth test${accountFlag(c)}\``;
   }
   // skipped: connector-specific flows (slack) still need the manual checklist;
   // a generic connector was simply skipped (--skip-auth / env-override install).
@@ -68,9 +92,16 @@ function configPhrase(c: RecapConnector): string {
   if (c.configSource === "skipped") return "config already present (left untouched)";
   // template: a placeholder slice was written and needs hand-editing.
   if (c.discoverySkippedVerb) {
-    return `config placeholder written — discovery skipped; edit it or re-run \`suasor ${c.connector} ${c.discoverySkippedVerb}\``;
+    // The re-run needs `--account` too: on a config with several accounts the
+    // discovery verb refuses an unnamed target rather than guessing one, so a
+    // bare command here would be a suggestion that cannot work (ADR-0050).
+    return `config placeholder written — discovery skipped; edit it or re-run \`suasor ${c.connector} ${c.discoverySkippedVerb}${accountFlag(c)}\``;
   }
-  return `config placeholder written — edit [connectors.${c.connector}] in config.toml`;
+  const section =
+    c.account === undefined
+      ? `[connectors.${c.connector}]`
+      : `[connectors.${c.connector}.accounts.${c.account}]`;
+  return `config placeholder written — edit ${section} in config.toml`;
 }
 
 /**
@@ -81,7 +112,7 @@ function configPhrase(c: RecapConnector): string {
 export function renderRecap(input: RecapInput): string {
   const lines: string[] = ["Setup recap:"];
   for (const c of input.connectors) {
-    lines.push(`  ${c.connector}: ${authPhrase(c)}; ${configPhrase(c)}.`);
+    lines.push(`  ${label(c)}: ${authPhrase(c)}; ${configPhrase(c)}.`);
   }
 
   const syncFailed = input.syncExitCode !== null && input.syncExitCode > 0;
