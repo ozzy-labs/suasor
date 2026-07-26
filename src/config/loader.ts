@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { connectorNames, loadConnectorConfigSchema } from "../connectors/registry.ts";
 import { ConfigError } from "./error.ts";
+import { legacyShapeRejector } from "./legacy-shapes.ts";
 import { Config } from "./schema.ts";
 import { collectSidecarEndpoints, SIDECAR_LOOPBACK_ALLOWLIST } from "./sidecar-egress.ts";
 
@@ -164,23 +165,6 @@ async function readFileLayer(configDir: string): Promise<Layer> {
  * `ConfigError`, each path prefixed `connectors.<name>` so the message points at
  * the exact field.
  */
-/**
- * Connectors that removed a config shape and replaced it with a different one,
- * mapped to the check that turns the stale shape into a migration instruction.
- *
- * A table rather than an `if` chain per connector, and **lazy** rather than a
- * manifest field: `manifest.ts` eagerly imports every connector module and is
- * deliberately kept off the config / registry / MCP-serve path (see its module
- * header), so declaring this there would drag all of them onto config load.
- */
-const LEGACY_SHAPE_REJECTORS: Record<
-  string,
-  () => Promise<(slice: Record<string, unknown>) => void>
-> = {
-  slack: async () => (await import("../connectors/slack.ts")).rejectLegacySlackConfig,
-  google: async () => (await import("../connectors/google.ts")).rejectLegacyGoogleConfig,
-};
-
 async function validateConnectorSlices(
   connectors: Record<string, Record<string, unknown>>,
 ): Promise<void> {
@@ -189,10 +173,10 @@ async function validateConnectorSlices(
     // A removed config shape gets the connector's own mechanical migration
     // message instead of a bare strict-mode "Unrecognized key" — the friendly
     // error IS the migration path (ADR-0042 決定 9, ADR-0051).
-    const loadRejector = LEGACY_SHAPE_REJECTORS[name];
-    if (loadRejector) {
+    const rejectLegacyShape = await legacyShapeRejector(name);
+    if (rejectLegacyShape) {
       try {
-        (await loadRejector())(slice);
+        rejectLegacyShape(slice);
       } catch (error) {
         if (error instanceof ConfigError) {
           issues.push(...error.issues);

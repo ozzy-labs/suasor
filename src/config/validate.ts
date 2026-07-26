@@ -36,6 +36,8 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { loadConnectorConfigSchema } from "../connectors/registry.ts";
 import { docsUrl } from "../shared/doc-ref.ts";
+import { ConfigError } from "./error.ts";
+import { type LegacyShapeRejector, legacyShapeRejector } from "./legacy-shapes.ts";
 import { Config } from "./schema.ts";
 
 /** Classification of a single validation finding. */
@@ -75,6 +77,39 @@ export interface ValidateResult {
 
 /** Same universal control key the loader recognizes on every connector slice. */
 const COMMON_CONNECTOR_KEYS = z.object({ enabled: z.boolean().optional() });
+
+/**
+ * Findings for a connector slice still written in a **removed** shape, or `[]`
+ * when it is clean. Each `ConfigError` issue becomes one non-fixable
+ * `invalid-value` finding carrying the connector's migration text verbatim.
+ *
+ * Not fixable on purpose: the repair is "write this other key with this value",
+ * which is a decision (which calendars do you actually want?), not the
+ * mechanical deletion `--fix` is scoped to.
+ */
+function legacyShapeFindings(
+  name: string,
+  slice: Record<string, unknown>,
+  reject: LegacyShapeRejector,
+): Finding[] {
+  try {
+    reject(slice);
+    return [];
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    const issues = error.issues.length > 0 ? error.issues : [error.message];
+    // The rejector's issues are written for a thrown `ConfigError`, so they lead
+    // with `connectors.<name>: `. Here that is already the finding's `path`, and
+    // printing it twice buries the instruction.
+    const prefix = `connectors.${name}: `;
+    return issues.map((message) => ({
+      path: `connectors.${name}`,
+      kind: "invalid-value" as const,
+      message: message.startsWith(prefix) ? message.slice(prefix.length) : message,
+      fixable: false,
+    }));
+  }
+}
 
 /** Map a Zod issue code to one of our finding categories. */
 function classifyZodIssue(issue: z.core.$ZodIssue): FindingKind {
@@ -156,6 +191,21 @@ export async function validateConfig(
   const danglingLocalRoots: number[] = [];
   for (const [name, sliceRaw] of Object.entries(connectors)) {
     const slice = isRecord(sliceRaw) ? sliceRaw : {};
+    // A **removed** config shape is not a typo, and must never reach the strict
+    // pass below: that would report it as a fixable `unknown-key`, and `--fix`
+    // would then delete it — silently reverting the ingest target to a schema
+    // default the operator never wrote (ADR-0051's `calendarId`, ADR-0042's
+    // `workspaces`). Report the connector's own migration text instead, as
+    // NOT fixable: rewriting the key is the operator's decision, not a
+    // mechanical drop.
+    const rejectLegacyShape = await legacyShapeRejector(name);
+    if (rejectLegacyShape) {
+      const legacy = legacyShapeFindings(name, slice, rejectLegacyShape);
+      if (legacy.length > 0) {
+        findings.push(...legacy);
+        continue;
+      }
+    }
     const schema = await loadConnectorConfigSchema(name);
     if (!schema) continue; // unknown / schema-less connector stays lenient.
     const validator =

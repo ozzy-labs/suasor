@@ -25,6 +25,7 @@ ADR-0049 の reachability probe はこれを `auth test` の 404 として可視
 `[connectors.google].calendarIds: string[]`（既定 `["primary"]` ＝従来の既定と同じ対象）にする。`sync` は**設定された全カレンダーを走る**。
 
 - **`calendarId` は受理しない。** 読み込み時に `ConfigError` で落とし、**書くべき `calendarIds = [...]` の行を名指しする**（flat / `accounts.<account>` の両方を検出する）。ADR-0042 決定 9 が Slack の撤去済み shape に対して採った形と同じで、「親切なエラーが移行手順そのもの」である。
+- **撤去済みキーは「typo」経路に落とさない。** 撤去済み shape の検出は `loadConfig` と `validate-config` の**両方**の入口で strict 検証より先に走らせる（`src/config/legacy-shapes.ts`）。`validate-config` の安全修正方針は「unknown key を削除する」なので、撤去済みキーを unknown key として分類すると **`--fix` が `calendarId = "work@x"` を黙って削除し、取り込み対象が `calendarIds` の既定値に戻る** — 本 ADR が防ごうとしている「既存 config が書いた覚えのない意味を持つ」そのものになる。したがって finding は **fixable ではない** `invalid-value` として移行文を出す（何を書くかは判断であって機械的削除ではない）。同じ穴は Slack の `workspaces` にも空いていたので同時に塞いだ。
 - **暗黙の昇格（`calendarId` を 1 要素の `calendarIds` として読む）は採らない。** 2 つのキーが併存すると優先順位が未定義になる（両方書いたらどちらが勝つ? flat の `calendarId` は `calendarIds` を書いた account に継承されるのか?）。どの答えを選んでも、**既存 config が書いた覚えのない意味を持つ**。1 行の機械的な編集の方が安い。
 - `suasor google calendars` の貼り付けブロックは、他の discovery verb（github / jira / notion / box）と**同じ共有レンダラ**で `calendarIds = [ ... ]` を出す。従来の「primary だけ有効・残りはコメント」は、複数を表現できないという撤去対象の制約そのものだった。
 

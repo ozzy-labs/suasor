@@ -136,7 +136,7 @@ function legacyCalendarPaths(config: ConnectorConfig): { path: string; value: un
   const raw = isRecord(config) ? config : {};
   const found: { path: string; value: unknown }[] = [];
   if (raw[LEGACY_CALENDAR_KEY] !== undefined) {
-    found.push({ path: `[connectors.google]`, value: raw[LEGACY_CALENDAR_KEY] });
+    found.push({ path: "[connectors.google]", value: raw[LEGACY_CALENDAR_KEY] });
   }
   const accounts = raw.accounts;
   if (isRecord(accounts)) {
@@ -668,7 +668,7 @@ interface GoogleAccount extends AccountSlice {
  * gives "one failed unit is warned and skipped, all-failed throws", and this
  * reuses it instead of growing a third isolation layer.
  */
-export interface GoogleUnit {
+interface GoogleUnit {
   readonly resource: GoogleResource;
   /** Calendar to read (`calendar` units only; `null` for drive / gmail). */
   readonly fetchCalendarId: string | null;
@@ -693,7 +693,7 @@ export interface GoogleUnit {
  * ids are collapsed: listing a calendar twice is a config typo, not a request to
  * ingest it twice.
  */
-export function googleUnits(settings: GoogleAccountSettings): GoogleUnit[] {
+function googleUnits(settings: GoogleAccountSettings): GoogleUnit[] {
   const units: GoogleUnit[] = [];
   for (const resource of settings.resources) {
     if (resource !== "calendar") {
