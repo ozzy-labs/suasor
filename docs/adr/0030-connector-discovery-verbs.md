@@ -7,6 +7,7 @@
 - Related: [ADR-0007](0007-connector-contract.md)（connector 契約 — `sync()` 一本）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（Slack 運用 verb / `slack conversations` discovery）, [ADR-0029](0029-onboarding-wizard.md)（onboarding wizard / 非破壊 config append）, [ADR-0003](0003-local-first-and-content-minimization.md)（read-only）
 - Tracks: #190 / Epic #185
 - Extended by: [ADR-0049](0049-connector-readiness-parity.md)（本 ADR の Alternatives が却下した「per-connector 専用導線」の論理を根拠に、[ADR-0039](0039-conversation-discovery-drift.md) の drift Layer 1 を `DISCOVERY_SPECS` 上で一般化する = `<connector> <verb> --new`）
+- 表記の更新（2026-07-27・[ADR-0051](0051-ingest-scope-defaults.md)）: 下の Context が google の手書き識別子として挙げる `calendarId` は **`calendarIds`（複数）** になった。`google calendars` の config ブロックも他 connector と同じ配列形（`calendarIds = [ ... ]`）を出す。**本 ADR の決定は無変更**で、むしろ google が単数ゆえに辞退していた drift 一般形（ADR-0049）に参加できるようになった。
 
 ## Context
 

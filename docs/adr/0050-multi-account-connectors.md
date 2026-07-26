@@ -5,6 +5,7 @@
 - Deciders: Suasor maintainers
 - Related: [ADR-0007](0007-connector-contract.md)（connector 契約・credential 先行・manifest — 本 ADR が capability を 1 つ足す）, [ADR-0014](0014-slack-multi-workspace.md)（alias パターンの初出。本 ADR が「生き残る部分」を一般化する）, [ADR-0042](0042-slack-workspace-less-connector.md)（Slack から alias を撤去した判断 — 本 ADR はその論理を**反転して適用**する）, [ADR-0049](0049-connector-readiness-parity.md)（readiness / doctor / drift の非 Slack parity — 本 ADR はその検査を per-account 化する）, [ADR-0043](0043-email-demand-signals.md)（`self_addresses` — account をまたいで union する対象）, [ADR-0003](0003-local-first-and-content-minimization.md)（明示列挙）
 - Tracks: [#441](https://github.com/ozzy-labs/suasor/issues/441)（ADR 敵対的検証 [#412](https://github.com/ozzy-labs/suasor/issues/412) の major `slack-4`）
+- 表記の更新（2026-07-27・[#536](https://github.com/ozzy-labs/suasor/issues/536)・[ADR-0051](0051-ingest-scope-defaults.md)）: 本文で account 相対スコープの例に挙げた `calendarId = "primary"` は **`calendarIds = ["primary"]`** に、`user = "me"` は **`user = "someone@contoso.com"`**（`"me"` は app-only では解決不能なため既定から撤去）に置き換わった。**決定は無変更** — スコープが account 相対の名前で書かれるという論拠も、決定 3 の「`default` を無印に保つ」も成立したままである。ADR-0051 決定 2 は決定 3 の名前空間化の論理を、account の 1 階層下（1 アカウント内の複数カレンダー）へ写している。
 
 ## Context
 

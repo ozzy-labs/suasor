@@ -6,6 +6,8 @@ import {
   GoogleConnectorConfig,
   type GooglePage,
   type GoogleResource,
+  manifest,
+  rejectLegacyGoogleConfig,
 } from "../../src/connectors/google.ts";
 import { syncConnector } from "../../src/connectors/index.ts";
 import { Store } from "../../src/db/index.ts";
@@ -16,20 +18,23 @@ function fakeGoogle(
   content: { downloads?: Record<string, string>; exports?: Record<string, string> } = {},
 ): {
   client: GoogleClientLike;
-  calls: Array<{ resource: GoogleResource; pageToken?: string }>;
+  calls: Array<{ resource: GoogleResource; pageToken?: string; calendarId?: string }>;
   downloadCalls: string[];
   exportCalls: Array<{ fileId: string; mimeType: string }>;
 } {
-  const calls: Array<{ resource: GoogleResource; pageToken?: string }> = [];
+  const calls: Array<{ resource: GoogleResource; pageToken?: string; calendarId?: string }> = [];
   const downloadCalls: string[] = [];
   const exportCalls: Array<{ fileId: string; mimeType: string }> = [];
-  const cursors: Partial<Record<GoogleResource, number>> = {};
+  const cursors: Record<string, number> = {};
   const client: GoogleClientLike = {
-    async listPage(resource, pageToken) {
-      calls.push({ resource, pageToken });
+    async listPage(resource, pageToken, calendarId) {
+      calls.push({ resource, pageToken, calendarId });
+      // Calendar fixtures are keyed per calendar so a multi-calendar walk can
+      // return different events per id (ADR-0051); other families ignore it.
+      const key = calendarId === undefined ? resource : `${resource}:${calendarId}`;
       const list = byResource[resource] ?? [];
-      const idx = cursors[resource] ?? 0;
-      cursors[resource] = idx + 1;
+      const idx = cursors[key] ?? 0;
+      cursors[key] = idx + 1;
       return list[idx] ?? { items: [] };
     },
     async downloadFile(fileId) {
@@ -63,10 +68,51 @@ async function collect(it: AsyncIterable<SourceRecord>): Promise<SourceRecord[]>
 }
 
 describe("GoogleConnectorConfig", () => {
-  test("defaults: all three resources, primary calendar", () => {
+  test("defaults: all three resources, the primary calendar as a one-entry list", () => {
     const c = GoogleConnectorConfig.parse({});
     expect(c.resources).toEqual(["drive", "gmail", "calendar"]);
-    expect(c.calendarId).toBe("primary");
+    expect(c.calendarIds).toEqual(["primary"]);
+  });
+
+  test("accepts several calendars", () => {
+    const c = GoogleConnectorConfig.parse({ calendarIds: ["primary", "team@group.calendar"] });
+    expect(c.calendarIds).toEqual(["primary", "team@group.calendar"]);
+  });
+});
+
+describe("rejectLegacyGoogleConfig (ADR-0051)", () => {
+  test("names the flat calendarId and the calendarIds line that replaces it", () => {
+    try {
+      rejectLegacyGoogleConfig({ calendarId: "work@example.com" });
+      throw new Error("expected a throw");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("calendarId");
+      expect(message).toContain('calendarIds = ["work@example.com"]');
+      expect(message).toContain("[connectors.google]");
+    }
+  });
+
+  test("reaches inside per-account tables and points at the account's own section", () => {
+    try {
+      rejectLegacyGoogleConfig({ accounts: { work: { calendarId: "w@x" } } });
+      throw new Error("expected a throw");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("[connectors.google.accounts.work]");
+      expect(message).toContain('calendarIds = ["w@x"]');
+    }
+  });
+
+  test("a migrated config passes", () => {
+    expect(() =>
+      rejectLegacyGoogleConfig({ calendarIds: ["primary"], accounts: { work: {} } }),
+    ).not.toThrow();
+    expect(() => rejectLegacyGoogleConfig({})).not.toThrow();
+  });
+
+  test("the connector refuses to build on the legacy key (no silent promotion)", () => {
+    expect(() => createGoogleConnector({ calendarId: "primary" })).toThrow("calendarIds");
   });
 });
 
@@ -431,6 +477,118 @@ describe("Google connector — per-resource error isolation (Issue #193)", () =>
   });
 });
 
+describe("Google connector — multiple calendars (ADR-0051)", () => {
+  test("one configured calendar keeps the pre-ADR-0051 id, meta and label", async () => {
+    // The compatibility hinge: an existing install's ingested calendar lineage
+    // has to survive the key rename, so a single-calendar config must produce a
+    // byte-identical record.
+    const { client, calls } = fakeGoogle({ calendar: [{ items: [calItem] }] });
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: ["primary"] },
+      { clientFactory: () => client },
+    );
+    const [record] = await collect(connector.sync(ctx()));
+    expect(record?.externalId).toBe("google:calendar:c1");
+    expect(record?.meta.calendarId).toBeUndefined();
+    // …and the id is still what gets fetched.
+    expect(calls[0]).toEqual({ resource: "calendar", pageToken: undefined, calendarId: "primary" });
+  });
+
+  test("several calendars each get walked, and their event ids are namespaced", async () => {
+    // One meeting carries the same event id in every calendar it lands on, so
+    // without the namespace the two calendars would write one source that
+    // flip-flops each sync (the ADR-0050 collision, one level down).
+    const { client, calls } = fakeGoogle({ calendar: [{ items: [calItem] }] });
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: ["primary", "team@group.calendar"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records.map((r) => r.externalId)).toEqual([
+      "google:calendar:primary:c1",
+      "google:calendar:team@group.calendar:c1",
+    ]);
+    expect(records.map((r) => r.meta.calendarId)).toEqual(["primary", "team@group.calendar"]);
+    expect(calls.map((c) => c.calendarId)).toEqual(["primary", "team@group.calendar"]);
+  });
+
+  test("a duplicated calendar id is walked once", async () => {
+    const { client, calls } = fakeGoogle({ calendar: [{ items: [calItem] }] });
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: ["primary", "primary"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records).toHaveLength(1);
+    // Deduplicated back to one calendar ⇒ back to the unnamespaced id.
+    expect(records[0]?.externalId).toBe("google:calendar:c1");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("ids are trimmed and de-duplicated the way the drift diff compares them", async () => {
+    // The diff normalizes trim + lowercase, so `--new` would call these one
+    // calendar. If sync disagreed it would write two sources for it while the
+    // drift view reported nothing new — a silent duplicate.
+    const { client, calls } = fakeGoogle({ calendar: [{ items: [calItem] }] });
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: [" Work@Example.com ", "work@example.com"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records).toHaveLength(1);
+    expect(records[0]?.externalId).toBe("google:calendar:c1");
+    // The first spelling is what gets fetched — trimmed, but not re-cased, since
+    // only the operator knows the id's real form.
+    expect(calls.map((c) => c.calendarId)).toEqual(["Work@Example.com"]);
+  });
+
+  test("one unreadable calendar does not take the readable ones down", async () => {
+    // Calendars are units of the existing per-resource isolation layer, so a
+    // mistyped id is a warn + a skip, not a dead calendar family.
+    const warns: string[] = [];
+    const client: GoogleClientLike = {
+      async listPage(_resource, _pageToken, calendarId) {
+        if (calendarId === "typo@x") throw new Error("404 Not Found");
+        return { items: [calItem] };
+      },
+      async downloadFile() {
+        return new Uint8Array(0);
+      },
+      async exportFile() {
+        return new Uint8Array(0);
+      },
+    };
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: ["primary", "typo@x"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx({ onWarn: (m) => warns.push(m) })));
+    expect(records.map((r) => r.externalId)).toEqual(["google:calendar:primary:c1"]);
+    expect(warns.join("\n")).toContain("calendar[typo@x] (404 Not Found)");
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines?.[0]).toBe(
+      "resources: calendar[primary]=ok, calendar[typo@x]=failed (cursor preserved)",
+    );
+  });
+
+  test("an empty calendarIds list ingests no calendar events (and says so in doctor)", async () => {
+    const { client, calls } = fakeGoogle({ calendar: [{ items: [calItem] }] });
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: [] },
+      { clientFactory: () => client },
+    );
+    expect(await collect(connector.sync(ctx()))).toEqual([]);
+    expect(calls).toEqual([]);
+    // Silent 0 is the failure mode, so the advisory has to fire (ADR-0007).
+    expect(manifest.noopWarning?.({ resources: ["calendar"], calendarIds: [] })).toContain(
+      "calendarIds is empty",
+    );
+    // …but only when `calendar` is actually in scope.
+    expect(manifest.noopWarning?.({ resources: ["drive"], calendarIds: [] })).toBeNull();
+  });
+});
+
 describe("Google connector — guards", () => {
   test("throws when no refreshToken is configured", async () => {
     const connector = createGoogleConnector(
@@ -470,35 +628,46 @@ describe("Google connector — multi-account (ADR-0050 / #441)", () => {
     observedAt: "2026-07-01T00:00:00Z",
   });
 
-  /** A client factory that records which refresh token / calendar each call got. */
+  /** A client factory that records which client id / refresh token each call got. */
   function perAccountClients(pages: Record<string, GooglePage[]>): {
-    factory: (auth: {
-      clientId: string;
-      refreshToken: string;
-      calendarId: string;
-    }) => GoogleClientLike;
-    seen: Array<{ clientId: string; refreshToken: string; calendarId: string }>;
+    factory: (auth: { clientId: string; refreshToken: string }) => GoogleClientLike;
+    seen: Array<{ clientId: string; refreshToken: string }>;
+    calendarCalls: Array<{ refreshToken: string; calendarId?: string }>;
   } {
-    const seen: Array<{ clientId: string; refreshToken: string; calendarId: string }> = [];
+    const seen: Array<{ clientId: string; refreshToken: string }> = [];
+    const calendarCalls: Array<{ refreshToken: string; calendarId?: string }> = [];
     return {
       seen,
+      calendarCalls,
       factory: (auth) => {
         seen.push(auth);
-        return fakeGoogle({ drive: pages[auth.refreshToken] ?? [] }).client;
+        const { client } = fakeGoogle({
+          drive: pages[auth.refreshToken] ?? [],
+          calendar: [{ items: [] }],
+        });
+        return {
+          ...client,
+          async listPage(resource, pageToken, calendarId) {
+            if (resource === "calendar") {
+              calendarCalls.push({ refreshToken: auth.refreshToken, calendarId });
+            }
+            return client.listPage(resource, pageToken, calendarId);
+          },
+        };
       },
     };
   }
 
   test("each account resolves its own credential and namespaces its external ids", async () => {
-    const { factory, seen } = perAccountClients({
+    const { factory, seen, calendarCalls } = perAccountClients({
       "rt-default": [{ items: [item("d1")] }],
       "rt-work": [{ items: [item("w1")] }],
     });
     const connector = createGoogleConnector(
       {
         clientId: "shared",
-        resources: ["drive"],
-        accounts: { default: {}, work: { calendarId: "work@example.com" } },
+        resources: ["drive", "calendar"],
+        accounts: { default: {}, work: { calendarIds: ["work@example.com"] } },
       },
       { clientFactory: factory },
     );
@@ -522,10 +691,16 @@ describe("Google connector — multi-account (ADR-0050 / #441)", () => {
     // pre-ADR-0050 install's stored meta is not rewritten.
     expect(records[0]?.meta.account).toBe("default");
     expect(records[1]?.meta.account).toBe("work");
-    // Inherited clientId, per-account calendarId.
+    // Inherited clientId, per-account credential.
     expect(seen).toEqual([
-      { clientId: "shared", refreshToken: "rt-default", calendarId: "primary" },
-      { clientId: "shared", refreshToken: "rt-work", calendarId: "work@example.com" },
+      { clientId: "shared", refreshToken: "rt-default" },
+      { clientId: "shared", refreshToken: "rt-work" },
+    ]);
+    // Per-account calendar scope: the inherited default for one, the account's
+    // own override for the other (ADR-0050 inheritance × ADR-0051 list).
+    expect(calendarCalls).toEqual([
+      { refreshToken: "rt-default", calendarId: "primary" },
+      { refreshToken: "rt-work", calendarId: "work@example.com" },
     ]);
   });
 

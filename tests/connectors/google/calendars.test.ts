@@ -180,7 +180,7 @@ describe("calendars — listCalendars", () => {
 });
 
 describe("calendars — renderConfigBlock", () => {
-  test("sets calendarId to the primary and comments the alternatives", () => {
+  test("renders every visible calendar into the calendarIds list (ADR-0051)", () => {
     const lines = renderConfigBlock({
       calendars: [
         {
@@ -196,14 +196,19 @@ describe("calendars — renderConfigBlock", () => {
     const text = lines.join("\n");
     expect(lines[0]).toBe("[connectors.google]");
     expect(text).toContain("enabled = true");
-    expect(text).toContain('calendarId = "primary"  # Me, Asia/Tokyo, primary');
-    expect(text).toContain('# calendarId = "work@x"  # Work, UTC');
-    expect(text).toContain("# calendarId is a single calendar id");
+    expect(text).toContain("calendarIds = [");
+    expect(text).toContain('  "primary",  # Me, Asia/Tokyo, primary');
+    expect(text).toContain('  "work@x",  # Work, UTC');
+    // The array *is* the ingest set, so the note has to say that deleting a line
+    // is how you opt out — not that the extra ids are inert labels.
+    expect(text).toContain("delete the lines you do not want");
+    // The singular key is gone; still rendering it would paste a config the
+    // loader now rejects.
+    expect(text).not.toContain("calendarId =");
   });
 
-  test("falls back to a primary placeholder when nothing is discovered", () => {
+  test("an empty enumeration renders an empty list, not an invented default", () => {
     const lines = renderConfigBlock({ calendars: [] });
-    expect(lines).toContain('calendarId = "primary"');
-    expect(lines.join("\n")).not.toContain("# calendarId =");
+    expect(lines).toContain("calendarIds = []");
   });
 });

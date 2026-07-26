@@ -161,6 +161,19 @@ export function configuredResources(config: Record<string, unknown>): Set<string
 }
 
 /**
+ * Read a google config slice's `calendarIds` list (ADR-0051). Absent ⇒ the
+ * schema default (`["primary"]`), because that is what `sync` will read; an
+ * explicit `[]` stays empty, because that is a deliberate "no calendars" and
+ * substituting `primary` there would probe something nothing ingests.
+ */
+export function configuredCalendarIds(config: Record<string, unknown>): string[] {
+  const raw = config.calendarIds;
+  if (raw === undefined) return ["primary"];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
  * ms-graph resource → its `features:` row label + the Azure application
  * permission an operator must grant. Client-credentials reports `.default`
  * (resolved server-side), so the row is N/A rather than scope-asserted — the
@@ -294,11 +307,29 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
       const features = msGraphFeatures(resources);
       const principal = `app ${clientId} @ tenant ${tenantId}`;
       if (!probe) return { principal, scopes, features };
-      const [{ msGraphProbeSpecs }, { probeResources }] = await Promise.all([
+      const [{ msGraphProbeSpecs }, { probeResources, unprobedResources }] = await Promise.all([
         import("./ms-graph/probe.ts"),
         import("./resource-probe.ts"),
       ]);
-      const specs = msGraphProbeSpecs(resources, asString(config.user) || "me");
+      // No `|| "me"` fallback (ADR-0051): this credential is app-only, where
+      // `/users/me` is read as a literal id and 404s. Probing it would report a
+      // failure about a user the operator never configured, hiding the real
+      // finding — that the mailbox to read has not been named.
+      const user = asString(config.user);
+      if (user.length === 0) {
+        return {
+          principal,
+          scopes,
+          features,
+          resources: unprobedResources(
+            [...resources],
+            "`user` is not set — app-only (client-credentials) credentials have no signed-in " +
+              "user, so the mailbox / drive to read must be named by UPN or object id in " +
+              "[connectors.ms-graph]",
+          ),
+        };
+      }
+      const specs = msGraphProbeSpecs(resources, user);
       return {
         principal,
         scopes,
@@ -329,19 +360,27 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
       const features = googleFeatures(resources, scopes);
       const principal = `client ${clientId}`;
       if (!probe) return { principal, scopes, features };
-      const [{ googleProbeSpecs }, { probeResources }] = await Promise.all([
+      const [{ googleProbeSpecs }, { probeResources, unprobedResources }] = await Promise.all([
         import("./google/probe.ts"),
         import("./resource-probe.ts"),
       ]);
-      // `calendarId` is the single calendar sync reads — probing it is what turns
-      // a mistyped id from a silent empty ingest into a 404 (ADR-0007).
-      const specs = googleProbeSpecs(resources, asString(config.calendarId) || "primary");
-      return {
-        principal,
-        scopes,
-        features,
-        resources: await probeResources(specs, result.accessToken, probeTransport),
-      };
+      // `calendarIds` are the calendars sync reads — probing each of them is what
+      // turns a mistyped id from a silent empty ingest into a 404 (ADR-0007).
+      const calendarIds = configuredCalendarIds(config);
+      const specs = googleProbeSpecs(resources, calendarIds);
+      const rows = await probeResources(specs, result.accessToken, probeTransport);
+      // `calendar` configured with an empty id list probes nothing; say so
+      // rather than dropping the row, which would read as "no calendar
+      // configured" (ADR-0051).
+      const unprobed =
+        resources.has("calendar") && calendarIds.length === 0
+          ? unprobedResources(
+              ["calendar"],
+              "calendarIds is empty — list the calendar ids to ingest " +
+                "(`suasor google calendars` enumerates the visible ones)",
+            )
+          : [];
+      return { principal, scopes, features, resources: [...rows, ...unprobed] };
     },
   },
   box: {

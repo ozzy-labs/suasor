@@ -4,10 +4,10 @@
  *
  * Enumerates the calendars a refresh token can see (`GET
  * /calendar/v3/users/me/calendarList`) so the operator can discover the
- * `calendarId` the connector reads without hand-hunting it from the Google
+ * `calendarIds` the connector reads without hand-hunting them from the Google
  * Calendar Web UI — closing the typo→silent-0-results gap (ADR-0007 "no silent
  * wrong answer"). Renders a paste-ready `[connectors.google]` block carrying the
- * discovered ids (the singular `calendarId` the connector config expects).
+ * discovered ids as the `calendarIds` list the connector config expects.
  *
  * Import-clean (ADR-0007): no `googleapis`. The default transport uses the
  * global `fetch` (same pattern as `src/connectors/google/auth.ts`), wrapped in the
@@ -21,15 +21,17 @@
  * `clientSecret` for installed/web clients) at Google's OAuth2 token endpoint —
  * the same exchange `google auth test` performs (`src/connectors/google/auth.ts`).
  */
+
 import {
   DEFAULT_CONNECTOR_TIMEOUT_MS,
   type FetchWithRetryOptions,
   fetchWithRetry,
 } from "../../util/retry.ts";
+import { renderConnectorConfigBlock } from "../onboard/config-block.ts";
 
 /** One calendar surfaced for the discovery CLI. */
 export interface GoogleCalendar {
-  /** Calendar id — the value `[connectors.google].calendarId` expects. */
+  /** Calendar id — an entry of the `[connectors.google].calendarIds` list. */
   readonly id: string;
   /** Human-readable name (`summaryOverride` preferred, else `summary`). */
   readonly summary: string;
@@ -237,29 +239,31 @@ export async function listCalendars(
 
 /**
  * Render a `[connectors.google]` config block the operator can paste straight
- * into `config.toml`. Unlike github's plural `repos = [...]`, the google
- * connector reads a **single** `calendarId`, so the block sets `calendarId` to
- * the primary (or first) discovered calendar and lists every other visible
- * calendar id as a `#` comment the operator can swap in — a mistyped id silently
- * ingests nothing (the gap this closes, ADR-0030).
+ * into `config.toml`.
+ *
+ * Since ADR-0051 the connector reads a **list** (`calendarIds`), so this uses the
+ * same shared array renderer as `github repos` / `jira projects` — and the same
+ * one the drift view (`--new`) pastes its fragment with, so the two never
+ * disagree about what a google config block looks like. Every visible calendar is
+ * listed: an id the operator does not want ingested is one deleted line, whereas
+ * the previous "primary uncommented, the rest commented" shape could only ever
+ * express one calendar, which is the limitation being removed.
  */
 export function renderConfigBlock(result: CalendarsResult): string[] {
-  const lines = ["[connectors.google]", "enabled = true"];
-  const chosen = result.calendars[0];
-  if (!chosen) {
-    lines.push('calendarId = "primary"');
-    return lines;
-  }
   const labelOf = (c: GoogleCalendar): string => {
     const parts = [c.summary || "(no summary)"];
     if (c.timeZone) parts.push(c.timeZone);
     if (c.primary) parts.push("primary");
     return parts.join(", ");
   };
-  lines.push("# calendarId is a single calendar id — the # comment is just a label");
-  lines.push(`calendarId = "${chosen.id}"  # ${labelOf(chosen)}`);
-  for (const c of result.calendars.slice(1)) {
-    lines.push(`# calendarId = "${c.id}"  # ${labelOf(c)}`);
-  }
-  return lines;
+  return renderConnectorConfigBlock(
+    "google",
+    result.calendars.map((c) => ({ value: c.id, label: labelOf(c) })),
+    {
+      key: "calendarIds",
+      idNote:
+        "every calendar listed here is ingested — delete the lines you do not want; " +
+        "the # comment is just a label",
+    },
+  );
 }

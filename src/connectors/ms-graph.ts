@@ -80,8 +80,20 @@ const MsGraphAccountSettings = z.object({
   tenantId: z.string().min(1).default(""),
   /** App registration (client) id. */
   clientId: z.string().min(1).default(""),
-  /** User principal name / id whose mailbox & drive are read (app-only flow). */
-  user: z.string().min(1).default("me"),
+  /**
+   * User principal name (`someone@contoso.com`) or object id whose mailbox,
+   * calendar, drive and chats are read.
+   *
+   * **No default** (ADR-0051). It used to default to `"me"`, which is only
+   * meaningful on a *delegated* token, where the signed-in user resolves it.
+   * This connector authenticates app-only (client credentials, see
+   * `ms-graph/auth.ts`) and there is no signed-in user, so Graph reads `me` as a
+   * literal user id and answers 404 — an install that never set `user` synced
+   * nothing, with the default itself as the cause. An empty value is therefore
+   * declared in the manifest's `requiredSettings` and reported by `doctor` /
+   * sync pre-flight, instead of shipping a value that cannot work.
+   */
+  user: z.string().min(1).default(""),
   /** Resource families to ingest. */
   resources: z.array(MsGraphResource).default(["mail", "calendar"]),
   /**
@@ -552,13 +564,34 @@ class MsGraphConnector implements Connector {
     ctx: SyncContext,
   ): AsyncIterable<SourceRecord> {
     const { tenantId, clientId, user } = account.settings;
-    if (!tenantId || !clientId) {
+    // `user` joins the guard (ADR-0051): every request path is `/users/{user}/…`,
+    // so an empty value would build `/users//messages` and fail deep inside the
+    // SDK with a shape nobody can act on. Failing here names the missing key —
+    // and it is a *config* failure, so it must not be reported as "Graph is
+    // down" (ADR-0007 "no silent wrong answer" has a loud counterpart: no
+    // misattributed one either).
+    const missing = [
+      ...(tenantId ? [] : ["tenantId"]),
+      ...(clientId ? [] : ["clientId"]),
+      ...(user ? [] : ["user"]),
+    ];
+    if (missing.length > 0) {
       // Account-scoped so the message names which account is unaddressable —
       // with several accounts, "required in config" alone is not actionable.
+      const keys =
+        missing.length === 1
+          ? (missing[0] as string)
+          : `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}`;
+      const verb = missing.length === 1 ? "is" : "are";
+      const hint =
+        user.length === 0
+          ? " ('user' is the mailbox to read — a UPN or object id; app-only credentials have " +
+            "no signed-in user, so there is no 'me' to fall back to)"
+          : "";
       throw new Error(
         account.declared
-          ? `ms-graph connector: tenantId and clientId are required in config (account '${account.name}')`
-          : "ms-graph connector: tenantId and clientId are required in config",
+          ? `ms-graph connector: ${keys} ${verb} required in config (account '${account.name}')${hint}`
+          : `ms-graph connector: ${keys} ${verb} required in config${hint}`,
       );
     }
 
@@ -655,6 +688,7 @@ export const manifest: ConnectorManifest = {
       "enabled = true",
       '# tenantId = "<tenant-guid>"   # required for auth',
       '# clientId = "<app-client-id>" # required for auth',
+      '# user = "someone@contoso.com" # required: whose mailbox / drive to read (UPN or object id)',
       "# A second tenant / mailbox goes in its own table:",
       "#   [connectors.ms-graph.accounts.work]  # see docs/guide/connectors.md (ADR-0050)",
     ],
@@ -662,6 +696,15 @@ export const manifest: ConnectorManifest = {
   requiredSettings: [
     { key: "tenantId", hint: "Azure AD tenant / directory id" },
     { key: "clientId", hint: "app registration (client) id" },
+    // ADR-0051: every Graph path this connector reads is `/users/{user}/…`, and
+    // the app-only flow has no signed-in user to resolve a `me`, so the mailbox
+    // has to be named. This is the key whose old `"me"` default made an
+    // unconfigured install fail as a 404 per resource instead of as a config
+    // error, which is why it is declared here rather than left to the schema.
+    {
+      key: "user",
+      hint: "user principal name or object id whose mailbox / calendar / drive is read",
+    },
   ],
   noopWarning(slice) {
     const cfg = MsGraphConnectorConfig.parse(slice ?? {});
@@ -678,7 +721,8 @@ export const manifest: ConnectorManifest = {
   surfacesChannels: false,
   surfacesTeams: false,
   // More than one tenant / mailbox in one install (ADR-0050): the ingest scope
-  // is account-relative (`user = "me"`), so the account has to be named.
+  // is account-relative (`user = "someone@contoso.com"` names a user *inside a
+  // tenant*), so the account has to be named.
   multiAccount: true,
   capabilityNotes: {
     genericDiscovery:

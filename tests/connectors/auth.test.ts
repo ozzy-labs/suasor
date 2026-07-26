@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  configuredCalendarIds,
   configuredResources,
   featureReadiness,
   githubFeatures,
@@ -201,6 +202,22 @@ describe("configuredResources", () => {
   test("empty set when resources is absent or not an array", () => {
     expect(configuredResources({}).size).toBe(0);
     expect(configuredResources({ resources: "mail" }).size).toBe(0);
+  });
+});
+
+describe("configuredCalendarIds (ADR-0051)", () => {
+  test("an absent key means the schema default, because that is what sync reads", () => {
+    expect(configuredCalendarIds({})).toEqual(["primary"]);
+  });
+
+  test("an explicit empty list stays empty — it is a deliberate 'no calendars'", () => {
+    // Substituting `primary` here would probe a calendar nothing ingests and
+    // report REACHABLE for a config that syncs zero events.
+    expect(configuredCalendarIds({ calendarIds: [] })).toEqual([]);
+  });
+
+  test("non-string / empty entries are dropped", () => {
+    expect(configuredCalendarIds({ calendarIds: ["primary", 7, "", null] })).toEqual(["primary"]);
   });
 });
 

@@ -203,7 +203,7 @@ resources = ["gmail", "calendar"]
 self_addresses = ["me@personal.example"]
 
 [connectors.google.accounts.work]
-calendarId = "me@work.example"                    # override
+calendarIds = ["me@work.example"]                 # override（ADR-0051 で複数化）
 resources = ["gmail", "calendar", "drive"]
 self_addresses = ["me@work.example"]
 ```
@@ -222,6 +222,8 @@ self_addresses = ["me@work.example"]
 | externalId | `google:<resource>:<id>` | `google:work:<resource>:<id>` |
 
 `default` を無印に保つのは**既存 install を無移行にする**ため（keychain / env / 取り込み済み source lineage がそのまま生きる）。名前付き account の externalId を名前空間化するのは **correctness 要件**で、Gmail の message id はメールボックス内でしか一意でなく、Calendar の event id は同じ会議が各出席者のカレンダーで同じ値を持つ（名前空間化しないと 1 件の会議が 1 本の source を取り合う）。**account の rename は identity の変更**であり、旧 id の source は残ったまま新 id で再取り込みになる。
+
+同じ名前空間化は **1 アカウント内の複数カレンダー**にも要る（[ADR-0051](../adr/0051-ingest-scope-defaults.md) 決定 2）: `calendarIds` が 2 件以上なら calendar の externalId は `google:<account>:calendar:<calendarId>:<eventId>` になり、**1 件だけなら従来どおり無印**（`default` account を無印に保つのと同じ後方互換の理由）。
 
 credential の保管は `suasor <connector> auth set --account <name>`、検証は `suasor <connector> auth test [--account <name>]`（省略時は全 account）。詳細は [cli design](cli.md) と [connectors guide](../guide/connectors.md#multi-account取り込みgoogle--ms-graph)。
 
@@ -243,10 +245,12 @@ email demand（自分宛ての未返信スレッド・[ADR-0043](../adr/0043-ema
 | connector | 必須キー | 用途 |
 | --- | --- | --- |
 | `google` | `clientId` | desktop / web app の OAuth client id |
-| `ms-graph` | `tenantId` / `clientId` | Azure AD tenant（directory）id / app registration の client id |
+| `ms-graph` | `tenantId` / `clientId` / `user` | Azure AD tenant（directory）id / app registration の client id / **読む対象のユーザー**（UPN または object id・[ADR-0051](../adr/0051-ingest-scope-defaults.md)） |
 | `jira` | `host` | Jira site host（scheme なし。例 `example.atlassian.net`） |
 
 これらは schema 上 `.default("")` を持つため**空でも load を通る**（`enabled = true` だけの slice が `loadConfig` も `validate-config` も通過する）。従来はその状態が sync 時にベンダ側の不透明なエラーとして初めて現れていたので、`suasor doctor` が `connectors.config` の **ERROR** として先に surface する（[ADR-0049](../adr/0049-connector-readiness-parity.md) 決定 2）。取り込み対象が空（`connectors.noop`・WARN）とは**別の行**で、severity も対処も違う。宣言先は connector manifest の `requiredSettings`（`src/connectors/manifest.ts`）。
+
+ms-graph の `user` は [ADR-0051](../adr/0051-ingest-scope-defaults.md) 決定 5 でこの表に加わった。既定は `"me"` だったが、`me` が解決されるのは delegated token だけで、この connector が使う app-only（client credentials）では**リテラルの id として扱われ 404 になる**。既定が非空だと `requiredSettings` の不変条件（required キーは空許容）と噛み合わないため、既定を `""` にした上で必須宣言している。`user` を明示的に `"me"` と書いた config はそのまま probe される（app-only で 404 になる事実を隠さないため）。
 
 ## `[sync]` — 取り込み鮮度の期待値（#442）
 

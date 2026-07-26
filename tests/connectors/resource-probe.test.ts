@@ -16,6 +16,7 @@ import {
   probeResources,
   type ResourceProbeSpec,
   type ResourceProbeTransport,
+  unprobedResources,
 } from "../../src/connectors/resource-probe.ts";
 
 const SPEC: ResourceProbeSpec = {
@@ -124,25 +125,55 @@ describe("probeResources — one row per spec, in order", () => {
   });
 });
 
-describe("googleProbeSpecs — targets the configured calendar", () => {
+describe("unprobedResources — config too incomplete to probe (ADR-0051)", () => {
+  test("reports unknown with the reason, one row per configured resource", () => {
+    const rows = unprobedResources(["mail", "calendar"], "`user` is not set");
+    expect(rows.map((r) => r.resource)).toEqual(["mail", "calendar"]);
+    // `unknown`, not a hidden row and not `unreachable`: nothing was asked, so
+    // nothing about the API was established (the ADR-0049 vocabulary is about
+    // whether the fact is known, not about whether the network was reached).
+    expect(rows.every((r) => r.state === "unknown")).toBe(true);
+    expect(rows[0]?.detail).toContain("not probed: `user` is not set");
+  });
+
+  test("no configured resources ⇒ no rows", () => {
+    expect(unprobedResources([], "whatever")).toEqual([]);
+  });
+});
+
+describe("googleProbeSpecs — targets the configured calendars", () => {
   test("calendar probe reads the configured calendarId, url-encoded", () => {
-    const [spec] = googleProbeSpecs(new Set(["calendar"]), "team a@group.calendar.google.com");
+    const [spec] = googleProbeSpecs(new Set(["calendar"]), ["team a@group.calendar.google.com"]);
     expect(spec?.url).toContain(encodeURIComponent("team a@group.calendar.google.com"));
     expect(spec?.what).toContain("team a@group.calendar.google.com");
   });
 
+  test("every configured calendar gets its own row (ADR-0051)", () => {
+    const specs = googleProbeSpecs(new Set(["calendar"]), ["primary", "team@group.calendar"]);
+    expect(specs.map((s) => s.what)).toEqual([
+      'calendar "primary"',
+      'calendar "team@group.calendar"',
+    ]);
+  });
+
+  test("a duplicated calendar id is probed once", () => {
+    const specs = googleProbeSpecs(new Set(["calendar"]), ["primary", "primary"]);
+    expect(specs).toHaveLength(1);
+  });
+
   test("only configured resources are probed", () => {
-    const specs = googleProbeSpecs(new Set(["drive"]), "primary");
+    const specs = googleProbeSpecs(new Set(["drive"]), ["primary"]);
     expect(specs.map((s) => s.resource)).toEqual(["drive"]);
   });
 
-  test("an empty calendarId falls back to primary rather than an empty path", () => {
-    const [spec] = googleProbeSpecs(new Set(["calendar"]), "");
-    expect(spec?.url).toContain("/calendars/primary");
+  test("an empty calendarIds list probes nothing rather than inventing primary", () => {
+    // The caller reports it as an unprobed row; silently probing `primary` would
+    // claim a verdict about a calendar the config does not ingest (ADR-0051).
+    expect(googleProbeSpecs(new Set(["calendar"]), [])).toEqual([]);
   });
 
   test("an unmapped resource name is skipped, not guessed at", () => {
-    expect(googleProbeSpecs(new Set(["chat"]), "primary")).toEqual([]);
+    expect(googleProbeSpecs(new Set(["chat"]), ["primary"])).toEqual([]);
   });
 });
 
@@ -155,9 +186,16 @@ describe("msGraphProbeSpecs — targets the configured user", () => {
     }
   });
 
-  test("the app-only footgun (user defaulting to 'me') is probed as-is so it surfaces", () => {
+  test('an explicit user = "me" is still probed as-is, so the app-only 404 surfaces', () => {
+    // `me` is no longer the default (ADR-0051), but an operator can still write
+    // it — and under the app-only flow Graph reads it as a literal id. Probing
+    // it verbatim is what turns that into a visible 404 rather than an empty sync.
     const [spec] = msGraphProbeSpecs(new Set(["mail"]), "me");
     expect(spec?.url).toContain("/users/me/");
+  });
+
+  test("an unset user yields no specs (the caller reports it as unprobed)", () => {
+    expect(msGraphProbeSpecs(new Set(["mail", "calendar"]), "")).toEqual([]);
   });
 
   test("teams probes getAllMessages, the endpoint sync uses, not the cheaper /chats", () => {
@@ -171,7 +209,7 @@ describe("msGraphProbeSpecs — targets the configured user", () => {
 
 describe("probe targets match what sync actually reads", () => {
   test("gmail probes the message list, not the narrower-scoped profile call", () => {
-    const [spec] = googleProbeSpecs(new Set(["gmail"]), "primary");
+    const [spec] = googleProbeSpecs(new Set(["gmail"]), ["primary"]);
     expect(spec?.url).toContain("/messages");
     expect(spec?.url).not.toContain("/profile");
   });

@@ -62,6 +62,50 @@ describe("validateConfig", () => {
     expect(f?.fixable).toBe(true);
   });
 
+  test("a removed config shape is NOT a fixable unknown key (ADR-0051 / ADR-0042)", async () => {
+    // The hazard this closes: `--fix`'s safe-fix policy is "drop unknown keys",
+    // so classifying a *removed* key as `unknown-key` would have `--fix` delete
+    // `calendarId = "work@x"` — silently reverting the ingest target to the
+    // `calendarIds` default. The finding must carry the migration instead.
+    const { findings, applied, fixed } = await validateConfig(
+      { connectors: { google: { clientId: "c", calendarId: "work@x" } } },
+      true,
+      () => true,
+    );
+    const f = findings.find((x) => x.path === "connectors.google");
+    expect(f?.kind).toBe("invalid-value");
+    expect(f?.fixable).toBe(false);
+    expect(f?.message).toContain('calendarIds = ["work@x"]');
+    // Nothing was touched.
+    expect(applied).toEqual([]);
+    expect((fixed.connectors as Record<string, Record<string, unknown>>).google?.calendarId).toBe(
+      "work@x",
+    );
+    // …and it is not *also* reported as a droppable typo.
+    expect(findings.some((x) => x.kind === "unknown-key")).toBe(false);
+  });
+
+  test("the same protection covers slack's removed multi-workspace shape", async () => {
+    const { findings, applied } = await validateConfig(
+      { connectors: { slack: { workspaces: { acme: { team: "T1" } } } } },
+      true,
+      () => true,
+    );
+    const f = findings.find((x) => x.path === "connectors.slack");
+    expect(f?.fixable).toBe(false);
+    expect(f?.message).toContain("remove 'workspaces'");
+    expect(applied).toEqual([]);
+  });
+
+  test("a migrated google slice validates normally", async () => {
+    const { findings } = await validateConfig(
+      { connectors: { google: { clientId: "c", calendarIds: ["primary"] } } },
+      false,
+      () => true,
+    );
+    expect(findings.filter((x) => x.path.startsWith("connectors.google"))).toEqual([]);
+  });
+
   test("classifies a missing dbPath parent dir as dangling-reference", async () => {
     const { findings } = await validateConfig(
       { storage: { dbPath: "/nowhere/sub/suasor.db" } },

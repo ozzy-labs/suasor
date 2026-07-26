@@ -5,6 +5,7 @@
 - Deciders: Suasor maintainers
 - Related: [ADR-0007](0007-connector-contract.md)（connector 契約・no silent wrong answer — 本 ADR の判断基準）, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)（scope readiness capability model — 本 ADR が「層」として明示化する）, [ADR-0030](0030-connector-discovery-verbs.md)（discovery registry — drift 一般化の載せ先。その Alternatives が per-connector 専用導線を却下した論理が本 ADR の根拠）, [ADR-0039](0039-conversation-discovery-drift.md)（Slack の三層 drift モデル — Layer 1 を本 ADR が一般化する）, [ADR-0048](0048-at-rest-protection.md)（doctor の「確信度が違うものを 1 行に畳まない」規律の先例）, [ADR-0003](0003-local-first-and-content-minimization.md)（明示列挙＝データ最小化 — drift の解が「自動追従」ではない理由）
 - Tracks: [#478](https://github.com/ozzy-labs/suasor/issues/478)（#449 の次設計サイクル 3/3）/ [#529](https://github.com/ozzy-labs/suasor/issues/529) の minor `connectors/connector-4` を統合
+- 一部改訂（2026-07-27・[#536](https://github.com/ozzy-labs/suasor/issues/536)・[ADR-0051](0051-ingest-scope-defaults.md)）: **決定 3 の google 例外（`driftNote` による `--new` 辞退）と Alternatives (h)（`calendarId` の配列化を却下）は覆された。** ADR-0051 が `calendarId` を `calendarIds` に複数化したので「configured な集合が無い」という辞退理由が消え、google は `scope = { key: "calendarIds" }` を宣言して drift 一般形に参加する。決定 3 の後半（Layer 2/3 を一般化しない理由）と、決定 1・決定 2 はそのまま有効。ms-graph の `user = "me"` を「probe が surface する footgun」と記した Consequences も、ADR-0051 決定 5 が既定値自体を撤去したことで**症状の記述**になった。
 
 ## Context
 

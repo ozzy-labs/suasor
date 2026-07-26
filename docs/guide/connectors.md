@@ -16,7 +16,7 @@ Even when a connector is **enabled** (a `[connectors.X]` section exists and is n
 
 ## A missing required setting is an error, not a warning
 
-An empty *scope* still syncs (0 observed). A missing **required non-secret setting** does not: the connector cannot address its API at all. `google` needs `clientId`, `ms-graph` needs `tenantId` + `clientId`, and `jira` needs `host`. All three carry a schema default of `""`, so a slice with just `enabled = true` passes `loadConfig` and `validate-config` and used to fail only at sync time with the vendor's own opaque error ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)).
+An empty *scope* still syncs (0 observed). A missing **required non-secret setting** does not: the connector cannot address its API at all. `google` needs `clientId`, `ms-graph` needs `tenantId` + `clientId` + `user` ([ADR-0051](../adr/0051-ingest-scope-defaults.md)), and `jira` needs `host`. All of them carry a schema default of `""`, so a slice with just `enabled = true` passes `loadConfig` and `validate-config` and used to fail only at sync time with the vendor's own opaque error ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)).
 
 `suasor doctor` now reports this as a `connectors.config` **error** (so `doctor` exits 1 and cron / CI can gate on it), and sync prints the same line before running:
 
@@ -39,7 +39,7 @@ resources = ["gmail", "calendar"]
 self_addresses = ["me@personal.example"]
 
 [connectors.google.accounts.work]
-calendarId = "me@work.example"                    # overrides the flat default
+calendarIds = ["me@work.example"]                 # overrides the flat default
 resources = ["gmail", "calendar", "drive"]
 self_addresses = ["me@work.example"]
 ```
@@ -67,7 +67,7 @@ clientId = "shared.apps.googleusercontent.com"
 [connectors.google.accounts.default]   # empty table: inherits everything above,
                                        # keeps the existing keychain entry and external ids
 [connectors.google.accounts.work]
-calendarId = "me@work.example"
+calendarIds = ["me@work.example"]
 ```
 
 If you forget, `suasor doctor` says so — and says it at the confidence the evidence supports:
@@ -109,12 +109,13 @@ suasor github repos --new       # visible to the token but missing from [connect
 suasor notion databases --new
 suasor jira projects --new
 suasor box folders --new
+suasor google calendars --new
 ```
 
 - It prints the new ids plus a paste-ready fragment to **merge into** the existing list, and — on an unnarrowed run — the configured ids that are no longer visible (renamed, deleted, or no longer permitted; they sync nothing).
 - **Nothing is ingested and nothing is written to config.** Explicit enumeration stays the model; `--new` only removes the eyeballing step.
 - With `--filter` / `--root` the "no longer visible" half is **not computed** and says so: a narrowed view cannot tell "gone" from "out of view".
-- `google calendars --new` is deliberately **not** offered: `calendarId` is a single value, so there is no configured *set* to diff. The half that matters for google — "does the configured id still resolve" — is answered by `suasor google auth test` (the reachability probe above).
+- `google calendars --new` joined this list with [ADR-0051](../adr/0051-ingest-scope-defaults.md): it was previously refused because a single `calendarId` gave no configured *set* to diff, and `calendarIds` is a set.
 - Unlike Slack, non-Slack connectors do **not** sweep for drift during sync and do not surface it in `doctor`; you see it when you run `--new`. That gap is intentional — see [ADR-0049](../adr/0049-connector-readiness-parity.md) 決定 3 for the cost reasoning.
 
 ## Start with `suasor onboard` (recommended setup path)
@@ -137,7 +138,7 @@ suasor onboard --connector box --skip-auth   # token via env override (headless 
 
 When you onboard a connector that has a discovery verb (**github** = `repos` / **google** = `calendars` / **box** = `folders` / **notion** = `databases` / **jira** = `projects`), the wizard runs its discovery probe after `auth test`, enumerates the ids visible from the token, generates a `[connectors.X]` block (with an id array such as `repos = [...]`), and appends it non-destructively. Because `config.toml` gets not just `enabled = true` but also the **ingest target ids**, setup completes without fishing for ids by hand (avoiding silent 0 counts from typos).
 
-- For a discovery-capable connector where the **token can be resolved** (keychain / env override) → it runs discovery and appends a block containing the discovered ids (`--json` reports `configSource` as `"discovery"` and a count in `discovered`)
+- For a discovery-capable connector where the **token can be resolved** (keychain / env override) → it runs discovery and appends a block containing the discovered ids (`--json` reports `configSource` as `"discovery"` and a count in `discovered`). The appended array is the ingest set, so review it and delete what you do not want — for **google** this changed with [ADR-0051](../adr/0051-ingest-scope-defaults.md): `calendarIds` now lists every visible calendar (auto-subscribed holiday / birthday calendars included), where the old singular `calendarId` could only ever select the primary one
 - Even for a discovery-capable connector, when the **token is missing / the probe fails** → it falls back to appending a minimal template slice (required keys as comment stubs) and prints the reason to stderr (`configSource` is `"template"`). You can run `suasor <connector> <verb>` by hand later and swap it in
 - **Connectors without discovery** (ms-graph / web / local) → as before, a template slice with comment stubs is appended (`configSource` is `"template"`)
 - **Slack** has its own bridge (below), not the generic discovery table
@@ -423,15 +424,17 @@ Ingests Microsoft 365 (Outlook mail / Calendar / OneDrive / Teams) (`@microsoft/
 [connectors.ms-graph]
 tenantId = "<directory-id>"
 clientId = "<app-client-id>"
-user = "user@contoso.com"               # target mailbox / drive
+user = "user@contoso.com"               # required: target mailbox / drive (UPN or object id)
 resources = ["mail", "calendar"]        # mail | calendar | files | teams
 ```
+
+> **`user` is required and has no default** ([ADR-0051](../adr/0051-ingest-scope-defaults.md), [#536](https://github.com/ozzy-labs/suasor/issues/536)). It used to default to `"me"`, which only resolves on a *delegated* token — this connector authenticates **app-only** (client credentials), where Graph reads `me` as a literal user id and answers 404. An install that never set `user` therefore synced nothing while looking like a permission problem. Unset is now reported by `doctor` as a `connectors.config` **error** and named by the sync pre-flight, instead of shipping a default that cannot work.
 
 - **identity**: `msgraph:<resource>:<id>` / **source_type**: `ms365_mail` / `ms365_calendar` / `ms365_file` / `ms365_teams_message`
 - **delta detection**: paginate the collection with `@odata.nextLink` and skip unchanged items by body fingerprint. `files` (OneDrive) uses the DriveItem content hash (`file.hashes.quickXorHash`, or sha256/sha1 if absent) as the fingerprint, so it **also detects content changes** without a rename and re-extracts ([ADR-0024](../adr/0024-document-extraction-sidecar.md) §6). When the hash is absent it falls back to the SHA-256 of the body (file name)
 - **Body extraction (OneDrive `files`)** ([ADR-0024](../adr/0024-document-extraction-sidecar.md) / [ADR-0034](../adr/0034-api-connector-extraction.md), #243): with the `[extraction]` sidecar enabled, Office/PDF (`.docx`/`.xlsx`/`.pptx`/`.pdf`) in the `files` resource are **read-only** lazy-fetched via the Graph API (`GET /users/{user}/drive/items/{id}/content`) and replaced with the extracted text. It goes through the same shared base (the extraction stage in `src/connectors/sync.ts`) as `local` / `box`. mail / calendar / teams ingest their text body as-is and are not extraction targets. Other files are **name-only**. See the [extraction guide](extraction.md) for details and degrade behavior
 - **size guard**: if the DriveItem `size` exceeds `[extraction].maxBytes` it is not fetched and is name-only. fetch / extraction failure and unsupported also degrade to name-only (ingestion itself succeeds)
-- **onboarding** (Issue #85): `suasor ms-graph auth set` (save the client secret to the keychain) / `suasor ms-graph auth test` (verify the client secret + tenantId/clientId connectivity via a client-credential token exchange and print granted scope). `auth test` requires `tenantId` / `clientId` in config.
+- **onboarding** (Issue #85): `suasor ms-graph auth set` (save the client secret to the keychain) / `suasor ms-graph auth test` (verify the client secret + tenantId/clientId connectivity via a client-credential token exchange and print granted scope). `auth test` requires `tenantId` / `clientId` in config; without `user` it still reports the credential and scopes, and prints every configured resource as `UNKNOWN — not probed` (there is nothing to probe under).
 - **feature readiness** (Issue #194): `auth test` prints a `features:` line per `resources` in config (same format as Slack). client-credential returns `.default`, and the actual application permissions (Mail.Read / Calendars.Read / Files.Read.All / Channel / Chat.Read.All) are resolved server-side and not enumerated in the token `scope`, so each line is `N/A (scopes not enumerated)` (check the actual permissions on the Azure app registration side). If `resources` is unset, only a single line `ingestion: N/A (no resources configured)`:
 
   ```text
@@ -442,11 +445,11 @@ resources = ["mail", "calendar"]        # mail | calendar | files | teams
     calendar read (Calendars.Read): N/A (scopes not enumerated)
   ```
 
-- **resource reachability** ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)): because the scope layer above structurally cannot answer anything for ms-graph, `auth test` additionally sends **one read-only GET per configured resource** under the configured `user` and reports what the API said, in a separate `resources (live probe):` block. This is the layer that catches the app-only footgun: `user` defaults to `"me"`, which is **not resolvable without a signed-in user**, so an app-only credential reading `/users/me/...` returns 404 — previously visible only as a sync that ingested nothing. Verdicts are `REACHABLE` (2xx) / `UNREACHABLE` (401/403 = permission, 404 = the configured id does not exist for this credential) / `UNKNOWN` (transport failure, timeout, 5xx). `UNKNOWN` is **never** reported as reachable. Pass `--no-probe` to skip it.
+- **resource reachability** ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)): because the scope layer above structurally cannot answer anything for ms-graph, `auth test` additionally sends **one read-only GET per configured resource** under the configured `user` and reports what the API said, in a separate `resources (live probe):` block. A mistyped UPN, or a `user` written as `"me"` (still accepted, still 404 under an app-only credential), surfaces here instead of as a sync that ingested nothing. Verdicts are `REACHABLE` (2xx) / `UNREACHABLE` (401/403 = permission, 404 = the configured id does not exist for this credential) / `UNKNOWN` (transport failure, timeout, 5xx, **or nothing to probe because `user` is unset**). `UNKNOWN` is **never** reported as reachable. Pass `--no-probe` to skip it.
 
   ```text
   resources (live probe):
-    mail: UNREACHABLE — mailbox of "me": HTTP 404, not found — check the configured id (ResourceNotFound: …)
+    mail: UNREACHABLE — mailbox of "typo@contoso.com": HTTP 404, not found — check the configured id (ResourceNotFound: …)
     calendar: REACHABLE — calendar of "you@contoso.com" readable
   ```
 
@@ -455,28 +458,35 @@ resources = ["mail", "calendar"]        # mail | calendar | files | teams
 Ingests Google Workspace (Drive / Gmail / Calendar) (`googleapis`, OAuth2 refresh token).
 
 - **token**: OAuth refresh token (read scope for the target APIs). env override `SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN`, keychain account `connector:google:refreshToken`
-- **multi-account**: add `[connectors.google.accounts.<account>]` to ingest a personal *and* a work account in one pass (per-account credential, `calendarId`, `resources`, `self_addresses`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph)
+- **multi-account**: add `[connectors.google.accounts.<account>]` to ingest a personal *and* a work account in one pass (per-account credential, `calendarIds`, `resources`, `self_addresses`, and error isolation). See [Multi-account ingestion](#multi-account-ingestion-google--ms-graph)
 - **config**:
 
 ```toml
 [connectors.google]
 clientId = "<oauth-client-id>"
-calendarId = "primary"                   # target for calendar events
+calendarIds = ["primary", "team@group.calendar.google.com"]  # every calendar to ingest
 resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
 ```
 
-- **identity**: `google:<resource>:<id>` / **source_type**: `google_drive` / `gmail_message` / `google_calendar`
+> **`calendarId` (singular) was replaced by `calendarIds` (a list)** ([ADR-0051](../adr/0051-ingest-scope-defaults.md), [#536](https://github.com/ozzy-labs/suasor/issues/536)) — a breaking change. One account routinely owns several calendars that matter (your own plus a team calendar), and a single id made every other one unreachable.
+>
+> **Migration**: rewrite `calendarId = "X"` as `calendarIds = ["X"]`, in `[connectors.google]` and in every `[connectors.google.accounts.<account>]` that sets it. The old key is **not** silently promoted: a config that still uses it fails to load with an error naming the exact replacement line. Run `suasor google calendars` to enumerate the ids you can add.
+>
+> **Identity**: with **one** configured calendar the external ids are unchanged (`google:calendar:<eventId>`), so an existing install's ingested calendar sources stay addressable. Listing a **second** calendar namespaces them (`google:calendar:<calendarId>:<eventId>`) — necessary because one meeting carries the same event id in every calendar it appears on, and two calendars would otherwise fight over a single source. The consequence is a one-time re-ingest of the first calendar's events under the new ids, with the old rows left behind (`suasor source forget` removes them).
+
+- **identity**: `google:<resource>:<id>` (calendar events add the calendar id when several are configured — see above) / **source_type**: `google_drive` / `gmail_message` / `google_calendar`
 - **delta detection**: paginate with `nextPageToken` and skip unchanged items by body fingerprint. Drive files use a **content fingerprint** (`md5Checksum` for binary, and the monotonically increasing `version` for Google-native files since they have no md5), so content changes without a rename are detected and re-ingested / re-extracted. Gmail / Calendar stay on the body SHA-256 fingerprint
 - **onboarding** (Issue #85): `suasor google auth set` (save the refresh token to the keychain) / `suasor google auth test` (verify connectivity via a refresh→access token exchange and print granted scope). `auth test` requires `clientId` in config, and for an installed/web client it also uses `connector:google:clientSecret` if you place it in the keychain (not needed for a public client).
-- **calendar discovery** ([ADR-0030](../adr/0030-connector-discovery-verbs.md)): hand-copying `calendarId` from the Web UI easily produces a typo that makes calendar sync **silently return 0**. Use the discovery verb that enumerates calendars visible from the token so you can paste them (the equivalent of github's `github repos`):
+- **calendar discovery** ([ADR-0030](../adr/0030-connector-discovery-verbs.md)): hand-copying a calendar id from the Web UI easily produces a typo that makes calendar sync **silently return 0**. Use the discovery verb that enumerates calendars visible from the token so you can paste them (the equivalent of github's `github repos`):
 
   ```bash
   suasor google calendars                  # enumerate visible calendars and print a [connectors.google] block
+  suasor google calendars --new            # only what the token sees that calendarIds does not list (drift)
   suasor google calendars --filter team    # filter by substring match on id / summary (case-insensitive)
   suasor google calendars --json           # print items + configBlock as JSON
   ```
 
-  After exchanging the refresh token for an access token, it enumerates `GET /calendar/v3/users/me/calendarList` (`nextPageToken` pagination) with `fetch` only (no `googleapis` dependency, import-clean, [ADR-0007](../adr/0007-connector-contract.md)) and prints calendarId / summary / timeZone / primary. It requires `clientId` in config, and an installed/web client also uses `connector:google:clientSecret` from the keychain (same shape as `auth test`). Unlike github's `repos` array, the paste-ready `[connectors.google]` block at the end of the output sets a **single** `calendarId` to the primary (or first) calendar and lists the other calendars as `# calendarId = "..."` comment lines, so you can switch the target just by swapping them. The refresh token / client secret / access token are never leaked in errors.
+  After exchanging the refresh token for an access token, it enumerates `GET /calendar/v3/users/me/calendarList` (`nextPageToken` pagination) with `fetch` only (no `googleapis` dependency, import-clean, [ADR-0007](../adr/0007-connector-contract.md)) and prints calendar id / summary / timeZone / primary. It requires `clientId` in config, and an installed/web client also uses `connector:google:clientSecret` from the keychain (same shape as `auth test`). Like github's `repos`, the paste-ready `[connectors.google]` block lists every visible calendar in a `calendarIds = [ ... ]` array — **every line in it is ingested**, so delete the ones you do not want (holiday / birthday calendars are visible too). The refresh token / client secret / access token are never leaked in errors.
 - **feature readiness** (Issue #194): `auth test` prints a `features:` line per `resources` in config (same format as Slack). Because Google's token response enumerates granted scope URLs, each resource's scope (`drive` / `gmail` (or `mail.google.com`) / `calendar`) is `READY` if included in the granted scopes and `MISSING <scope>` otherwise. If `resources` is unset, only a single line `ingestion: N/A (no resources configured)`:
 
   ```text
@@ -488,11 +498,12 @@ resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
     Calendar read: MISSING calendar
   ```
 
-- **resource reachability** ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)): a granted scope says the permission was asked for; it does not say the resource you configured is readable. `auth test` therefore also sends **one read-only GET per configured resource** and prints a separate `resources (live probe):` block. The calendar probe reads the **configured `calendarId`**, not a generic calendar list — so the typo the discovery verb above exists to prevent is caught here too, as a 404 instead of a silent 0-count sync. Verdicts are `REACHABLE` / `UNREACHABLE` (401/403 = permission, 404 = the configured id does not resolve) / `UNKNOWN` (transport failure, timeout, 5xx — never reported as reachable). The `features:` block stays as its own block: a granted scope and a live API answer have different confidence, so they are not folded into one line. Pass `--no-probe` to skip it.
+- **resource reachability** ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)): a granted scope says the permission was asked for; it does not say the resource you configured is readable. `auth test` therefore also sends **one read-only GET per configured resource** and prints a separate `resources (live probe):` block. The calendar probe reads **every configured `calendarIds` entry** (one row each), not a generic calendar list — so the typo the discovery verb above exists to prevent is caught here too, as a 404 instead of a silent 0-count sync. Verdicts are `REACHABLE` / `UNREACHABLE` (401/403 = permission, 404 = the configured id does not resolve) / `UNKNOWN` (transport failure, timeout, 5xx, or an empty `calendarIds` leaving nothing to probe — never reported as reachable). The `features:` block stays as its own block: a granted scope and a live API answer have different confidence, so they are not folded into one line. Pass `--no-probe` to skip it.
 
   ```text
   resources (live probe):
     drive: REACHABLE — Drive file list readable
+    calendar: REACHABLE — calendar "primary" readable
     calendar: UNREACHABLE — calendar "teem@group.calendar.google.com": HTTP 404, not found — check the configured id
   ```
 

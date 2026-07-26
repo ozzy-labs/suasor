@@ -74,16 +74,13 @@ describe("discovery --new — registered where the scope is a set of ids", () =>
   });
 });
 
-describe("discovery --new — refused with a reason where the scope is a single id", () => {
-  test("google calendars --new explains why and points at the check that does apply", async () => {
+describe("discovery --new — google joined once its scope became a set (ADR-0051)", () => {
+  test("google calendars --new is accepted (it fails only on the missing credential)", async () => {
     const { code, err } = await run(["google", "calendars", "--new"]);
     expect(code).toBe(1);
-    expect(err).toContain("not available");
-    expect(err).toContain("calendarId");
-    // The refusal is only useful if it says what to run instead.
-    expect(err).toContain("google auth test");
-    // And it must not have been a credential failure masquerading as a refusal.
-    expect(err).not.toContain("no google refreshToken configured");
+    // The flag itself is no longer the complaint — the absent credential is.
+    expect(err).not.toContain("not available");
+    expect(err).toContain("no google refreshToken configured");
   });
 
   test("google calendars without --new still works as a plain enumeration verb", async () => {

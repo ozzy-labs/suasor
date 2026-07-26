@@ -86,6 +86,16 @@ describe("configuredIds — lenient slice read", () => {
   test("non-string entries are dropped", () => {
     expect(configuredIds({ repos: ["a/one", 42] }, SCOPE)).toEqual(["a/one"]);
   });
+
+  test("an absent key resolves to the scope's schema default when it has one", () => {
+    // google's `calendarIds` defaults to `["primary"]`, so a config that never
+    // wrote the key is still ingesting `primary` — reporting it as "visible but
+    // not configured" would be a wrong answer about what is being synced.
+    const scope = DISCOVERY_SPECS.google?.scope as DiscoveryScope;
+    expect(configuredIds({}, scope)).toEqual(["primary"]);
+    // An *explicit* empty list is a deliberate "none", not an omission.
+    expect(configuredIds({ calendarIds: [] }, scope)).toEqual([]);
+  });
 });
 
 describe("DISCOVERY_SPECS — drift capability is declared, never silently absent", () => {
@@ -102,9 +112,13 @@ describe("DISCOVERY_SPECS — drift capability is declared, never silently absen
     });
   }
 
-  test("google opts out because its scope is a single calendarId", () => {
-    expect(DISCOVERY_SPECS.google?.scope).toBeUndefined();
-    expect(DISCOVERY_SPECS.google?.driftNote).toContain("calendarId");
+  test("google joined the drift diff once its scope became a set (ADR-0051)", () => {
+    // ADR-0049 決定 3 opted google out with a `driftNote` because a single
+    // `calendarId` had no configured *set* to diff. `calendarIds` is a set, so
+    // the opt-out has to be gone — leaving it would keep refusing a verb that
+    // now works.
+    expect(DISCOVERY_SPECS.google?.scope?.key).toBe("calendarIds");
+    expect(DISCOVERY_SPECS.google?.driftNote).toBeUndefined();
   });
 
   test("the set-scoped connectors point at their real config key", () => {

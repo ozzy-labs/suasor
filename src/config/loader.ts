@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { connectorNames, loadConnectorConfigSchema } from "../connectors/registry.ts";
 import { ConfigError } from "./error.ts";
+import { legacyShapeRejector } from "./legacy-shapes.ts";
 import { Config } from "./schema.ts";
 import { collectSidecarEndpoints, SIDECAR_LOOPBACK_ALLOWLIST } from "./sidecar-egress.ts";
 
@@ -169,13 +170,13 @@ async function validateConnectorSlices(
 ): Promise<void> {
   const issues: string[] = [];
   for (const [name, slice] of Object.entries(connectors)) {
-    // Slack's removed ADR-0014 multi-workspace shape gets the mechanical
-    // migration message instead of a bare strict-mode "Unrecognized key"
-    // (ADR-0042 決定 9 — the friendly error IS the migration path).
-    if (name === "slack") {
+    // A removed config shape gets the connector's own mechanical migration
+    // message instead of a bare strict-mode "Unrecognized key" — the friendly
+    // error IS the migration path (ADR-0042 決定 9, ADR-0051).
+    const rejectLegacyShape = await legacyShapeRejector(name);
+    if (rejectLegacyShape) {
       try {
-        const { rejectLegacySlackConfig } = await import("../connectors/slack.ts");
-        rejectLegacySlackConfig(slice);
+        rejectLegacyShape(slice);
       } catch (error) {
         if (error instanceof ConfigError) {
           issues.push(...error.issues);

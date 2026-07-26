@@ -153,16 +153,20 @@ describe("missingSettingWarning — required non-secret settings (ADR-0049)", ()
     expect(warning).toContain("cannot reach its API");
   });
 
-  test("ms-graph: both ids are named when both are missing", () => {
+  test("ms-graph: every missing key is named, `user` included (ADR-0051)", () => {
     const warning = missingSettingWarning("ms-graph", {});
     expect(warning).toContain("tenantId");
     expect(warning).toContain("clientId");
+    // `user` used to default to `"me"`, which parsed as populated and so could
+    // never be reported here even though it made every request 404 app-only.
+    expect(warning).toContain("user");
   });
 
   test("ms-graph: only the actually-missing key is named", () => {
-    const warning = missingSettingWarning("ms-graph", { tenantId: "t-1" });
+    const warning = missingSettingWarning("ms-graph", { tenantId: "t-1", user: "u@x.test" });
     expect(warning).toContain("clientId");
     expect(warning).not.toContain("tenantId (");
+    expect(warning).not.toContain("user (");
   });
 
   test("jira: host is required", () => {
@@ -177,7 +181,9 @@ describe("missingSettingWarning — required non-secret settings (ADR-0049)", ()
     expect(
       missingSettingWarning("google", { clientId: "abc.apps.googleusercontent.com" }),
     ).toBeNull();
-    expect(missingSettingWarning("ms-graph", { tenantId: "t", clientId: "c" })).toBeNull();
+    expect(
+      missingSettingWarning("ms-graph", { tenantId: "t", clientId: "c", user: "u@x.test" }),
+    ).toBeNull();
     expect(missingSettingWarning("jira", { host: "example.atlassian.net" })).toBeNull();
   });
 
@@ -229,6 +235,7 @@ describe("per-account advisories (ADR-0050 / #441)", () => {
       missingSettingWarnings("ms-graph", {
         tenantId: "t-1",
         clientId: "c-1",
+        user: "shared@example.com",
         accounts: { alpha: {}, beta: { user: "someone@example.com" } },
       }),
     ).toEqual([]);
