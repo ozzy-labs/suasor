@@ -55,7 +55,8 @@ maxRetries = 3                       # 429/5xx の最大試行回数（初回含
 backend = "disabled"   # disabled（既定）| markitdown
 # baseUrl = "http://localhost:8929"   # markitdown sidecar（/extract を付加）
 # allowRemote = false                 # 非 loopback baseUrl のとき true 必須（Issue #436・egress opt-in）
-# maxBytes = 5000000                  # 抽出テキストの上限。超過は name-only に degrade
+# maxBytes = 5000000                  # 入力バイト数の上限。超過は fetch せず name-only に degrade
+# maxTextChars = 5000000              # 抽出テキストの文字数上限。超過は打ち切り + 警告（state=truncated）
 # version = "1"                       # extractor version。bump で既存 source を次 sync で再抽出
 ```
 
@@ -63,7 +64,7 @@ backend = "disabled"   # disabled（既定）| markitdown
 - ML 委譲（[ADR-0006](../adr/0006-ml-delegation.md)）: 変換はサイドカー、本体は thin client のみ（in-process パーサ無し）。失敗は best-effort で warning + name-only fallback
 - 初期スコープは **`local` connector 限定**（box/drive(API) は内容 fetch + 内容 fingerprint を要する後続 Issue で段階化）
 - **`baseUrl` は loopback allowlist（`localhost` / `127.0.0.0/8` / `::1`）でゲート**（Issue #436・[ADR-0003](../adr/0003-local-first-and-content-minimization.md)）。markitdown は文書バイト全体を送るため、非 loopback は `allowRemote = true` を明示しない限り load 時に `ConfigError`。opt-in 時は doctor / 起動 WARN で remote egress を開示
-- `baseUrl` / `maxBytes` / `version` は markitdown backend に適用。`version` を bump すると `extraction_meta` の記録と差分（drift）し、既存 source が次の `sync` で自動再抽出される（ADR-0024 §6・`suasor extraction status` で可視化）。未知キーは保持（`passthrough`）
+- `baseUrl` / `maxBytes` / `maxTextChars` / `version` は markitdown backend に適用。**`maxBytes` は入力バイト数、`maxTextChars` は抽出後テキスト長**で、測る量が違うため別 knob（[#529](https://github.com/ozzy-labs/suasor/issues/529)）。`version` を bump すると `extraction_meta` の記録と差分（drift）し、既存 source が次の `sync` で自動再抽出される（ADR-0024 §6・`suasor extraction status` で可視化）。未知キーは保持（`passthrough`）
 
 ### `[export]`（確定・ADR-0025）
 

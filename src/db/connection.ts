@@ -225,7 +225,7 @@ export function initSchema(sqlite: Database): void {
     -- events, ADR-0002): records which extractor version produced a source's
     -- extracted body, so a later extractor upgrade (version bump) or a newly
     -- enabled backend is detected as drift and re-extracted on the next sync.
-    -- state is the per-source outcome (extracted / unsupported / too_large).
+    -- state is the per-source outcome (extracted / truncated / unsupported / too_large).
     CREATE TABLE IF NOT EXISTS extraction_meta (
       external_id  TEXT PRIMARY KEY,
       version      TEXT NOT NULL,

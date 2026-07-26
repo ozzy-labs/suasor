@@ -27,6 +27,24 @@ import { secretEnvName } from "../../connectors/secrets.ts";
 import { standaloneGate } from "../build-target.ts";
 import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
+/**
+ * Whether the config declares a `[connectors.<name>]` slice (Issue #529).
+ *
+ * A stored credential is inert without one — nothing enumerates a connector the
+ * config does not mention. Failing to load the config is treated as "cannot
+ * tell": the note is an advisory, and a broken/absent config is a different
+ * problem that other commands report properly.
+ */
+async function hasConnectorSlice(connector: string): Promise<boolean> {
+  try {
+    const { loadConfig } = await import("../../config/index.ts");
+    const config = await loadConfig();
+    return config.connectors[connector] !== undefined;
+  } catch {
+    return true;
+  }
+}
+
 /** Base class for `<connector> auth set` — stores the connector secret in the keychain. */
 class ConnectorAuthSetCommand extends Command {
   static connectorName = "";
@@ -87,6 +105,17 @@ class ConnectorAuthSetCommand extends Command {
         `(service 'suasor', account 'connector:${connector}:${spec.secretName}').\n`,
     );
     this.context.stdout.write(`next: verify it with \`suasor ${connector} auth test\`.\n`);
+    // A stored secret alone does not enable a connector: `[connectors.<name>]`
+    // has to exist in the config for anything to read it. ADR-0029 called the
+    // auth/config disconnect structurally fixed, but only the wizard path
+    // closes it — `auth set` on its own left the operator with a working
+    // credential and a connector that silently never syncs.
+    if (!(await hasConnectorSlice(connector))) {
+      this.context.stdout.write(
+        `note: config has no [connectors.${connector}] section, so this credential is not used yet — ` +
+          `add it with \`suasor onboard --connector ${connector}\` (or by hand).\n`,
+      );
+    }
     return 0;
   }
 }

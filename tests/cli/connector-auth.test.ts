@@ -5,7 +5,10 @@
  * wiring (secret resolution + config reads + probe) is exercised directly with
  * an injected secret resolver, avoiding the real keychain/network.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
 import { AUTH_SPECS, authConnectorNames } from "../../src/connectors/auth-specs.ts";
 import { connectorSecretNames } from "../../src/connectors/registry.ts";
@@ -30,9 +33,12 @@ async function run(
   args: string[],
   stdin: AsyncIterable<Buffer | string> = (async function* () {})(),
   keychain?: KeychainBackend,
+  configDir?: string,
 ): Promise<{ code: number; out: string; err: string }> {
   const saved = SECRET_ENVS.map((k) => [k, process.env[k]] as const);
   for (const k of SECRET_ENVS) delete process.env[k];
+  const savedConfigDir = process.env.SUASOR_CONFIG_DIR;
+  if (configDir !== undefined) process.env.SUASOR_CONFIG_DIR = configDir;
   let out = "";
   let err = "";
   const cli = buildCli();
@@ -63,6 +69,10 @@ async function run(
     for (const [k, v] of saved) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
+    }
+    if (configDir !== undefined) {
+      if (savedConfigDir === undefined) delete process.env.SUASOR_CONFIG_DIR;
+      else process.env.SUASOR_CONFIG_DIR = savedConfigDir;
     }
   }
 }
@@ -241,5 +251,48 @@ describe("AUTH_SPECS.test probe wiring (injected secret resolver)", () => {
     await expect(
       AUTH_SPECS.jira?.test({ secret: async (n) => (n === "token" ? "tok" : null), config: {} }),
     ).rejects.toThrow(/host is required/);
+  });
+});
+
+/**
+ * A stored credential does nothing on its own: without a `[connectors.<name>]`
+ * slice nothing enumerates the connector, so `auth set` alone left the operator
+ * with a working token and a connector that silently never synced (Issue #529 /
+ * ADR-0029, whose "structural" fix only ever covered the wizard path).
+ */
+describe("auth set — the config slice it does not write", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "suasor-auth-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function setToken(toml: string): Promise<{ out: string; code: number }> {
+    await Bun.write(join(dir, "config.toml"), toml);
+    const { code, out } = await run(
+      ["github", "auth", "set", "--token", "ghp_x"],
+      (async function* () {})(),
+      memoryKeychain(),
+      dir,
+    );
+    return { code, out };
+  }
+
+  test("says so when the config has no slice for the connector", async () => {
+    const { code, out } = await setToken('[storage]\ndbPath = "/tmp/x.db"\n');
+    expect(code).toBe(0);
+    expect(out).toContain("no [connectors.github] section");
+    // Naming the command that fixes it, not just the problem.
+    expect(out).toContain("suasor onboard --connector github");
+  });
+
+  test("stays quiet when the slice is already there", async () => {
+    const { code, out } = await setToken('[connectors.github]\nrepos = ["o/r"]\n');
+    expect(code).toBe(0);
+    expect(out).not.toContain("no [connectors.github] section");
   });
 });

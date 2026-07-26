@@ -79,7 +79,7 @@ export interface ConnectorSyncDeps {
     connectors: Record<string, Record<string, unknown>>;
     embedding?: Pick<EmbeddingConfig, "backend" | "baseUrl" | "model">;
     /** `[extraction]` section; when backend is enabled, Office/PDF bodies are extracted (ADR-0024). */
-    extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes">;
+    extraction?: Pick<ExtractionConfig, "backend" | "baseUrl" | "maxBytes" | "maxTextChars">;
     /**
      * `[tasks]` section; its `homes.slack` column map lets post-sync read-back
      * interpret slack list items (ADR-0036 §6 / R1-3: resolved from the slack
@@ -115,7 +115,12 @@ export async function runConnectorSyncTool(
     ...(deps.secrets ? { secrets: deps.secrets } : {}),
     embedder,
     extractor,
-    ...(deps.config.extraction ? { extractionMaxBytes: deps.config.extraction.maxBytes } : {}),
+    ...(deps.config.extraction
+      ? {
+          extractionMaxBytes: deps.config.extraction.maxBytes,
+          extractionMaxTextChars: deps.config.extraction.maxTextChars,
+        }
+      : {}),
     // R1-3 (ADR-0036): read-back resolves the slack column map from the slack
     // home specifically (not the current default), so a switched default never
     // breaks Slack read-back on already-published tasks.

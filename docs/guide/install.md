@@ -12,7 +12,7 @@ the simplest option if you don't already run Bun:
 | You... | Use | Runtime on the host | Connectors | Secrets | Assistant skills |
 | --- | --- | --- | --- | --- | --- |
 | just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) | GitHub + local files only | env vars only | **all 22, bundled** |
-| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | keychain or env | all 22 |
+| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | keychain or env | all 22 (needs a mount, below) |
 | already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 | all | keychain or env | all 22 |
 
 The binary trades connector breadth for zero setup — the capability columns are
@@ -101,6 +101,20 @@ docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
   you can also pull manually with `docker run ... ollama pull bge-m3`.
 - Larger than the other channels (Ollama runtime included). Stay on npm/binary if
   you only need FTS or already run Ollama.
+
+- **Assistant skills need a second mount.** `skills install` writes the mirrors to
+  a directory, and the agent host reads them from *your* filesystem — so writing
+  them inside the container achieves nothing. Mount the target and point
+  `--host` at it:
+
+  ```bash
+  docker run --rm -v suasor-data:/data -v "$HOME:/host" \
+    ghcr.io/ozzy-labs/suasor:latest skills install --host /host
+  ```
+
+  This produces `~/.claude/skills/` and `~/.agents/skills/` on the host, the same
+  layout npm and the binary produce. Without it the skills stay in the image and
+  no agent host ever sees them.
 - The image's base layers (`oven/bun` and `ollama/ollama`) are pinned by tag +
   digest in the `Dockerfile` so each build embeds a known Bun and Ollama
   (reproducible, supply-chain-safe builds). The Bun version is kept in lockstep

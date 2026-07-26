@@ -84,6 +84,22 @@ describe("extractionStatus (ADR-0024)", () => {
     expect(status.totals.stale).toBe(0);
   });
 
+  test("a truncated body is counted apart from a complete one (#529)", async () => {
+    await syncConnector(store, fakeConnector([docRecord("d1", "long.docx")]), {
+      extractor: extractor("1", { "long.docx": "x".repeat(200) }),
+      extractionMaxTextChars: 50,
+    });
+    const status = extractionStatus(store.connection.sqlite, {
+      backend: "markitdown",
+      version: "1",
+    });
+    // Folding it into `extracted` would report full coverage over a corpus
+    // whose tails are missing; leaving it out of every bucket would make the
+    // totals silently not add up.
+    expect(status.totals.truncated).toBe(1);
+    expect(status.totals.extracted).toBe(0);
+  });
+
   test("box_file sources are tracked for pending/extracted (cross-connector base, #241)", async () => {
     // A Box Office file extracts; another is ingested name-only → pending.
     await syncConnector(store, fakeConnector([docRecord("b1", "spec.docx", "box_file")]), {

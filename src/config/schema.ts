@@ -215,8 +215,20 @@ export const ExtractionConfig = z
      * (localhost/127.0.0.0/8/::1 only). Default off (local-only).
      */
     allowRemote: z.boolean().default(false),
-    /** Max extracted-text bytes; larger inputs degrade to name-only. */
+    /**
+     * Max **input** size in bytes: a file larger than this is not sent to the
+     * sidecar at all and stays name-only (state `too_large`, with a warning).
+     */
     maxBytes: z.number().int().positive().default(DEFAULT_EXTRACTION_MAX_BYTES),
+    /**
+     * Max **extracted-text** length, in characters. Separate from `maxBytes`
+     * because the two measure unrelated quantities and pull in opposite
+     * directions: image-heavy PDFs are huge but carry almost no text, while a
+     * well-compressed docx is small and extracts to a lot. Sharing one knob
+     * meant raising the input limit to admit a 20 MB scanned PDF also tripled
+     * how much text every document was allowed to store.
+     */
+    maxTextChars: z.number().int().positive().default(DEFAULT_EXTRACTION_MAX_BYTES),
     /**
      * Extractor version tag (ADR-0024 §6). Recorded per source in
      * `extraction_meta`; bump it after upgrading the sidecar to re-extract drifted
