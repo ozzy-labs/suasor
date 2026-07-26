@@ -525,6 +525,23 @@ describe("Google connector — multiple calendars (ADR-0051)", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("ids are trimmed and de-duplicated the way the drift diff compares them", async () => {
+    // The diff normalizes trim + lowercase, so `--new` would call these one
+    // calendar. If sync disagreed it would write two sources for it while the
+    // drift view reported nothing new — a silent duplicate.
+    const { client, calls } = fakeGoogle({ calendar: [{ items: [calItem] }] });
+    const connector = createGoogleConnector(
+      { resources: ["calendar"], calendarIds: [" Work@Example.com ", "work@example.com"] },
+      { clientFactory: () => client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records).toHaveLength(1);
+    expect(records[0]?.externalId).toBe("google:calendar:c1");
+    // The first spelling is what gets fetched — trimmed, but not re-cased, since
+    // only the operator knows the id's real form.
+    expect(calls.map((c) => c.calendarId)).toEqual(["Work@Example.com"]);
+  });
+
   test("one unreadable calendar does not take the readable ones down", async () => {
     // Calendars are units of the existing per-resource isolation layer, so a
     // mistyped id is a warn + a skip, not a dead calendar family.

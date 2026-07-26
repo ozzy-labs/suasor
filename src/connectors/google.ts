@@ -689,9 +689,14 @@ interface GoogleUnit {
  *
  * The single-calendar case is deliberately indistinguishable from the
  * pre-ADR-0051 shape — no namespace, label `calendar` — so existing installs keep
- * their external ids, their `meta` and their warning text unchanged. Duplicate
- * ids are collapsed: listing a calendar twice is a config typo, not a request to
- * ingest it twice.
+ * their external ids, their `meta` and their warning text unchanged.
+ *
+ * Ids are trimmed and de-duplicated **under the same normalization the drift
+ * diff uses** (trim + lowercase, `discovery-specs.ts`), keeping the first
+ * spelling for the fetch. Listing a calendar twice is a config typo, not a
+ * request to ingest it twice — and diverging from the diff's normalization would
+ * mean `--new` reporting "nothing new" while sync quietly writes two sources for
+ * the one calendar.
  */
 function googleUnits(settings: GoogleAccountSettings): GoogleUnit[] {
   const units: GoogleUnit[] = [];
@@ -700,7 +705,15 @@ function googleUnits(settings: GoogleAccountSettings): GoogleUnit[] {
       units.push({ resource, fetchCalendarId: null, namespace: null, label: resource });
       continue;
     }
-    const ids = [...new Set(settings.calendarIds)];
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const raw of settings.calendarIds) {
+      const id = raw.trim();
+      const key = id.toLowerCase();
+      if (id.length === 0 || seen.has(key)) continue;
+      seen.add(key);
+      ids.push(id);
+    }
     const multi = ids.length > 1;
     for (const id of ids) {
       units.push({
