@@ -240,7 +240,7 @@ export class SyncAllCommand extends Command {
         this.context.stderr.write(
           `warning: ${truncatedCount} long document(s) truncated to ` +
             `${config.embedding.maxInputChars} chars before embedding ` +
-            "(recall covers the head only; see docs/guide/embedding.md)\n",
+            `(recall covers the head only; see ${docsUrl("guide/embedding.md")})\n`,
         );
       }
 
