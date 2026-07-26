@@ -42,6 +42,9 @@
  *     line anchors are not derivable from file content. There are none in the
  *     repo today; if one appears, the *file* half is still checked and the
  *     fragment half is reported as `unverified`, not passed.
+ *   - Reference links with no matching definition (`[text][nope]`): that is
+ *     `MD052/reference-links-images`, already on. What this script adds is the
+ *     other half — whether the *definition's* destination resolves.
  *   - Raw HTML links (`<a href>`, `<img src>`): `MD033/no-inline-html` limits
  *     inline HTML to `details` / `summary` / `description`, so a raw HTML link
  *     cannot get past lint in the first place.
