@@ -597,6 +597,56 @@ describe("suasor doctor", () => {
     expect(noop[0]?.detail).toContain("channels");
   });
 
+  // ADR-0049 / Issue #478: the non-Slack counterpart of the `slack.config`
+  // check. A connector enabled without the non-secret settings it cannot work
+  // without used to sail past loadConfig / validate-config / doctor (the keys
+  // carry a `.default("")`) and fail only at sync with the vendor's own opaque
+  // error. It is an *error*, not a warning: unlike the no-op case, the sync does
+  // not succeed with 0 observed.
+  test("enabled google with no clientId is a connectors.config error (ADR-0049)", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.google]\nenabled = true\nresources = ["drive"]\n');
+    const { code, out } = await run(["doctor", "--json"]);
+    expect(code).toBe(1);
+    const report = JSON.parse(out) as DoctorReport;
+    const config = report.checks.filter((c) => c.name === "connectors.config");
+    expect(config).toHaveLength(1);
+    expect(config[0]?.status).toBe("error");
+    expect(config[0]?.detail).toContain("google");
+    expect(config[0]?.detail).toContain("clientId");
+    // Not folded into the scope-emptiness line: the scope here is fine.
+    expect(report.checks.some((c) => c.name === "connectors.noop")).toBe(false);
+  });
+
+  test("enabled ms-graph names every missing required setting (ADR-0049)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.ms-graph]\nenabled = true\n");
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const config = report.checks.filter((c) => c.name === "connectors.config");
+    expect(config).toHaveLength(1);
+    expect(config[0]?.detail).toContain("tenantId");
+    expect(config[0]?.detail).toContain("clientId");
+  });
+
+  test("a fully-set google slice emits no connectors.config check (ADR-0049)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      '[connectors.google]\nenabled = true\nclientId = "abc.apps.googleusercontent.com"\n',
+    );
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "connectors.config")).toBe(false);
+  });
+
+  test("a connector with no required settings never emits connectors.config (ADR-0049)", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nenabled = true\n");
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.some((c) => c.name === "connectors.config")).toBe(false);
+  });
+
   test("slack with channels configured emits no nothing-to-ingest warning (#388)", async () => {
     await run(["init"]);
     await writeConfig('[connectors.slack]\nchannels = ["C1"]\n');

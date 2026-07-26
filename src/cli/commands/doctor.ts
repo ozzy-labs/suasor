@@ -380,7 +380,7 @@ export class DoctorCommand extends Command {
     //    hide that token (#161). Only credential *presence* is probed, never the
     //    value (NFR-PRV-4).
     if (config !== null) {
-      const { noopWarning } = await import("../../connectors/noop-check.ts");
+      const { noopWarning, missingSettingWarning } = await import("../../connectors/noop-check.ts");
       const enabled: string[] = [];
       const missingCred: string[] = [];
       const storedNotEnabled: string[] = [];
@@ -388,6 +388,12 @@ export class DoctorCommand extends Command {
       // target" (empty scope). Surfaced offline here so the no-op is visible at
       // diagnosis time instead of only as a warning during sync (Issue #388).
       const noopScoped: Array<{ name: string; message: string }> = [];
+      // Enabled connectors missing a non-secret setting they cannot work without
+      // (ADR-0049 / Issue #478) — the non-Slack counterpart of the `slack.config`
+      // check. Kept separate from `noopScoped` because the severities differ: an
+      // empty scope still syncs (0 observed), an empty `clientId` / `host` cannot
+      // authenticate or address the API at all.
+      const missingSettings: Array<{ name: string; message: string }> = [];
       for (const name of connectorNames()) {
         const slice = config.connectors[name];
         const isEnabled = slice !== undefined && slice.enabled !== false;
@@ -409,6 +415,8 @@ export class DoctorCommand extends Command {
         if (slice !== undefined) {
           const noop = noopWarning(name, slice);
           if (noop !== null) noopScoped.push({ name, message: noop });
+          const missingSetting = missingSettingWarning(name, slice);
+          if (missingSetting !== null) missingSettings.push({ name, message: missingSetting });
         }
         if (secrets.length === 0) continue; // needs no auth (e.g. web)
         for (const secret of secrets) {
@@ -452,6 +460,15 @@ export class DoctorCommand extends Command {
       // the sync-time `warning: <name>: ...` formatting (Issue #388).
       for (const { name, message } of noopScoped) {
         checks.push({ name: "connectors.noop", status: "warn", detail: `${name}: ${message}` });
+      }
+      // Enabled-but-unaddressable: one error line per connector missing a
+      // required non-secret setting (ADR-0049). An error, not a warning: unlike
+      // the no-op case the sync does not succeed with 0 observed — it fails with
+      // the vendor's own opaque message, which is exactly the "no silent wrong
+      // answer" shape ADR-0007 asks doctor to pre-empt. Slack's equivalent
+      // (`slack.config`) has been an error since ADR-0042 決定 9.
+      for (const { name, message } of missingSettings) {
+        checks.push({ name: "connectors.config", status: "error", detail: `${name}: ${message}` });
       }
 
       // 5b-2. Mail connector enabled but no self_addresses (Issue #488): email

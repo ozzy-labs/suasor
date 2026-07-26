@@ -19,6 +19,8 @@ import { Command, type CommandClass, Option } from "clipanion";
 import {
   type ConnectorDiscoverySpec,
   DISCOVERY_SPECS,
+  type DiscoveryItem,
+  type DiscoveryScope,
   discoveryConnectorNames,
 } from "../../connectors/discovery-specs.ts";
 
@@ -34,6 +36,10 @@ class ConnectorDiscoveryCommand extends Command {
     description: "Root node id to enumerate under (tree-shaped namespaces only, e.g. box folders).",
   });
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
+  new = Option.Boolean("--new", false, {
+    description:
+      "Show only what is visible to the credential but missing from config (drift), plus what config lists that is no longer visible.",
+  });
   noProgress = Option.Boolean("--no-progress", false, {
     description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
   });
@@ -51,6 +57,17 @@ class ConnectorDiscoveryCommand extends Command {
     // it for flat ones so a typo never silently does nothing.
     if (this.root !== undefined && !spec.acceptsRoot) {
       this.context.stderr.write(`error: \`${connector} ${spec.verb}\` does not accept --root\n`);
+      return 1;
+    }
+
+    // `--new` needs a configured *set* of ids to diff against. A connector whose
+    // scope is a single value says why instead of emitting a diff in which every
+    // non-selected item looks like drift (ADR-0049).
+    if (this.new && !spec.scope) {
+      this.context.stderr.write(
+        `error: \`${connector} ${spec.verb} --new\` is not available: ` +
+          `${spec.driftNote ?? "this connector's ingest scope is not a set of ids"}\n`,
+      );
       return 1;
     }
 
@@ -92,6 +109,10 @@ class ConnectorDiscoveryCommand extends Command {
     }
     progress.finish();
 
+    if (this.new && spec.scope) {
+      return this.reportDrift(connector, spec, spec.scope, slice, result.items);
+    }
+
     if (this.json) {
       this.context.stdout.write(
         `${JSON.stringify({ items: result.items, configBlock: result.configBlock }, null, 2)}\n`,
@@ -122,6 +143,57 @@ class ConnectorDiscoveryCommand extends Command {
     );
     return 0;
   }
+
+  /**
+   * Render the drift view (`--new`, ADR-0049): only what the credential can see
+   * that config does not list, plus what config lists that the enumeration no
+   * longer returns. Nothing is ingested and nothing is written to config —
+   * explicit enumeration stays the model (ADR-0039 §Decision), this only removes
+   * the "re-read the whole list and eyeball it" step.
+   *
+   * Exit code stays 0 even when drift exists: it is information, not a failure
+   * (a repo you deliberately do not ingest is not an error). `doctor` is where a
+   * gating verdict belongs.
+   */
+  private async reportDrift(
+    connector: string,
+    spec: ConnectorDiscoverySpec,
+    scope: DiscoveryScope,
+    slice: Record<string, unknown>,
+    items: readonly DiscoveryItem[],
+  ): Promise<number> {
+    const { configuredIds, diffDiscovered } = await import("../../connectors/discovery-specs.ts");
+    // A narrowed enumeration cannot support a "removed" claim — see DiscoveryDiff.
+    const partialView = this.filter !== undefined || this.root !== undefined;
+    const configured = configuredIds(slice, scope);
+    const diff = diffDiscovered(items, configured, scope, partialView);
+
+    if (this.json) {
+      this.context.stdout.write(
+        `${JSON.stringify(
+          {
+            new: diff.added,
+            removed: diff.removed,
+            removedComputed: diff.removedComputed,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return 0;
+    }
+
+    const { renderDriftReport } = await import("../drift-report.ts");
+    const { out, err } = renderDriftReport({
+      connector,
+      itemNoun: spec.itemNoun,
+      scope,
+      diff,
+    });
+    for (const line of out) this.context.stdout.write(`${line}\n`);
+    for (const line of err) this.context.stderr.write(`${line}\n`);
+    return 0;
+  }
 }
 
 /** Build the `<connector> <verb>` discovery command for one connector. */
@@ -139,10 +211,25 @@ function makeDiscoveryCommand(spec: ConnectorDiscoverySpec): CommandClass {
         can paste into config.toml so you never hand-hunt an id — a mistyped id
         silently ingests nothing (ADR-0030). Use --filter to narrow a long list,
         --json for machine-readable output. The credential never touches stderr.
+        ${
+          spec.scope
+            ? `Use --new to see only the drift: the ${spec.itemNoun}s visible to the
+        credential that [connectors.${spec.connector}].${spec.scope.key} does not
+        list (and, on an unnarrowed run, the configured ids that are no longer
+        visible). Nothing is ingested or written to config — explicit enumeration
+        stays the model (ADR-0039 / ADR-0049).`
+            : `--new is not available here: ${spec.driftNote ?? ""}`
+        }
       `,
       examples: [
         [`List everything visible`, `suasor ${spec.connector} ${spec.verb}`],
         [`Filtered, as JSON`, `suasor ${spec.connector} ${spec.verb} --filter acme --json`],
+        ...(spec.scope
+          ? ([[`Only what config is missing`, `suasor ${spec.connector} ${spec.verb} --new`]] as [
+              string,
+              string,
+            ][])
+          : []),
         ...(spec.acceptsRoot
           ? ([
               [

@@ -33,6 +33,13 @@ export interface GoogleAuthResult {
   readonly scope: string;
   /** Access-token lifetime in seconds, when reported. */
   readonly expiresIn: number | null;
+  /**
+   * The minted access token, used only to drive the per-resource reachability
+   * probe (ADR-0049) in the same process. **Never printed / serialized** — the
+   * `auth test` report is assembled field by field and carries identity, scopes
+   * and verdicts only (NFR-PRV-4).
+   */
+  readonly accessToken: string;
 }
 
 /** Inputs the refresh exchange needs. */
@@ -113,5 +120,6 @@ export async function testGoogleAuth(
   return {
     scope: asString(body.scope),
     expiresIn: typeof expiresInRaw === "number" ? expiresInRaw : null,
+    accessToken: asString(body.access_token),
   };
 }

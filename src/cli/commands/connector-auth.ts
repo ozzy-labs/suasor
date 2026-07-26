@@ -22,6 +22,7 @@
 import { Command, type CommandClass, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import { connectorBundledInBinary } from "../../connectors/registry.ts";
+import type { ResourceReachabilityState } from "../../connectors/resource-probe.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { secretEnvName } from "../../connectors/secrets.ts";
 import { standaloneGate } from "../build-target.ts";
@@ -125,6 +126,10 @@ class ConnectorAuthTestCommand extends Command {
   static connectorName = "";
 
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });
+  noProbe = Option.Boolean("--no-probe", false, {
+    description:
+      "Skip the per-resource reachability probe (google / ms-graph); report scope readiness only.",
+  });
 
   override async execute(): Promise<number> {
     const connector = (this.constructor as typeof ConnectorAuthTestCommand).connectorName;
@@ -160,7 +165,12 @@ class ConnectorAuthTestCommand extends Command {
 
     let report: Awaited<ReturnType<typeof spec.test>>;
     try {
-      report = await spec.test({ secret, config: slice });
+      // The reachability probe defaults ON (ADR-0049): the whole point of the
+      // verb is "will this credential actually work", and the operator should not
+      // have to know to ask for the layer that answers it. It costs one extra
+      // read-only GET per configured resource on an explicit health command;
+      // --no-probe opts out for a scopes-only run.
+      report = await spec.test({ secret, config: slice, probe: !this.noProbe });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       const hint = message.startsWith(`no ${connector} `)
@@ -183,9 +193,26 @@ class ConnectorAuthTestCommand extends Command {
         this.context.stdout.write(`  ${f.label}: ${f.status}\n`);
       }
     }
+    // Kept as its own block, never merged into `features:` — a scope row is a
+    // self-report about what was granted, a reachability row is what the API
+    // answered, and folding two confidence levels into one line lets the weaker
+    // one masquerade as the stronger (ADR-0049).
+    if (report.resources && report.resources.length > 0) {
+      this.context.stdout.write("resources (live probe):\n");
+      for (const r of report.resources) {
+        this.context.stdout.write(`  ${r.resource}: ${RESOURCE_LABEL[r.state]} — ${r.detail}\n`);
+      }
+    }
     return 0;
   }
 }
+
+/** Display label per reachability verdict (uppercase, matching `features:`). */
+const RESOURCE_LABEL: Record<ResourceReachabilityState, string> = {
+  reachable: "REACHABLE",
+  unreachable: "UNREACHABLE",
+  unknown: "UNKNOWN",
+};
 
 /** Build the `<name> auth set` command for one connector. */
 function makeAuthSetCommand(name: string): CommandClass {
@@ -219,13 +246,24 @@ function makeAuthTestCommand(name: string): CommandClass {
       category: "Connector auth",
       description: `Verify the stored ${name} credential and report identity + scopes.`,
       details: `
-        Runs a single read-only round-trip to confirm the stored credential is
-        live, then prints the resolved identity, granted scopes (when the API
-        reports them), and a 'features:' readiness block (READY / MISSING / N/A).
+        Runs a read-only round-trip to confirm the stored credential is live,
+        then prints the resolved identity, granted scopes (when the API reports
+        them), and a 'features:' readiness block (READY / MISSING / N/A).
+
+        For the resource-gated connectors (google / ms-graph) it additionally
+        probes each configured 'resources' entry with one read-only GET and
+        prints a separate 'resources (live probe):' block
+        (REACHABLE / UNREACHABLE / UNKNOWN, ADR-0049). This is what catches a
+        mistyped calendarId or user, and an app permission that was never granted
+        — neither of which a scope check can see. Pass --no-probe to skip it.
+        A probe that cannot establish the fact reports UNKNOWN; it is never
+        reported as reachable.
+
         The credential never touches stderr; only the API's error code is shown.
       `,
       examples: [
         [`Test the stored credential`, `suasor ${name} auth test`],
+        [`Scopes only, no live resource probe`, `suasor ${name} auth test --no-probe`],
         [`As JSON`, `suasor ${name} auth test --json`],
       ],
     });

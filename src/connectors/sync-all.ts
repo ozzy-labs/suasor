@@ -223,16 +223,24 @@ async function runOneConnector(
   }
 }
 
-/** Emit the pre-sync no-op advisory (Issue #187) for empty connector slices. */
-async function emitNoopWarnings(options: BulkSyncOptions): Promise<void> {
+/**
+ * Emit the pre-sync config advisories for each connector slice: the no-op
+ * warning for an empty scope (Issue #187) and the required-setting warning for a
+ * slice that cannot address its API at all (ADR-0049 / Issue #478). Two lines,
+ * not one — they differ in severity and remedy.
+ */
+async function emitPreSyncAdvisories(options: BulkSyncOptions): Promise<void> {
   const onWarn = options.syncOptions?.onWarn;
   if (!onWarn) return;
   // Lazy-imported to keep this module's top level import-clean (the schemas pull
   // no heavy SDK, but the lazy import mirrors the connector lazy-load discipline).
-  const { noopWarning } = await import("./noop-check.ts");
+  const { noopWarning, missingSettingWarning } = await import("./noop-check.ts");
   for (const name of options.names) {
-    const noop = noopWarning(name, options.connectors[name] ?? {});
+    const slice = options.connectors[name] ?? {};
+    const noop = noopWarning(name, slice);
     if (noop !== null) onWarn(`${name}: ${noop}`);
+    const missingSetting = missingSettingWarning(name, slice);
+    if (missingSetting !== null) onWarn(`${name}: ${missingSetting}`);
   }
 }
 
@@ -314,7 +322,7 @@ export async function runBulkSync(store: Store, options: BulkSyncOptions): Promi
   // Pre-sync no-op advisory (Issue #187): warn for enabled-but-empty slices before
   // any connector runs, in `names` order, so the advisory is deterministic and not
   // interleaved with concurrent progress output.
-  await emitNoopWarnings(options);
+  await emitPreSyncAdvisories(options);
 
   const continueOnError = options.continueOnError ?? true;
   return continueOnError ? runBoundedPool(store, options) : runSerialFailFast(store, options);

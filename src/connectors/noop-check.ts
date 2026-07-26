@@ -29,7 +29,7 @@
  */
 
 import type { ConnectorConfig } from "./contract.ts";
-import { connectorManifest } from "./manifest.ts";
+import { connectorManifest, type RequiredSetting } from "./manifest.ts";
 
 /**
  * Return a no-op warning for a connector's config slice, or `null` when the
@@ -50,4 +50,35 @@ export function noopWarning(name: string, slice: ConnectorConfig): string | null
   } catch {
     return null;
   }
+}
+
+/**
+ * Return a "required setting is empty" message for a connector's config slice,
+ * or `null` when every declared {@link RequiredSetting} is populated (ADR-0049,
+ * Issue #478).
+ *
+ * Distinct from {@link noopWarning}, and deliberately not folded into it: an
+ * empty scope means the connector runs and ingests nothing (a warning — the run
+ * still succeeds), whereas an empty required setting means the connector cannot
+ * authenticate or address its API at all (the run fails, with the vendor's
+ * error). They differ in both severity and remedy, so callers report them as
+ * separate lines.
+ *
+ * The message is the *body* only — callers prefix it with the connector name,
+ * matching the existing `warning: <name>: ...` formatting.
+ */
+export function missingSettingWarning(name: string, slice: ConnectorConfig): string | null {
+  const required = connectorManifest(name)?.requiredSettings ?? [];
+  if (required.length === 0) return null;
+  const raw = (slice ?? {}) as Record<string, unknown>;
+  const missing = required.filter((setting) => {
+    const value = raw[setting.key];
+    return typeof value !== "string" || value.trim().length === 0;
+  });
+  if (missing.length === 0) return null;
+  const detail = missing.map((s) => `${s.key} (${s.hint})`).join(", ");
+  return (
+    `required setting(s) not set: ${detail} — the connector cannot reach its API ` +
+    `until they are set in [connectors.${name}]`
+  );
 }

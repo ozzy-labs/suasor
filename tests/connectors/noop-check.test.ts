@@ -7,7 +7,7 @@
  * before a silent 0-observed run. Pure / SDK-free, so it is exercised directly.
  */
 import { describe, expect, test } from "bun:test";
-import { noopWarning } from "../../src/connectors/noop-check.ts";
+import { missingSettingWarning, noopWarning } from "../../src/connectors/noop-check.ts";
 
 describe("noopWarning — empty/no-op slices warn", () => {
   test("github: no repos + notifications off", () => {
@@ -118,5 +118,60 @@ describe("noopWarning — edge cases", () => {
     // swallows the parse error and returns null rather than turning a pre-sync
     // advisory into a hard error.
     expect(noopWarning("github", { repos: 42 } as never)).toBeNull();
+  });
+});
+
+describe("missingSettingWarning — required non-secret settings (ADR-0049)", () => {
+  test("google: enabled with no clientId cannot reach its API", () => {
+    const warning = missingSettingWarning("google", {});
+    expect(warning).toContain("clientId");
+    expect(warning).toContain("cannot reach its API");
+  });
+
+  test("ms-graph: both ids are named when both are missing", () => {
+    const warning = missingSettingWarning("ms-graph", {});
+    expect(warning).toContain("tenantId");
+    expect(warning).toContain("clientId");
+  });
+
+  test("ms-graph: only the actually-missing key is named", () => {
+    const warning = missingSettingWarning("ms-graph", { tenantId: "t-1" });
+    expect(warning).toContain("clientId");
+    expect(warning).not.toContain("tenantId (");
+  });
+
+  test("jira: host is required", () => {
+    expect(missingSettingWarning("jira", {})).toContain("host");
+  });
+
+  test("a whitespace-only value counts as missing", () => {
+    expect(missingSettingWarning("google", { clientId: "   " })).toContain("clientId");
+  });
+
+  test("a populated slice is quiet", () => {
+    expect(
+      missingSettingWarning("google", { clientId: "abc.apps.googleusercontent.com" }),
+    ).toBeNull();
+    expect(missingSettingWarning("ms-graph", { tenantId: "t", clientId: "c" })).toBeNull();
+    expect(missingSettingWarning("jira", { host: "example.atlassian.net" })).toBeNull();
+  });
+
+  test("connectors that declare no required settings are always quiet", () => {
+    expect(missingSettingWarning("github", {})).toBeNull();
+    expect(missingSettingWarning("slack", {})).toBeNull();
+    expect(missingSettingWarning("local", {})).toBeNull();
+  });
+
+  test("unknown connector → no warning", () => {
+    expect(missingSettingWarning("does-not-exist", {})).toBeNull();
+  });
+
+  test("it is a separate verdict from the scope-emptiness one, not folded in", () => {
+    // A google slice can be perfectly scoped and still unable to authenticate:
+    // the two questions have different remedies, so both lines must be able to
+    // fire independently.
+    const slice = { resources: ["drive"] };
+    expect(noopWarning("google", slice)).toBeNull();
+    expect(missingSettingWarning("google", slice)).toContain("clientId");
   });
 });

@@ -6,6 +6,7 @@
 - Implemented: #46
 - Related: [ADR-0007](0007-connector-contract.md)（connector contract — `sync()` 一本）, [ADR-0003](0003-local-first-and-content-minimization.md)（read 専用・書き戻し禁止）, [ADR-0004](0004-mcp-agent-boundary-and-hitl.md)（MCP/HITL 境界）
 - Prior art: opshub の Slack 実装（`slack auth test` の readiness capability model = opshub ADR-0040、token principal/scope = opshub ADR-0018、conversations discovery = opshub ADR-0041 §366）
+- Extended by: [ADR-0049](0049-connector-readiness-parity.md)（本 ADR の capability model を「scope 層」と明示し、その上に per-resource の**到達性層**を積む。scope が構造上答えを出せない connector（ms-graph の `.default`）でも readiness を N/A に留めないため）
 
 ## Context
 

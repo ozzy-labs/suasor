@@ -541,6 +541,10 @@ export const manifest: ConnectorManifest = {
       '# clientId = "<app-client-id>" # required for auth',
     ],
   },
+  requiredSettings: [
+    { key: "tenantId", hint: "Azure AD tenant / directory id" },
+    { key: "clientId", hint: "app registration (client) id" },
+  ],
   noopWarning(slice) {
     const cfg = MsGraphConnectorConfig.parse(slice ?? {});
     if (cfg.resources.length === 0) {

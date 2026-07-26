@@ -24,7 +24,18 @@
  * resource-gated connectors (ms-graph / google) emit one row per configured
  * `resources` entry. Verdicts are conservative self-reports (`READY` / `MISSING` /
  * `N/A`); a granted scope never implies a resource is actually reachable.
+ *
+ * Per-resource **reachability** (ADR-0049, Issue #478) is a second, separate
+ * layer: for the resource-gated connectors, `auth test` additionally probes each
+ * configured resource with one read-only GET and reports `reachable` /
+ * `unreachable` / `unknown` ({@link import("./resource-probe.ts")}). It is kept
+ * as its own block rather than folded into the `features:` verdicts precisely
+ * because the two have different confidence — a scope row is a self-report about
+ * what was granted, a reachability row is what the API answered — and collapsing
+ * them would let one taint the other.
  */
+
+import type { ResourceProbeTransport, ResourceReachability } from "./resource-probe.ts";
 
 /** One self-reported readiness row for an `auth test` `features:` block. */
 export interface AuthFeatureReadiness {
@@ -40,8 +51,15 @@ export interface AuthTestReport {
   readonly principal: string;
   /** Comma/space-separated granted scopes, or `null` when the API reports none. */
   readonly scopes: string | null;
-  /** Per-feature readiness rows (may be empty). */
+  /** Per-feature readiness rows (scope layer; may be empty). */
   readonly features: readonly AuthFeatureReadiness[];
+  /**
+   * Per-resource reachability rows (ADR-0049). Present only for the connectors
+   * that declare probe targets **and** only when the caller asked for the probe
+   * (`probe: true`); absent means "not probed", which is deliberately distinct
+   * from "probed and found nothing".
+   */
+  readonly resources?: readonly ResourceReachability[];
 }
 
 /** Resolves a connector secret by name (keychain + env override). */
@@ -64,7 +82,22 @@ export interface ConnectorAuthSpec {
   readonly test: (deps: {
     secret: SecretResolver;
     config: Record<string, unknown>;
+    /**
+     * Run the per-resource reachability probe (ADR-0049) after the credential
+     * round-trip. Costs one extra read-only GET per **configured** resource, so
+     * it is a caller decision (`auth test` defaults it on, `--no-probe` opts
+     * out). Connectors with no probe targets ignore it.
+     */
+    probe?: boolean;
+    /** Injectable probe transport (tests drive it without network). */
+    probeTransport?: ResourceProbeTransport;
   }) => Promise<AuthTestReport>;
+  /**
+   * Whether this connector has per-resource reachability probes at all. Drives
+   * the CLI's `--no-probe` help and lets the completeness test tell "no probe
+   * targets" apart from "forgot to wire the probe".
+   */
+  readonly probesResources?: boolean;
 }
 
 function asString(value: unknown): string {
@@ -237,7 +270,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "ms-graph",
     secretName: "clientSecret",
     secretLabel: "app client secret",
-    async test({ secret, config }) {
+    probesResources: true,
+    async test({ secret, config, probe, probeTransport }) {
       const clientSecret = await secret("clientSecret");
       if (!clientSecret) throw new Error("no ms-graph clientSecret configured");
       const tenantId = asString(config.tenantId);
@@ -254,16 +288,31 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
       // possible here; readiness reflects which Graph resources are *configured*
       // (`resources = [...]`) and reports them N/A (scopes not enumerated). The
       // operator confirms the actual Mail.Read / Calendars.Read / Files.Read.All
-      // / Channel/Chat permissions in the Azure app registration.
-      const features = msGraphFeatures(configuredResources(config));
-      return { principal: `app ${clientId} @ tenant ${tenantId}`, scopes, features };
+      // / Channel/Chat permissions in the Azure app registration — or, better,
+      // lets the reachability probe below answer it from the API (ADR-0049).
+      const resources = configuredResources(config);
+      const features = msGraphFeatures(resources);
+      const principal = `app ${clientId} @ tenant ${tenantId}`;
+      if (!probe) return { principal, scopes, features };
+      const [{ msGraphProbeSpecs }, { probeResources }] = await Promise.all([
+        import("./ms-graph/probe.ts"),
+        import("./resource-probe.ts"),
+      ]);
+      const specs = msGraphProbeSpecs(resources, asString(config.user) || "me");
+      return {
+        principal,
+        scopes,
+        features,
+        resources: await probeResources(specs, result.accessToken, probeTransport),
+      };
     },
   },
   google: {
     connector: "google",
     secretName: "refreshToken",
     secretLabel: "OAuth refresh token",
-    async test({ secret, config }) {
+    probesResources: true,
+    async test({ secret, config, probe, probeTransport }) {
       const refreshToken = await secret("refreshToken");
       if (!refreshToken) throw new Error("no google refreshToken configured");
       const clientId = asString(config.clientId);
@@ -276,8 +325,23 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
         ...(clientSecret ? { clientSecret } : {}),
       });
       const scopes = result.scope.length > 0 ? result.scope : null;
-      const features = googleFeatures(configuredResources(config), scopes);
-      return { principal: `client ${clientId}`, scopes, features };
+      const resources = configuredResources(config);
+      const features = googleFeatures(resources, scopes);
+      const principal = `client ${clientId}`;
+      if (!probe) return { principal, scopes, features };
+      const [{ googleProbeSpecs }, { probeResources }] = await Promise.all([
+        import("./google/probe.ts"),
+        import("./resource-probe.ts"),
+      ]);
+      // `calendarId` is the single calendar sync reads — probing it is what turns
+      // a mistyped id from a silent empty ingest into a 404 (ADR-0007).
+      const specs = googleProbeSpecs(resources, asString(config.calendarId) || "primary");
+      return {
+        principal,
+        scopes,
+        features,
+        resources: await probeResources(specs, result.accessToken, probeTransport),
+      };
     },
   },
   box: {

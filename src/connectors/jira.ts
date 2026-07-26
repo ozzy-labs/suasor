@@ -395,6 +395,7 @@ export const manifest: ConnectorManifest = {
       '# projects = ["PROJ"]             # project keys to ingest (`suasor jira projects`)',
     ],
   },
+  requiredSettings: [{ key: "host", hint: "Jira site host, e.g. example.atlassian.net" }],
   noopWarning(slice) {
     const cfg = JiraConnectorConfig.parse(slice ?? {});
     // An explicit `jql` is its own target (it overrides per-project queries);

@@ -66,6 +66,30 @@ export interface ConnectorSliceTemplate {
 export type ConnectorConfigSchema = z.ZodType<Record<string, unknown>, ConnectorConfig>;
 
 /**
+ * One non-secret config key a connector cannot work without (ADR-0049, Issue
+ * #478).
+ *
+ * These keys are schema-*present* but empty-*tolerated*: `clientId` / `tenantId`
+ * / `host` all carry a `.default("")` so an absent key parses cleanly, which is
+ * what lets `[connectors.google] enabled = true` with no `clientId` sail past
+ * `loadConfig`, `validate-config` and `doctor` and then fail only at sync time
+ * with the vendor's own opaque error. The scope-emptiness detector
+ * ({@link ConnectorManifest.noopWarning}) does not catch them either: the scope
+ * can be perfectly well populated while the connector has nothing to
+ * authenticate *with*.
+ *
+ * Declaring them here gives `doctor` the same "this config cannot work" verdict
+ * Slack already had via its own config check, without a per-connector special
+ * case in the CLI.
+ */
+export interface RequiredSetting {
+  /** Config key inside `[connectors.<name>]` (e.g. `clientId`). */
+  readonly key: string;
+  /** What it is / where the operator gets it, appended to the doctor detail. */
+  readonly hint: string;
+}
+
+/**
  * Everything the platform needs to know about one connector, in one place. Read
  * by the registry-adjacent lookups + the completeness test. See the module header
  * for the owned-vs-declared split.
@@ -104,6 +128,14 @@ export interface ConnectorManifest {
    * itself) means the connector has no no-op notion (it ingests a fixed stream).
    */
   readonly noopWarning: ((slice: ConnectorConfig) => string | null) | null;
+  /**
+   * Non-secret config keys that must be non-empty for this connector to work at
+   * all (ADR-0049). Omitted / empty when the connector has none (its schema
+   * either requires nothing beyond a credential, or every key has a working
+   * default). See {@link RequiredSetting} for why an empty-tolerated schema
+   * default is not enough.
+   */
+  readonly requiredSettings?: readonly RequiredSetting[];
   /**
    * Whether the connector exposes the **generic** `<connector> auth set/test`
    * verbs (`AUTH_SPECS`, Issue #85). `false` when it needs no auth (`web` /

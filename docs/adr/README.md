@@ -89,3 +89,4 @@ NNNN-kebab-case-title.md
 | 0046 | Agent surface contraction (MCP tools 45 → 39, skills 32 → 22) |
 | 0047 | Storage lifecycle (visibility first + opt-in retention; no content-addressing) |
 | 0048 | At-rest protection (threat model; owner-only files + OS full-disk encryption, no app-level crypto) |
+| 0049 | Per-connector readiness / drift parity (resource reachability layer above scope; drift Layer 1 generalized onto the discovery registry) |

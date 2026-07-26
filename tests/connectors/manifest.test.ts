@@ -112,6 +112,25 @@ describe("connector manifest — completeness (parametrized over connectorNames(
         }
       });
 
+      test("requiredSettings name real, empty-tolerated config keys (ADR-0049)", () => {
+        const required = manifest?.requiredSettings ?? [];
+        for (const setting of required) {
+          expect(setting.key.length).toBeGreaterThan(0);
+          // A hint is not decoration: the doctor line has to tell the operator
+          // *what* to put there, not just that something is missing.
+          expect(setting.hint.length).toBeGreaterThan(0);
+          // The key must exist in the connector's own schema — otherwise the
+          // check would forever report a key nobody can set (and a rename would
+          // silently orphan it, the exact drift class #440 collapsed the tables
+          // to prevent).
+          const parsed = manifest?.configSchema.parse({}) as Record<string, unknown>;
+          expect(Object.hasOwn(parsed, setting.key)).toBe(true);
+          // And it must be empty-tolerated: a key the schema already rejects when
+          // absent is `loadConfig`'s job, not doctor's.
+          expect(parsed[setting.key]).toBe("");
+        }
+      });
+
       test("surfacesChannels / surfacesTeams match the channel / team meta tables", () => {
         expect(manifest?.surfacesChannels).toBe(channelMetaConnectors().includes(name));
         expect(manifest?.surfacesTeams).toBe(teamMetaConnectors().includes(name));

@@ -14,6 +14,37 @@ Even when a connector is **enabled** (a `[connectors.X]` section exists and is n
 - The same warning appears on both paths: single sync (`suasor <connector> sync`) and bulk sync (`suasor sync`, [ADR-0027](../adr/0027-bulk-sync-orchestration.md))
 - It is **warning-only** and does not change the exit code **when a credential is configured** — an empty scope with a valid credential is not a failure; the run succeeds normally with `0 observed`. A **missing** credential is a different case: credential resolution now precedes the empty-scope check, so a connector with no resolvable credential fails loudly (**exit 1**) regardless of whether its scope is empty ([#404](https://github.com/ozzy-labs/suasor/issues/404), generalizing Slack's [#385](https://github.com/ozzy-labs/suasor/issues/385); see [ADR-0007](../adr/0007-connector-contract.md))
 
+## A missing required setting is an error, not a warning
+
+An empty *scope* still syncs (0 observed). A missing **required non-secret setting** does not: the connector cannot address its API at all. `google` needs `clientId`, `ms-graph` needs `tenantId` + `clientId`, and `jira` needs `host`. All three carry a schema default of `""`, so a slice with just `enabled = true` passes `loadConfig` and `validate-config` and used to fail only at sync time with the vendor's own opaque error ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)).
+
+`suasor doctor` now reports this as a `connectors.config` **error** (so `doctor` exits 1 and cron / CI can gate on it), and sync prints the same line before running:
+
+```text
+[ERR ] connectors.config  google: required setting(s) not set: clientId (OAuth client id of the desktop / web app) — the connector cannot reach its API until they are set in [connectors.google]
+```
+
+It is a separate line from the empty-scope warning above, on purpose: the severities and the remedies differ, and a slice can legitimately have a full ingest scope and no way to authenticate.
+
+## Drift: what the credential can see that config does not list
+
+After the initial setup, new repositories / databases / projects / folders appear over time. Because Suasor only ingests what you **explicitly enumerate** (a deliberate data-minimization choice, [ADR-0039](../adr/0039-conversation-discovery-drift.md)), anything new is simply never ingested — and re-running the full discovery verb means eyeballing the whole list again to spot it.
+
+`--new` shows only the difference ([ADR-0049](../adr/0049-connector-readiness-parity.md)):
+
+```bash
+suasor github repos --new       # visible to the token but missing from [connectors.github].repos
+suasor notion databases --new
+suasor jira projects --new
+suasor box folders --new
+```
+
+- It prints the new ids plus a paste-ready fragment to **merge into** the existing list, and — on an unnarrowed run — the configured ids that are no longer visible (renamed, deleted, or no longer permitted; they sync nothing).
+- **Nothing is ingested and nothing is written to config.** Explicit enumeration stays the model; `--new` only removes the eyeballing step.
+- With `--filter` / `--root` the "no longer visible" half is **not computed** and says so: a narrowed view cannot tell "gone" from "out of view".
+- `google calendars --new` is deliberately **not** offered: `calendarId` is a single value, so there is no configured *set* to diff. The half that matters for google — "does the configured id still resolve" — is answered by `suasor google auth test` (the reachability probe above).
+- Unlike Slack, non-Slack connectors do **not** sweep for drift during sync and do not surface it in `doctor`; you see it when you run `--new`. That gap is intentional — see [ADR-0049](../adr/0049-connector-readiness-parity.md) 決定 3 for the cost reasoning.
+
 ## Start with `suasor onboard` (recommended setup path)
 
 Before configuring connectors one by one by hand, the interactive wizard **`suasor onboard`** stitches the correct order (connector selection → token storage → `auth test` round-trip → appending the `[connectors.X]` slice → first sync → scheduler scaffold → MCP registration) into a single command ([ADR-0029](../adr/0029-onboarding-wizard.md)).
@@ -107,6 +138,7 @@ Hand-copying the `owner/repo` you write in `repos` from the Web UI easily produc
 ```bash
 suasor github repos                    # enumerate visible repositories and print a [connectors.github] block
 suasor github repos --filter acme      # filter by substring match on full_name (case-insensitive)
+suasor github repos --new              # only what is visible but missing from config (drift, ADR-0049)
 suasor github repos --json             # print items + configBlock as JSON
 ```
 
@@ -337,6 +369,14 @@ resources = ["mail", "calendar"]        # mail | calendar | files | teams
     calendar read (Calendars.Read): N/A (scopes not enumerated)
   ```
 
+- **resource reachability** ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)): because the scope layer above structurally cannot answer anything for ms-graph, `auth test` additionally sends **one read-only GET per configured resource** under the configured `user` and reports what the API said, in a separate `resources (live probe):` block. This is the layer that catches the app-only footgun: `user` defaults to `"me"`, which is **not resolvable without a signed-in user**, so an app-only credential reading `/users/me/...` returns 404 — previously visible only as a sync that ingested nothing. Verdicts are `REACHABLE` (2xx) / `UNREACHABLE` (401/403 = permission, 404 = the configured id does not exist for this credential) / `UNKNOWN` (transport failure, timeout, 5xx). `UNKNOWN` is **never** reported as reachable. Pass `--no-probe` to skip it.
+
+  ```text
+  resources (live probe):
+    mail: UNREACHABLE — mailbox of "me": HTTP 404, not found — check the configured id (ResourceNotFound: …)
+    calendar: REACHABLE — calendar of "you@contoso.com" readable
+  ```
+
 ## Google
 
 Ingests Google Workspace (Drive / Gmail / Calendar) (`googleapis`, OAuth2 refresh token).
@@ -372,6 +412,14 @@ resources = ["drive", "gmail", "calendar"]  # drive | gmail | calendar
     Drive read: READY
     Gmail read: READY
     Calendar read: MISSING calendar
+  ```
+
+- **resource reachability** ([ADR-0049](../adr/0049-connector-readiness-parity.md), [#478](https://github.com/ozzy-labs/suasor/issues/478)): a granted scope says the permission was asked for; it does not say the resource you configured is readable. `auth test` therefore also sends **one read-only GET per configured resource** and prints a separate `resources (live probe):` block. The calendar probe reads the **configured `calendarId`**, not a generic calendar list — so the typo the discovery verb above exists to prevent is caught here too, as a 404 instead of a silent 0-count sync. Verdicts are `REACHABLE` / `UNREACHABLE` (401/403 = permission, 404 = the configured id does not resolve) / `UNKNOWN` (transport failure, timeout, 5xx — never reported as reachable). The `features:` block stays as its own block: a granted scope and a live API answer have different confidence, so they are not folded into one line. Pass `--no-probe` to skip it.
+
+  ```text
+  resources (live probe):
+    drive: REACHABLE — Drive file list readable
+    calendar: UNREACHABLE — calendar "teem@group.calendar.google.com": HTTP 404, not found — check the configured id
   ```
 
 - **Body extraction** ([ADR-0024](../adr/0024-document-extraction-sidecar.md) / [ADR-0034](../adr/0034-api-connector-extraction.md), #242): with the `[extraction]` sidecar enabled, Office/PDF (`.docx`/`.xlsx`/`.pptx`/`.pdf`) on Drive are **read-only** lazy-fetched (`downloadFile`) via the Drive media endpoint, and Google-native files (Docs/Sheets/Slides) are mapped to an Office format (docx/xlsx/pptx) via the Drive **export** endpoint (`exportFile`) before being replaced with the extracted text. It goes through the same shared base (the extraction stage in `src/connectors/sync.ts`) as `local` / `box`. Gmail / Calendar and non-exportable natives (Forms, etc.) are **name-only**. size guard (if a binary's `size` exceeds `maxBytes` it is not fetched and is name-only), and name-only degrade on fetch / export / extraction failure and unsupported (ingestion itself succeeds). See the [extraction guide](extraction.md) for details
