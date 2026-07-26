@@ -47,7 +47,7 @@ jobs:
         run: bun run build
 
   lint:
-    name: lint (biome + markdown)
+    name: lint (biome + markdown + doc links)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -66,6 +66,13 @@ jobs:
 
       - name: Markdownlint
         run: bun run lint:md
+
+      # Link *targets* (#543). Markdownlint checks link syntax and same-file
+      # `#fragment`s (MD051) but never whether a relative target exists, so an
+      # ADR rename leaves silently dead links behind. See the header of
+      # scripts/check-doc-links.mjs for the exact scope.
+      - name: Doc links
+        run: bun run lint:links
 
   # Security & workflow quality gates. These mirror the local lefthook hooks
   # (gitleaks / trivy live in lefthook-base.yaml, actionlint in lefthook.yaml)

@@ -103,7 +103,7 @@ user 名側（決定 2）は `PersonIdentityObserved.displayName` の再利用�
 ### Negative / Trade-offs
 
 - 新 projection `slack_channels` の追加で、schema / initSchema / migration / rebuild / store-info / events / reducer の 7 箇所配線が要る（決定 9）。配線漏れは replay 不整合や行数カウント欠落を生むため、PR1 で機械的に揃える。
-- sync 時に `users.info` / `conversations.info` の round-trip が増える（per-run キャッシュで同一 run 内は 1 回に抑えるが、初回 / 新規 id では追加 API コール）。rate limit は既存の retry（[ADR-0019](0019-slack-fetch-path-rate-limit-retry.md)）に従う。
+- sync 時に `users.info` / `conversations.info` の round-trip が増える（per-run キャッシュで同一 run 内は 1 回に抑えるが、初回 / 新規 id では追加 API コール）。rate limit は既存の retry（[ADR-0019](0019-slack-fetch-rate-limit-retry.md)）に従う。
 - 改名の追従が next-sync 依存（決定 7）で、sync 間は陳腐化しうる（許容する割り切り）。
 - backfill verb（決定 11）のぶん CLI / 運用表面が増える。
 

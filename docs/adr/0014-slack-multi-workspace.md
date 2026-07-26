@@ -26,7 +26,7 @@ suasor は単一 `[connectors.slack]`（`team` + `channels` + 単一 token `conn
 
 - 共通実装は `src/connectors/per-resource.ts`（`syncResourcesIsolated`）に切り出し、各 connector のリソースループを包む。Slack は per-channel × per-workspace の二層 + membership 到達不能（[ADR-0011](0011-slack-operational-verbs-and-readiness.md)）という独自要件があるため、引き続き自前の隔離ロジックを保持する（共通ヘルパには寄せない）。
 - cursor 非リセットの解釈は connector ごとに異なる：github は **共有 `since` cursor を成功 repo の最新 `updated_at` のみで前進**させ、失敗 repo の gap を次回 silent に skip しない。google / box / ms-graph は fingerprint ベース（cursor `null`）で前進そのものが無く、次回再走査で復旧する。
-- warn / サマリ書式は Slack と統一（`<kind>: N OK, M failed (cursor preserved) — <resource> (<error>)` / `<kind>s: a=ok, b=failed (cursor preserved)`）。運用挙動の詳細は [connectors guide](../guide/connectors.md#per-resource-エラー分離github--google--box--ms-graph)。
+- warn / サマリ書式は Slack と統一（`<kind>: N OK, M failed (cursor preserved) — <resource> (<error>)` / `<kind>s: a=ok, b=failed (cursor preserved)`）。運用挙動の詳細は [connectors guide](../guide/connectors.md#per-resource-error-isolation-github--google--box--ms-graph--notion--jira)。
 
 ## Consequences
 

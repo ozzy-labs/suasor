@@ -31,7 +31,7 @@ connector は共通の **contract（TypeScript interface）** を実装する:
 
 - **所有と宣言の分担（lazy-import 規律 NFR-PRF-1 の維持）**: eager-safe な pure data（scope-emptiness 述語・onboard template）は manifest が**所有**し、旧テーブル module は manifest に委譲する。lazy hot-path / ロジック保持テーブル（`SECRET_NAMES` / `BINARY_BUNDLED_CONNECTORS` は registry、`AUTH_SPECS` / `DISCOVERY_SPECS` はその module、channel/team meta は hot loop）はその場に残し、manifest は**参加可否を宣言**して完全性テストが突き合わせる。manifest module は connector module を eager import するが、connector module は top-level import-clean（`zod` + contract types のみ、重い SDK は `sync` 内 lazy import）なので SDK は pull しない。manifest module は registry / config / MCP-serve の hot path には載せない（CLI-path / 遅延ロードの consumer のみ）。
 - **完全性テスト（#162 / #296 パターンの拡張）**: `connectorNames()` を回す parametrized test（`tests/connectors/manifest.test.ts`）が、各 manifest を全 surface と突き合わせるか、`capabilityNotes` で理由付き opt-out していることを assert する。10 個目の connector が surface を1つ忘れると、production で無音劣化する代わりに**テストが落ちる**。
-- **Slack の fold**: Slack も同 manifest 形に capability flag で fold する。独自の auth（`slack auth set/test`, [ADR-0011](0011-slack-connector.md)）と discovery（`slack conversations`）を持つため generic surface を `capabilityNotes` 付きで opt-out し、`surfacesChannels` / `surfacesTeams` を true 宣言する（invisible な特例ではなく明示的な宣言になる）。
+- **Slack の fold**: Slack も同 manifest 形に capability flag で fold する。独自の auth（`slack auth set/test`, [ADR-0011](0011-slack-operational-verbs-and-readiness.md)）と discovery（`slack conversations`）を持つため generic surface を `capabilityNotes` 付きで opt-out し、`surfacesChannels` / `surfacesTeams` を true 宣言する（invisible な特例ではなく明示的な宣言になる）。
 
 ### credential 解決は scope-emptiness 判定に先行する
 

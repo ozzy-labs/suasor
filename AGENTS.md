@@ -86,7 +86,7 @@ bun test                   # テスト
 `.github/workflows/ci.yaml` が PR / `main` push で以下を実行する。ローカル lefthook をバイパスした PR（`--no-verify` / Web 編集等）でも CI 側が正本としてガードする:
 
 - `check`: typecheck + test + build。テストは `bun run test:coverage`（`scripts/coverage-gate.mjs`）で **overall の line/function カバレッジ閾値ゲート**を適用する（floor 未達は CI fail）。ローカルでも `bun run test:coverage` で同じゲートを再現できる（閾値は `COVERAGE_MIN_LINE` / `COVERAGE_MIN_FUNCTION` で上書き可）
-- `lint`: Biome + markdownlint
+- `lint`: Biome + markdownlint + doc links。`bun run lint:links`（`scripts/check-doc-links.mjs`）が Markdown の**相対リンクの参照先の実在**と、他ファイルを指す `#fragment`、および `src/` 配下の `docsUrl("…")` のリテラル引数を検査する（markdownlint はリンクの構文と同一ファイル内 fragment しか見ない）。対象・非対象の線引きはスクリプト冒頭のコメントが正本
 - `security`: gitleaks（秘密情報、履歴全走査）/ Trivy（`fs` 脆弱性 + 秘密情報）/ actionlint（workflow lint）。ツールは `.mise.toml` のピン版を `jdx/mise-action` で導入する
 
 ## コーディング規約
