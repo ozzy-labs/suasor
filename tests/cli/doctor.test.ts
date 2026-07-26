@@ -362,14 +362,16 @@ describe("suasor doctor", () => {
     expect(warn?.detail).toContain("FTS");
   });
 
-  test("set-but-unused [llm] backend is a config warning (#235)", async () => {
+  test("a leftover retired [llm] section is a config warning (#529)", async () => {
     await run(["init"]);
     await writeConfig('[llm]\nbackend = "anthropic"\n');
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
-    const warn = report.checks.find((c) => c.name === "llm.backend");
+    const warn = report.checks.find((c) => c.name === "llm");
     expect(warn?.status).toBe("warn");
-    expect(warn?.detail).toContain("anthropic");
+    // The remedy is deleting the section — naming the value would imply it
+    // nearly worked, and no value here was ever read.
+    expect(warn?.detail).toContain("retired");
   });
 
   // Issue #267: doctor probes the model's actual output dimension once and

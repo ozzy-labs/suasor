@@ -172,7 +172,7 @@ export async function serveMcp(options: ServeOptions = {}): Promise<void> {
 
   // Non-fatal config warnings: keys accepted by the schema but silently dropped
   // at runtime (external embedding backend with no API key → FTS fallback;
-  // set-but-unused [llm] backend). Surfaced on stderr (never the JSON-RPC stream)
+  // leftover retired [llm] section). Surfaced on stderr (never the JSON-RPC stream)
   // so the operator sees the no-op at boot rather than only via `doctor`
   // (ADR-0007).
   for (const warning of collectConfigWarnings({ ...config, embeddingApiKeyPresent })) {

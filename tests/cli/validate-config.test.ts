@@ -213,9 +213,9 @@ roots = [
       expect(out).toContain("config is valid");
     });
 
-    test("surfaces an [llm] backend as a readiness advisory (does not gate exit)", async () => {
-      // A well-formed config whose [llm].backend is set: accepted but unused at
-      // runtime (host-delegated, ADR-0006). Advisory only — exit stays 0.
+    test("surfaces a leftover [llm] section as a readiness advisory (does not gate exit)", async () => {
+      // A well-formed config that still carries the retired [llm] section
+      // (ADR-0006 決定 4). Advisory only — exit stays 0, nothing is broken.
       writeFileSync(
         configPath,
         `[storage]\ndbPath = "${join(dir, "advisory.db")}"\n[embedding]\nbackend = "disabled"\n[llm]\nbackend = "anthropic"\n`,
@@ -225,7 +225,7 @@ roots = [
       expect(code).toBe(0);
       expect(out).toContain("config is valid");
       expect(out).toContain("readiness advisories");
-      expect(out).toContain("llm.backend");
+      expect(out).toContain("[llm] is retired");
     });
   });
 });

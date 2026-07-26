@@ -106,7 +106,7 @@ export class ValidateConfigCommand extends Command {
     //    with any backend / no key. Only attempted when the file already parses
     //    into a valid config (else the structural findings come first).
     //  - Advisory warnings: accepted-but-not-honored keys (external embedding
-    //    backend with no key → recall degrades to FTS; a set-but-unused [llm]
+    //    backend with no key → recall degrades to FTS; a leftover retired [llm]
     //    backend → inference is host-delegated, ADR-0006). Advisory only: printed
     //    but never gating the exit code (the degrade is intentional).
     const dimFindings: typeof structural = [];

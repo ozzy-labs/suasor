@@ -16,7 +16,6 @@ export {
   DigestJob,
   EmbeddingBackend,
   EmbeddingConfig,
-  LlmBackend,
   LlmConfig,
   StorageConfig,
 } from "./schema.ts";

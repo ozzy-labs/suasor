@@ -47,12 +47,6 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 # maxRetries = 3                        # 429/5xx retry attempts incl. first; 1 disables
 # allowRemote = false                   # opt in to a non-loopback ollama sidecar (egress; Issue #436)
 
-[llm]
-# NOTE: [llm].backend is accepted by the schema but NOT read by the runtime today
-#   — inference is delegated to the host LLM (ADR-0006). Setting it has no effect
-#   beyond a startup warning; it is reserved for a future on-box inference path.
-backend = "disabled"   # disabled | anthropic | openai | ollama
-
 [extraction]
 backend = "disabled"   # disabled | markitdown — Office/PDF body extraction sidecar (ADR-0024)
 # Run the bundled sidecar with \`suasor extraction serve\` (needs the markitdown CLI on PATH).
