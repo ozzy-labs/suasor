@@ -22,8 +22,14 @@
  *   name-only and ingest still succeeds (ADR-0024 §3). Drive content fetch shares
  *   the same connector-agnostic base as `local` / `box` (#243).
  * - **identity** — `msgraph:<resource>:<id>` (cross-source-unique, resource-
- *   prefixed, ADR-0007). `source_type` is one of `ms365_mail`, `ms365_calendar`,
+ *   prefixed, ADR-0007), or `msgraph:<account>:<resource>:<id>` for a named
+ *   account (ADR-0050). `source_type` is one of `ms365_mail`, `ms365_calendar`,
  *   `ms365_file`, `ms365_teams_message`.
+ * - **multi-account** — `[connectors.ms-graph.accounts.<account>]` ingests more
+ *   than one tenant / mailbox in one pass (ADR-0050), each with its own
+ *   `clientSecret` (`connector:ms-graph:<account>:clientSecret`), its own
+ *   `tenantId` / `clientId` / `user`, and per-account error isolation. A config
+ *   with no `accounts` table is exactly one unprefixed `default` account.
  * - **content fingerprint (files)** — for OneDrive `files`, the connector supplies
  *   the DriveItem content hash (`file.hashes.quickXorHash`, else sha256/sha1) as
  *   the delta fingerprint so a content-only change (same filename) surfaces as
@@ -49,14 +55,27 @@ import type {
   SyncResult,
 } from "./contract.ts";
 import type { ConnectorManifest } from "./manifest.ts";
-import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
+import {
+  type AccountIsolationResult,
+  type AccountSlice,
+  accountIdPrefix,
+  accountSecretName,
+  accountSlices,
+  accountsRecord,
+  syncAccountsIsolated,
+} from "./multi-account.ts";
+import { syncResourcesIsolated } from "./per-resource.ts";
 
 /** Graph resource families this connector can ingest. */
 export const MsGraphResource = z.enum(["mail", "calendar", "files", "teams"]);
 export type MsGraphResource = z.infer<typeof MsGraphResource>;
 
-/** `[connectors.ms-graph]` config (docs/design/config.md). */
-export const MsGraphConnectorConfig = z.object({
+/**
+ * Settings for **one** Microsoft 365 account. Every key here is per-account: a
+ * second account is typically a different tenant with its own app registration
+ * and its own `user` (ADR-0050).
+ */
+const MsGraphAccountSettings = z.object({
   /** Azure AD tenant id (directory id). */
   tenantId: z.string().min(1).default(""),
   /** App registration (client) id. */
@@ -71,6 +90,16 @@ export const MsGraphConnectorConfig = z.object({
    * configured rather than read from the API.
    */
   self_addresses: z.array(z.string().min(1)).default([]),
+});
+export type MsGraphAccountSettings = z.infer<typeof MsGraphAccountSettings>;
+
+/**
+ * `[connectors.ms-graph]` config (docs/design/config.md). The flat keys configure
+ * the single `default` account **and** act as inherited defaults for every entry
+ * of the optional `[connectors.ms-graph.accounts.<account>]` table (ADR-0050).
+ */
+export const MsGraphConnectorConfig = MsGraphAccountSettings.extend({
+  accounts: accountsRecord(MsGraphAccountSettings.partial().strict()),
 });
 export type MsGraphConnectorConfig = z.infer<typeof MsGraphConnectorConfig>;
 
@@ -216,6 +245,7 @@ function toRecord(
   resource: MsGraphResource,
   item: GraphItem,
   client: MsGraphClientLike,
+  account: AccountSlice,
 ): SourceRecord {
   const spec = RESOURCE_SPEC[resource];
   const title = item.subject ?? item.name ?? "";
@@ -245,13 +275,18 @@ function toRecord(
   const fingerprint = resource === "files" ? contentHash(item) : undefined;
 
   return {
-    externalId: `msgraph:${resource}:${item.id}`,
+    // Named accounts namespace the id (ADR-0050): Graph message / event ids are
+    // scoped to a mailbox, so two accounts would otherwise collide. `default`
+    // stays unprefixed so an existing install's lineage holds.
+    externalId: `msgraph:${accountIdPrefix(account)}${resource}:${item.id}`,
     sourceType: spec.sourceType,
     body,
     observedAt,
     meta: {
       resource,
       id: item.id,
+      // Only for an explicitly declared account (see the google connector).
+      ...(account.declared ? { account: account.name } : {}),
       ...(resource === "calendar" ? calendarMeta(item) : {}),
       ...(resource === "mail" ? mailMeta(item) : {}),
     },
@@ -433,97 +468,178 @@ export interface MsGraphConnectorOptions {
   clientFactory?: MsGraphClientFactory;
 }
 
+/** One resolved Graph account: its raw slice plus its parsed settings. */
+interface MsGraphAccount extends AccountSlice {
+  readonly settings: MsGraphAccountSettings;
+}
+
+/**
+ * Build the credential precondition for the configured accounts (ADR-0007
+ * any-of): the pass throws only when **no** account has a client secret, while an
+ * individual tokenless account is left to the per-account skip below.
+ */
+function msGraphCredentials(accounts: readonly MsGraphAccount[]): CredentialRequirement {
+  const secretNames = accounts.map((account) => accountSecretName(account, "clientSecret"));
+  const single = accounts.length === 1 && !(accounts[0] as MsGraphAccount).declared;
+  return {
+    secretNames,
+    missingMessage: single
+      ? MS_GRAPH_CREDENTIALS.missingMessage
+      : `ms-graph connector: no clientSecret configured for any account ` +
+        `(${accounts.map((a) => `'${a.name}'`).join(", ")}) — store each account's secret under ` +
+        `keychain account 'connector:ms-graph:<account>:clientSecret', or set ` +
+        `SUASOR_CONNECTOR_MS_GRAPH_<ACCOUNT>_CLIENTSECRET`,
+  };
+}
+
 /** Microsoft Graph connector implementing the read-only contract (ADR-0007). */
 class MsGraphConnector implements Connector {
   readonly name = MS_GRAPH_CONNECTOR_NAME;
   readonly sourceType = "ms365";
-  readonly credentials = MS_GRAPH_CREDENTIALS;
+  readonly credentials: CredentialRequirement;
 
-  /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
-  private isolation: IsolationResult | null = null;
+  /** Per-account isolation outcome (set when `sync` ran) → finalize summary. */
+  private accountIsolation: AccountIsolationResult | null = null;
+  /** Per-account resource-isolation summary lines, in run order. */
+  private resourceSummaries: string[] = [];
+  /** Whether any account saw a partial per-resource failure. */
+  private resourcePartial = false;
 
   constructor(
-    private readonly config: MsGraphConnectorConfig,
+    private readonly accounts: readonly MsGraphAccount[],
     private readonly clientFactory: MsGraphClientFactory,
-  ) {}
+  ) {
+    this.credentials = msGraphCredentials(accounts);
+  }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
     // Empty scope is a genuine no-op: the credential precondition (`credentials`
     // above) is enforced centrally by the sync service before `sync()` runs, so
     // this early return can never mask a missing clientSecret (ADR-0007
-    // "credential 解決は scope-emptiness 判定に先行する", Issue #440).
-    if (this.config.resources.length === 0) return;
+    // "credential 解決は scope-emptiness 判定に先行する", Issue #440). Per account
+    // (ADR-0050): an account that ingests nothing is dropped from the pass.
+    const active = this.accounts.filter((account) => account.settings.resources.length > 0);
+    if (active.length === 0) return;
 
-    const clientSecret = await ctx.secret("clientSecret");
-    // Guaranteed present by the central credential check; narrow for the client.
-    if (clientSecret === null) throw new Error(MS_GRAPH_CREDENTIALS.missingMessage);
+    this.accountIsolation = null;
+    this.resourceSummaries = [];
+    this.resourcePartial = false;
+    const secrets = new Map<string, string>();
 
-    if (!this.config.tenantId || !this.config.clientId) {
-      throw new Error("ms-graph connector: tenantId and clientId are required in config");
+    yield* syncAccountsIsolated(
+      active,
+      ctx,
+      async (account) => {
+        const clientSecret = await ctx.secret(accountSecretName(account, "clientSecret"));
+        // A secretless account is skipped with a warning, never a total failure
+        // (ADR-0007 multi-account clause).
+        if (clientSecret === null) return "no clientSecret configured";
+        secrets.set(account.name, clientSecret);
+        return null;
+      },
+      (account, accountCtx) =>
+        this.syncAccount(account, secrets.get(account.name) as string, accountCtx),
+      (result) => {
+        this.accountIsolation = result;
+      },
+    );
+  }
+
+  /** Stream one account's configured resources, with per-resource isolation. */
+  private async *syncAccount(
+    account: MsGraphAccount,
+    clientSecret: string,
+    ctx: SyncContext,
+  ): AsyncIterable<SourceRecord> {
+    const { tenantId, clientId, user } = account.settings;
+    if (!tenantId || !clientId) {
+      // Account-scoped so the message names which account is unaddressable —
+      // with several accounts, "required in config" alone is not actionable.
+      throw new Error(
+        account.declared
+          ? `ms-graph connector: tenantId and clientId are required in config (account '${account.name}')`
+          : "ms-graph connector: tenantId and clientId are required in config",
+      );
     }
 
-    const client = await this.clientFactory({
-      tenantId: this.config.tenantId,
-      clientId: this.config.clientId,
-      clientSecret,
-      user: this.config.user,
-    });
-    this.isolation = null;
+    const client = await this.clientFactory({ tenantId, clientId, clientSecret, user });
 
     // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
     // resource family failing (e.g. mail 403) records a warn and is skipped
-    // while the rest stream; only an all-resources failure throws.
-    const user = this.config.user;
+    // while the rest stream; only an all-resources failure throws — which the
+    // account layer above then isolates to this account (ADR-0050).
     const fetchResource = (resource: MsGraphResource): AsyncIterable<SourceRecord> =>
       (async function* () {
         let path: string | undefined = RESOURCE_SPEC[resource].path(user);
         while (path) {
           const page: GraphPage = await client.getPage(path);
           for (const item of page.value ?? []) {
-            yield toRecord(resource, item, client);
+            yield toRecord(resource, item, client, account);
           }
           path = page["@odata.nextLink"];
         }
       })();
 
     yield* syncResourcesIsolated(
-      this.config.resources,
+      account.settings.resources,
       ctx,
       (resource) => resource,
       "resource",
       fetchResource,
       (result) => {
-        this.isolation = result;
+        if (result.partialFailure) this.resourcePartial = true;
+        for (const line of result.summaryLines ?? []) {
+          this.resourceSummaries.push(
+            account.declared ? `account '${account.name}' ${line}` : line,
+          );
+        }
       },
     );
   }
 
   finalize(): SyncResult {
     // Fingerprint-based change detection; no per-run cursor to persist. A
-    // partial resource failure is surfaced so the CLI exits non-zero without
-    // discarding the collected records (ADR-0027, Issue #193).
-    const iso = this.isolation;
-    if (iso?.partialFailure) {
-      return {
-        cursor: null,
-        partialFailure: true,
-        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
-      };
-    }
-    return { cursor: null };
+    // partial failure — at either layer, a degraded account or a failed resource
+    // family — is surfaced so the CLI exits non-zero without discarding the
+    // collected records (ADR-0027, Issue #193 / ADR-0050).
+    const partial = (this.accountIsolation?.partialFailure ?? false) || this.resourcePartial;
+    if (!partial) return { cursor: null };
+    const summaryLines = [
+      ...(this.accountIsolation?.summaryLines ?? []),
+      ...this.resourceSummaries,
+    ];
+    return {
+      cursor: null,
+      partialFailure: true,
+      ...(summaryLines.length > 0 ? { summaryLines } : {}),
+    };
   }
 }
 
 /**
  * Build the Microsoft Graph connector from its config slice (validates with Zod).
  * The Graph + MSAL SDKs are not imported here — only when `sync` actually runs.
+ *
+ * The slice is resolved into one account per `[connectors.ms-graph.accounts.<x>]`
+ * entry — or the single implicit `default` account when there is no table
+ * (ADR-0050) — each inheriting the flat keys it does not override.
  */
 export function createMsGraphConnector(
   config: ConnectorConfig,
   options: MsGraphConnectorOptions = {},
 ): Connector {
-  const parsed = MsGraphConnectorConfig.parse(config ?? {});
-  return new MsGraphConnector(parsed, options.clientFactory ?? defaultMsGraphClientFactory);
+  // Validate the whole slice first (account names, env-override collisions,
+  // per-account typos) so those errors surface here and not as a confusing
+  // failure inside one account's settings. The result is deliberately
+  // discarded: Zod fills schema defaults into every account, which erases the
+  // absent-vs-set distinction inheritance needs, so the effective config comes
+  // from the raw merge in `accountSlices` (see multi-account.ts).
+  MsGraphConnectorConfig.parse(config ?? {});
+  const accounts: MsGraphAccount[] = accountSlices(config ?? {}).map((account) => ({
+    ...account,
+    settings: MsGraphAccountSettings.parse(account.slice),
+  }));
+  return new MsGraphConnector(accounts, options.clientFactory ?? defaultMsGraphClientFactory);
 }
 
 /** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
@@ -539,6 +655,8 @@ export const manifest: ConnectorManifest = {
       "enabled = true",
       '# tenantId = "<tenant-guid>"   # required for auth',
       '# clientId = "<app-client-id>" # required for auth',
+      "# A second tenant / mailbox goes in its own table:",
+      "#   [connectors.ms-graph.accounts.work]  # see docs/guide/connectors.md (ADR-0050)",
     ],
   },
   requiredSettings: [
@@ -559,6 +677,9 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: false,
   surfacesChannels: false,
   surfacesTeams: false,
+  // More than one tenant / mailbox in one install (ADR-0050): the ingest scope
+  // is account-relative (`user = "me"`), so the account has to be named.
+  multiAccount: true,
   capabilityNotes: {
     genericDiscovery:
       "resources are a fixed family (mail/calendar/files/teams), not enumerated ids — no discovery verb",

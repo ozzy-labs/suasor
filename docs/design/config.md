@@ -190,6 +190,41 @@ notifications = "off"                     # off | all | repos（既定 off・per
 
 合成後の実効 config（`env override > file > defaults`）は `suasor config show [--effective] [--json]` で確認する（[cli design](cli.md) の `config show`）。secret は**常にマスク**（`***`）され、connector の資格情報は**存在有無のみ**（`set` / `unset`）を出す（NFR-PRV-4）。`doctor`（健全性診断）とは責務分離で、`config show` は「今どの値が効いているか」を出す。
 
+## multi-account（`[connectors.<name>.accounts.<account>]`・ADR-0050 / #441）
+
+個人アカウントと仕事アカウントの mail / calendar / files を 1 install で取り込む。対応 connector は **`google` / `ms-graph`**（manifest の `multiAccount` が宣言し、completeness test が config schema と突き合わせる）。
+
+```toml
+[connectors.google]
+clientId = "shared.apps.googleusercontent.com"   # 全 account が継承する既定値
+resources = ["gmail", "calendar"]
+
+[connectors.google.accounts.personal]
+self_addresses = ["me@personal.example"]
+
+[connectors.google.accounts.work]
+calendarId = "me@work.example"                    # override
+resources = ["gmail", "calendar", "drive"]
+self_addresses = ["me@work.example"]
+```
+
+- **`accounts` が無ければ従来どおり**: flat キーがそのまま `default` という 1 アカウントになる。既存 config は無改修で動く
+- **`accounts` があれば flat キーは継承の既定値**になり、それ自体は取り込まれる account では**なくなる**。従来の flat 設定を残したまま account を足すときは `[connectors.<name>.accounts.default]`（**空テーブルで可**・flat を継承）も書く。書き忘れは `doctor` の `connectors.accounts` が指摘する
+- account 名は `[A-Za-z0-9][A-Za-z0-9_-]*`。**env override 名が衝突する組（`work-a` と `work_a`）は load 時に拒否**される
+- account テーブル内も **strict**（未知キーは load 時に `ConfigError`）
+
+### secret / externalId の命名
+
+| | `default` account | 名前付き account（例 `work`） |
+| --- | --- | --- |
+| keychain account | `connector:google:refreshToken` | `connector:google:work:refreshToken` |
+| env override | `SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN` | `SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN` |
+| externalId | `google:<resource>:<id>` | `google:work:<resource>:<id>` |
+
+`default` を無印に保つのは**既存 install を無移行にする**ため（keychain / env / 取り込み済み source lineage がそのまま生きる）。名前付き account の externalId を名前空間化するのは **correctness 要件**で、Gmail の message id はメールボックス内でしか一意でなく、Calendar の event id は同じ会議が各出席者のカレンダーで同じ値を持つ（名前空間化しないと 1 件の会議が 1 本の source を取り合う）。**account の rename は identity の変更**であり、旧 id の source は残ったまま新 id で再取り込みになる。
+
+credential の保管は `suasor <connector> auth set --account <name>`、検証は `suasor <connector> auth test [--account <name>]`（省略時は全 account）。詳細は [cli design](cli.md) と [connectors guide](../guide/connectors.md#multi-account取り込みgoogle--ms-graph)。
+
 ## `[connectors.google]` / `[connectors.ms-graph]` の `self_addresses`（#488）
 
 ```toml
@@ -197,7 +232,7 @@ notifications = "off"                     # off | all | repos（既定 off・per
 self_addresses = ["me@example.com", "me@old-domain.com", "team@example.com"]
 ```
 
-email demand（自分宛ての未返信スレッド・[ADR-0043](../adr/0043-email-demand-signals.md)）の「自分」を定める。**未設定なら email demand は常に空**（Slack の `self_user_ids` と同じ形）で、`doctor` が警告する。
+email demand（自分宛ての未返信スレッド・[ADR-0043](../adr/0043-email-demand-signals.md)）の「自分」を定める。**未設定なら email demand は常に空**（Slack の `self_user_ids` と同じ形）で、`doctor` が警告する。multi-account では **account をまたいで union** され（「自分」は 1 人）、`doctor` の警告も account ごとに出る（[ADR-0050](../adr/0050-multi-account-connectors.md) 決定 7）。
 
 **API から自動導出しない**のは、エイリアス・旧アドレス・配布リスト（`team@`）も実務上「自分宛て」であり、プロフィール API が返す単一の主アドレスでは取りこぼすため。
 

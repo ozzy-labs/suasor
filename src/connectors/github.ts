@@ -440,4 +440,7 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: true,
   surfacesChannels: false,
   surfacesTeams: false,
+  // `owner/repo` names the object globally, so a second account adds no
+  // addressing power (ADR-0050 決定 1).
+  multiAccount: false,
 };

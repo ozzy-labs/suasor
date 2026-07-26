@@ -1351,6 +1351,10 @@ export const manifest: ConnectorManifest = {
   connectorSpecificOnboard: true,
   surfacesChannels: true,
   surfacesTeams: true,
+  // Slack retired the named account with ADR-0042: channel ids are globally
+  // unique, so an unnamed token pool addresses everything the per-alias table
+  // did — the reasoning ADR-0050 inverts for the account-relative connectors.
+  multiAccount: false,
   capabilityNotes: {
     genericAuth: "own token-pool auth + scope readiness (`slack auth set/test`, ADR-0011/0042)",
     genericDiscovery:

@@ -16,7 +16,7 @@
  * config loader and keychain are imported inside `execute`.
  */
 import { Command, Option } from "clipanion";
-import { connectorNames, connectorSecretNames } from "../../connectors/registry.ts";
+import { connectorNames } from "../../connectors/registry.ts";
 
 /** One connector's introspected state (shape of each `--json` array element). */
 interface ConnectorStatus {
@@ -27,8 +27,16 @@ interface ConnectorStatus {
   /**
    * Whether the connector's credential is configured (env override or keychain),
    * or `null` for connectors that need no auth (e.g. `web`). Never the value.
+   * For a multi-account connector this is true only when **every** configured
+   * account has one — a single stored credential must not report the connector
+   * as ready while a second account silently syncs nothing (ADR-0050).
    */
   tokenConfigured: boolean | null;
+  /**
+   * Declared accounts missing a credential (ADR-0050). Absent for a
+   * single-account connector, so the pre-ADR-0050 shape is unchanged.
+   */
+  missingAccounts?: string[];
 }
 
 export class ConnectorsListCommand extends Command {
@@ -55,9 +63,10 @@ export class ConnectorsListCommand extends Command {
   });
 
   override async execute(): Promise<number> {
-    const [{ loadConfig }, { resolveSecret }] = await Promise.all([
+    const [{ loadConfig }, { resolveSecret }, { accountSecretProbes }] = await Promise.all([
       import("../../config/index.ts"),
       import("../../connectors/secrets.ts"),
+      import("../../connectors/noop-check.ts"),
     ]);
 
     const config = await loadConfig();
@@ -68,24 +77,34 @@ export class ConnectorsListCommand extends Command {
       // enabled: slice present and not explicitly `enabled = false`.
       const enabled = slice !== undefined && slice.enabled !== false;
 
-      const secretNames = connectorSecretNames(name);
+      // One probe per (account, secret) — for a single-account connector that is
+      // exactly its declared secret names (ADR-0050).
+      const probes = accountSecretProbes(name, slice ?? {});
       let tokenConfigured: boolean | null;
-      if (secretNames.length === 0) {
+      const missingAccounts: string[] = [];
+      if (probes.length === 0) {
         tokenConfigured = null; // connector needs no auth (e.g. web)
       } else {
         // Configured when *every* required secret resolves to a non-empty value.
+        // Every probe runs: which accounts are missing is the actionable part,
+        // and stopping at the first would name only one of them.
         let allPresent = true;
-        for (const secret of secretNames) {
-          const value = await resolveSecret(name, secret);
-          if (value === null) {
-            allPresent = false;
-            break;
+        for (const probe of probes) {
+          if ((await resolveSecret(name, probe.secret)) !== null) continue;
+          allPresent = false;
+          if (probe.account !== null && !missingAccounts.includes(probe.account)) {
+            missingAccounts.push(probe.account);
           }
         }
         tokenConfigured = allPresent;
       }
 
-      statuses.push({ name, enabled, tokenConfigured });
+      statuses.push({
+        name,
+        enabled,
+        tokenConfigured,
+        ...(missingAccounts.length > 0 ? { missingAccounts } : {}),
+      });
     }
 
     if (this.json) {
@@ -97,7 +116,14 @@ export class ConnectorsListCommand extends Command {
       const enabledLabel = s.enabled ? "enabled " : "disabled";
       const tokenLabel =
         s.tokenConfigured === null ? "n/a" : s.tokenConfigured ? "configured" : "missing";
-      this.context.stdout.write(`${s.name.padEnd(9)} ${enabledLabel}  token: ${tokenLabel}\n`);
+      // Naming the accounts turns "missing" from a puzzle into an instruction.
+      const accounts =
+        s.missingAccounts && s.missingAccounts.length > 0
+          ? ` (accounts: ${s.missingAccounts.join(", ")})`
+          : "";
+      this.context.stdout.write(
+        `${s.name.padEnd(9)} ${enabledLabel}  token: ${tokenLabel}${accounts}\n`,
+      );
     }
     const enabledCount = statuses.filter((s) => s.enabled).length;
     this.context.stdout.write(`${statuses.length} connector(s), ${enabledCount} enabled.\n`);

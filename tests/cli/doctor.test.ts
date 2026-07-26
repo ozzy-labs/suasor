@@ -19,6 +19,8 @@ const SECRET_ENVS = [
   "SUASOR_CONNECTOR_SLACK_BP_TOKEN",
   "SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET",
   "SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN",
+  "SUASOR_CONNECTOR_GOOGLE_PERSONAL_REFRESHTOKEN",
+  "SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN",
   "SUASOR_CONNECTOR_BOX_TOKEN",
 ];
 const saved: Record<string, string | undefined> = {};
@@ -839,5 +841,133 @@ describe("suasor doctor", () => {
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.filter((c) => c.name === "connectors.self_addresses")).toHaveLength(0);
     delete process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN;
+  });
+
+  // ADR-0050 / Issue #441. Every connector check that used to be per connector
+  // is per account for a multi-account slice — a complete account must not vouch
+  // for an incomplete one.
+  // The flat keys carry no clientId, so `work` (which sets none of its own)
+  // inherits the empty default while `personal` is complete.
+  const TWO_GOOGLE_ACCOUNTS = [
+    "[connectors.google]",
+    'resources = ["gmail"]',
+    'self_addresses = ["me@personal.example"]',
+    "[connectors.google.accounts.personal]",
+    'clientId = "personal.apps.googleusercontent.com"',
+    "[connectors.google.accounts.work]",
+    "",
+  ].join("\n");
+
+  test("a missing per-account credential is named with its account (ADR-0050)", async () => {
+    await run(["init"]);
+    await writeConfig(TWO_GOOGLE_ACCOUNTS);
+    process.env.SUASOR_CONNECTOR_GOOGLE_PERSONAL_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const check = report.checks.find(
+      (c) => c.name === "connectors" && c.detail.includes("missing credential"),
+    );
+    // The personal account has a token; without per-account probes the whole
+    // connector would report "all credentials configured".
+    expect(check?.detail).toContain("google (account 'work')");
+    expect(check?.detail).not.toContain("account 'personal'");
+  });
+
+  test("connectors.config is reported per account, pointing at the account's table", async () => {
+    await run(["init"]);
+    await writeConfig(TWO_GOOGLE_ACCOUNTS);
+    process.env.SUASOR_CONNECTOR_GOOGLE_PERSONAL_REFRESHTOKEN = "rt";
+    process.env.SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const errors = report.checks.filter((c) => c.name === "connectors.config");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.status).toBe("error");
+    expect(errors[0]?.detail).toContain("google (account 'work')");
+    expect(errors[0]?.detail).toContain("[connectors.google.accounts.work]");
+  });
+
+  test("self_addresses inherited by an account do not re-warn; a cleared one does", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.google]",
+        'clientId = "shared"',
+        'resources = ["gmail"]',
+        'self_addresses = ["me@personal.example"]',
+        "[connectors.google.accounts.personal]",
+        "[connectors.google.accounts.work]",
+        "self_addresses = []",
+        "",
+      ].join("\n"),
+    );
+    process.env.SUASOR_CONNECTOR_GOOGLE_PERSONAL_REFRESHTOKEN = "rt";
+    process.env.SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const warns = report.checks.filter((c) => c.name === "connectors.self_addresses");
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.detail).toContain("google (account 'work')");
+    expect(warns[0]?.detail).toContain("[connectors.google.accounts.work].self_addresses");
+  });
+
+  test("warns that a stored default-account credential is no longer synced (ADR-0050)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.google]",
+        'clientId = "shared"',
+        'self_addresses = ["me@example.com"]',
+        "[connectors.google.accounts.work]",
+        "",
+      ].join("\n"),
+    );
+    // The evidence that a default account really existed: its credential.
+    process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN = "rt";
+    process.env.SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const check = report.checks.find((c) => c.name === "connectors.accounts");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("no longer synced");
+  });
+
+  test("only informs when nothing shows a default account ever existed (ADR-0050)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.google]",
+        'clientId = "shared"',
+        'self_addresses = ["me@example.com"]',
+        "[connectors.google.accounts.work]",
+        "",
+      ].join("\n"),
+    );
+    process.env.SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    const check = report.checks.find((c) => c.name === "connectors.accounts");
+    // Undeterminable ⇒ state the rule, claim nothing about this install.
+    expect(check?.status).toBe("info");
+    expect(check?.detail).not.toContain("no longer synced");
+  });
+
+  test("a config that declares accounts.default is silent about demotion", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.google]",
+        'clientId = "shared"',
+        'self_addresses = ["me@example.com"]',
+        "[connectors.google.accounts.default]",
+        "[connectors.google.accounts.work]",
+        "",
+      ].join("\n"),
+    );
+    process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN = "rt";
+    process.env.SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN = "rt";
+    const { out } = await run(["doctor", "--json"]);
+    const report = JSON.parse(out) as DoctorReport;
+    expect(report.checks.filter((c) => c.name === "connectors.accounts")).toHaveLength(0);
   });
 });

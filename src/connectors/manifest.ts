@@ -160,6 +160,24 @@ export interface ConnectorManifest {
    */
   readonly surfacesTeams: boolean;
   /**
+   * Whether the connector ingests **more than one account** in a single pass via
+   * `[connectors.<name>.accounts.<account>]` (ADR-0050, Issue #441): per-account
+   * config table, per-account secret naming, per-account external-id namespacing
+   * and per-account error isolation (`src/connectors/multi-account.ts`).
+   *
+   * Declared here rather than inferred, and cross-checked by the completeness
+   * test against the connector's own config schema — a connector that grows an
+   * `accounts` key without declaring it (or the reverse) would leave `doctor` and
+   * the `auth` verbs inspecting only the first account, which is precisely the
+   * silent per-surface gap the manifest exists to prevent.
+   *
+   * `false` for the connectors whose ingest scope is written in globally unique
+   * ids (Slack channels, GitHub `owner/repo`, Notion database ids, …): there the
+   * account is not needed to say *which object*, and ADR-0042 shows naming it
+   * anyway costs more than it buys.
+   */
+  readonly multiAccount: boolean;
+  /**
    * Whether the connector has a **connector-specific onboarding bridge** in the
    * wizard (#458): `suasor onboard` drives its token store + probe + config
    * slice through a dedicated bridge instead of the generic AUTH_SPECS path.
