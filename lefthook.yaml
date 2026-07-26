@@ -15,3 +15,12 @@ pre-commit:
     actionlint:
       glob: ".github/workflows/*.{yaml,yml}"
       run: mise exec -- actionlint {staged_files}
+    # Relative-link targets (#543). markdownlint checks link syntax and same-file
+    # `#fragment`s, never whether the target exists. Deliberately repo-wide and
+    # not `{staged_files}`: a link's validity depends on files other than the one
+    # being edited (renaming an ADR breaks links in files this commit never
+    # touches), so the whole set is re-checked whenever Markdown (link sources)
+    # or TypeScript (`docsUrl()` call sites) is staged.
+    doc-links:
+      glob: "**/*.{md,ts}"
+      run: mise exec -- bun scripts/check-doc-links.mjs

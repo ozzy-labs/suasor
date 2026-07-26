@@ -39,7 +39,7 @@ Suasor は (1) AI エージェント利用者（既に Node/Bun を持つ層）�
 ### Negative / Trade-offs
 
 - 厳密には「単一バイナリ + ごく少数の native 同梱」（sqlite-vec 拡張）になる
-- **npm 版は Bun 専用**（`npx` では動かない）。[ADR-0001](0001-storage-engine.md) が `bun:sqlite` を DB 層に固定した時点で決まっていたことで、後年の drift ではない。導線はすべて `bunx` で統一する
+- **npm 版は Bun 専用**（`npx` では動かない）。[ADR-0001](0001-typescript-bun-stack.md) が `bun:sqlite` を DB 層に固定した時点で決まっていたことで、後年の drift ではない。導線はすべて `bunx` で統一する
 - **keychain（`@napi-rs/keyring`）は単一バイナリに同梱されない**（`bun build --compile --external @napi-rs/keyring`）。バイナリでは `<connector> auth set` が使えず、secret は `SUASOR_CONNECTOR_<NAME>_<SECRET>` の env override で渡す（CLI 側で gate 済み）
 
 ## Alternatives Considered

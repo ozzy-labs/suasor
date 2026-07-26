@@ -42,7 +42,7 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 | `observedAfter` | `iso` | （任意） | `observed_at` 下限（inclusive `>=`） |
 | `observedBefore` | `iso` | （任意） | `observed_at` 上限（exclusive `<`） |
 | `limit` | `int > 0` | `20` | 返す最大 hit 数 |
-| `fullBody` | `bool` | `false` | excerpt ではなく全文 `body` を返す（既定は excerpt のみ・全文は `source.get` に委譲、[ADR-0018](0018-knowledge-graph-traversal.md) payload 抑制・retrieval-m2） |
+| `fullBody` | `bool` | `false` | excerpt ではなく全文 `body` を返す（既定は excerpt のみ・全文は `source.get` に委譲、[ADR-0018](../adr/0018-knowledge-graph-traversal.md) payload 抑制・retrieval-m2） |
 | `maxBodyChars` | `int > 0` | `240` | hit ごとの excerpt 最大文字数 |
 
 フィルタは FTS / 短クエリ LIKE fallback の両経路に同一適用され、未指定時は従来結果と一致する（additive、#142）。
@@ -57,7 +57,7 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
       "sourceType": "github_issue",
       "observedAt": "2026-06-14T00:00:00.000Z",
       "score": -1.43,             // bm25（昇順=より関連）。fallback 時は token 出現回数（多いほど関連）
-      "excerpt": "…match 周辺…"    // 既定の上限付き excerpt（[ADR-0018](0018-knowledge-graph-traversal.md) payload 抑制・retrieval-m2）。fullBody 指定時は代わりに "body"（全文・ADR-0003）
+      "excerpt": "…match 周辺…"    // 既定の上限付き excerpt（[ADR-0018](../adr/0018-knowledge-graph-traversal.md) payload 抑制・retrieval-m2）。fullBody 指定時は代わりに "body"（全文・ADR-0003）
     }
   ],
   "strategy": "fts",              // "fts" | "like-fallback"（短クエリは後者）
@@ -69,7 +69,7 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 
 - `totalHits` / `truncated` は「20/20 打ち切り」と「5/5 完全」をエージェントが区別するための透明性フィールド（ADR-0007「no silent wrong answer」）
 - `analyzedQuery` は FTS / LIKE fallback とも whitespace 分割トークン（fallback も per-token AND のため）。痩せ/空結果の原因（何が検索されたか）を可視化する
-- **payload 抑制（retrieval-m2）**: 既定は全文ではなく hit ごとの上限付き `excerpt`（既定 240 code point）。lexical hit はマッチ位置中心、recall は先頭 N chars を切り出す。全文は `source.get` に委譲し、`fullBody: true` で `body`（全文）、`maxBodyChars` で excerpt 長を上書き（[ADR-0018](0018-knowledge-graph-traversal.md) の payload 抑制原則を search に適用）
+- **payload 抑制（retrieval-m2）**: 既定は全文ではなく hit ごとの上限付き `excerpt`（既定 240 code point）。lexical hit はマッチ位置中心、recall は先頭 N chars を切り出す。全文は `source.get` に委譲し、`fullBody: true` で `body`（全文）、`maxBodyChars` で excerpt 長を上書き（[ADR-0018](../adr/0018-knowledge-graph-traversal.md) の payload 抑制原則を search に適用）
 - ランキング・短クエリ fallback・クエリエスケープの詳細は [retrieval](retrieval.md) を参照
 - 意味検索が要るケースは 意味検索（embedding 有効時）へ
 
