@@ -228,7 +228,11 @@ describe("docs quote the real skill count (Issue #518)", () => {
   // is cheap; noticing a stale number in prose is not.
   const count = listBundledSkills().length;
 
-  for (const file of ["docs/guide/skills.md", "docs/guide/install.md"]) {
+  // CLAUDE.md was added after it drifted the same way the guides had (it still
+  // said 32 and named `personal-brief` / `find-document`, merged away by
+  // ADR-0046): a guard that covers only the files that broke last time keeps
+  // finding out about the next one from a reader.
+  for (const file of ["docs/guide/skills.md", "docs/guide/install.md", "CLAUDE.md"]) {
     test(`${file} carries no stale skill count`, async () => {
       const { readFileSync } = await import("node:fs");
       const { join } = await import("node:path");
@@ -240,7 +244,10 @@ describe("docs quote the real skill count (Issue #518)", () => {
       const claims = [
         ...[...text.matchAll(/(?:all |全 )(\d+)/g)].map((m) => Number(m[1])),
         ...[...text.matchAll(/(\d+) 個のアシスタント/g)].map((m) => Number(m[1])),
-        ...[...text.matchAll(/(\d+) (?:skill|件)\b/g)].map((m) => Number(m[1])),
+        // No `\b` after 件: it is not a word character, so `件）` has no word
+        // boundary and the claim in CLAUDE.md was silently not extracted —
+        // caught only because the guard also asserts it found *something*.
+        ...[...text.matchAll(/(\d+) (?:skill\b|件)/g)].map((m) => Number(m[1])),
       ];
       expect(claims.length).toBeGreaterThan(0);
       for (const claimed of claims) expect(claimed).toBe(count);

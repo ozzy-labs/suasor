@@ -10,7 +10,7 @@
 
 ## Skills
 
-- **アシスタント skill（Suasor 同梱・32 件）** — `personal-brief` / `next-actions` / `find-document` / `research` 等。SSOT は [`docs/skills/`](docs/skills/)（[ADR-0008](docs/adr/0008-assistant-skills.md)）、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開。**展開された mirror は commit しない（`.gitignore` 済みのローカル install 物。[ADR-0035](docs/adr/0035-project-skills-vendor-dev-skills.md)）**。read 系は自律 OK、write 系は HITL（auto-apply なし）
+- **アシスタント skill（Suasor 同梱・22 件）** — `brief` / `next-actions` / `find` / `meeting` 等。SSOT は [`docs/skills/`](docs/skills/)（[ADR-0008](docs/adr/0008-assistant-skills.md)）、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開。**展開された mirror は commit しない（`.gitignore` 済みのローカル install 物。[ADR-0035](docs/adr/0035-project-skills-vendor-dev-skills.md)）**。read 系は自律 OK、write 系は HITL（auto-apply なし）
 - **エコシステム共通 dev skill** — `@ozzylabs/skills` 由来（drive / commit / review 等）。**user-scope install（`npx @ozzylabs/skills install`）で利用**する。以前は project-scope に commit していたが撤回した（[ADR-0035](docs/adr/0035-project-skills-vendor-dev-skills.md) の一部撤回注記を参照）
 
 ## Skills の共通ルール
