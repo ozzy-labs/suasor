@@ -19,7 +19,7 @@ mcp_tools_write:
 
 # person-cleanup
 
-connector author handle から投影された person の重複を、operator の判断で統合 / 分離する HITL write skill。connector identity は初期に **1 handle = 1 person** で投影され（自動 fuzzy 同定なし）、同一人物の重複統合は人が明示的に行う（[ADR-0022](../../adr/0022-person-identity-resolution.md) / [ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+connector author handle から投影された person の重複を、operator の判断で統合 / 分離する HITL write skill。connector identity は初期に **1 handle = 1 person** で投影され（自動 fuzzy 同定なし）、同一人物の重複統合は人が明示的に行う（[ADR-0022](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0022-person-identity-resolution.md) / [ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ## いつ発火するか
 

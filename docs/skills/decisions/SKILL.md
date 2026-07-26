@@ -21,7 +21,7 @@ mcp_tools_write: []
 
 # decisions
 
-意思決定を引く単一入口（[ADR-0046](../../adr/0046-agent-surface-contraction.md)）。**mode** で「一覧・変遷」と「1 件の根拠」を切り替える。read-only。
+意思決定を引く単一入口（[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md)）。**mode** で「一覧・変遷」と「1 件の根拠」を切り替える。read-only。
 
 以前は `decision-log`（一覧）と `decision-rationale`（根拠）に分かれていたが、どちらも `decision.list` + `graph.related` で、違いは**何件を、どこまで深く**だけだった。
 
@@ -34,7 +34,7 @@ mcp_tools_write: []
 
 ## 何をするか（MCP tool flow）
 
-すべて read tool（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ### mode=log（既定）
 
@@ -57,7 +57,7 @@ reducer が張る決定まわりの辺は **decision → source の `derived_fro
 1. **共有 source 経由の 2 hop** — 決定の根拠 source から `graph.related` を逆向きに辿り、同じ source を根拠に持つ別の決定を見る。同じ議論から複数の決定が出た場合にだけ当たる
 2. **手で張った `manual_link`** — `link.add`（write / HITL）で決定間に明示的に張られていれば `graph.related` に出る
 
-**1 hop で何も返らないことを「先行決定は無い」と言い換えてはならない**（[ADR-0007](../../adr/0007-connector-contract.md) の "no silent wrong answer"）。辿れなかったときは「provenance link には記録が無い」と述べ、必要なら `search` で当時の議論を補う。
+**1 hop で何も返らないことを「先行決定は無い」と言い換えてはならない**（[ADR-0007](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0007-connector-contract.md) の "no silent wrong answer"）。辿れなかったときは「provenance link には記録が無い」と述べ、必要なら `search` で当時の議論を補う。
 
 ## 制約
 

@@ -1,11 +1,11 @@
 # Dev skills の更新（re-vendor）手順
 
 > **[2026-07-04] 廃止**: 本手順が対象とする dev skill の project-scope vendoring は撤回された
-> （[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) の一部撤回注記を参照）。dev skill は
+> （[ADR-0035](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0035-project-skills-vendor-dev-skills.md) の一部撤回注記を参照）。dev skill は
 > user-scope install（`npx @ozzylabs/skills install`）へ移行したため、以下の re-vendor 手順は
 > 歴史的記録であり現在は使用しない。
 
-[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) に基づき、エコシステム共通 dev skill
+[ADR-0035](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0035-project-skills-vendor-dev-skills.md) に基づき、エコシステム共通 dev skill
 （drive / lint / commit / ship / pr / review / implement / test / lessons-triage / lint-rules /
 commit-conventions / usage-guard）は `@ozzylabs/skills` 由来の **vendored project skill** として
 本リポジトリに commit している。

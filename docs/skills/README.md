@@ -1,14 +1,14 @@
 # Assistant Skills
 
-[ADR-0008](../adr/0008-assistant-skills.md)。自然文トリガのアシスタント skill 群。SSOT は `docs/skills/<name>/SKILL.md`、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開する。read 系はエージェント自律 OK、write 系は HITL（auto-apply なし、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。install 後の起動・確認・トラブルシュートは [利用ガイド](../guide/skills.md) を参照。
+[ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md)。自然文トリガのアシスタント skill 群。SSOT は `docs/skills/<name>/SKILL.md`、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開する。read 系はエージェント自律 OK、write 系は HITL（auto-apply なし、[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。install 後の起動・確認・トラブルシュートは [利用ガイド](https://github.com/ozzy-labs/suasor/blob/main/docs/guide/skills.md) を参照。
 
-> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
+> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
 ## Read 系（自律 OK・9）
 
-各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_*` が SSOT・[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
+各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_*` が SSOT・[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
 
-> **[ADR-0046](../adr/0046-agent-surface-contraction.md) で 32 → 22 に収縮した。** 同じ意図の skill を 1 本に畳み、違いは引数（期間・読み手・対象・深さ）に逃がしている。ユーザーは skill 名を知らずに話しかけるので、「今週どうなってる」の一言で 5 本が競合する状態が問題だった。**read / write の承認境界は跨いでいない**（跨ぐと HITL が壊れる）ため、畳まれたのは read 系のみ。
+> **[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md) で 32 → 22 に収縮した。** 同じ意図の skill を 1 本に畳み、違いは引数（期間・読み手・対象・深さ）に逃がしている。ユーザーは skill 名を知らずに話しかけるので、「今週どうなってる」の一言で 5 本が競合する状態が問題だった。**read / write の承認境界は跨いでいない**（跨ぐと HITL が壊れる）ため、畳まれたのは read 系のみ。
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
@@ -51,11 +51,11 @@
 | [`source-forget`](source-forget/SKILL.md) | 「あの誤取り込みを消して」「この source を忘れて」 | search / source.list → source.forget |
 | [`sync-now`](sync-now/SKILL.md) | 「最新を取り込んで」「Slack 同期して」「sync して」 | connector.sync |
 
-エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）。**user-scope install（`npx @ozzylabs/skills install`）で利用する** — [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) の project-scope vendoring は 2026-07-04 に一部撤回された（当時の re-vendor 手順は [dev-skills-refresh.md](dev-skills-refresh.md) に歴史的記録として残る）。
+エコシステム共通 dev skill（drive / lint / commit / ship / pr / review 等）は `@ozzylabs/skills` 由来（名前空間 disjoint）。**user-scope install（`npx @ozzylabs/skills install`）で利用する** — [ADR-0035](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0035-project-skills-vendor-dev-skills.md) の project-scope vendoring は 2026-07-04 に一部撤回された（当時の re-vendor 手順は [dev-skills-refresh.md](dev-skills-refresh.md) に歴史的記録として残る）。
 
 ## インストール
 
-SSOT（本ディレクトリ）はパッケージに同梱され、`suasor skills install` でエージェントの skill ディレクトリに展開する（[ADR-0008](../adr/0008-assistant-skills.md)・[docs/design/cli.md](../design/cli.md)）。
+SSOT（本ディレクトリ）はパッケージに同梱され、`suasor skills install` でエージェントの skill ディレクトリに展開する（[ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md)・[docs/design/cli.md](https://github.com/ozzy-labs/suasor/blob/main/docs/design/cli.md)）。
 
 ```bash
 suasor skills install                 # ~/.claude/skills/ + ~/.agents/skills/ へ展開（user scope・既定）
@@ -73,9 +73,18 @@ suasor skills info <name>             # 単一 skill の category / 境界 / tri
 
 展開は冪等で、内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated` に上書きする。`suasor init` は本コマンドを案内するのみで自動展開はしない。
 
+### リンクの書き方（[Issue #548](https://github.com/ozzy-labs/suasor/issues/548)）
+
+本ディレクトリはリポジトリの残りを連れずに配られる（npm パッケージ / binary / install 済み mirror のどこにも `docs/adr/` は無い）。したがって:
+
+- **`docs/skills/` の外**（ADR・design・guide）は**絶対 URL** で書く — `https://github.com/ozzy-labs/suasor/blob/main/docs/...`
+- **`docs/skills/` の中**（`../<name>/SKILL.md` や本 README）は**相対のまま**。install は全 skill を一括展開するので host dir でも解決する
+
+`bun run lint:links` が両方向を検査する（外向き相対リンクは失敗・絶対 URL も実在と `#fragment` を検査）。根拠は [ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md) の「リンクの形式」。
+
 ### host dir の扱い（ADR-0035）
 
-[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo dogfood-commit は廃止した。host dir（`.claude/skills/` / `.agents/skills/`）の扱いは次の 2 系統に分かれる:
+[ADR-0035](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0035-project-skills-vendor-dev-skills.md) で in-repo dogfood-commit は廃止した。host dir（`.claude/skills/` / `.agents/skills/`）の扱いは次の 2 系統に分かれる:
 
 - **assistant skill の mirror** — `docs/skills/` SSOT のローカル install 物。**commit しない**（`.gitignore` 済み）。各開発者が必要に応じ `suasor skills install` で展開する。install の正しさは `tests/skills/install.test.ts`（synthetic SSOT 上の `installSkills` / `detectDrift`）が担保する。
-- **エコシステム共通 dev skill（drive / lint / commit 等）** — `@ozzylabs/skills` 由来。**user-scope install（`npx @ozzylabs/skills install`）で利用**する（以前は project-scope に commit していたが撤回・[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) の一部撤回注記を参照）。
+- **エコシステム共通 dev skill（drive / lint / commit 等）** — `@ozzylabs/skills` 由来。**user-scope install（`npx @ozzylabs/skills install`）で利用**する（以前は project-scope に commit していたが撤回・[ADR-0035](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0035-project-skills-vendor-dev-skills.md) の一部撤回注記を参照）。

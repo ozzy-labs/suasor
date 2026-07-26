@@ -18,8 +18,21 @@
  * are a possible follow-up (Issue #386).
  */
 
+/**
+ * GitHub blob base for the repository tree on the default branch.
+ *
+ * Exported alongside {@link DOCS_BASE_URL} because the same prefix is what makes
+ * an absolute link *checkable*: `scripts/check-doc-links.mjs` strips it to
+ * recover a repository path and resolves the target like any relative link, so a
+ * URL written into the bundled skills (ADR-0008 — they ship without the rest of
+ * `docs/`, so they cannot use relative links) still fails the lint when the doc
+ * it points at is renamed. One constant, so the writer and the checker cannot
+ * disagree about what "our own repository" spells.
+ */
+export const REPO_BLOB_BASE_URL = "https://github.com/ozzy-labs/suasor/blob/main";
+
 /** GitHub blob base for repository docs on the default branch (see {@link docsUrl}). */
-export const DOCS_BASE_URL = "https://github.com/ozzy-labs/suasor/blob/main/docs";
+export const DOCS_BASE_URL = `${REPO_BLOB_BASE_URL}/docs`;
 
 /**
  * Build a followable URL for a repository doc.

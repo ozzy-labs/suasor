@@ -137,6 +137,133 @@ describe("check-doc-links.mjs — link targets", () => {
   });
 });
 
+describe("check-doc-links.mjs — absolute links into this repository (#548)", () => {
+  // The URL prefix is imported from the same constant the runtime docsUrl()
+  // builder uses, so this literal is the one place the test asserts its spelling.
+  const BLOB = "https://github.com/ozzy-labs/suasor/blob/main";
+
+  test("resolves a repository blob URL like a relative link", () => {
+    const { exitCode, stderr } = runOnFixture({
+      "docs/skills/x/SKILL.md": `# X\n\n[here](${BLOB}/docs/adr/0008-a.md)\n[gone](${BLOB}/docs/adr/0011-renamed-away.md)\n`,
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("1 broken link(s)");
+    expect(stderr).toContain("docs/skills/x/SKILL.md:4");
+    expect(stderr).toContain("target: docs/adr/0011-renamed-away.md");
+  });
+
+  test("checks the fragment of a repository blob URL", () => {
+    const { exitCode, stderr } = runOnFixture({
+      "docs/skills/x/SKILL.md": `# X\n\n[ok](${BLOB}/docs/adr/0008-a.md#context)\n[bad](${BLOB}/docs/adr/0008-a.md#no-such-anchor)\n`,
+      "docs/adr/0008-a.md": "# A\n\n## Context\n",
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("1 broken link(s)");
+    expect(stderr).toContain("docs/adr/0008-a.md#no-such-anchor");
+  });
+
+  test("leaves URLs that are not this repository's default-branch tree alone", () => {
+    const { exitCode } = runOnFixture({
+      "docs/a.md": [
+        "# A",
+        "",
+        "[issue](https://github.com/ozzy-labs/suasor/issues/548)",
+        "[other repo](https://github.com/ozzy-labs/handbook/blob/main/adr/0028-x.md)",
+        "[permalink](https://github.com/ozzy-labs/suasor/blob/deadbeef/docs/gone.md)",
+        "[tree](https://github.com/ozzy-labs/suasor/tree/main/docs/gone)",
+        "",
+      ].join("\n"),
+    });
+    expect(exitCode).toBe(0);
+  });
+});
+
+describe("check-doc-links.mjs — shipped roots (#548)", () => {
+  /** A manifest that ships `docs/skills` on its own, as the real one does. */
+  const manifest = JSON.stringify({ files: ["dist/index.js", "docs/skills"] });
+
+  test("applies to any shipped directory, not only ones under docs/", () => {
+    // The rule follows what is distributed, not where it happens to live.
+    const { exitCode, stderr } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["templates"] }),
+      "templates/note.md": "# Note\n\n[adr](../docs/adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("templates/ is distributed on its own");
+  });
+
+  test("a files entry naming a single file is not a root", () => {
+    // `dist/index.js` and friends are files; treating them as roots would flag
+    // links they cannot possibly contain.
+    const { exitCode } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["docs/guide/install.md"] }),
+      "docs/guide/install.md": "# Install\n\n[adr](../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(0);
+  });
+
+  test("fails on a relative link that escapes the shipped root, naming the URL to use", () => {
+    const { exitCode, stderr } = runOnFixture({
+      "package.json": manifest,
+      "docs/skills/x/SKILL.md": "# X\n\n[adr](../../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    // The target exists — that is the whole point: check 1 passes and the link
+    // is still dead for everyone reading the installed mirror.
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("docs/skills/ is distributed on its own");
+    expect(stderr).toContain("https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-a.md");
+  });
+
+  test("allows relative links that stay inside the shipped root", () => {
+    // Sibling skills are installed together, so `../other/SKILL.md` resolves in
+    // the host dir exactly as it does in the repo.
+    const { exitCode } = runOnFixture({
+      "package.json": manifest,
+      "docs/skills/x/SKILL.md": "# X\n\n[pair](../y/SKILL.md)\n[catalog](../README.md)\n",
+      "docs/skills/y/SKILL.md": "# Y\n",
+      "docs/skills/README.md": "# Skills\n",
+    });
+    expect(exitCode).toBe(0);
+  });
+
+  test("does not restrict docs that are not shipped on their own", () => {
+    const { exitCode } = runOnFixture({
+      "package.json": manifest,
+      "docs/design/cli.md": "# CLI\n\n[adr](../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(0);
+  });
+
+  test("reports a globbed shipped root as unverified instead of half-reading it", () => {
+    // npm accepts globs in `files`; expanding them here would decide the rule on
+    // a guess. Saying so out loud is the only answer that is not a wrong one.
+    const { exitCode, stdout } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["docs/skills/*"] }),
+      "docs/skills/x/SKILL.md": "# X\n\n[adr](../../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(stdout).toContain("unverified:");
+    expect(stdout).toContain('"docs/skills/*" is a glob');
+    expect(exitCode).toBe(0);
+  });
+
+  test("the rule keys on package.json rather than a hardcoded path", () => {
+    // Same tree, a manifest that ships nothing: the link is then only as fragile
+    // as any other relative link, and the checker says so by staying quiet.
+    const { exitCode } = runOnFixture({
+      "package.json": JSON.stringify({ files: ["dist/index.js"] }),
+      "docs/skills/x/SKILL.md": "# X\n\n[adr](../../adr/0008-a.md)\n",
+      "docs/adr/0008-a.md": "# A\n",
+    });
+    expect(exitCode).toBe(0);
+  });
+});
+
 describe("check-doc-links.mjs — cross-file fragments", () => {
   test("accepts a fragment that matches a heading in the target file", () => {
     const { exitCode } = runOnFixture({

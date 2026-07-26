@@ -20,7 +20,7 @@ mcp_tools_write:
 
 # task-publish
 
-確定タスクを**外部ホーム**（GitHub Issues / Jira / Slack List）へ起票し、状態を遠隔操作する HITL write skill（[ADR-0036](../../adr/0036-task-external-home.md) / [ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。Suasor は「横断捕捉・AI 提案・優先付け・由来」に徹し、**公開したタスクの住処は外部ツール**に委ねる（single pane）。ホームは destination（github / jira / slack）ごとに独立設定でき、`task.publish` は任意の `destination` 引数（省略時 `[tasks].default`）で行き先を選ぶ（[ADR-0036](../../adr/0036-task-external-home.md) 改訂 R1-2）。`tasks` projection は published task については状態の正本ではなく、優先ビュー表示用の読み取りキャッシュ + provenance（状態の正本は外部ホーム＝D1）。**未 publish タスクは private tier（ローカルが正本・R1-4）**。`task-update` が Suasor 内 lifecycle を動かすのに対し、本 skill は**外部への egress write / 遠隔操作**を担う。
+確定タスクを**外部ホーム**（GitHub Issues / Jira / Slack List）へ起票し、状態を遠隔操作する HITL write skill（[ADR-0036](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0036-task-external-home.md) / [ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。Suasor は「横断捕捉・AI 提案・優先付け・由来」に徹し、**公開したタスクの住処は外部ツール**に委ねる（single pane）。ホームは destination（github / jira / slack）ごとに独立設定でき、`task.publish` は任意の `destination` 引数（省略時 `[tasks].default`）で行き先を選ぶ（[ADR-0036](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0036-task-external-home.md) 改訂 R1-2）。`tasks` projection は published task については状態の正本ではなく、優先ビュー表示用の読み取りキャッシュ + provenance（状態の正本は外部ホーム＝D1）。**未 publish タスクは private tier（ローカルが正本・R1-4）**。`task-update` が Suasor 内 lifecycle を動かすのに対し、本 skill は**外部への egress write / 遠隔操作**を担う。
 
 ## いつ発火するか
 
@@ -31,7 +31,7 @@ mcp_tools_write:
 
 ## 何をするか（MCP tool flow）
 
-read で対象を特定して、egress write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](../../adr/0004-mcp-agent-boundary-and-hitl.md)）。egress（外部送信）を伴うため、ローカル draft.export 以上に確認は厳格にする（[ADR-0003](../../adr/0003-local-first-and-content-minimization.md) §egress 境界）。
+read で対象を特定して、egress write は HITL。**auto-apply 経路は存在しない**（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。egress（外部送信）を伴うため、ローカル draft.export 以上に確認は厳格にする（[ADR-0003](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0003-local-first-and-content-minimization.md) §egress 境界）。
 
 1. `task.list`（`state` で絞り可）で対象 task を特定する。各 task は `id` / `title` / `state` / 既存の外部 id（publish 済みか）
 2. どの task をどのホーム（GitHub / Jira / Slack List）にどう操作するかを**ユーザーに提示して確認を取る**（native framing: ホスト側で人の承認を促す）。送信先・本文（コメント等）を明示する
@@ -42,8 +42,8 @@ read で対象を特定して、egress write は HITL。**auto-apply 経路は�
 ## 制約
 
 - HITL。人の承認なしに `task.publish` / `task.act` を呼ばない。auto-apply しない。`task.list` は read（特定）
-- **行き先は destination ごとの typed ホーム**（[ADR-0036](../../adr/0036-task-external-home.md) 改訂 R1）。`task.publish` の任意 `destination` 引数（省略時 `[tasks].default`）で振り分ける（R1-2）。公開済み task の操作/読み戻しは task 自身の `published_destination` で config 解決（R1-3）
+- **行き先は destination ごとの typed ホーム**（[ADR-0036](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0036-task-external-home.md) 改訂 R1）。`task.publish` の任意 `destination` 引数（省略時 `[tasks].default`）で振り分ける（R1-2）。公開済み task の操作/読み戻しは task 自身の `published_destination` で config 解決（R1-3）
 - **冪等・二重起票回避**: actuator は冪等 label（例 `suasor` + `suasor-task-<id>`）で同一タスクの重複起票を防ぐ。「外部起票成功 → ローカル event append 失敗」の二重起票リスクに注意し、再実行時は既存外部 id を確認してから操作する
-- connector（read 専用・[ADR-0007](../../adr/0007-connector-contract.md)）と actuator（write）は型レベルで別 capability。actuator 未実装のソースへは publish できない（status で報告、throw しない）
-- Slack List actuator は comment 非対応など、ホームごとに対応操作に差がある（[ADR-0036](../../adr/0036-task-external-home.md)）。非対応操作は `unsupported` として報告する
+- connector（read 専用・[ADR-0007](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0007-connector-contract.md)）と actuator（write）は型レベルで別 capability。actuator 未実装のソースへは publish できない（status で報告、throw しない）
+- Slack List actuator は comment 非対応など、ホームごとに対応操作に差がある（[ADR-0036](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0036-task-external-home.md)）。非対応操作は `unsupported` として報告する
 - 本 skill は手順書のみで実処理を持たない
