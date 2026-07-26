@@ -280,8 +280,8 @@ describe("Box connector — multi-account (ADR-0050 / #537)", () => {
             cursors[folderId] = idx + 1;
             return list[idx] ?? { files: [] };
           },
-          async downloadFile() {
-            return new Uint8Array(0);
+          async downloadFile(fileId) {
+            return new TextEncoder().encode(`${token}:${fileId}`);
           },
         };
       },
@@ -410,6 +410,25 @@ describe("Box connector — multi-account (ADR-0050 / #537)", () => {
     expect(result?.summaryLines).toContain(
       "account 'a' folders: 1=ok, 2=failed (cursor preserved)",
     );
+  });
+
+  test("each record's extraction handle downloads through its own account's client", async () => {
+    // The client is now built per account, and `readBytes` is called long after
+    // `sync()` returned (the extraction stage drives it) — so each record has to
+    // keep *its* account's client, not the last one built.
+    const { factory } = boxByToken({
+      "tok-a": { "0": [{ files: [{ id: "d1", name: "a.docx", size: 4, sha1: "s1" }] }] },
+      "tok-b": { "0": [{ files: [{ id: "d2", name: "b.docx", size: 4, sha1: "s2" }] }] },
+    });
+    const connector = createBoxConnector(
+      { folders: ["0"], accounts: { a: {}, b: {} } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(ctx({ secret: accountSecrets({ "a:token": "tok-a", "b:token": "tok-b" }) })),
+    );
+    const bytes = await Promise.all(records.map((r) => r.extractable?.readBytes()));
+    expect(bytes.map((b) => new TextDecoder().decode(b))).toEqual(["tok-a:d1", "tok-b:d2"]);
   });
 
   test("the credential requirement names one token per configured account", () => {
