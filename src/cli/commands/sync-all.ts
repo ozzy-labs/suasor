@@ -20,6 +20,7 @@
  */
 import { Command, Option } from "clipanion";
 import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
+import type { BulkSyncResult } from "../../connectors/sync-all.ts";
 import { BINARY_SCOPE_DOC, currentBuildIsBinary } from "../build-target.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
@@ -168,9 +169,17 @@ export class SyncAllCommand extends Command {
           ? "no matching enabled connectors"
           : "no connectors enabled (add a [connectors.<name>] section)";
       if (this.json) {
-        this.context.stdout.write(
-          `${JSON.stringify({ results: [], succeeded: 0, failed: 0 }, null, 2)}\n`,
-        );
+        // Same shape as the real run's `BulkSyncResult` — including the empty
+        // `preSyncAdvisories` (Issue #544). Nothing was selected, so nothing was
+        // advised; a consumer must not have to branch on which of two shapes
+        // `sync --json` produced.
+        const empty: BulkSyncResult = {
+          results: [],
+          succeeded: 0,
+          failed: 0,
+          preSyncAdvisories: [],
+        };
+        this.context.stdout.write(`${JSON.stringify(empty, null, 2)}\n`);
       } else {
         this.context.stdout.write(`sync: ${detail}.\n`);
       }

@@ -14,6 +14,35 @@
  */
 import type { AccountSlice } from "../connectors/multi-account.ts";
 
+/**
+ * The refusal for `--account` on a connector that declares no per-account
+ * configuration, shared by every verb that can be handed one (Issue #544).
+ *
+ * Shared because the same question deserves the same answer: `onboard` already
+ * named the connectors that *do* accept `--account`, while `auth` / the discovery
+ * verbs only explained the capability, so the same mistake got a more useful
+ * answer on one path than on another.
+ *
+ * `supported` is passed in rather than read here (this module stays import-clean,
+ * NFR-PRF-1) — but every caller passes `multiAccountConnectorNames()`, derived
+ * from the manifests. No call site lists connector names, so the connector that
+ * adopts `multiAccount` next joins this message by flipping its own flag.
+ */
+export function noPerAccountConfigMessage(
+  unsupported: readonly string[],
+  supported: readonly string[],
+): string {
+  const declares = unsupported.length === 1 ? "it declares" : "they declare";
+  // Defensive rather than decorative: with no multi-account connector at all the
+  // parenthetical would be an empty `()`, which reads as a bug in the message.
+  const accepted = supported.length === 0 ? "" : ` (${supported.join(", ")})`;
+  return (
+    `--account does not apply to ${unsupported.join(", ")}: ${declares} no per-account ` +
+    `configuration — only a connector with a [connectors.<name>.accounts.<account>] ` +
+    `table accepts it${accepted}`
+  );
+}
+
 /** Resolved accounts, or a ready-to-print refusal (the CLI writes it verbatim). */
 export type AccountResolution =
   | { readonly ok: true; readonly accounts: AccountSlice[] }
@@ -49,17 +78,14 @@ export async function resolveConnectorAccounts(
   account: string | undefined,
   options: ResolveAccountsOptions,
 ): Promise<AccountResolution> {
-  const [{ connectorManifest }, { accountSlices }] = await Promise.all([
+  const [{ connectorManifest, multiAccountConnectorNames }, { accountSlices }] = await Promise.all([
     import("../connectors/manifest.ts"),
     import("../connectors/multi-account.ts"),
   ]);
   if (account !== undefined && connectorManifest(connector)?.multiAccount !== true) {
     return {
       ok: false,
-      message:
-        `error: the ${connector} connector has no per-account configuration, so --account ` +
-        `does not apply (only connectors with a [connectors.<name>.accounts.<account>] table ` +
-        `accept it)\n`,
+      message: `error: ${noPerAccountConfigMessage([connector], multiAccountConnectorNames())}\n`,
     };
   }
   let slice: Record<string, unknown> = {};

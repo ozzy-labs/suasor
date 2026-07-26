@@ -45,6 +45,24 @@ export interface RecapInput {
   readonly synced: boolean;
   /** First-sync exit code (`null` when skipped). */
   readonly syncExitCode: number | null;
+  /**
+   * Labels (`advisoryLabel` spelling) of the slices the first sync's pre-sync
+   * advisories were raised for — an empty ingest scope (Issue #187) or an unset
+   * required setting (ADR-0049 / ADR-0051). Absent / empty when the sync was
+   * skipped or every slice was complete (Issue #544).
+   *
+   * The recap carries the **labels only**, never the advisory text: the sync
+   * already printed each one on stderr, in full, and restating it here would
+   * report the same finding twice. What the recap adds is that the closing
+   * verdict stops saying "Setup complete." while a connector that will ingest
+   * nothing is sitting in the config the wizard just wrote — the same reason the
+   * recap exists at all (Issue #388 item 1).
+   *
+   * Not part of {@link recapHasFailure}: both advisories are documented as
+   * warnings that leave the exit code alone (#187, ADR-0049), and the wizard must
+   * not start failing runs that `suasor sync` exits 0 on.
+   */
+  readonly configWarnings?: readonly string[];
 }
 
 /** Whether the run should exit non-zero: any auth-test failure, or a failed sync. */
@@ -124,6 +142,20 @@ export function renderRecap(input: RecapInput): string {
     );
   }
 
+  // Pointer, not a restatement: the `warning:` lines carry what each advisory
+  // says and how to fix it, and those two advisories differ in both severity and
+  // remedy ("runs and ingests nothing" vs "cannot reach its API"), so folding
+  // them into one recap sentence would flatten that difference. The pointer names
+  // the *stream* rather than saying "above": the recap is stdout and the
+  // advisories are stderr, so "above" is only true when both are on a terminal.
+  const configWarnings = input.configWarnings ?? [];
+  if (configWarnings.length > 0) {
+    lines.push(
+      `  config: ${configWarnings.length} pre-sync warning(s) for ${configWarnings.join(", ")} — ` +
+        "see the `warning:` line(s) on stderr",
+    );
+  }
+
   const authFailed = input.connectors.some((c) => c.authTest === "failed");
   const manualPending = input.connectors.some(
     (c) => c.authFlow === "connector-specific" && c.authTest !== "ok",
@@ -133,6 +165,13 @@ export function renderRecap(input: RecapInput): string {
     lines.push("Setup finished with errors — see the FAILED line(s) above.");
   } else if (manualPending) {
     lines.push("Setup needs manual steps — finish the connector-specific checklist above.");
+  } else if (configWarnings.length > 0) {
+    // A sync that exits 0 having ingested nothing is the failure #187 is about;
+    // closing with a bare "Setup complete." would be the wizard's own version of
+    // it.
+    lines.push(
+      `Setup complete, but ${configWarnings.length} pre-sync config warning(s) are unresolved.`,
+    );
   } else {
     lines.push("Setup complete.");
   }

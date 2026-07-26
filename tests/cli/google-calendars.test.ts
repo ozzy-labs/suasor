@@ -134,6 +134,10 @@ describe("suasor google calendars — per-account targeting (ADR-0050)", () => {
     const { code, err } = await run(["github", "repos", "--account", "work"]);
     expect(code).toBe(1);
     expect(err).toContain("no per-account configuration");
+    // Same refusal as `onboard` and `auth`, naming the connectors that do accept
+    // `--account` (#544), derived from the manifests rather than listed here.
+    expect(err).toContain("box");
+    expect(err).toContain("google");
   });
 });
 

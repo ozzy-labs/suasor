@@ -55,6 +55,7 @@ export {
   type BulkSyncOptions,
   type BulkSyncResult,
   type ConnectorLoader,
+  type PreSyncAdvisory,
   runBulkSync,
   selectEnabledConnectors,
 } from "./sync-all.ts";
