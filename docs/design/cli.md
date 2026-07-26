@@ -69,7 +69,7 @@ suasor --version                       # バージョン出力
 |---|---|---|---|
 | `init` | `--force` | false | 既存 `config.toml` を default テンプレートで上書きする |
 | `onboard` | `--connector a,b` | (TTY 時は対話) | セットアップ対象の connector 名カンマ列。非 TTY（パイプ / CI）では必須 |
-| `onboard` | `--account <name>` | （なし＝flat slice） | multi-account connector（manifest の `multiAccount`＝google / ms-graph / box）に **named account を追加**する。token は `connector:<name>:<account>:<secret>` へ保存し、`[connectors.<name>.accounts.<account>]` を非破壊追記する（[ADR-0050](../adr/0050-multi-account-connectors.md)・[#538](https://github.com/ozzy-labs/suasor/issues/538)） |
+| `onboard` | `--account <name>` | （なし＝flat slice） | multi-account connector（manifest の `multiAccount` が宣言。現時点で google / ms-graph / box）に **named account を追加**する。token は `connector:<name>:<account>:<secret>` へ保存し、`[connectors.<name>.accounts.<account>]` を非破壊追記する（[ADR-0050](../adr/0050-multi-account-connectors.md)・[#538](https://github.com/ozzy-labs/suasor/issues/538)） |
 | `onboard` | `--skip-auth` | false | keychain 格納 + auth test を skip（token は env override / binary 前提） |
 | `onboard` | `--skip-sync` | false | 初回 `suasor sync` を skip |
 | `onboard` | `--write-cron` | false | cron 行を crontab に追記する（既定は雛形を表示のみ） |

@@ -174,14 +174,15 @@ export class OnboardCommand extends Command {
       (including one you set enabled = false) is never rewritten.
 
       A second account (personal + work mail / calendar / files) is added with
-      --account <name> on a multi-account connector (google / ms-graph / box,
-      ADR-0050): the token is stored under that account's own keychain name (the
-      same path as '<connector> auth set --account'), verified with 'auth test',
-      and appended as [connectors.<name>.accounts.<account>]. Because that table
-      demotes the connector's flat keys to inheritance defaults, the wizard also
-      writes [connectors.<name>.accounts.default] when a credential shows the
-      unnamed account was really ingesting — so adding the second account does
-      not silently stop the first.
+      --account <name>, on the connectors whose manifest declares per-account
+      configuration (ADR-0050; anything else is refused by name): the token is
+      stored under that account's own keychain name (the same path as
+      '<connector> auth set --account'), verified with 'auth test', and appended
+      as [connectors.<name>.accounts.<account>]. Because that table demotes the
+      connector's flat keys to inheritance defaults, the wizard also writes
+      [connectors.<name>.accounts.default] when a credential shows the unnamed
+      account was really ingesting — so adding the second account does not
+      silently stop the first.
 
       Non-interactive use: on a non-TTY stdin (a pipe / CI) the wizard does not
       prompt — pass --connector, supply tokens via env override
@@ -202,7 +203,7 @@ export class OnboardCommand extends Command {
 
   account = Option.String("--account", {
     description:
-      "Configure this named account ([connectors.<name>.accounts.<account>], ADR-0050) instead of the connector's flat slice — how a second Google / Microsoft / Box account is added.",
+      "Configure this named account instead of the connector's flat slice, on connectors with a [connectors.<name>.accounts.<account>] table (ADR-0050) — how a second personal / work account is added.",
   });
 
   skipAuth = Option.Boolean("--skip-auth", false, {
@@ -286,6 +287,12 @@ export class OnboardCommand extends Command {
     // the recap reports them as manual-pending (Issue #384).
     const manualSteps = new Map<string, readonly string[]>();
 
+    // How a connector is named in the human-readable lines: bare in the ordinary
+    // run, `google (account 'work')` in account mode. Taken from the shared
+    // helper rather than re-spelled, so doctor, the sync warnings and the wizard
+    // spell an account identically.
+    const { advisoryLabel } = await import("../../connectors/noop-check.ts");
+
     // 2-4. Per connector: store token, auth test, append config slice.
     for (const connector of connectors) {
       const report: ConnectorReport = {
@@ -321,12 +328,7 @@ export class OnboardCommand extends Command {
         continue;
       }
 
-      // How this connector is named in the human-readable lines: bare in the
-      // ordinary run, `google (account 'work')` in account mode — the same shape
-      // doctor and the sync warnings use (`advisoryLabel`), so one install's
-      // messages agree on how an account is spelled.
-      const who =
-        this.account === undefined ? connector : `${connector} (account '${this.account}')`;
+      const who = advisoryLabel(connector, this.account ?? null);
 
       if (!this.skipAuth) {
         const stored = await this.storeTokenFor(connector, interactive, this.account);
