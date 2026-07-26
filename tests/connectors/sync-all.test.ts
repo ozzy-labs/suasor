@@ -246,13 +246,54 @@ describe("runBulkSync", () => {
 
   test("does not warn for a connector slice with an ingest target (#187)", async () => {
     const warnings: string[] = [];
-    await runBulkSync(store, {
+    const result = await runBulkSync(store, {
       names: ["github", "web"],
       connectors: { github: { repos: ["owner/repo"] }, web: { urls: ["https://example.com"] } },
       loadConnector: async (name) => fakeConnector(name, []),
       syncOptions: { onWarn: (m) => warnings.push(m) },
     });
     expect(warnings).toEqual([]);
+    expect(result.preSyncAdvisories).toEqual([]);
+  });
+
+  test("returns the advisories it emitted, attributed to their slice (#544)", async () => {
+    // The result is what a caller rendering its own summary (the onboard recap)
+    // reads, so it has to be the same set that reached `onWarn` — not a second
+    // derivation that could drift from it.
+    const warnings: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["github", "web"],
+      connectors: { github: { repos: [] }, web: { urls: ["https://example.com"] } },
+      loadConnector: async (name) => fakeConnector(name, []),
+      syncOptions: { onWarn: (m) => warnings.push(m) },
+    });
+    expect(result.preSyncAdvisories.map((a) => a.connector)).toEqual(["github"]);
+    expect(result.preSyncAdvisories[0]?.account).toBeNull();
+    expect(warnings).toHaveLength(result.preSyncAdvisories.length);
+    for (const advisory of result.preSyncAdvisories) {
+      expect(warnings.some((w) => w.endsWith(advisory.message))).toBe(true);
+    }
+  });
+
+  test("collects the advisories even with no onWarn wired (#544)", async () => {
+    // A caller that renders its own summary must not have to opt into the warning
+    // stream to learn the config raised something.
+    const result = await runBulkSync(store, {
+      names: ["github"],
+      connectors: { github: { repos: [] } },
+      loadConnector: async (name) => fakeConnector(name, []),
+    });
+    expect(result.preSyncAdvisories).toHaveLength(1);
+    expect(result.preSyncAdvisories[0]?.connector).toBe("github");
+  });
+
+  test("attributes a multi-account advisory to its account (ADR-0050)", async () => {
+    const result = await runBulkSync(store, {
+      names: ["google"],
+      connectors: { google: { accounts: { work: { resources: [] } } } },
+      loadConnector: async (name) => fakeConnector(name, []),
+    });
+    expect(result.preSyncAdvisories.map((a) => a.account)).toContain("work");
   });
 });
 

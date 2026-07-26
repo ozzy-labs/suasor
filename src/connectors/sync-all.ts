@@ -73,6 +73,23 @@ export interface BulkSyncEntry {
   error?: string;
 }
 
+/**
+ * One pre-sync config advisory, attributed to the slice it is about.
+ *
+ * Returned as data (not only emitted through `onWarn`) so a caller that renders
+ * its own closing summary — the onboarding wizard, Issue #544 — can report *that
+ * advisories exist* without re-deriving them from the config and without parsing
+ * the warning stream, which also carries the run's other warnings.
+ */
+export interface PreSyncAdvisory {
+  /** Connector the advisory is about. */
+  readonly connector: string;
+  /** Declared account it is about, or `null` for a single-account slice. */
+  readonly account: string | null;
+  /** Message body (the emitter prefixes it with the connector / account label). */
+  readonly message: string;
+}
+
 /** Aggregate result of a `suasor sync` run. */
 export interface BulkSyncResult {
   /**
@@ -84,7 +101,17 @@ export interface BulkSyncResult {
   succeeded: number;
   /** Count of connectors that threw (continue-on-error still ran the rest). */
   failed: number;
+  /**
+   * The pre-sync config advisories raised before any connector ran, in `names`
+   * order (empty when every slice was complete). These are the same ones emitted
+   * through `syncOptions.onWarn`; the array is what was emitted, not a second
+   * derivation of it.
+   */
+  preSyncAdvisories: PreSyncAdvisory[];
 }
+
+/** The per-connector tally, before the run's advisories are folded in. */
+type BulkSyncCounts = Omit<BulkSyncResult, "preSyncAdvisories">;
 
 /** How the bulk orchestrator builds one connector — injected for testability. */
 export type ConnectorLoader = (
@@ -224,27 +251,36 @@ async function runOneConnector(
 }
 
 /**
- * Emit the pre-sync config advisories for each connector slice: the no-op
- * warning for an empty scope (Issue #187) and the required-setting warning for a
- * slice that cannot address its API at all (ADR-0049 / Issue #478). Two lines,
- * not one — they differ in severity and remedy. Both are emitted **per account**
- * for a multi-account slice (ADR-0050 / Issue #441).
+ * Collect and emit the pre-sync config advisories for each connector slice: the
+ * no-op warning for an empty scope (Issue #187) and the required-setting warning
+ * for a slice that cannot address its API at all (ADR-0049 / Issue #478). Two
+ * lines, not one — they differ in severity and remedy. Both are evaluated **per
+ * account** for a multi-account slice (ADR-0050 / Issue #441).
+ *
+ * Collected unconditionally and emitted only when a caller wired `onWarn`: the
+ * returned array is what the run has to say about the config, and a caller that
+ * renders its own summary (Issue #544) reads it instead of deriving the same
+ * verdict a second time. Both advisories are pure functions of the slice, so
+ * collecting costs a schema parse per connector and no I/O.
  */
-async function emitPreSyncAdvisories(options: BulkSyncOptions): Promise<void> {
-  const onWarn = options.syncOptions?.onWarn;
-  if (!onWarn) return;
+async function emitPreSyncAdvisories(options: BulkSyncOptions): Promise<PreSyncAdvisory[]> {
   // Lazy-imported to keep this module's top level import-clean (the schemas pull
   // no heavy SDK, but the lazy import mirrors the connector lazy-load discipline).
   const { noopWarnings, missingSettingWarnings, advisoryLabel } = await import("./noop-check.ts");
+  const advisories: PreSyncAdvisory[] = [];
   for (const name of options.names) {
     const slice = options.connectors[name] ?? {};
-    for (const advisory of noopWarnings(name, slice)) {
-      onWarn(`${advisoryLabel(name, advisory.account)}: ${advisory.message}`);
-    }
-    for (const advisory of missingSettingWarnings(name, slice)) {
-      onWarn(`${advisoryLabel(name, advisory.account)}: ${advisory.message}`);
+    for (const advisory of [...noopWarnings(name, slice), ...missingSettingWarnings(name, slice)]) {
+      advisories.push({ connector: name, account: advisory.account, message: advisory.message });
     }
   }
+  const onWarn = options.syncOptions?.onWarn;
+  if (onWarn) {
+    for (const advisory of advisories) {
+      onWarn(`${advisoryLabel(advisory.connector, advisory.account)}: ${advisory.message}`);
+    }
+  }
+  return advisories;
 }
 
 /**
@@ -253,7 +289,7 @@ async function emitPreSyncAdvisories(options: BulkSyncOptions): Promise<void> {
  * original ADR-0027 semantics, kept serial because "stop at the first" is only
  * well-defined in order.
  */
-async function runSerialFailFast(store: Store, options: BulkSyncOptions): Promise<BulkSyncResult> {
+async function runSerialFailFast(store: Store, options: BulkSyncOptions): Promise<BulkSyncCounts> {
   const results: BulkSyncEntry[] = [];
   let succeeded = 0;
   let failed = 0;
@@ -277,7 +313,7 @@ async function runSerialFailFast(store: Store, options: BulkSyncOptions): Promis
  * order). Workers pull the next unclaimed index from a shared cursor — a simple
  * bounded semaphore without an external dependency.
  */
-async function runBoundedPool(store: Store, options: BulkSyncOptions): Promise<BulkSyncResult> {
+async function runBoundedPool(store: Store, options: BulkSyncOptions): Promise<BulkSyncCounts> {
   const { names } = options;
   const slots = new Array<BulkSyncEntry>(names.length);
   const oks = new Array<boolean>(names.length);
@@ -325,8 +361,11 @@ export async function runBulkSync(store: Store, options: BulkSyncOptions): Promi
   // Pre-sync no-op advisory (Issue #187): warn for enabled-but-empty slices before
   // any connector runs, in `names` order, so the advisory is deterministic and not
   // interleaved with concurrent progress output.
-  await emitPreSyncAdvisories(options);
+  const preSyncAdvisories = await emitPreSyncAdvisories(options);
 
   const continueOnError = options.continueOnError ?? true;
-  return continueOnError ? runBoundedPool(store, options) : runSerialFailFast(store, options);
+  const counts = await (continueOnError
+    ? runBoundedPool(store, options)
+    : runSerialFailFast(store, options));
+  return { ...counts, preSyncAdvisories };
 }

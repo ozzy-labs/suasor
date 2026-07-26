@@ -157,11 +157,31 @@ describe("suasor sync (bulk)", () => {
       succeeded: number;
       failed: number;
       results: { connector: string; ok: boolean }[];
+      preSyncAdvisories: { connector: string; account: string | null; message: string }[];
     };
     expect(parsed.succeeded).toBe(1);
     expect(parsed.failed).toBe(0);
     expect(parsed.results[0]?.connector).toBe("web");
     expect(parsed.results[0]?.ok).toBe(true);
+    // The empty `urls` scope is advised on stderr; the same advisory is now in
+    // the machine-readable aggregate, so a cron log carries it too (#544).
+    expect(parsed.preSyncAdvisories[0]?.connector).toBe("web");
+    expect(parsed.preSyncAdvisories[0]?.account).toBeNull();
+  });
+
+  test("--json keeps one shape when nothing is enabled (#544)", async () => {
+    await run(["init"]);
+    await writeConfig("");
+    const { code, out } = await run(["sync", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out) as Record<string, unknown>;
+    // Same keys as a real run — a consumer must not branch on which shape it got.
+    expect(Object.keys(parsed).sort()).toEqual([
+      "failed",
+      "preSyncAdvisories",
+      "results",
+      "succeeded",
+    ]);
   });
 
   test("invalid connector config fails the whole run at load (before any sync, #162)", async () => {

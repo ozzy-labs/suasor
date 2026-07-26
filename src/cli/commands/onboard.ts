@@ -23,7 +23,6 @@
  */
 import { Command, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
-import type { ConnectorConfig } from "../../connectors/contract.ts";
 import type { AccountSlice } from "../../connectors/multi-account.ts";
 import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
@@ -1069,7 +1068,8 @@ export class OnboardCommand extends Command {
    * `configWarnings` carries the labels (`google (account 'work')`) of the slices
    * the pre-sync advisories fired for, for the closing recap — **not** their text:
    * the text is printed by the sync itself, through `onWarn`, exactly where and
-   * how `suasor sync` prints it.
+   * how `suasor sync` prints it. The labels come from the run's own
+   * `preSyncAdvisories`, so the recap can never disagree with what was printed.
    */
   private async firstSync(
     connectors: string[],
@@ -1103,7 +1103,6 @@ export class OnboardCommand extends Command {
       };
     }
 
-    const configWarnings = await this.preSyncAdvisoryLabels(names, config.connectors);
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const result = await runBulkSync(store, {
@@ -1131,44 +1130,19 @@ export class OnboardCommand extends Command {
           : `${entry.connector}: failed (${entry.error}).`,
       );
       const summary = `${lines.join("\n")}\nsync: ${result.succeeded} succeeded, ${result.failed} failed.\n`;
+      // The labels the recap points at are read back from the run itself, not
+      // re-derived: one slice can raise both advisories, and only the run knows
+      // which ones it actually emitted.
+      const { advisoryLabel } = await import("../../connectors/noop-check.ts");
+      const configWarnings: string[] = [];
+      for (const advisory of result.preSyncAdvisories) {
+        const label = advisoryLabel(advisory.connector, advisory.account);
+        if (!configWarnings.includes(label)) configWarnings.push(label);
+      }
       return { code: result.failed > 0 ? 1 : 0, summary, configWarnings };
     } finally {
       store.close();
     }
-  }
-
-  /**
-   * Labels of the slices the first sync's pre-sync advisories are about, in
-   * `names` order and de-duplicated (one label even when a slice trips both
-   * advisories).
-   *
-   * Deliberately re-derived rather than captured from the `onWarn` stream above:
-   * `onWarn` also carries the run's other warnings (concurrency, per-connector),
-   * and telling them apart by arrival order would make the recap depend on when
-   * `runBulkSync` happens to emit what. Both advisories are pure functions of the
-   * config slice, so computing them here answers the same question without
-   * inventing a second source of truth — and the text still has exactly one
-   * emitter (the sync).
-   */
-  private async preSyncAdvisoryLabels(
-    names: readonly string[],
-    connectors: Record<string, ConnectorConfig | undefined>,
-  ): Promise<string[]> {
-    const { noopWarnings, missingSettingWarnings, advisoryLabel } = await import(
-      "../../connectors/noop-check.ts"
-    );
-    const labels: string[] = [];
-    for (const name of names) {
-      const slice = connectors[name] ?? {};
-      for (const advisory of [
-        ...noopWarnings(name, slice),
-        ...missingSettingWarnings(name, slice),
-      ]) {
-        const label = advisoryLabel(name, advisory.account);
-        if (!labels.includes(label)) labels.push(label);
-      }
-    }
-    return labels;
   }
 
   /**

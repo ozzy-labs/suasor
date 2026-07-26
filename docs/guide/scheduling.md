@@ -124,7 +124,7 @@ journalctl --user -u suasor-sync.service          # ログを確認
 - systemd: `OnFailure=` で通知 unit を起動
 - `--json` 出力をログに残し、`failed` 件数や connector ごとの `error` を後追いできるようにする
 
-`--json` の形は connector ごとの結果（`{ connector, ok, outcome?, error? }`）と集計（`succeeded` / `failed`）を含む（[CLI リファレンス](../design/cli.md) の `BulkSyncResult`）。
+`--json` の形は connector ごとの結果（`{ connector, ok, outcome?, error? }`）と集計（`succeeded` / `failed`）、および取り込み前に出る config advisory（`preSyncAdvisories[]` = `{connector, account, message}`。scope 空 / 必須設定未設定。stderr の `warning:` 行と同一）を含む（[CLI リファレンス](../design/cli.md) の `BulkSyncResult`）。
 
 **部分失敗も exit 1 で検知できる**（[ADR-0042](../adr/0042-slack-workspace-less-connector.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)）: Slack の token pool のように 1 connector が内部に複数の取り込み単位（token / channel）を持つ場合、**一部の token だけが死んだ・一部の channel だけ取り込めなかった部分失敗**も connector 失敗として集計され `suasor sync` 全体が exit 1 になる（取り込めたレコードは保持される）。`slack sync` 単体でも同様に部分失敗で exit 1 となり、末尾に token 別サマリ行を出す。これにより「一部 token だけ失効 / rate limit」を exit code を gate にした cron / CI で取りこぼさない。`--json` では各 connector の `outcome.partialFailure` / `outcome.summaryLines` で機械可読に判別できる。
 
