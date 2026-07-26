@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.4.0](https://github.com/ozzy-labs/suasor/compare/v0.3.0...v0.4.0) (2026-07-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **connectors:** fix the ingest-scope defaults (google calendarIds, ms-graph user) ([#540](https://github.com/ozzy-labs/suasor/issues/540))
+* **config:** retire the [llm] section — the host is the LLM ([#531](https://github.com/ozzy-labs/suasor/issues/531))
+
+### refactor
+
+* **config:** retire the [llm] section — the host is the LLM ([#531](https://github.com/ozzy-labs/suasor/issues/531)) ([fbb9415](https://github.com/ozzy-labs/suasor/commit/fbb9415bd5e260e983f92040d7ece01a0ad4f1a1))
+
+
+### Features
+
+* **calendar:** derive proximity demand and rank imminent meetings first ([#528](https://github.com/ozzy-labs/suasor/issues/528)) ([52ca3c6](https://github.com/ozzy-labs/suasor/commit/52ca3c630172aabb57c759468110cd75fbc92d3d))
+* **connectors:** adopt multi-account for box (the remaining ADR-0050 candidate) ([#541](https://github.com/ozzy-labs/suasor/issues/541)) ([14bd2ce](https://github.com/ozzy-labs/suasor/commit/14bd2ced28d4286ed6fe4740beefd4bacebc84be))
+* **connectors:** fix the ingest-scope defaults (google calendarIds, ms-graph user) ([#540](https://github.com/ozzy-labs/suasor/issues/540)) ([31d6210](https://github.com/ozzy-labs/suasor/commit/31d621017e844fc0955bd721a9f96231b61ed925))
+* **connectors:** multi-account ingestion for google / ms-graph (lift the Slack alias pattern) ([#535](https://github.com/ozzy-labs/suasor/issues/535)) ([3fe4359](https://github.com/ozzy-labs/suasor/commit/3fe4359522c71f93c4d186109b39798e99607169))
+* **connectors:** per-connector readiness / doctor parity with slack ([#533](https://github.com/ozzy-labs/suasor/issues/533)) ([80c7499](https://github.com/ozzy-labs/suasor/commit/80c7499064019ffdb3135e119ab514cd19d0b67c))
+* **email:** derive demand from unanswered threads addressed to me ([#527](https://github.com/ozzy-labs/suasor/issues/527)) ([63b3885](https://github.com/ozzy-labs/suasor/commit/63b38854e2d5162c0e592c1afc447d2925db6b2d))
+* **onboard:** configure a second account with the wizard ([#542](https://github.com/ozzy-labs/suasor/issues/542)) ([0e79748](https://github.com/ozzy-labs/suasor/commit/0e79748fdcb4de36f1ad72f69a22598ab2ae372e))
+
+
+### Bug Fixes
+
+* **calendar:** store event times separately and expand recurring occurrences ([#525](https://github.com/ozzy-labs/suasor/issues/525)) ([60decaa](https://github.com/ozzy-labs/suasor/commit/60decaa8891a7d508ff8e01813f3f6cb7931acbf))
+* close out the live findings in the ADR-review minor backlog ([#530](https://github.com/ozzy-labs/suasor/issues/530)) ([c169a8c](https://github.com/ozzy-labs/suasor/commit/c169a8c5a54561d64ff380e8172edd349e9fb773))
+* **onboard:** embed and extract in the wizard's first sync ([#550](https://github.com/ozzy-labs/suasor/issues/550)) ([2fe1b22](https://github.com/ozzy-labs/suasor/commit/2fe1b22eb24308b466962549359426ba210493f2))
+* **onboard:** emit the pre-sync advisories the wizard's first sync dropped ([#545](https://github.com/ozzy-labs/suasor/issues/545)) ([cca1c23](https://github.com/ozzy-labs/suasor/commit/cca1c23cb2da46548654f0f7f179c8f3ac9c2052))
+* **skills:** make bundled skill links resolve outside the repository ([#549](https://github.com/ozzy-labs/suasor/issues/549)) ([7b05847](https://github.com/ozzy-labs/suasor/commit/7b0584732d4ea19ec58ff9b859dc94bc2c12e122))
+* **storage:** make the store owner-only and write down the at-rest threat model ([#532](https://github.com/ozzy-labs/suasor/issues/532)) ([fe7a39b](https://github.com/ozzy-labs/suasor/commit/fe7a39bc34d98715b726e60ce73721e64d006f64))
+
 ## [0.3.0](https://github.com/ozzy-labs/suasor/compare/v0.2.2...v0.3.0) (2026-07-25)
 
 
