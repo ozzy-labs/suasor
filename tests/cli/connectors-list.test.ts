@@ -19,6 +19,8 @@ const SECRET_ENVS = [
   "SUASOR_CONNECTOR_SLACK_TOKEN",
   "SUASOR_CONNECTOR_MS_GRAPH_CLIENTSECRET",
   "SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN",
+  "SUASOR_CONNECTOR_GOOGLE_PERSONAL_REFRESHTOKEN",
+  "SUASOR_CONNECTOR_GOOGLE_WORK_REFRESHTOKEN",
   "SUASOR_CONNECTOR_BOX_TOKEN",
 ];
 
@@ -75,7 +77,12 @@ async function writeConfig(toml: string): Promise<void> {
   await Bun.write(join(dir, "config.toml"), toml);
 }
 
-type Status = { name: string; enabled: boolean; tokenConfigured: boolean | null };
+type Status = {
+  name: string;
+  enabled: boolean;
+  tokenConfigured: boolean | null;
+  missingAccounts?: string[];
+};
 
 describe("suasor connectors list", () => {
   test("--help lists the connectors list command", async () => {
@@ -148,5 +155,38 @@ describe("suasor connectors list", () => {
     expect(out).toContain("github");
     expect(out).toContain("token:");
     expect(out).toMatch(/\d+ connector\(s\), \d+ enabled\./);
+  });
+
+  test("a multi-account connector is 'configured' only when every account is (ADR-0050)", async () => {
+    await run(["init"]);
+    await writeConfig(
+      [
+        "[connectors.google]",
+        'clientId = "shared"',
+        "[connectors.google.accounts.personal]",
+        "[connectors.google.accounts.work]",
+        "",
+      ].join("\n"),
+    );
+    process.env.SUASOR_CONNECTOR_GOOGLE_PERSONAL_REFRESHTOKEN = "rt";
+
+    const { out } = await run(["connectors", "list", "--json"]);
+    const google = (JSON.parse(out) as Status[]).find((s) => s.name === "google");
+    // Pre-ADR-0050 this read `configured`, because one stored credential
+    // answered for the whole connector — while the work account synced nothing.
+    expect(google?.tokenConfigured).toBe(false);
+    expect(google?.missingAccounts).toEqual(["work"]);
+
+    const human = await run(["connectors", "list"]);
+    expect(human.out).toContain("token: missing (accounts: work)");
+  });
+
+  test("a single-account connector keeps the pre-ADR-0050 shape", async () => {
+    await run(["init"]);
+    await writeConfig('[connectors.google]\nclientId = "c"\n');
+    process.env.SUASOR_CONNECTOR_GOOGLE_REFRESHTOKEN = "rt";
+    const { out } = await run(["connectors", "list", "--json"]);
+    const google = (JSON.parse(out) as Status[]).find((s) => s.name === "google");
+    expect(google).toEqual({ name: "google", enabled: true, tokenConfigured: true });
   });
 });

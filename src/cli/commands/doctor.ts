@@ -380,10 +380,21 @@ export class DoctorCommand extends Command {
     //    hide that token (#161). Only credential *presence* is probed, never the
     //    value (NFR-PRV-4).
     if (config !== null) {
-      const { noopWarning, missingSettingWarning } = await import("../../connectors/noop-check.ts");
+      const {
+        noopWarnings,
+        missingSettingWarnings,
+        accountSecretProbes,
+        demotedDefaultAccountNotice,
+        advisoryLabel,
+      } = await import("../../connectors/noop-check.ts");
       const enabled: string[] = [];
       const missingCred: string[] = [];
       const storedNotEnabled: string[] = [];
+      // `[connectors.<name>]` demoted to inheritance defaults by an `accounts`
+      // table with no `default` entry (ADR-0050) — reported at the confidence the
+      // evidence supports (see `demotedDefaultAccountNotice`).
+      const demotedDefaults: Array<{ name: string; severity: "warn" | "info"; message: string }> =
+        [];
       // Enabled connectors whose config slice resolves to "enabled but no ingest
       // target" (empty scope). Surfaced offline here so the no-op is visible at
       // diagnosis time instead of only as a warning during sync (Issue #388).
@@ -413,17 +424,41 @@ export class DoctorCommand extends Command {
         // offline detector: it returns a warning body when the slice has no ingest
         // target, or null otherwise. Exit code stays unchanged (warn only).
         if (slice !== undefined) {
-          const noop = noopWarning(name, slice);
-          if (noop !== null) noopScoped.push({ name, message: noop });
-          const missingSetting = missingSettingWarning(name, slice);
-          if (missingSetting !== null) missingSettings.push({ name, message: missingSetting });
+          for (const advisory of noopWarnings(name, slice)) {
+            noopScoped.push({
+              name: advisoryLabel(name, advisory.account),
+              message: advisory.message,
+            });
+          }
+          for (const advisory of missingSettingWarnings(name, slice)) {
+            missingSettings.push({
+              name: advisoryLabel(name, advisory.account),
+              message: advisory.message,
+            });
+          }
+          // A default account demoted to inheritance defaults (ADR-0050). The
+          // stored-credential probe is what separates the two confidence levels,
+          // so resolve it rather than guessing from config alone — but lazily:
+          // the notice does not apply to most configs, and an eager probe would
+          // charge every doctor run a keychain read per connector for it.
+          const notice = await demotedDefaultAccountNotice(name, slice, async () => {
+            const resolved = await Promise.all(
+              secrets.map((secret) => resolveSecret(name, secret)),
+            );
+            return resolved.some((value) => value !== null);
+          });
+          if (notice !== null) demotedDefaults.push({ name, ...notice });
         }
         if (secrets.length === 0) continue; // needs no auth (e.g. web)
-        for (const secret of secrets) {
-          if ((await resolveSecret(name, secret)) === null) {
-            missingCred.push(name);
-            break;
-          }
+        // Per account (ADR-0050): every configured account needs its own
+        // credential, and a single-account connector resolves to exactly the
+        // pre-ADR-0050 probe (base secret names, unlabelled). Every account is
+        // reported, not just the first — "which accounts are unusable" is the
+        // whole question here.
+        for (const probe of accountSecretProbes(name, slice ?? {})) {
+          if ((await resolveSecret(name, probe.secret)) !== null) continue;
+          const label = advisoryLabel(name, probe.account);
+          if (!missingCred.includes(label)) missingCred.push(label);
         }
       }
       if (enabled.length === 0) {
@@ -470,27 +505,48 @@ export class DoctorCommand extends Command {
       for (const { name, message } of missingSettings) {
         checks.push({ name: "connectors.config", status: "error", detail: `${name}: ${message}` });
       }
+      // The flat keys demoted to inheritance defaults by an `accounts` table with
+      // no `default` entry (ADR-0050). `warn` only when a stored credential shows
+      // the account really existed; otherwise `info`, because nothing in the
+      // config distinguishes "was ingesting" from "never was" and inventing that
+      // distinction would be the guess this check exists to avoid.
+      for (const { name, severity, message } of demotedDefaults) {
+        checks.push({
+          name: "connectors.accounts",
+          status: severity,
+          detail: `${name}: ${message}`,
+        });
+      }
 
       // 5b-2. Mail connector enabled but no self_addresses (Issue #488): email
       //      demand is derived from "addressed to me and unanswered", so
       //      without the operator's own addresses it is *silently always
       //      empty* — the same failure shape as Slack's self_user_ids.
+      //      Per account (ADR-0050): the work account is usually the one whose
+      //      addresses are missing, and a connector-level check would call it
+      //      configured because the personal account has some.
+      const { accountSlices } = await import("../../connectors/multi-account.ts");
       for (const name of ["google", "ms-graph"]) {
-        const slice = config.connectors[name];
-        if (slice === undefined || slice.enabled === false) continue;
-        const resources = (slice.resources as string[] | undefined) ?? [];
-        const ingestsMail =
-          resources.length === 0 || resources.includes("gmail") || resources.includes("mail");
-        if (!ingestsMail) continue;
-        const addresses = (slice.self_addresses as string[] | undefined) ?? [];
-        if (addresses.length === 0) {
+        const connectorSlice = config.connectors[name];
+        if (connectorSlice === undefined || connectorSlice.enabled === false) continue;
+        for (const account of accountSlices(connectorSlice)) {
+          const resources = (account.slice.resources as string[] | undefined) ?? [];
+          const ingestsMail =
+            resources.length === 0 || resources.includes("gmail") || resources.includes("mail");
+          if (!ingestsMail) continue;
+          const addresses = (account.slice.self_addresses as string[] | undefined) ?? [];
+          if (addresses.length > 0) continue;
+          const section = account.declared
+            ? `[connectors.${name}.accounts.${account.name}]`
+            : `[connectors.${name}]`;
           checks.push({
             name: "connectors.self_addresses",
             status: "warn",
             detail:
-              `${name}: no self_addresses configured — email demand (unanswered threads ` +
-              `addressed to you) is always empty. Add your own addresses, including ` +
-              `aliases and any team@ you answer, to [connectors.${name}].self_addresses`,
+              `${advisoryLabel(name, account.declared ? account.name : null)}: no self_addresses ` +
+              `configured — email demand (unanswered threads addressed to you) is always empty. ` +
+              `Add your own addresses, including aliases and any team@ you answer, to ` +
+              `${section}.self_addresses`,
           });
         }
       }

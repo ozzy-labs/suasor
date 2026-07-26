@@ -314,4 +314,9 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: true,
   surfacesChannels: false,
   surfacesTeams: false,
+  // Follow-up (#441): box folder ids are account-relative, so box is a genuine
+  // ADR-0050 candidate — deferred, not overlooked. Adopting it is a config
+  // schema line (`accounts: accountsRecord(...)`), this flag, and wrapping the
+  // folder loop in `syncAccountsIsolated`.
+  multiAccount: false,
 };

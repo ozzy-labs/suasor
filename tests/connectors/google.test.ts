@@ -462,6 +462,204 @@ describe("Google connector — guards", () => {
   // the completeness test in `tests/connectors/manifest.test.ts`.
 });
 
+describe("Google connector — multi-account (ADR-0050 / #441)", () => {
+  const item = (id: string) => ({
+    id,
+    title: `t-${id}`,
+    detail: "",
+    observedAt: "2026-07-01T00:00:00Z",
+  });
+
+  /** A client factory that records which refresh token / calendar each call got. */
+  function perAccountClients(pages: Record<string, GooglePage[]>): {
+    factory: (auth: {
+      clientId: string;
+      refreshToken: string;
+      calendarId: string;
+    }) => GoogleClientLike;
+    seen: Array<{ clientId: string; refreshToken: string; calendarId: string }>;
+  } {
+    const seen: Array<{ clientId: string; refreshToken: string; calendarId: string }> = [];
+    return {
+      seen,
+      factory: (auth) => {
+        seen.push(auth);
+        return fakeGoogle({ drive: pages[auth.refreshToken] ?? [] }).client;
+      },
+    };
+  }
+
+  test("each account resolves its own credential and namespaces its external ids", async () => {
+    const { factory, seen } = perAccountClients({
+      "rt-default": [{ items: [item("d1")] }],
+      "rt-work": [{ items: [item("w1")] }],
+    });
+    const connector = createGoogleConnector(
+      {
+        clientId: "shared",
+        resources: ["drive"],
+        accounts: { default: {}, work: { calendarId: "work@example.com" } },
+      },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) =>
+            name === "refreshToken"
+              ? "rt-default"
+              : name === "work:refreshToken"
+                ? "rt-work"
+                : null,
+        }),
+      ),
+    );
+    // `default` keeps the pre-ADR-0050 id, so an existing install's already
+    // ingested lineage stays addressable; only the named account is prefixed.
+    expect(records.map((r) => r.externalId)).toEqual(["google:drive:d1", "google:work:drive:w1"]);
+    // `meta.account` is a display facet, present once the operator named the
+    // account — never for the implicit single account (asserted below), so a
+    // pre-ADR-0050 install's stored meta is not rewritten.
+    expect(records[0]?.meta.account).toBe("default");
+    expect(records[1]?.meta.account).toBe("work");
+    // Inherited clientId, per-account calendarId.
+    expect(seen).toEqual([
+      { clientId: "shared", refreshToken: "rt-default", calendarId: "primary" },
+      { clientId: "shared", refreshToken: "rt-work", calendarId: "work@example.com" },
+    ]);
+  });
+
+  test("a tokenless account is skipped with a warning; the rest still sync", async () => {
+    const { factory } = perAccountClients({ "rt-personal": [{ items: [item("p1")] }] });
+    const warns: string[] = [];
+    const connector = createGoogleConnector(
+      { clientId: "c", resources: ["drive"], accounts: { personal: {}, work: {} } },
+      { clientFactory: factory },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "personal:refreshToken" ? "rt-personal" : null),
+          onWarn: (m) => warns.push(m),
+        }),
+      ),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["google:personal:drive:p1"]);
+    expect(warns.join("\n")).toContain("account 'work' skipped: no refreshToken configured");
+    const result = await connector.finalize?.();
+    // Non-zero exit: an account the config declares ingested nothing.
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines).toContain("accounts: personal=ok, work=skipped");
+  });
+
+  test("one account's dead credential does not stop the other", async () => {
+    const warns: string[] = [];
+    const connector = createGoogleConnector(
+      { clientId: "c", resources: ["drive"], accounts: { personal: {}, work: {} } },
+      {
+        clientFactory: (auth) => {
+          if (auth.refreshToken === "dead") throw new Error("invalid_grant");
+          return fakeGoogle({ drive: [{ items: [item("p1")] }] }).client;
+        },
+      },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "work:refreshToken" ? "dead" : "rt"),
+          onWarn: (m) => warns.push(m),
+        }),
+      ),
+    );
+    expect(records.map((r) => r.externalId)).toEqual(["google:personal:drive:p1"]);
+    expect(warns.join("\n")).toContain("work (invalid_grant)");
+    expect((await connector.finalize?.())?.summaryLines).toContain(
+      "accounts: personal=ok, work=failed",
+    );
+  });
+
+  test("every account failing still throws (a total failure is not a partial success)", async () => {
+    const connector = createGoogleConnector(
+      { clientId: "c", resources: ["drive"], accounts: { personal: {}, work: {} } },
+      {
+        clientFactory: () => {
+          throw new Error("invalid_grant");
+        },
+      },
+    );
+    await expect(
+      collect(connector.sync(ctx({ secret: async () => "rt", onWarn: () => {} }))),
+    ).rejects.toThrow("invalid_grant");
+  });
+
+  test("a per-resource failure is attributed to the account it happened in", async () => {
+    const connector = createGoogleConnector(
+      {
+        clientId: "c",
+        resources: ["drive", "gmail"],
+        accounts: { personal: {}, work: { resources: ["drive"] } },
+      },
+      {
+        clientFactory: (auth) =>
+          auth.refreshToken === "rt-personal"
+            ? fakeFailingGoogle({
+                byResource: { drive: [{ items: [item("p1")] }] },
+                failResources: { gmail: new Error("403 Forbidden") },
+              })
+            : fakeGoogle({ drive: [{ items: [item("w1")] }] }).client,
+      },
+    );
+    const warns: string[] = [];
+    await collect(
+      connector.sync(
+        ctx({
+          secret: async (name) => (name === "personal:refreshToken" ? "rt-personal" : "rt-work"),
+          onWarn: (m) => warns.push(m),
+        }),
+      ),
+    );
+    expect(warns.join("\n")).toContain("account 'personal': 1 resource OK, 1 failed");
+    const result = await connector.finalize?.();
+    expect(result?.partialFailure).toBe(true);
+    expect(result?.summaryLines).toContain(
+      "account 'personal' resources: drive=ok, gmail=failed (cursor preserved)",
+    );
+  });
+
+  test("an account with no resources is a no-op, not a degraded run", async () => {
+    // Empty scope keeps its pre-existing meaning (0 observed, exit 0) — turning
+    // it into a partial failure would change the exit code of a config that was
+    // deliberately narrowed.
+    const connector = createGoogleConnector(
+      { clientId: "c", accounts: { personal: {}, work: { resources: [] } } },
+      { clientFactory: () => fakeGoogle({ drive: [{ items: [item("p1")] }] }).client },
+    );
+    await collect(connector.sync(ctx({ secret: async () => "rt", onWarn: () => {} })));
+    expect((await connector.finalize?.())?.partialFailure).toBeUndefined();
+  });
+
+  test("a config with no accounts table is unchanged, id and meta included", async () => {
+    const connector = createGoogleConnector(
+      { clientId: "c", resources: ["drive"] },
+      { clientFactory: () => fakeGoogle({ drive: [{ items: [item("d1")] }] }).client },
+    );
+    const records = await collect(connector.sync(ctx()));
+    expect(records[0]?.externalId).toBe("google:drive:d1");
+    expect(records[0]?.meta).not.toHaveProperty("account");
+    expect((await connector.finalize?.())?.partialFailure).toBeUndefined();
+  });
+
+  test("self_addresses are unioned across accounts", async () => {
+    const { resolveSelfAddresses } = await import("../../src/connectors/google.ts");
+    expect(
+      resolveSelfAddresses({
+        self_addresses: ["Me@Personal.example"],
+        accounts: { work: { self_addresses: ["me@work.example"] }, personal: {} },
+      }),
+    ).toEqual(["me@personal.example", "me@work.example"]);
+  });
+});
+
 /** Extractor that returns text from a table; `null` ⇒ unsupported. */
 function fakeExtractor(table: Record<string, string | null>): Extractor {
   return {

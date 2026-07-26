@@ -7,7 +7,32 @@
  * before a silent 0-observed run. Pure / SDK-free, so it is exercised directly.
  */
 import { describe, expect, test } from "bun:test";
-import { missingSettingWarning, noopWarning } from "../../src/connectors/noop-check.ts";
+import type { ConnectorConfig } from "../../src/connectors/contract.ts";
+import {
+  accountSecretProbes,
+  advisoryLabel,
+  demotedDefaultAccountNotice,
+  missingSettingWarnings,
+  noopWarnings,
+} from "../../src/connectors/noop-check.ts";
+
+/**
+ * Single-account adapters. The advisories are per account (ADR-0050), but a
+ * config with no `accounts` table must keep producing exactly one unlabelled
+ * message — so the pre-ADR-0050 assertions below are kept verbatim as the
+ * regression guard for that path.
+ */
+function noopWarning(name: string, slice: ConnectorConfig): string | null {
+  const advisories = noopWarnings(name, slice);
+  expect(advisories.every((a) => a.account === null)).toBe(true);
+  return advisories[0]?.message ?? null;
+}
+
+function missingSettingWarning(name: string, slice: ConnectorConfig): string | null {
+  const advisories = missingSettingWarnings(name, slice);
+  expect(advisories.every((a) => a.account === null)).toBe(true);
+  return advisories[0]?.message ?? null;
+}
 
 describe("noopWarning — empty/no-op slices warn", () => {
   test("github: no repos + notifications off", () => {
@@ -173,5 +198,118 @@ describe("missingSettingWarning — required non-secret settings (ADR-0049)", ()
     const slice = { resources: ["drive"] };
     expect(noopWarning("google", slice)).toBeNull();
     expect(missingSettingWarning("google", slice)).toContain("clientId");
+  });
+});
+
+describe("per-account advisories (ADR-0050 / #441)", () => {
+  test("one no-op advisory per account, attributed by name", () => {
+    const advisories = noopWarnings("google", {
+      resources: ["drive"],
+      accounts: { personal: {}, work: { resources: [] } },
+    });
+    expect(advisories).toHaveLength(1);
+    expect(advisories[0]?.account).toBe("work");
+    expect(advisories[0]?.message).toContain("nothing to ingest");
+  });
+
+  test("a complete account does not vouch for an incomplete one", () => {
+    // The connector-level verdict would be "fine" here: `personal` has a
+    // clientId. That is exactly the state this per-account split exists to stop
+    // hiding — `work` overrides it with an empty string.
+    const advisories = missingSettingWarnings("google", {
+      clientId: "shared.apps.googleusercontent.com",
+      accounts: { personal: {}, work: { clientId: "" } },
+    });
+    expect(advisories.map((a) => a.account)).toEqual(["work"]);
+    expect(advisories[0]?.message).toContain("[connectors.google.accounts.work]");
+  });
+
+  test("accounts inherit the flat keys they do not override", () => {
+    expect(
+      missingSettingWarnings("ms-graph", {
+        tenantId: "t-1",
+        clientId: "c-1",
+        accounts: { alpha: {}, beta: { user: "someone@example.com" } },
+      }),
+    ).toEqual([]);
+  });
+
+  test("credential probes are per account, with the default one unprefixed", () => {
+    expect(accountSecretProbes("google", {})).toEqual([
+      { account: null, base: "refreshToken", secret: "refreshToken" },
+    ]);
+    expect(accountSecretProbes("google", { accounts: { default: {}, work: {} } })).toEqual([
+      { account: "default", base: "refreshToken", secret: "refreshToken" },
+      { account: "work", base: "refreshToken", secret: "work:refreshToken" },
+    ]);
+  });
+
+  test("a connector that does not declare multiAccount keeps its base probes", () => {
+    // The capability is what the manifest declares, never what a stray config
+    // key implies — otherwise a typo'd `accounts` table would silently redirect
+    // the credential probe to secrets nothing reads.
+    expect(accountSecretProbes("github", { accounts: { work: {} } })).toEqual([
+      { account: null, base: "token", secret: "token" },
+    ]);
+  });
+
+  test("advisoryLabel names the account only once one is declared", () => {
+    expect(advisoryLabel("google", null)).toBe("google");
+    expect(advisoryLabel("google", "work")).toBe("google (account 'work')");
+  });
+});
+
+describe("demotedDefaultAccountNotice — the flat slice becoming defaults (ADR-0050)", () => {
+  /** Credential probe that records whether it was consulted at all. */
+  function probe(stored: boolean): (() => Promise<boolean>) & { calls: () => number } {
+    let calls = 0;
+    const fn = async () => {
+      calls += 1;
+      return stored;
+    };
+    return Object.assign(fn, { calls: () => calls });
+  }
+
+  test("silent when there is no accounts table, or when it declares default", async () => {
+    // And without touching the keychain: the probe is a callback precisely so
+    // the common case costs no secret read per connector per doctor run.
+    const flat = probe(true);
+    expect(await demotedDefaultAccountNotice("google", { clientId: "c" }, flat)).toBeNull();
+    expect(flat.calls()).toBe(0);
+
+    const declared = probe(true);
+    expect(
+      await demotedDefaultAccountNotice(
+        "google",
+        { accounts: { default: {}, work: {} } },
+        declared,
+      ),
+    ).toBeNull();
+    expect(declared.calls()).toBe(0);
+  });
+
+  test("warns when a credential for the unnamed default is still stored", async () => {
+    const notice = await demotedDefaultAccountNotice(
+      "google",
+      { accounts: { work: {} } },
+      probe(true),
+    );
+    expect(notice?.severity).toBe("warn");
+    expect(notice?.message).toContain("no longer synced");
+    expect(notice?.message).toContain("[connectors.google.accounts.default]");
+  });
+
+  test("only informs when nothing shows the default account ever existed", async () => {
+    // Without a stored credential, "was ingesting" and "never was" are
+    // indistinguishable — so the notice states the rule and asserts nothing
+    // about this install's history.
+    const notice = await demotedDefaultAccountNotice(
+      "google",
+      { accounts: { work: {} } },
+      probe(false),
+    );
+    expect(notice?.severity).toBe("info");
+    expect(notice?.message).not.toContain("no longer synced");
+    expect(notice?.message).toContain("inherited defaults");
   });
 });

@@ -13,8 +13,15 @@
  *   (ADR-0034 §b): binary files use Drive's `md5Checksum`; Google-native files
  *   (Docs/Sheets/Slides) have no md5, so the monotonic `version` is used instead.
  * - **identity** — `google:<resource>:<id>` (cross-source-unique, resource-
- *   prefixed, ADR-0007). `source_type` is one of `google_drive`, `gmail_message`,
+ *   prefixed, ADR-0007), or `google:<account>:<resource>:<id>` for a named
+ *   account (ADR-0050). `source_type` is one of `google_drive`, `gmail_message`,
  *   `google_calendar`.
+ * - **multi-account** — `[connectors.google.accounts.<account>]` ingests a
+ *   personal and a work Google account in one pass (ADR-0050), each with its own
+ *   credential (`connector:google:<account>:refreshToken`), its own
+ *   `calendarId` / `resources`, and per-account error isolation. A config with no
+ *   `accounts` table is exactly one unprefixed `default` account — the
+ *   pre-ADR-0050 behaviour, byte for byte.
  * - **extraction** — Drive Office/PDF files carry an `extractable` handle so the
  *   shared sync extraction stage (ADR-0024) fetches their content via the Drive
  *   API and replaces the body with sidecar-extracted text. Google-native files
@@ -42,14 +49,27 @@ import type {
   SyncResult,
 } from "./contract.ts";
 import type { ConnectorManifest } from "./manifest.ts";
-import { type IsolationResult, syncResourcesIsolated } from "./per-resource.ts";
+import {
+  type AccountIsolationResult,
+  type AccountSlice,
+  accountIdPrefix,
+  accountSecretName,
+  accountSlices,
+  accountsRecord,
+  syncAccountsIsolated,
+} from "./multi-account.ts";
+import { syncResourcesIsolated } from "./per-resource.ts";
 
 /** Google resource families this connector can ingest. */
 export const GoogleResource = z.enum(["drive", "gmail", "calendar"]);
 export type GoogleResource = z.infer<typeof GoogleResource>;
 
-/** `[connectors.google]` config (docs/design/config.md). */
-export const GoogleConnectorConfig = z.object({
+/**
+ * Settings for **one** Google account. Every key here is per-account: a work and
+ * a personal account differ in which calendar is `primary`, which resources are
+ * worth ingesting, and which addresses count as "me" (ADR-0050).
+ */
+const GoogleAccountSettings = z.object({
   /** OAuth client id of the desktop / web app. */
   clientId: z.string().min(1).default(""),
   /** Calendar id to read events from (default the primary calendar). */
@@ -68,6 +88,17 @@ export const GoogleConnectorConfig = z.object({
    */
   self_addresses: z.array(z.string().min(1)).default([]),
 });
+export type GoogleAccountSettings = z.infer<typeof GoogleAccountSettings>;
+
+/**
+ * `[connectors.google]` config (docs/design/config.md). The flat keys configure
+ * the single `default` account **and** act as inherited defaults for every entry
+ * of the optional `[connectors.google.accounts.<account>]` table (ADR-0050) — one
+ * OAuth `clientId` typically serves every account the operator owns.
+ */
+export const GoogleConnectorConfig = GoogleAccountSettings.extend({
+  accounts: accountsRecord(GoogleAccountSettings.partial().strict()),
+});
 export type GoogleConnectorConfig = z.infer<typeof GoogleConnectorConfig>;
 
 export const GOOGLE_CONNECTOR_NAME = "google";
@@ -75,11 +106,25 @@ export const GOOGLE_CONNECTOR_NAME = "google";
 /**
  * The operator's own addresses from a connector slice, lowercased and
  * de-duplicated (ADR-0043 決定 2). Mirrors `resolveSelfUserIds` for Slack.
+ *
+ * The union is taken **across accounts** (ADR-0050): "me" is one person with two
+ * mailboxes, so a thread addressed to the work address is the operator's demand
+ * regardless of which account ingested it. Reading only the flat key would have
+ * made every named account's addresses invisible to the email-demand predicate —
+ * i.e. silently empty demand, the exact failure `doctor` warns about for an
+ * unset `self_addresses`.
  */
 export function resolveSelfAddresses(config: ConnectorConfig): string[] {
-  const raw = (config as { self_addresses?: unknown } | undefined)?.self_addresses;
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.map((a) => String(a).trim().toLowerCase()).filter((a) => a.length > 0))];
+  const addresses: string[] = [];
+  for (const account of accountSlices(config)) {
+    const raw = (account.slice as { self_addresses?: unknown }).self_addresses;
+    if (!Array.isArray(raw)) continue;
+    for (const value of raw) {
+      const address = String(value).trim().toLowerCase();
+      if (address.length > 0) addresses.push(address);
+    }
+  }
+  return [...new Set(addresses)];
 }
 
 /** Milliseconds in a day — the calendar window is expressed in days. */
@@ -313,6 +358,7 @@ function toRecord(
   resource: GoogleResource,
   item: GoogleItem,
   client: GoogleClientLike,
+  account: AccountSlice,
 ): SourceRecord {
   const body =
     item.title && item.detail ? `${item.title}\n\n${item.detail}` : item.title || item.detail;
@@ -320,13 +366,20 @@ function toRecord(
   const fingerprint = isDrive ? (item.md5Checksum ?? item.version) : undefined;
   const extractable = isDrive ? driveExtractable(item, client) : undefined;
   return {
-    externalId: `google:${resource}:${item.id}`,
+    // Named accounts namespace the id (ADR-0050): Gmail message ids are unique
+    // per mailbox and one meeting carries the same Calendar event id in every
+    // attendee's copy, so two accounts would otherwise write one flip-flopping
+    // source. `default` stays unprefixed so an existing install's lineage holds.
+    externalId: `google:${accountIdPrefix(account)}${resource}:${item.id}`,
     sourceType: SOURCE_TYPE[resource],
     body,
     observedAt: item.observedAt,
     meta: {
       resource,
       id: item.id,
+      // Only for an explicitly declared account: a single-account install keeps
+      // exactly the meta it already has (no rewrite of existing rows).
+      ...(account.declared ? { account: account.name } : {}),
       ...(item.calendar !== undefined ? item.calendar : {}),
       ...(item.mail !== undefined ? item.mail : {}),
     },
@@ -504,91 +557,173 @@ export interface GoogleConnectorOptions {
   clientFactory?: GoogleClientFactory;
 }
 
+/** One resolved Google account: its raw slice plus its parsed settings. */
+interface GoogleAccount extends AccountSlice {
+  readonly settings: GoogleAccountSettings;
+}
+
+/**
+ * Build the credential precondition for the configured accounts (ADR-0007
+ * any-of): the pass throws only when **no** account has a token, while an
+ * individual tokenless account is left to the per-account skip below.
+ */
+function googleCredentials(accounts: readonly GoogleAccount[]): CredentialRequirement {
+  const secretNames = accounts.map((account) => accountSecretName(account, "refreshToken"));
+  const single = accounts.length === 1 && !(accounts[0] as GoogleAccount).declared;
+  return {
+    secretNames,
+    missingMessage: single
+      ? GOOGLE_CREDENTIALS.missingMessage
+      : `google connector: no refreshToken configured for any account ` +
+        `(${accounts.map((a) => `'${a.name}'`).join(", ")}) — store each account's token under ` +
+        `keychain account 'connector:google:<account>:refreshToken', or set ` +
+        `SUASOR_CONNECTOR_GOOGLE_<ACCOUNT>_REFRESHTOKEN`,
+  };
+}
+
 /** Google connector implementing the read-only contract (ADR-0007). */
 class GoogleConnector implements Connector {
   readonly name = GOOGLE_CONNECTOR_NAME;
   readonly sourceType = "google";
-  readonly credentials = GOOGLE_CREDENTIALS;
+  readonly credentials: CredentialRequirement;
 
-  /** Per-resource isolation outcome (set when `sync` ran) → finalize summary. */
-  private isolation: IsolationResult | null = null;
+  /** Per-account isolation outcome (set when `sync` ran) → finalize summary. */
+  private accountIsolation: AccountIsolationResult | null = null;
+  /** Per-account resource-isolation summary lines, in run order. */
+  private resourceSummaries: string[] = [];
+  /** Whether any account saw a partial per-resource failure. */
+  private resourcePartial = false;
 
   constructor(
-    private readonly config: GoogleConnectorConfig,
+    private readonly accounts: readonly GoogleAccount[],
     private readonly clientFactory: GoogleClientFactory,
-  ) {}
+  ) {
+    this.credentials = googleCredentials(accounts);
+  }
 
   async *sync(ctx: SyncContext): AsyncIterable<SourceRecord> {
     // Empty scope is a genuine no-op: the credential precondition (`credentials`
     // above) is enforced centrally by the sync service before `sync()` runs, so
     // this early return can never mask a missing refreshToken (ADR-0007
-    // "credential 解決は scope-emptiness 判定に先行する", Issue #440).
-    if (this.config.resources.length === 0) return;
+    // "credential 解決は scope-emptiness 判定に先行する", Issue #440). Per account
+    // (ADR-0050): an account that ingests nothing is dropped from the pass rather
+    // than counted as a degraded one — it is a no-op, not a failure.
+    const active = this.accounts.filter((account) => account.settings.resources.length > 0);
+    if (active.length === 0) return;
 
-    const refreshToken = await ctx.secret("refreshToken");
-    // Guaranteed present by the central credential check; narrow for the client.
-    if (refreshToken === null) throw new Error(GOOGLE_CREDENTIALS.missingMessage);
+    this.accountIsolation = null;
+    this.resourceSummaries = [];
+    this.resourcePartial = false;
+    const tokens = new Map<string, string>();
 
+    yield* syncAccountsIsolated(
+      active,
+      ctx,
+      async (account) => {
+        const refreshToken = await ctx.secret(accountSecretName(account, "refreshToken"));
+        // A tokenless account is skipped with a warning, never a total failure
+        // (ADR-0007 multi-account clause). The central check already guaranteed
+        // at least one account has a credential.
+        if (refreshToken === null) return "no refreshToken configured";
+        tokens.set(account.name, refreshToken);
+        return null;
+      },
+      (account, accountCtx) =>
+        this.syncAccount(account, tokens.get(account.name) as string, accountCtx),
+      (result) => {
+        this.accountIsolation = result;
+      },
+    );
+  }
+
+  /** Stream one account's configured resources, with per-resource isolation. */
+  private async *syncAccount(
+    account: GoogleAccount,
+    refreshToken: string,
+    ctx: SyncContext,
+  ): AsyncIterable<SourceRecord> {
     const client = await this.clientFactory({
-      clientId: this.config.clientId,
+      clientId: account.settings.clientId,
       refreshToken,
-      calendarId: this.config.calendarId,
+      calendarId: account.settings.calendarId,
     });
-    this.isolation = null;
 
     // Per-resource error isolation (ADR-0014 generalized, Issue #193): one
     // resource family failing (e.g. Drive 403) records a warn and is skipped
-    // while the rest stream; only an all-resources failure throws.
+    // while the rest stream; only an all-resources failure throws — which the
+    // account layer above then isolates to this account (ADR-0050).
     const fetchResource = (resource: GoogleResource): AsyncIterable<SourceRecord> =>
       (async function* () {
         let pageToken: string | undefined;
         do {
           const page = await client.listPage(resource, pageToken);
           for (const item of page.items) {
-            yield toRecord(resource, item, client);
+            yield toRecord(resource, item, client, account);
           }
           pageToken = page.nextPageToken;
         } while (pageToken);
       })();
 
     yield* syncResourcesIsolated(
-      this.config.resources,
+      account.settings.resources,
       ctx,
       (resource) => resource,
       "resource",
       fetchResource,
       (result) => {
-        this.isolation = result;
+        if (result.partialFailure) this.resourcePartial = true;
+        for (const line of result.summaryLines ?? []) {
+          this.resourceSummaries.push(
+            account.declared ? `account '${account.name}' ${line}` : line,
+          );
+        }
       },
     );
   }
 
   finalize(): SyncResult {
     // Fingerprint-based change detection; no per-run cursor to persist. A
-    // partial resource failure is surfaced so the CLI exits non-zero without
-    // discarding the collected records (ADR-0027, Issue #193).
-    const iso = this.isolation;
-    if (iso?.partialFailure) {
-      return {
-        cursor: null,
-        partialFailure: true,
-        ...(iso.summaryLines ? { summaryLines: iso.summaryLines } : {}),
-      };
-    }
-    return { cursor: null };
+    // partial failure — at either layer, a degraded account or a failed resource
+    // family — is surfaced so the CLI exits non-zero without discarding the
+    // collected records (ADR-0027, Issue #193 / ADR-0050).
+    const partial = (this.accountIsolation?.partialFailure ?? false) || this.resourcePartial;
+    if (!partial) return { cursor: null };
+    const summaryLines = [
+      ...(this.accountIsolation?.summaryLines ?? []),
+      ...this.resourceSummaries,
+    ];
+    return {
+      cursor: null,
+      partialFailure: true,
+      ...(summaryLines.length > 0 ? { summaryLines } : {}),
+    };
   }
 }
 
 /**
  * Build the Google connector from its config slice (validates with Zod).
  * `googleapis` is not imported here — only when `sync` actually runs.
+ *
+ * The slice is resolved into one account per `[connectors.google.accounts.<x>]`
+ * entry — or the single implicit `default` account when there is no table
+ * (ADR-0050) — each inheriting the flat keys it does not override.
  */
 export function createGoogleConnector(
   config: ConnectorConfig,
   options: GoogleConnectorOptions = {},
 ): Connector {
-  const parsed = GoogleConnectorConfig.parse(config ?? {});
-  return new GoogleConnector(parsed, options.clientFactory ?? defaultGoogleClientFactory);
+  // Validate the whole slice first (account names, env-override collisions,
+  // per-account typos) so those errors surface here and not as a confusing
+  // failure inside one account's settings. The result is deliberately
+  // discarded: Zod fills schema defaults into every account, which erases the
+  // absent-vs-set distinction inheritance needs, so the effective config comes
+  // from the raw merge in `accountSlices` (see multi-account.ts).
+  GoogleConnectorConfig.parse(config ?? {});
+  const accounts: GoogleAccount[] = accountSlices(config ?? {}).map((account) => ({
+    ...account,
+    settings: GoogleAccountSettings.parse(account.slice),
+  }));
+  return new GoogleConnector(accounts, options.clientFactory ?? defaultGoogleClientFactory);
 }
 
 /** Platform manifest (SSOT for the scattered per-connector tables, Issue #440). */
@@ -600,7 +735,12 @@ export const manifest: ConnectorManifest = {
   needsAuth: true,
   bundledInBinary: false,
   sliceTemplate: {
-    body: ["enabled = true", '# clientId = "<oauth-client-id>"  # required for auth'],
+    body: [
+      "enabled = true",
+      '# clientId = "<oauth-client-id>"  # required for auth',
+      "# A second Google account (personal + work) goes in its own table:",
+      "#   [connectors.google.accounts.work]   # see docs/guide/connectors.md (ADR-0050)",
+    ],
   },
   requiredSettings: [{ key: "clientId", hint: "OAuth client id of the desktop / web app" }],
   noopWarning(slice) {
@@ -614,4 +754,7 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: true,
   surfacesChannels: false,
   surfacesTeams: false,
+  // Personal + work Google accounts in one install (ADR-0050): the ingest scope
+  // is account-relative (`calendarId = "primary"`), so the account has to be named.
+  multiAccount: true,
 };

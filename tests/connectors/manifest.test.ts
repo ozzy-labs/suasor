@@ -135,6 +135,28 @@ describe("connector manifest — completeness (parametrized over connectorNames(
         expect(manifest?.surfacesChannels).toBe(channelMetaConnectors().includes(name));
         expect(manifest?.surfacesTeams).toBe(teamMetaConnectors().includes(name));
       });
+
+      test("multiAccount ⟺ the config schema actually has an `accounts` table (ADR-0050)", () => {
+        // Both directions matter. A connector that grows an `accounts` key
+        // without declaring it leaves `doctor` and the `auth` verbs inspecting
+        // only the first account (a silent half-configured install); one that
+        // declares it without the schema key makes `--account` accept a name
+        // whose credential nothing will ever read.
+        const parsed = manifest?.configSchema.parse({}) as Record<string, unknown>;
+        expect(manifest?.multiAccount).toBe(Object.hasOwn(parsed, "accounts"));
+      });
+
+      test("a multi-account connector namespaces its per-account credential", async () => {
+        if (manifest?.multiAccount !== true) return;
+        // The any-of credential requirement has to name one secret per configured
+        // account (ADR-0007 multi-account clause) — otherwise a work account with
+        // no token would be masked by the personal account's, and skipped
+        // silently instead of warned about.
+        const connector = await loadConnector(name, { accounts: { default: {}, work: {} } });
+        expect(connector.credentials?.secretNames).toEqual(
+          (manifest.secretNames as string[]).flatMap((secret) => [secret, `work:${secret}`]),
+        );
+      });
     });
   }
 });

@@ -362,6 +362,8 @@ export const manifest: ConnectorManifest = {
   genericDiscovery: false,
   surfacesChannels: false,
   surfacesTeams: false,
+  // Filesystem roots are absolute paths; there is no account to name.
+  multiAccount: false,
   capabilityNotes: {
     genericAuth: "local filesystem only — no credential to store or test",
     genericDiscovery: "roots are user-supplied paths — no upstream namespace to enumerate",

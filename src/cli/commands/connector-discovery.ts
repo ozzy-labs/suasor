@@ -43,6 +43,10 @@ class ConnectorDiscoveryCommand extends Command {
   noProgress = Option.Boolean("--no-progress", false, {
     description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
   });
+  account = Option.String("--account", {
+    description:
+      "Account whose credential and settings to enumerate with, on connectors with a [connectors.<name>.accounts.<account>] table (ADR-0050).",
+  });
 
   override async execute(): Promise<number> {
     const connector = (this.constructor as typeof ConnectorDiscoveryCommand).connectorName;
@@ -71,14 +75,34 @@ class ConnectorDiscoveryCommand extends Command {
       return 1;
     }
 
-    const [{ loadConfig }, { makeSecretResolver }, { createProgress }] = await Promise.all([
-      import("../../config/index.ts"),
-      import("../../connectors/secrets.ts"),
-      import("../progress.ts"),
-    ]);
-    const config = await loadConfig();
-    const slice = (config.connectors[connector] ?? {}) as Record<string, unknown>;
-    const secret = makeSecretResolver(connector);
+    // Which account's credential and settings to enumerate with (ADR-0050). A
+    // connector with no `accounts` table resolves to one implicit `default`, so
+    // the single-account path is unchanged; with several configured the target
+    // is refused rather than guessed — enumerating the personal account's
+    // namespace and pasting it under the work account is a silent mis-config.
+    const [{ resolveConnectorAccounts, ambiguousAccountMessage }, { makeSecretResolver }] =
+      await Promise.all([import("../connector-account.ts"), import("../../connectors/secrets.ts")]);
+    const resolvedAccounts = await resolveConnectorAccounts(connector, this.account, {
+      tolerateConfigError: false,
+    });
+    if (!resolvedAccounts.ok) {
+      this.context.stderr.write(resolvedAccounts.message);
+      return 1;
+    }
+    if (resolvedAccounts.accounts.length > 1) {
+      this.context.stderr.write(ambiguousAccountMessage(connector, resolvedAccounts.accounts));
+      return 1;
+    }
+    const account = resolvedAccounts.accounts[0];
+    if (!account) {
+      this.context.stderr.write(`error: no configured account for ${connector}\n`);
+      return 1;
+    }
+    const { accountSecretName } = await import("../../connectors/multi-account.ts");
+    const { createProgress } = await import("../progress.ts");
+    const slice = account.slice;
+    const resolveConnectorSecret = makeSecretResolver(connector);
+    const secret = (name: string) => resolveConnectorSecret(accountSecretName(account, name));
 
     // Indeterminate progress on stderr while paging runs, so a multi-page sweep
     // is not silent. TTY-gated and suppressed by --no-progress so --json / piped

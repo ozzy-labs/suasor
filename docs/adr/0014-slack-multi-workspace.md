@@ -1,6 +1,7 @@
 # 0014. Slack multi-workspace（`[connectors.slack.workspaces.<alias>]`）
 
 - Status: Superseded by [ADR-0042](0042-slack-workspace-less-connector.md)（2026-07-21・[#464](https://github.com/ozzy-labs/suasor/issues/464)。workspace alias（per-alias config / secret / cursor / `--workspace`）は廃止され、無名 token プール + flat config + canonical channel identity に置き換わる。**本 ADR 内「per-resource エラー分離の非 Slack への一般化（#193）」節の不変条件は Slack alias 構成に依存せず引き続き有効**で、ADR-0042 では token 軸の隔離として維持される）
+- 一般化（2026-07-26・[#441](https://github.com/ozzy-labs/suasor/issues/441)・[ADR-0050](0050-multi-account-connectors.md)）: **本 ADR の alias パターンは Slack から消えたが、パターン自体は死んでいない。** ADR-0042 が alias を捨てられたのは Slack の取り込みスコープが globally unique な channel id で書かれているからで、その条件が成立しない connector — 取り込みスコープが**アカウント相対の名前**（google の `calendarId = "primary"`、ms-graph の `user = "me"`）で書かれる google / ms-graph — では account に名前が要る。ADR-0050 が本 ADR の決定 1（per-alias config table・ただし flat キーは継承の既定値）/ 決定 2（per-alias secret 命名・`default` は無印）/ 決定 4 後半（per-alias エラー隔離）を `accounts` として一般化した。**決定 3（alias ネスト cursor）だけは一般化していない** — 対象 connector は fingerprint ベースで cursor を持たないため、規約のみ ADR-0050 決定 5 に記し実装は保留した。
 - Date: 2026-06-19
 - Deciders: Suasor maintainers
 - Tracking: [#50](https://github.com/ozzy-labs/suasor/issues/50) / epic [#53](https://github.com/ozzy-labs/suasor/issues/53)
