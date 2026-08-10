@@ -19,9 +19,10 @@
  */
 import { existsSync } from "node:fs";
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
-export class ExportBackupCommand extends Command {
+export class ExportBackupCommand extends SuasorCommand {
   static override paths = [["export", "backup"]];
 
   static override usage = Command.Usage({

@@ -15,6 +15,7 @@
  */
 import { Command, Option } from "clipanion";
 import type { ConversationType, SlackConversation } from "../../connectors/slack/conversations.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { isInteractiveStdin } from "../read-secret.ts";
 
 const SLACK = "slack";
@@ -138,7 +139,7 @@ async function configuredChannels(stderr: { write(s: string): unknown }): Promis
 }
 
 /** `slack follow` — add channels to the ingest list by name or id. */
-export class SlackFollowCommand extends Command {
+export class SlackFollowCommand extends SuasorCommand {
   static override paths = [[SLACK, "follow"]];
 
   static override usage = Command.Usage({
@@ -293,7 +294,7 @@ export class SlackFollowCommand extends Command {
 }
 
 /** `slack unfollow` — remove channels from the ingest list by name or id. */
-export class SlackUnfollowCommand extends Command {
+export class SlackUnfollowCommand extends SuasorCommand {
   static override paths = [[SLACK, "unfollow"]];
 
   static override usage = Command.Usage({

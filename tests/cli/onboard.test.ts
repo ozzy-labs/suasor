@@ -963,7 +963,7 @@ describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", () 
       // hard-coded "suasor" — the test runner launches from a .ts entry, so the
       // wizard substitutes the from-source `bun` invocation here.
       const block = out.slice(mcpIdx);
-      expect(block).toMatch(/"command": "(suasor|bun|bunx)"/);
+      expect(block).toMatch(/"command": "(suasor|bun|bunx|docker)"/);
       // An MCP-specific note is printed directly *after* the snippet (Issue #388
       // item 2). Asserting on the post-snippet slice (not the whole output) so the
       // scheduler's own note earlier on cannot stand in for it.

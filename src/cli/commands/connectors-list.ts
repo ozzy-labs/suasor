@@ -17,6 +17,7 @@
  */
 import { Command, Option } from "clipanion";
 import { connectorNames } from "../../connectors/registry.ts";
+import { SuasorCommand } from "../base-command.ts";
 
 /** One connector's introspected state (shape of each `--json` array element). */
 interface ConnectorStatus {
@@ -39,7 +40,7 @@ interface ConnectorStatus {
   missingAccounts?: string[];
 }
 
-export class ConnectorsListCommand extends Command {
+export class ConnectorsListCommand extends SuasorCommand {
   static override paths = [["connectors", "list"]];
 
   static override usage = Command.Usage({

@@ -19,8 +19,9 @@
  * `execute`; only clipanion + node:fs/path/child_process are eager (std lib).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class ConfigEditCommand extends Command {
+export class ConfigEditCommand extends SuasorCommand {
   static override paths = [["config", "edit"]];
 
   static override usage = Command.Usage({
