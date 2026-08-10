@@ -434,7 +434,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "or a github notification already read (`meta.unread=false`), are " +
         "hidden so 'unprocessed' is true (ADR-0041 supersedes ADR-0012 決定 4). Pass " +
         "includeSeen=true to return all with `seenState` populated. Use as the priority " +
-        "signal in next-actions / personal-brief. Returns `truncated: true` when more rows " +
+        "signal in next-actions / brief. Returns `truncated: true` when more rows " +
         "match than `limit` returned (ADR-0007).",
       inputSchema: {
         selfUserId: z
@@ -810,7 +810,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
   // --- commitment.list: read the commitment ledger by state (ADR-0021). ---
   // Read tool (readOnlyHint: true): outstanding "約束/コミットメント" so a host
   // can surface them as a "やるべきこと" priority signal alongside Slack demand
-  // in next-actions / personal-brief. Filter by state and direction.
+  // in next-actions / brief. Filter by state and direction.
   server.registerTool(
     "commitment.list",
     {
