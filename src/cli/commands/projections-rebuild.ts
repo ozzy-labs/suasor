@@ -5,9 +5,10 @@
  * `execute` so the CLI cold start stays light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { createProgress } from "../progress.ts";
 
-export class ProjectionsRebuildCommand extends Command {
+export class ProjectionsRebuildCommand extends SuasorCommand {
   static override paths = [["projections", "rebuild"]];
 
   static override usage = Command.Usage({

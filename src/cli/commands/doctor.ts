@@ -20,6 +20,7 @@ import { Command, Option } from "clipanion";
 import { connectorNames, connectorSecretNames } from "../../connectors/registry.ts";
 // Type-only import — erased at compile time, keeps the lazy-import discipline.
 import type { KeychainBackend } from "../../connectors/secrets.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
 /** Severity of a single check (worst across checks sets the exit code). */
@@ -49,7 +50,7 @@ const PROJECTION_TABLES = [
   "slack_teams",
 ];
 
-export class DoctorCommand extends Command {
+export class DoctorCommand extends SuasorCommand {
   static override paths = [["doctor"]];
 
   static override usage = Command.Usage({

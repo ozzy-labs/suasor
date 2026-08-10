@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveSince } from "../../src/cli/commands/brief.ts";
 import { buildCli } from "../../src/cli/index.ts";
+import { resolveSince } from "../../src/shared/since.ts";
 
 let dir: string;
 

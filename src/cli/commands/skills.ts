@@ -1,17 +1,18 @@
 /**
- * `suasor skills install` / `suasor skills list` — assistant skills (ADR-0008).
+ * `suasor skills install` / `list` / `prune` — assistant skills (ADR-0008).
  *
  * The SSOT for each assistant skill is `docs/skills/<name>/SKILL.md`, shipped
  * with the package. `install` expands those into the agent skill dirs
  * (`.claude/skills/` / `.agents/skills/`); `list` reports their installed
- * status. Only the bundled assistant skills are touched — ecosystem dev skills
- * (`@ozzylabs/skills`) live in a disjoint namespace.
+ * status (including `orphan` mirrors for retired catalog names, #556); `prune`
+ * deletes those orphans. Only the bundled assistant skills are touched —
+ * ecosystem dev skills (`@ozzylabs/skills`) live in a disjoint namespace.
  *
  * Flags:
  *   --scope claude|agents|all   which mirror dir(s) to target (default all)
  *   --host  <dir>               base dir to install under (default cwd)
- *   --dry-run                   (install) preview without writing
- *   --json                      (list) machine-readable status
+ *   --dry-run                   (install / prune) preview without writing
+ *   --json                      (list / prune) machine-readable output
  *
  * The skills service (fs work) is lazy-imported inside `execute` to keep the
  * command registry cheap to build (NFR-PRF-1, docs/design/cli.md).
@@ -19,6 +20,7 @@
 import { homedir } from "node:os";
 import { Command, Option } from "clipanion";
 import { VERSION } from "../../version.ts";
+import { SuasorCommand } from "../base-command.ts";
 
 /** Install targets for assistant skills (ADR-0008). Mirrors `skills` module. */
 const SCOPES = ["claude", "agents", "all"] as const;
@@ -35,7 +37,7 @@ function resolveBaseDir(host: string | undefined, project: boolean): string {
   return project ? process.cwd() : homedir();
 }
 
-export class SkillsInstallCommand extends Command {
+export class SkillsInstallCommand extends SuasorCommand {
   static override paths = [["skills", "install"]];
 
   static override usage = Command.Usage({
@@ -85,15 +87,21 @@ export class SkillsInstallCommand extends Command {
       return 1;
     }
 
-    const { installSkills } = await import("../../skills/index.ts");
+    const { installSkills, orphanStatuses } = await import("../../skills/index.ts");
+    const baseDir = resolveBaseDir(this.host, this.project);
     let results: Awaited<ReturnType<typeof installSkills>>;
+    let orphans: Awaited<ReturnType<typeof orphanStatuses>>;
     try {
       results = installSkills({
-        baseDir: resolveBaseDir(this.host, this.project),
+        baseDir,
         scope: this.scope as Scope,
         dryRun: this.dryRun,
         version: VERSION,
       });
+      // Post-install cleanup signal (#556): install overwrites but never
+      // deletes, so retired mirrors (ADR-0046) survive every upgrade unless
+      // someone is told they exist. Removal stays opt-in via 'skills prune'.
+      orphans = orphanStatuses({ baseDir, scope: this.scope as Scope });
     } catch (cause) {
       this.context.stderr.write(
         `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
@@ -119,11 +127,108 @@ export class SkillsInstallCommand extends Command {
     this.context.stdout.write(
       `${this.dryRun ? "Dry run: " : ""}${created} created, ${updated} updated, ${unchanged} unchanged (scope=${this.scope}).\n`,
     );
+    if (orphans.length > 0) {
+      const names = [...new Set(orphans.map((o) => o.name))].join(", ");
+      this.context.stderr.write(
+        `warning: ${orphans.length} mirror(s) outside the catalog found (${names}); ` +
+          `these are retired skills a previous suasor installed — remove with 'suasor skills prune'\n`,
+      );
+    }
     return 0;
   }
 }
 
-export class SkillsListCommand extends Command {
+export class SkillsPruneCommand extends SuasorCommand {
+  static override paths = [["skills", "prune"]];
+
+  static override usage = Command.Usage({
+    category: "Skills",
+    description: "Remove orphaned assistant-skill mirrors (retired catalog names).",
+    details: `
+      Deletes mirrors for skills the bundled catalog no longer ships — e.g. the
+      pre-0.3 names folded away by ADR-0046 — which 'skills install' overwrites
+      but never removes. Left in place, they collide with the current skills
+      and instruct MCP tools that no longer exist.
+
+      Only mirrors suasor demonstrably installed are touched: names recorded in
+      the host dir's .suasor-skills.json stamp, plus the known retired names.
+      Ecosystem dev skills (@ozzylabs/skills) and other foreign skill dirs are
+      never candidates — except a hand-placed skill reusing a known retired
+      name, which is indistinguishable from an unstamped old install; check
+      with --dry-run first if that might apply.
+    `,
+    examples: [
+      ["Remove orphaned mirrors (user scope)", "suasor skills prune"],
+      ["Preview without deleting", "suasor skills prune --dry-run"],
+      ["Prune this repo's local install", "suasor skills prune --project"],
+      ["Prune only for Claude Code", "suasor skills prune --scope claude"],
+    ],
+  });
+
+  project = Option.Boolean("--project", false, {
+    description: "Prune the current project's install instead of the user home (default: user).",
+  });
+
+  scope = Option.String("--scope", "all", {
+    description: "Prune target: claude | agents | all (default all).",
+  });
+
+  host = Option.String("--host", {
+    description: "Base directory to prune under (default: user home, or cwd with --project).",
+  });
+
+  dryRun = Option.Boolean("--dry-run", false, {
+    description: "List the orphaned mirrors without deleting anything.",
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the prune results as JSON.",
+  });
+
+  override async execute(): Promise<number> {
+    if (!SCOPES.includes(this.scope as Scope)) {
+      this.context.stderr.write(
+        `error: invalid --scope '${this.scope}' (expected: ${SCOPES.join(" | ")})\n`,
+      );
+      return 1;
+    }
+
+    const { pruneSkills } = await import("../../skills/index.ts");
+    let results: Awaited<ReturnType<typeof pruneSkills>>;
+    try {
+      results = pruneSkills({
+        baseDir: resolveBaseDir(this.host, this.project),
+        scope: this.scope as Scope,
+        dryRun: this.dryRun,
+      });
+    } catch (cause) {
+      this.context.stderr.write(
+        `error: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+      return 1;
+    }
+
+    if (this.json) {
+      this.context.stdout.write(`${JSON.stringify(results)}\n`);
+      return 0;
+    }
+
+    if (results.length === 0) {
+      this.context.stdout.write(`No orphaned mirrors found (scope=${this.scope}).\n`);
+      return 0;
+    }
+    const verb = this.dryRun ? "would remove" : "removed";
+    for (const r of results) {
+      this.context.stdout.write(`${verb}: ${r.mirrorPath}\n`);
+    }
+    this.context.stdout.write(
+      `${this.dryRun ? "Dry run: " : ""}${results.length} orphaned mirror(s) ${verb} (scope=${this.scope}).\n`,
+    );
+    return 0;
+  }
+}
+
+export class SkillsListCommand extends SuasorCommand {
   static override paths = [["skills", "list"]];
 
   static override usage = Command.Usage({
@@ -132,7 +237,9 @@ export class SkillsListCommand extends Command {
     details: `
       Lists the bundled assistant skills (ADR-0008) and, per host dir, whether
       each is installed, missing, or modified relative to the SSOT
-      (docs/skills/<name>/SKILL.md).
+      (docs/skills/<name>/SKILL.md). Mirrors whose names have left the catalog
+      (retired skills, ADR-0046) are appended as orphan — remove them with
+      'suasor skills prune'.
 
       --format=detailed adds each skill's category and read/write boundary
       (frontmatter, ADR-0032). The default --format=compact preserves the
@@ -238,14 +345,22 @@ export class SkillsListCommand extends Command {
     const installed = statuses.filter((s) => s.state === "installed").length;
     const missing = statuses.filter((s) => s.state === "missing").length;
     const modified = statuses.filter((s) => s.state === "modified").length;
+    const orphaned = statuses.filter((s) => s.state === "orphan").length;
     this.context.stdout.write(
-      `${installed} installed, ${missing} missing, ${modified} modified (scope=${this.scope}).\n`,
+      `${installed} installed, ${missing} missing, ${modified} modified` +
+        `${orphaned > 0 ? `, ${orphaned} orphan` : ""} (scope=${this.scope}).\n`,
     );
+    if (orphaned > 0) {
+      this.context.stderr.write(
+        `warning: ${orphaned} mirror(s) are for retired skills the catalog no longer ships; ` +
+          `remove with 'suasor skills prune'\n`,
+      );
+    }
     return 0;
   }
 }
 
-export class SkillsSearchCommand extends Command {
+export class SkillsSearchCommand extends SuasorCommand {
   static override paths = [["skills", "search"]];
 
   static override usage = Command.Usage({
@@ -305,7 +420,7 @@ export class SkillsSearchCommand extends Command {
   }
 }
 
-export class SkillsInfoCommand extends Command {
+export class SkillsInfoCommand extends SuasorCommand {
   static override paths = [["skills", "info"]];
 
   static override usage = Command.Usage({
@@ -317,7 +432,7 @@ export class SkillsInfoCommand extends Command {
     `,
     examples: [
       ["Show the next-actions skill", "suasor skills info next-actions"],
-      ["Machine-readable output", "suasor skills info research --json"],
+      ["Machine-readable output", "suasor skills info find --json"],
     ],
   });
 

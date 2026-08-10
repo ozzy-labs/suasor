@@ -13,12 +13,13 @@
  */
 import { Command, type CommandClass, Option } from "clipanion";
 import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { standaloneGate } from "../build-target.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
 
 /** A `suasor <name> sync` command bound to one connector name. */
-class ConnectorSyncCommand extends Command {
+class ConnectorSyncCommand extends SuasorCommand {
   static connectorName = "";
 
   json = Option.Boolean("--json", false, {
@@ -83,7 +84,7 @@ class ConnectorSyncCommand extends Command {
     }
 
     const [
-      { ConfigError, loadConfig },
+      { loadConfig },
       { Store },
       { loadConnector, syncConnector },
       { createEmbedderResolved },
@@ -98,16 +99,9 @@ class ConnectorSyncCommand extends Command {
 
     // `loadConfig` validates each `[connectors.<name>]` slice against the
     // connector's schema (#162), so a typo / invalid value fails fast here.
-    let config: Awaited<ReturnType<typeof loadConfig>>;
-    try {
-      config = await loadConfig();
-    } catch (cause) {
-      if (cause instanceof ConfigError) {
-        this.context.stderr.write(`error: ${cause.message}\n`);
-        return 1;
-      }
-      throw cause;
-    }
+    // A `ConfigError` escapes to the shared base command, which renders the
+    // uniform `error:` + `hint:` pair (#560).
+    const config = await loadConfig();
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
       this.context.stderr.write("error: storage.dbPath is not configured\n");

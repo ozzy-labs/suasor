@@ -22,8 +22,9 @@
  * TOML editor are imported inside `execute`; only clipanion is eager.
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class ValidateConfigCommand extends Command {
+export class ValidateConfigCommand extends SuasorCommand {
   static override paths = [["validate-config"]];
 
   static override usage = Command.Usage({

@@ -14,8 +14,9 @@
  * stdout is reserved for the JSON-RPC stream — diagnostics go to stderr.
  */
 import { Command } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class McpServeCommand extends Command {
+export class McpServeCommand extends SuasorCommand {
   static override paths = [["mcp", "serve"]];
 
   static override usage = Command.Usage({
