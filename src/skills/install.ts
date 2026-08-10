@@ -13,6 +13,13 @@
  * have left the catalog (ADR-0046 folded 32 skills into 22, and install never
  * removed the retired mirrors), without ever touching foreign skill dirs.
  *
+ * Ownership guard on install (#563): a SKILL.md already present at a catalog
+ * path that suasor cannot prove it wrote (stamp name record / retired names)
+ * is treated as user-authored — `installSkills` skips it instead of silently
+ * overwriting, unless `force` is set. The post-ADR-0046 names are deliberately
+ * generic (`brief`, `find`, `draft`, `meeting`, `decisions`), exactly the
+ * names users pick for their own skills.
+ *
  * No heavy dependencies: only `node:fs` / `node:path` (NFR-PRF-1).
  */
 import { type Dirent, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -103,12 +110,22 @@ export interface InstallOptions {
   readonly hosts?: readonly Host[];
   /** When true, compute changes but write nothing. */
   readonly dryRun?: boolean;
+  /**
+   * When true, overwrite mirrors suasor cannot prove it wrote (#563). Without
+   * it, a differing SKILL.md at a catalog path whose name is in neither the
+   * host stamp's name record nor {@link RETIRED_SKILLS} is treated as
+   * user-authored and skipped.
+   */
+  readonly force?: boolean;
   /** Injectable skill catalog (defaults to the bundled set). */
   readonly skills?: readonly BundledSkill[];
 }
 
-/** What an install did (or, with `dryRun`, would do) to one mirror. */
-export type InstallAction = "created" | "updated" | "unchanged";
+/**
+ * What an install did (or, with `dryRun`, would do) to one mirror. `skipped`
+ * = a differing file suasor could not prove it owns was left untouched (#563).
+ */
+export type InstallAction = "created" | "updated" | "unchanged" | "skipped";
 
 export interface InstallResult {
   readonly name: string;
@@ -137,6 +154,13 @@ function readTextOrNull(path: string): string | null {
  * Idempotent: an unchanged mirror is left as-is (`unchanged`); a missing one is
  * `created`; a drifted one is `updated`. With `dryRun`, nothing is written but
  * the actions reflect what would happen.
+ *
+ * Ownership guard (#563): `updated` requires evidence that suasor wrote the
+ * existing file — its name in the host stamp's name record ({@link
+ * SkillsStamp.skills}) or in {@link RETIRED_SKILLS}. A differing file without
+ * that evidence is a user-authored skill that happens to collide with a
+ * catalog name; it is `skipped` (and kept out of the stamp record, so a later
+ * run does not suddenly claim it) unless `force` is set.
  */
 export function installSkills(options: InstallOptions = {}): InstallResult[] {
   const baseDir = options.baseDir ?? process.cwd();
@@ -144,6 +168,18 @@ export function installSkills(options: InstallOptions = {}): InstallResult[] {
   const hosts = options.hosts ?? scopeHosts(scope);
   const skills = options.skills ?? listBundledSkills();
   const dryRun = options.dryRun ?? false;
+  const force = options.force ?? false;
+
+  // Ownership evidence per host, read before anything is written: the stamp's
+  // name record plus the historical retired names (same guard as orphan
+  // detection). A pre-#556 stamp carries no name record, so an upgrade whose
+  // SSOT moved on will skip those mirrors once — `--force` re-adopts them.
+  const ownedByHost = new Map<Host, ReadonlySet<string>>(
+    hosts.map((host) => [
+      host,
+      new Set([...(readStamp(baseDir, host)?.skills ?? []), ...RETIRED_SKILLS]),
+    ]),
+  );
 
   const results: InstallResult[] = [];
   for (const skill of skills) {
@@ -152,8 +188,14 @@ export function installSkills(options: InstallOptions = {}): InstallResult[] {
       const target = mirrorPath(baseDir, host, skill.name);
       const current = readTextOrNull(target);
       const action: InstallAction =
-        current === null ? "created" : current === source ? "unchanged" : "updated";
-      if (!dryRun && action !== "unchanged") {
+        current === null
+          ? "created"
+          : current === source
+            ? "unchanged"
+            : force || (ownedByHost.get(host)?.has(skill.name) ?? false)
+              ? "updated"
+              : "skipped";
+      if (!dryRun && (action === "created" || action === "updated")) {
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, source);
       }
@@ -165,8 +207,14 @@ export function installSkills(options: InstallOptions = {}): InstallResult[] {
   // beside the mirrors, never inside them — a mirror must stay byte-identical
   // to its SSOT or drift detection would flag every skill.
   if (!dryRun && options.version !== undefined && skills.length > 0) {
-    const names = skills.map((s) => s.name);
     for (const host of hosts) {
+      // Skipped names stay out of the record (#563): recording them would
+      // claim ownership of a user-authored file and let the next run — or a
+      // prune — destroy it.
+      const skippedHere = new Set(
+        results.filter((r) => r.host === host && r.action === "skipped").map((r) => r.name),
+      );
+      const names = skills.map((s) => s.name).filter((name) => !skippedHere.has(name));
       const path = stampPath(baseDir, host);
       mkdirSync(dirname(path), { recursive: true });
       // The stamp also records which skill names suasor wrote (#556), so a

@@ -111,13 +111,24 @@ describe("installSkills", () => {
     expect(second.every((r) => r.action === "unchanged")).toBe(true);
   });
 
-  test("refreshes a drifted mirror (updated)", () => {
-    installSkills({ baseDir, skills: bundled() });
+  test("refreshes a drifted mirror suasor owns via the stamp record (updated)", () => {
+    installSkills({ baseDir, skills: bundled(), version: "1.0.0" });
+    const target = mirrorPath(baseDir, "claude", "next-actions");
+    writeFileSync(target, "locally edited\n");
+    const again = installSkills({ baseDir, scope: "claude", skills: bundled() });
+    const hit = again.find((r) => r.name === "next-actions");
+    expect(hit?.action).toBe("updated");
+    expect(readFileSync(target, "utf8")).toBe(FIXTURE["next-actions"]);
+  });
+
+  test("refreshes a drifted retired-name mirror even without a stamp (pre-#556 install)", () => {
+    // 'personal-brief' is a RETIRED_SKILLS member: historical ownership
+    // evidence covers installs whose stamps carried no name record.
+    installSkills({ baseDir, skills: bundled() }); // no version → no stamp
     const target = mirrorPath(baseDir, "claude", "personal-brief");
     writeFileSync(target, "locally edited\n");
     const again = installSkills({ baseDir, scope: "claude", skills: bundled() });
-    const hit = again.find((r) => r.name === "personal-brief");
-    expect(hit?.action).toBe("updated");
+    expect(again.find((r) => r.name === "personal-brief")?.action).toBe("updated");
     expect(readFileSync(target, "utf8")).toBe(FIXTURE["personal-brief"]);
   });
 
@@ -126,6 +137,73 @@ describe("installSkills", () => {
     expect(results.every((r) => r.action === "created")).toBe(true);
     expect(existsSync(join(baseDir, ".claude", "skills"))).toBe(false);
     expect(existsSync(join(baseDir, ".agents", "skills"))).toBe(false);
+  });
+});
+
+describe("installSkills — user-authored collision guard (#563)", () => {
+  /** Write a user-authored SKILL.md at a catalog path, bypassing installSkills. */
+  function plantUserSkill(name: string, body = "# my own skill\n"): string {
+    const target = mirrorPath(baseDir, "claude", name);
+    mkdirSync(join(baseDir, ".claude", "skills", name), { recursive: true });
+    writeFileSync(target, body);
+    return target;
+  }
+
+  test("skips a differing file suasor cannot prove it wrote, and keeps it out of the stamp", () => {
+    // 'next-actions' is not a retired name and no stamp records it → the
+    // pre-existing file is user-authored evidence-wise and must survive.
+    const target = plantUserSkill("next-actions");
+    const results = installSkills({
+      baseDir,
+      scope: "claude",
+      skills: bundled(),
+      version: "1.0.0",
+    });
+    expect(results.find((r) => r.name === "next-actions")?.action).toBe("skipped");
+    expect(readFileSync(target, "utf8")).toBe("# my own skill\n");
+    // The stamp record must not claim the skipped name — otherwise the next
+    // install (or prune) would treat the user's skill as suasor's.
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["personal-brief"]);
+    // ...so a re-run still skips instead of destroying it.
+    const again = installSkills({ baseDir, scope: "claude", skills: bundled(), version: "1.0.0" });
+    expect(again.find((r) => r.name === "next-actions")?.action).toBe("skipped");
+    expect(readFileSync(target, "utf8")).toBe("# my own skill\n");
+    // And it is never an orphan / prune candidate either.
+    expect(orphanStatuses({ baseDir, scope: "claude", skills: bundled() })).toEqual([]);
+  });
+
+  test("force overwrites the user file and adopts the name into the stamp record", () => {
+    const target = plantUserSkill("next-actions");
+    const results = installSkills({
+      baseDir,
+      scope: "claude",
+      skills: bundled(),
+      version: "1.0.0",
+      force: true,
+    });
+    expect(results.find((r) => r.name === "next-actions")?.action).toBe("updated");
+    expect(readFileSync(target, "utf8")).toBe(FIXTURE["next-actions"]);
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["next-actions", "personal-brief"]);
+  });
+
+  test("dry-run reports the skip without writing anything", () => {
+    const target = plantUserSkill("next-actions");
+    const results = installSkills({ baseDir, scope: "claude", skills: bundled(), dryRun: true });
+    expect(results.find((r) => r.name === "next-actions")?.action).toBe("skipped");
+    expect(readFileSync(target, "utf8")).toBe("# my own skill\n");
+  });
+
+  test("an identical file is unchanged, not skipped (no ownership question)", () => {
+    plantUserSkill("next-actions", FIXTURE["next-actions"]);
+    const results = installSkills({
+      baseDir,
+      scope: "claude",
+      skills: bundled(),
+      version: "1.0.0",
+    });
+    expect(results.find((r) => r.name === "next-actions")?.action).toBe("unchanged");
+    // Byte-identical to the SSOT → effectively a mirror; recording it is safe.
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["next-actions", "personal-brief"]);
   });
 });
 
@@ -148,7 +226,9 @@ describe("skillStatuses / detectDrift", () => {
   });
 
   test("detectDrift returns missing + modified mirrors only", () => {
-    installSkills({ baseDir, scope: "claude", skills: bundled() });
+    // version → the stamp records ownership, so the re-install below may
+    // legitimately refresh the locally edited mirror (#563 guard satisfied).
+    installSkills({ baseDir, scope: "claude", skills: bundled(), version: "1.0.0" });
     writeFileSync(mirrorPath(baseDir, "claude", "next-actions"), "edited\n");
     const drift = detectDrift({ baseDir, scope: "claude", skills: bundled() });
     expect(drift.map((d) => d.name)).toEqual(["next-actions"]);

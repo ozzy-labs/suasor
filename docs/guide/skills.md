@@ -14,7 +14,8 @@ suasor skills install --project        # カレントプロジェクトの .clau
 suasor skills install --scope claude   # Claude Code（.claude/skills/）のみ
 suasor skills install --scope agents   # Codex / Copilot / Gemini（.agents/skills/）のみ
 suasor skills install --host /path/to/project   # 展開先を明示指定（--project より優先）
-suasor skills install --dry-run        # 書き込まず差分（created / updated / unchanged）だけ確認
+suasor skills install --dry-run        # 書き込まず差分（created / updated / unchanged / skipped）だけ確認
+suasor skills install --force          # suasor が書いた記録の無い差分ファイル（自作 skill の名前衝突）も上書き
 suasor skills prune                    # catalog から消えた旧 skill の mirror（orphan）を削除
 suasor skills prune --dry-run          # 削除対象を確認するだけ
 ```
@@ -90,7 +91,7 @@ description: 「次に何をする?」「やること教えて」…
 
 ### `modified` / drift と表示される
 
-mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。なお [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo の mirror commit と `skills-drift` フックは廃止された。**host dir（`.claude/skills/` / `.agents/skills/`）配下は現在すべてローカル install 物で、commit されるものは無い** — dev skill の project-scope vendoring も 2026-07-04 に撤回され user-scope install へ移行した。
+mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。ただし suasor が書いた記録（stamp の `skills` 名簿 / 退役名リスト）の無いファイルは**ユーザー自作 skill の名前衝突**とみなして `skipped`（上書きしない・[Issue #563](https://github.com/ozzy-labs/suasor/issues/563)）— 自作 skill なら改名して衝突を避けるか、SSOT で上書きしてよければ `--force` を付ける。なお [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo の mirror commit と `skills-drift` フックは廃止された。**host dir（`.claude/skills/` / `.agents/skills/`）配下は現在すべてローカル install 物で、commit されるものは無い** — dev skill の project-scope vendoring も 2026-07-04 に撤回され user-scope install へ移行した。
 
 ### `orphan` と表示される
 

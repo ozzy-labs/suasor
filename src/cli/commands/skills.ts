@@ -12,6 +12,8 @@
  *   --scope claude|agents|all   which mirror dir(s) to target (default all)
  *   --host  <dir>               base dir to install under (default cwd)
  *   --dry-run                   (install / prune) preview without writing
+ *   --force                     (install) overwrite differing files suasor
+ *                               cannot prove it installed (#563)
  *   --json                      (list / prune) machine-readable output
  *
  * The skills service (fs work) is lazy-imported inside `execute` to keep the
@@ -47,6 +49,12 @@ export class SkillsInstallCommand extends Command {
       into .claude/skills/ and/or .agents/skills/ (ADR-0008). Idempotent:
       unchanged skills are left as-is, drifted ones are refreshed from the SSOT.
 
+      A differing SKILL.md that suasor cannot prove it installed (its name is
+      in neither the host dir's .suasor-skills.json stamp record nor the known
+      retired names) is treated as a user-authored skill colliding with a
+      catalog name and skipped with a warning; pass --force to overwrite it
+      (#563).
+
       Installs under your home directory by default (user scope), so the skills
       are available in every project; pass --project for a repo-local install,
       or --host <dir> for an explicit root. Each host dir is stamped with the
@@ -58,6 +66,7 @@ export class SkillsInstallCommand extends Command {
       ["Install into this repo only", "suasor skills install --project"],
       ["Install only for Claude Code", "suasor skills install --scope claude"],
       ["Preview without writing", "suasor skills install --dry-run"],
+      ["Overwrite user-authored files at catalog paths", "suasor skills install --force"],
       ["Install into a specific root", "suasor skills install --host /path/to/project"],
     ],
   });
@@ -78,6 +87,10 @@ export class SkillsInstallCommand extends Command {
     description: "Show what would change without writing any files.",
   });
 
+  force = Option.Boolean("--force", false, {
+    description: "Overwrite differing files suasor cannot prove it installed (user-authored?).",
+  });
+
   override async execute(): Promise<number> {
     if (!SCOPES.includes(this.scope as Scope)) {
       this.context.stderr.write(
@@ -95,6 +108,7 @@ export class SkillsInstallCommand extends Command {
         baseDir,
         scope: this.scope as Scope,
         dryRun: this.dryRun,
+        force: this.force,
         version: VERSION,
       });
       // Post-install cleanup signal (#556): install overwrites but never
@@ -112,9 +126,14 @@ export class SkillsInstallCommand extends Command {
     let created = 0;
     let updated = 0;
     let unchanged = 0;
+    const skipped: typeof results = [];
     for (const r of results) {
       if (r.action === "unchanged") {
         unchanged++;
+        continue;
+      }
+      if (r.action === "skipped") {
+        skipped.push(r);
         continue;
       }
       if (r.action === "created") created++;
@@ -123,9 +142,21 @@ export class SkillsInstallCommand extends Command {
         `${verb} ${r.action === "created" ? "new" : "updated"}: ${r.mirrorPath}\n`,
       );
     }
+    for (const r of skipped) {
+      this.context.stdout.write(`skipped (not installed by suasor): ${r.mirrorPath}\n`);
+    }
     this.context.stdout.write(
-      `${this.dryRun ? "Dry run: " : ""}${created} created, ${updated} updated, ${unchanged} unchanged (scope=${this.scope}).\n`,
+      `${this.dryRun ? "Dry run: " : ""}${created} created, ${updated} updated, ${unchanged} unchanged` +
+        `${skipped.length > 0 ? `, ${skipped.length} skipped` : ""} (scope=${this.scope}).\n`,
     );
+    if (skipped.length > 0) {
+      const names = [...new Set(skipped.map((r) => r.name))].join(", ");
+      this.context.stderr.write(
+        `warning: ${skipped.length} file(s) at catalog paths differ from the SSOT but were not ` +
+          `installed by this suasor (${names}); they look user-authored, so they were left ` +
+          `untouched — move them aside, or re-run with --force to overwrite\n`,
+      );
+    }
     if (orphans.length > 0) {
       const names = [...new Set(orphans.map((o) => o.name))].join(", ");
       this.context.stderr.write(
