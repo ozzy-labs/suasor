@@ -144,6 +144,97 @@ export function buildCli(commands: CommandClass[] = registeredCommandClasses()):
 const HELP_FLAGS = new Set(["-h", "--help"]);
 
 /**
+ * The category every new install needs first. clipanion renders general-help
+ * categories strictly alphabetically (`Cli#usage` sorts category names with
+ * `localeCompare`; there is no ordering hook), which buried Setup — the
+ * init/onboard chain — ~170 lines below the connector plumbing (#566). The
+ * root-help interceptor below hoists this category to the top.
+ */
+const SETUP_CATEGORY = "Setup";
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+/** Sentinel that opens clipanion's fixed general-help epilogue paragraph. */
+const HELP_EPILOGUE_PREFIX = "You can also print more details";
+
+/**
+ * If `line` is a general-help category header, return the category name,
+ * else `null`. Handles both of clipanion's header renderings: the colored
+ * `━━━ Name ━━━…` rule (or `━━━ Name:` when the line is too long) and the
+ * plain-text form, which is the bare category name on an unindented line.
+ * Only names actually present in `categories` are accepted, so command or
+ * description lines (always indented) and the binary banner never match.
+ */
+function headerCategory(line: string, categories: ReadonlySet<string>): string | null {
+  if (line.startsWith(" ") || line.startsWith("\t")) return null;
+  let stripped = line.replace(ANSI_PATTERN, "").trim();
+  if (stripped.startsWith("━")) {
+    stripped = stripped
+      .replace(/^━+\s*/, "")
+      .replace(/\s*━+$/, "")
+      .replace(/:$/, "")
+      .trim();
+  }
+  return categories.has(stripped) ? stripped : null;
+}
+
+/**
+ * Reorder clipanion's rendered general help so the `Setup` category comes
+ * first (right after the binary banner), leaving every other category in
+ * clipanion's alphabetical order and all block contents byte-identical.
+ *
+ * Works on the rendered text because clipanion's category order is not
+ * configurable (see `SETUP_CATEGORY`); the `categoryHelp()` interceptor above
+ * is precedent for post-processing its rendering. The category-name set is
+ * derived from the registry, so the parser cannot drift from what is wired.
+ * Colored and plain renderings are both handled. If `Setup` is absent or
+ * already first, the text is returned unchanged.
+ */
+export function setupFirstHelp(text: string, commands: CommandClass[]): string {
+  const categories = new Set<string>(["General commands"]);
+  for (const command of commands) {
+    const category = command.usage?.category;
+    if (category) categories.add(category.replace(/\s+/g, " ").trim());
+  }
+
+  // Partition into the preamble (binary banner) plus one block per category
+  // header. Each block carries its trailing blank separator line, so blocks
+  // can be reordered without disturbing spacing.
+  const blocks: { name: string | null; lines: string[] }[] = [{ name: null, lines: [] }];
+  for (const line of text.split("\n")) {
+    const name = headerCategory(line, categories);
+    if (name !== null) blocks.push({ name, lines: [] });
+    (blocks[blocks.length - 1] as { lines: string[] }).lines.push(line);
+  }
+
+  // Detach the fixed epilogue paragraph from the last category block so a
+  // reorder can never drag it away from the bottom of the help output.
+  const last = blocks[blocks.length - 1] as { name: string | null; lines: string[] };
+  const epilogueAt = last.lines.findIndex((line) =>
+    line.replace(ANSI_PATTERN, "").startsWith(HELP_EPILOGUE_PREFIX),
+  );
+  if (epilogueAt > 0) {
+    blocks.push({ name: null, lines: last.lines.splice(epilogueAt) });
+  }
+
+  const setupIndex = blocks.findIndex((block) => block.name === SETUP_CATEGORY);
+  if (setupIndex <= 1) return text; // absent, or already the first category
+  const [setup] = blocks.splice(setupIndex, 1);
+  blocks.splice(1, 0, setup as { name: string | null; lines: string[] });
+  return blocks.flatMap((block) => block.lines).join("\n");
+}
+
+/**
+ * `true` for exactly the invocations clipanion answers with the general help:
+ * a bare `suasor` and a root `suasor --help` / `-h`.
+ */
+export function isRootHelp(argv: string[]): boolean {
+  if (argv.length === 0) return true;
+  return argv.length === 1 && HELP_FLAGS.has(argv[0] as string);
+}
+
+/**
  * Pre-parse interceptor for `suasor <category-verb> --help`.
  *
  * clipanion resolves a partial path like `slack` — the common prefix of several
@@ -247,5 +338,11 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<nu
     return 0;
   }
   const cli = buildCli(commands);
+  if (isRootHelp(argv)) {
+    // Root general help: render clipanion's own output (bare `usage()` keeps
+    // its default color resolution), then hoist Setup to the top (#566).
+    process.stdout.write(setupFirstHelp(cli.usage(), commands));
+    return 0;
+  }
   return cli.run(argv, Cli.defaultContext);
 }
