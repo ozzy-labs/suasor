@@ -124,8 +124,16 @@ class ConnectorAuthSetCommand extends Command {
     }
 
     const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
-    const { storeSecret } = await import("../../connectors/secrets.ts");
-    await storeSecret(connector, secretName, value, keychain ? { keychain } : {});
+    const { storeSecret, storeSecretErrorMessage } = await import("../../connectors/secrets.ts");
+    try {
+      await storeSecret(connector, secretName, value, keychain ? { keychain } : {});
+    } catch (cause) {
+      // A headless host (Docker, a server) has no Secret Service — the write
+      // throws *after* the secret was pasted. Print the env-override recovery
+      // instead of the raw native error (Issue #557).
+      this.context.stderr.write(storeSecretErrorMessage(connector, secretName, cause));
+      return 1;
+    }
     const forAccount = target.declared ? ` for account '${target.name}'` : "";
     this.context.stdout.write(
       `Stored ${connector} ${spec.secretLabel}${forAccount} in the OS keychain ` +

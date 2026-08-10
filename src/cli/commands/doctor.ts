@@ -18,6 +18,8 @@
 import { existsSync } from "node:fs";
 import { Command, Option } from "clipanion";
 import { connectorNames, connectorSecretNames } from "../../connectors/registry.ts";
+// Type-only import — erased at compile time, keeps the lazy-import discipline.
+import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { docsUrl } from "../doc-ref.ts";
 
 /** Severity of a single check (worst across checks sets the exit code). */
@@ -82,7 +84,7 @@ export class DoctorCommand extends Command {
     const [
       { loadConfig, resolveConfigDir },
       { Store, DEFAULT_VEC_TABLE, VEC_META_TABLE },
-      { resolveSecret },
+      { probeKeychain, resolveSecret },
       { join },
     ] = await Promise.all([
       import("../../config/index.ts"),
@@ -460,6 +462,33 @@ export class DoctorCommand extends Command {
           const label = advisoryLabel(name, probe.account);
           if (!missingCred.includes(label)) missingCred.push(label);
         }
+      }
+      // 5a. Keychain availability probe (Issue #557). The resolve path reads a
+      //     broken keychain backend the same as an absent entry, so on a
+      //     headless host (Docker, a server without a Secret Service) every
+      //     keychain-stored credential reports as "missing credential" — and
+      //     the obvious fix, `auth set`, then crashes on the same backend.
+      //     Probe once and surface the distinction: warn when it changes how
+      //     the missing-credential lines should be read, info otherwise
+      //     (env-override installs are a supported headless path, NFR-PRV-4).
+      const keychainBackend = (this.context as { keychain?: KeychainBackend }).keychain;
+      const keychainProbe = await probeKeychain(
+        keychainBackend ? { keychain: keychainBackend } : {},
+      );
+      if (!keychainProbe.available) {
+        checks.push({
+          name: "keychain",
+          status: missingCred.length > 0 ? "warn" : "info",
+          detail:
+            missingCred.length > 0
+              ? `OS keychain unavailable (${keychainProbe.reason}) — "missing credential" below ` +
+                "may mean unreadable, not unset; set secrets via env overrides " +
+                "(SUASOR_CONNECTOR_<NAME>_<SECRET>) instead of 'auth set'"
+              : `OS keychain unavailable (${keychainProbe.reason}) — connector secrets come ` +
+                "from env overrides (SUASOR_CONNECTOR_<NAME>_<SECRET>)",
+        });
+      } else {
+        checks.push({ name: "keychain", status: "ok", detail: "OS keychain available" });
       }
       if (enabled.length === 0) {
         checks.push({

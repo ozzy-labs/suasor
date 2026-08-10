@@ -52,10 +52,8 @@ export const slackOnboardBridge: OnboardBridge = {
  */
 async function runSlackBridge(deps: OnboardBridgeDeps): Promise<number | undefined> {
   const { stdout, stderr } = deps;
-  const [{ SLACK_TOKENS_SECRET }, { resolveSecret, storeSecret }] = await Promise.all([
-    import("../../connectors/slack.ts"),
-    import("../../connectors/secrets.ts"),
-  ]);
+  const [{ SLACK_TOKENS_SECRET }, { resolveSecret, storeSecret, storeSecretErrorMessage }] =
+    await Promise.all([import("../../connectors/slack.ts"), import("../../connectors/secrets.ts")]);
   const secretName = SLACK_TOKENS_SECRET; // the unnamed token pool (ADR-0042)
 
   // A legacy ADR-0014 multi-workspace config cannot be driven (or synced) —
@@ -90,7 +88,15 @@ async function runSlackBridge(deps: OnboardBridgeDeps): Promise<number | undefin
       );
       return 1;
     }
-    await storeSecret(SLACK, secretName, token, deps.keychain ? { keychain: deps.keychain } : {});
+    try {
+      await storeSecret(SLACK, secretName, token, deps.keychain ? { keychain: deps.keychain } : {});
+    } catch (cause) {
+      // Headless host (Docker / server): no Secret Service — surface the
+      // env-override recovery instead of the raw native error (Issue #557).
+      stderr.write(storeSecretErrorMessage(SLACK, secretName, cause));
+      stderr.write("hint: then re-run this wizard with --skip-auth\n");
+      return 1;
+    }
     deps.report.authStored = true;
     if (!deps.json) stdout.write("slack: token stored in the OS keychain.\n");
   }
