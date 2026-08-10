@@ -41,17 +41,16 @@ MCP tools and skills were **renamed with no backward-compatible aliases** ([ADR-
 | `decision-log` / `decision-rationale` | `decisions` |
 | `announcement-draft` / `handoff-draft` | `draft` |
 
-**Environments that installed the old skills keep their stale mirrors** (`skills install` overwrites but never deletes). If `suasor skills list` reports an old name as `modified` / an orphan, remove the mirror directories by hand:
+**Environments that installed the old skills keep their stale mirrors** (`skills install` overwrites but never deletes). The host reads the leftover mirrors **alongside** the new skills, so the trigger collisions return, and the stale skills call pre-rename MCP tools (`recall.search` etc.) that no longer exist ([Issue #556](https://github.com/ozzy-labs/suasor/issues/556)). `suasor skills list` reports the old names as `orphan`, and `suasor skills install` prints a one-line stderr warning while any remain; remove them with `suasor skills prune`:
 
 ```bash
-rm -rf ~/.claude/skills/{personal-brief,catchup,weekly-review,external-brief,health-check}
-rm -rf ~/.claude/skills/{doc-review,pr-review,doc-diff,find-document,research}
-rm -rf ~/.claude/skills/{meeting-prep,action-item-status,decision-log,decision-rationale}
-rm -rf ~/.claude/skills/{announcement-draft,handoff-draft}
-suasor skills install   # deploy the new catalog
+suasor skills install           # deploy the new catalog (warns if orphans remain)
+suasor skills list              # stale mirrors of the old skills appear as orphan
+suasor skills prune --dry-run   # preview what would be removed (deletes nothing)
+suasor skills prune             # remove the orphan mirrors (both .claude/skills/ and .agents/skills/)
 ```
 
-The same applies to `.agents/skills/`.
+Prune only removes mirrors it can prove suasor wrote (stamp-recorded names plus the known retired names); it never touches ecosystem dev skills (`@ozzylabs/skills`) or hand-authored skills living in the same directories. A hand-authored skill that happens to reuse a known retired name cannot be distinguished from an unstamped old install and will be listed as a candidate — run `--dry-run` first if that might apply to you. `--project` / `--host <dir>` clean project-local installs the same way.
 
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 

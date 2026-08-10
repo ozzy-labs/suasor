@@ -48,8 +48,9 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 ほぼ同義の入口から選ばされる状態を解消するための表面積収縮）。host 設定・自作 skill・スクリプトが
 `recall.search` / `search.hybrid` / `source.get.full` / `commitment.resolve`・`.dismiss`・`.reopen` /
 `demand.ack`・`.dismiss`、あるいは統合で消えた 16 の skill 名を参照している場合は更新が要る。
-新旧の対応は[移行表](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046)にすべて載せてある（`skills install` が
-上書きはするが削除はしない skill mirror の消し方も含む）。
+新旧の対応は[移行表](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046)にすべて載せてある。統合で消えた skill の
+mirror はアップグレード後も残る（`skills install` は上書きするが削除はしない）ため、
+`suasor skills list` が `orphan` として報告し、`suasor skills prune` で削除できる。
 
 ## クイックスタート（暫定）
 
@@ -95,7 +96,8 @@ suasor search "<query>"
 
 # 同梱のアシスタント skill をエージェントホストへ展開。
 suasor skills install        # .claude/skills/ + .agents/skills/
-suasor skills list           # installed / missing / modified
+suasor skills list           # installed / missing / modified / orphan
+suasor skills prune          # 退役 skill の mirror（orphan）を削除
 
 # メンテナンス。
 suasor db migrate            # projection schema 適用（idempotent）
