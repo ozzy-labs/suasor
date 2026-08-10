@@ -195,6 +195,29 @@ describe("suasor skills install — scope + version stamp (#445)", () => {
     expect(existsSync(join(dir, ".claude", "skills"))).toBe(false);
   });
 
+  test("a user-authored skill at a catalog name is skipped and only --force overwrites (#563)", async () => {
+    // The user's own 'find' skill predates any suasor install here.
+    const mine = join(dir, ".claude", "skills", "find", "SKILL.md");
+    mkdirSync(join(dir, ".claude", "skills", "find"), { recursive: true });
+    writeFileSync(mine, "# my find\n");
+
+    const first = await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    expect(first.code).toBe(0);
+    expect(first.out).toContain("skipped (not installed by suasor)");
+    expect(first.out).toContain("1 skipped");
+    expect(first.err).toContain("--force");
+    expect(readFileSync(mine, "utf8")).toBe("# my find\n");
+    // The stamp record must not claim the skipped name.
+    const { readStamp } = await import("../../src/skills/index.ts");
+    expect(readStamp(dir, "claude")?.skills).not.toContain("find");
+
+    const forced = await run(["skills", "install", "--host", dir, "--scope", "claude", "--force"]);
+    expect(forced.code).toBe(0);
+    expect(forced.err).not.toContain("--force");
+    expect(readFileSync(mine, "utf8")).not.toBe("# my find\n");
+    expect(readStamp(dir, "claude")?.skills).toContain("find");
+  });
+
   test("skills list warns once when the installed mirrors carry another version", async () => {
     await run(["skills", "install", "--host", dir, "--scope", "claude"]);
     // Rewrite the stamp as if an older suasor had installed them.
