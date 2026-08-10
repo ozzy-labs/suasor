@@ -23,6 +23,7 @@
  * `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
 const DEFAULT_CONFIG_TOML = `# Suasor configuration (docs/design/config.md).
@@ -66,7 +67,7 @@ backend = "disabled"   # disabled | pandoc — md->Office (docx/pptx/xlsx) sidec
 # allowRemote = false                 # opt in to a non-loopback sidecar (egress; Issue #436)
 `;
 
-export class InitCommand extends Command {
+export class InitCommand extends SuasorCommand {
   static override paths = [["init"]];
 
   static override usage = Command.Usage({

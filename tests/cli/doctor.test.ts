@@ -209,6 +209,7 @@ describe("suasor doctor", () => {
       "embedding",
       "store.growth",
       "extraction",
+      "keychain",
       "connectors",
     ]);
   });
@@ -969,5 +970,84 @@ describe("suasor doctor", () => {
     const { out } = await run(["doctor", "--json"]);
     const report = JSON.parse(out) as DoctorReport;
     expect(report.checks.filter((c) => c.name === "connectors.accounts")).toHaveLength(0);
+  });
+});
+
+describe("suasor doctor — keychain availability probe (#557)", () => {
+  /** Run with an injected keychain backend (clipanion merges context extras). */
+  async function runWithKeychain(
+    keychain: {
+      get(s: string, a: string): string | null;
+      set(s: string, a: string, v: string): void;
+    },
+    args: string[] = ["doctor", "--json"],
+  ): Promise<{ code: number; out: string }> {
+    const prev = process.env.SUASOR_CONFIG_DIR;
+    process.env.SUASOR_CONFIG_DIR = dir;
+    let out = "";
+    const cli = buildCli();
+    const context = {
+      stdin: process.stdin,
+      stdout: {
+        write: (s: string) => {
+          out += s;
+          return true;
+        },
+      } as NodeJS.WriteStream,
+      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      env: process.env,
+      colorDepth: 1,
+      keychain,
+    };
+    try {
+      const code = await cli.run(args, context);
+      return { code, out };
+    } finally {
+      if (prev === undefined) delete process.env.SUASOR_CONFIG_DIR;
+      else process.env.SUASOR_CONFIG_DIR = prev;
+    }
+  }
+
+  const working = { get: () => null, set: () => {} };
+  const broken = {
+    get: () => {
+      throw new Error("no Secret Service available (headless host)");
+    },
+    set: () => {},
+  };
+
+  test("a reachable backend reports keychain ok", async () => {
+    await run(["init"]);
+    const { code, out } = await runWithKeychain(working);
+    expect(code).toBe(0);
+    const report = JSON.parse(out) as DoctorReport;
+    const check = report.checks.find((c) => c.name === "keychain");
+    expect(check?.status).toBe("ok");
+  });
+
+  test("a broken backend with no missing credentials is info (env-override installs are supported)", async () => {
+    await run(["init"]);
+    const { code, out } = await runWithKeychain(broken);
+    expect(code).toBe(0); // never an error: headless + env overrides is a supported path
+    const report = JSON.parse(out) as DoctorReport;
+    const check = report.checks.find((c) => c.name === "keychain");
+    expect(check?.status).toBe("info");
+    expect(check?.detail).toContain("no Secret Service available");
+    expect(check?.detail).toContain("SUASOR_CONNECTOR_<NAME>_<SECRET>");
+  });
+
+  test("a broken backend + missing credentials warns that missing may mean unreadable", async () => {
+    await run(["init"]);
+    await writeConfig("[connectors.github]\nrepos = []\n");
+    const { code, out } = await runWithKeychain(broken);
+    expect(code).toBe(0); // warn does not fail the exit code
+    const report = JSON.parse(out) as DoctorReport;
+    const check = report.checks.find((c) => c.name === "keychain");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("may mean unreadable, not unset");
+    expect(check?.detail).toContain("SUASOR_CONNECTOR_<NAME>_<SECRET>");
+    // The ambiguity the probe resolves: the missing-credential warning is present.
+    const connectors = report.checks.find((c) => c.name === "connectors" && c.status === "warn");
+    expect(connectors?.detail).toContain("github");
   });
 });

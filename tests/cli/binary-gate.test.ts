@@ -165,3 +165,45 @@ describe("suasor sync (bulk) — binary skips external connectors", () => {
     expect(out).toContain("github");
   });
 });
+
+describe("onboard — binary gate (#557)", () => {
+  test("onboard without --skip-auth: binary build → exit 1 + escape hatch up front", async () => {
+    // The wizard's token-storage step is the `auth set` path; ungated it would
+    // crash with an opaque module error right after the user pasted a secret.
+    const { code, err } = await run(["onboard"], { binary: true });
+    expect(code).toBe(1);
+    expect(err).toContain(UNSUPPORTED);
+    expect(err).toContain("--skip-auth");
+    expect(err).toContain("SUASOR_CONNECTOR_<NAME>_<SECRET>");
+    expect(err).not.toContain("Cannot find module");
+  });
+
+  test("onboard --skip-auth --connector slack: binary build → SDK gate refuses by name", async () => {
+    const { code, err } = await run(
+      ["onboard", "--skip-auth", "--skip-sync", "--connector", "slack"],
+      { binary: true },
+    );
+    expect(code).toBe(1);
+    expect(err).toContain(UNSUPPORTED);
+    expect(err).toContain("slack");
+  });
+
+  test("onboard --skip-auth --connector github: bundled connector is NOT gated", async () => {
+    const { code, out, err } = await run(
+      ["onboard", "--skip-auth", "--skip-sync", "--connector", "github"],
+      { binary: true },
+    );
+    expect(err).not.toContain(UNSUPPORTED);
+    expect(code).toBe(0);
+    expect(out).toContain("appended [connectors.github]");
+  });
+
+  test("slack auth set: binary build → exit 1 + token-pool env-override hint", async () => {
+    const { code, err } = await run(["slack", "auth", "set", "--token", "xoxb-x"], {
+      binary: true,
+    });
+    expect(code).toBe(1);
+    expect(err).toContain(UNSUPPORTED);
+    expect(err).toContain("SUASOR_CONNECTOR_SLACK_TOKENS");
+  });
+});

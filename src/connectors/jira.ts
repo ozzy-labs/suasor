@@ -2,7 +2,7 @@
  * Jira connector (ADR-0007). Read-only ingest of issues, their comments (and the
  * worklog summary folded into the issue body) for the configured projects into
  * `SourceRecord`s — project / ticket demand signal (agile context distinct from
- * GitHub issues) for search / research / next-actions.
+ * GitHub issues) for search / find / next-actions.
  *
  * - **read-only** — only Jira read endpoints are called (`GET /rest/api/3/search`
  *   for JQL, `GET /rest/api/3/issue/{key}/comment` for comments); nothing is ever

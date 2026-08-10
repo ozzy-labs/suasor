@@ -228,27 +228,40 @@ describe("docs quote the real skill count (Issue #518)", () => {
   // is cheap; noticing a stale number in prose is not.
   const count = listBundledSkills().length;
 
+  // Every numeric claim about the catalog size, in either language. The
+  // first draft of this guard only matched "all N" / "全 N" and silently
+  // passed while "N 個のアシスタント skill" stayed stale — so it is pinned
+  // by a deliberate-break check during development, not by inspection.
+  const extractClaims = (text: string): number[] => [
+    ...[...text.matchAll(/(?:all |全 )(\d+)/g)].map((m) => Number(m[1])),
+    ...[...text.matchAll(/(\d+) 個のアシスタント/g)].map((m) => Number(m[1])),
+    // No `\b` after 件: it is not a word character, so `件）` has no word
+    // boundary and the claim in CLAUDE.md was silently not extracted —
+    // caught only because the guard also asserts it found *something*.
+    ...[...text.matchAll(/(\d+) (?:skill\b|件)/g)].map((m) => Number(m[1])),
+  ];
+
+  const read = async (file: string): Promise<string> => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    return readFileSync(join(import.meta.dir, "../..", file), "utf8");
+  };
+
+  // #562 removed every count from docs/guide/skills.md: the guide re-drifted
+  // to "read 20 / write 9" while claiming 22 in the same file, so it stopped
+  // stating counts in prose altogether (the ADR-0032 lesson). For that file
+  // the guard now enforces the *absence* of catalog-size claims.
+  test("docs/guide/skills.md carries no skill count at all (#562)", async () => {
+    expect(extractClaims(await read("docs/guide/skills.md"))).toEqual([]);
+  });
+
   // CLAUDE.md was added after it drifted the same way the guides had (it still
   // said 32 and named `personal-brief` / `find-document`, merged away by
   // ADR-0046): a guard that covers only the files that broke last time keeps
   // finding out about the next one from a reader.
-  for (const file of ["docs/guide/skills.md", "docs/guide/install.md", "CLAUDE.md"]) {
+  for (const file of ["docs/guide/install.md", "CLAUDE.md"]) {
     test(`${file} carries no stale skill count`, async () => {
-      const { readFileSync } = await import("node:fs");
-      const { join } = await import("node:path");
-      const text = readFileSync(join(import.meta.dir, "../..", file), "utf8");
-      // Every numeric claim about the catalog size, in either language. The
-      // first draft of this guard only matched "all N" / "全 N" and silently
-      // passed while "N 個のアシスタント skill" stayed stale — so it is pinned
-      // by a deliberate-break check during development, not by inspection.
-      const claims = [
-        ...[...text.matchAll(/(?:all |全 )(\d+)/g)].map((m) => Number(m[1])),
-        ...[...text.matchAll(/(\d+) 個のアシスタント/g)].map((m) => Number(m[1])),
-        // No `\b` after 件: it is not a word character, so `件）` has no word
-        // boundary and the claim in CLAUDE.md was silently not extracted —
-        // caught only because the guard also asserts it found *something*.
-        ...[...text.matchAll(/(\d+) (?:skill\b|件)/g)].map((m) => Number(m[1])),
-      ];
+      const claims = extractClaims(await read(file));
       expect(claims.length).toBeGreaterThan(0);
       for (const claimed of claims) expect(claimed).toBe(count);
     });

@@ -22,6 +22,7 @@
 
 import { Command, Option } from "clipanion";
 import { connectorNames } from "../../connectors/registry.ts";
+import { SuasorCommand } from "../base-command.ts";
 
 /** A connector's credential presence (never the value, NFR-PRV-4). */
 interface CredentialPresence {
@@ -38,7 +39,7 @@ interface CredentialPresence {
   configured: boolean;
 }
 
-export class ConfigShowCommand extends Command {
+export class ConfigShowCommand extends SuasorCommand {
   static override paths = [["config", "show"]];
 
   static override usage = Command.Usage({

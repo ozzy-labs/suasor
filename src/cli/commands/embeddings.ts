@@ -13,6 +13,7 @@
  * inside `execute` so the command registry stays cheap (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
 
@@ -76,7 +77,7 @@ function warnTruncations(
   }
 }
 
-export class EmbeddingsStatusCommand extends Command {
+export class EmbeddingsStatusCommand extends SuasorCommand {
   static override paths = [["embeddings", "status"]];
 
   static override usage = Command.Usage({
@@ -136,7 +137,7 @@ export class EmbeddingsStatusCommand extends Command {
   }
 }
 
-export class EmbeddingsRebuildCommand extends Command {
+export class EmbeddingsRebuildCommand extends SuasorCommand {
   static override paths = [["embeddings", "rebuild"]];
 
   static override usage = Command.Usage({
@@ -208,7 +209,7 @@ export class EmbeddingsRebuildCommand extends Command {
   }
 }
 
-export class EmbeddingsDrainCommand extends Command {
+export class EmbeddingsDrainCommand extends SuasorCommand {
   static override paths = [["embeddings", "drain"]];
 
   static override usage = Command.Usage({
@@ -270,7 +271,7 @@ export class EmbeddingsDrainCommand extends Command {
   }
 }
 
-export class EmbeddingsFindDuplicatesCommand extends Command {
+export class EmbeddingsFindDuplicatesCommand extends SuasorCommand {
   static override paths = [["embeddings", "find-duplicates"]];
 
   static override usage = Command.Usage({
@@ -348,7 +349,7 @@ export class EmbeddingsFindDuplicatesCommand extends Command {
   }
 }
 
-export class EmbeddingsListFailedCommand extends Command {
+export class EmbeddingsListFailedCommand extends SuasorCommand {
   static override paths = [["embeddings", "list-failed"]];
 
   static override usage = Command.Usage({

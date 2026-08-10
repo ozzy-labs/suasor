@@ -97,6 +97,65 @@ export async function storeSecret(
 }
 
 /**
+ * Human-readable error for a failed keychain *write* ({@link storeSecret}) at a
+ * CLI surface (Issue #557). A headless host (Docker, CI, a server) has no
+ * Secret Service, so the write throws a raw native error at the exact moment
+ * the user has just pasted a token — the most trust-sensitive step of setup.
+ * Callers catch and print this instead: the failure plus the env-override
+ * escape hatch (docs/design/config.md).
+ */
+export function storeSecretErrorMessage(connector: string, secret: string, cause: unknown): string {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return (
+    `error: could not store the ${connector} secret in the OS keychain: ${detail}\n` +
+    "hint: no keychain on this host (Docker / headless)? set the env override instead: " +
+    `${secretEnvName(connector, secret)}=<value>\n`
+  );
+}
+
+/** Outcome of {@link probeKeychain}: usable, or unavailable with the native reason. */
+export type KeychainProbe = { available: true } | { available: false; reason: string };
+
+/**
+ * Keychain account probed by {@link probeKeychain}. Namespaced away from
+ * `connector:` / `embedding:` entries so the probe can never read a real secret.
+ */
+const PROBE_ACCOUNT = "diagnostic:availability-probe";
+
+/**
+ * Probe whether the OS keychain is usable at all, distinguishing "keychain
+ * unavailable" from "credential not stored" (Issue #557). The resolve path
+ * deliberately swallows native errors (an absent entry and a broken backend
+ * both read as `null`), which makes `doctor` misdiagnose a headless host as
+ * "missing credential" and recommend `auth set` — which then crashes. This
+ * probe surfaces the difference: a "no matching entry" error means the backend
+ * answered (available); any other error (no Secret Service, locked backend) or
+ * a failed native-module import (the standalone binary keeps `@napi-rs/keyring`
+ * external, ADR-0010) means unavailable.
+ */
+export async function probeKeychain(options: SecretStoreOptions = {}): Promise<KeychainProbe> {
+  // Reading a never-written account answers "can the backend be reached"
+  // without touching any real secret. An injected backend returns null for an
+  // absent entry (or throws to simulate a broken host); the native Entry is
+  // probed *raw* — not through loadKeyringBackend, whose `get` swallows every
+  // error into `null` (that swallowing is the very ambiguity this probe exists
+  // to resolve).
+  try {
+    if (options.keychain) {
+      options.keychain.get(KEYCHAIN_SERVICE, PROBE_ACCOUNT);
+      return { available: true };
+    }
+    const { Entry } = await import("@napi-rs/keyring");
+    new Entry(KEYCHAIN_SERVICE, PROBE_ACCOUNT).getPassword();
+    return { available: true };
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    if (/no matching entry/i.test(reason)) return { available: true };
+    return { available: false, reason };
+  }
+}
+
+/**
  * Build a {@link import("./contract.ts").SyncContext}-compatible `secret`
  * resolver bound to a connector, reusing one keychain backend across calls.
  */

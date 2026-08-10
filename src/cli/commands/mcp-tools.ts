@@ -14,8 +14,9 @@
  * light.
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class McpToolsCommand extends Command {
+export class McpToolsCommand extends SuasorCommand {
   static override paths = [["mcp", "tools"]];
 
   static override usage = Command.Usage({
