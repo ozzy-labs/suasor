@@ -26,7 +26,12 @@ import {
   recallSearch,
 } from "../retrieval/embedding/index.ts";
 import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
-import { DEFAULT_EXCERPT_CHARS, DEFAULT_SEARCH_LIMIT, searchSources } from "../retrieval/search.ts";
+import {
+  buildExcerpt,
+  DEFAULT_EXCERPT_CHARS,
+  DEFAULT_SEARCH_LIMIT,
+  searchSources,
+} from "../retrieval/search.ts";
 import {
   buildActivityTimeline,
   buildBrief,
@@ -80,22 +85,41 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     });
   };
 
-  // Shared body-projection args for the retrieval tool (`search`, every mode).
-  // By default each hit returns a bounded excerpt, not the full
-  // body, so a multi-hit response can't overflow the host context; the full text
-  // is fetched via source.get (retrieval-m2 / ADR-0018 payload suppression).
+  // Shared body-projection args for every tool that returns source bodies in
+  // bulk (`search`, `source.list`, `demand.list`, `brief`). By default each row
+  // returns a bounded excerpt, not the full body, so a multi-row response can't
+  // overflow the host context; the full text is fetched via source.get
+  // (retrieval-m2 / ADR-0018 payload suppression).
   const fullBodyShape = z
     .boolean()
     .optional()
     .describe(
-      "Return each hit's full body instead of a bounded excerpt (default: excerpt only — fetch full text via source.get).",
+      "Return each row's full body instead of a bounded excerpt (default: excerpt only — fetch full text via source.get).",
     );
   const maxBodyCharsShape = z
     .number()
     .int()
     .positive()
     .optional()
-    .describe(`Max characters per hit excerpt (default ${DEFAULT_EXCERPT_CHARS}).`);
+    .describe(`Max characters per row excerpt (default ${DEFAULT_EXCERPT_CHARS}).`);
+
+  // Excerpt projection for list-shaped source rows (Issue #564). `search`
+  // established the payload discipline (bounded excerpt by default), but
+  // `source.list` / `demand.list` / `brief` returned every row's full body
+  // unbounded — one call could bundle 50 extracted-PDF bodies, the exact
+  // overflow the excerpt design exists to prevent. Rows carry `excerpt`
+  // instead of `body` unless `fullBody` is set; full text stays one
+  // source.get away. Projection happens at the tool boundary so queries.ts
+  // (and its CLI / scorer consumers) keep seeing full bodies.
+  type ExcerptProjected<T> = Omit<T, "body"> & { excerpt: string };
+  const projectBody = <T extends { body: string }>(
+    record: T,
+    opts: { fullBody?: boolean | undefined; maxBodyChars?: number | undefined },
+  ): T | ExcerptProjected<T> => {
+    if (opts.fullBody === true) return record;
+    const { body, ...rest } = record;
+    return { ...rest, excerpt: buildExcerpt(body, opts.maxBodyChars ?? DEFAULT_EXCERPT_CHARS) };
+  };
 
   // --- search: the single retrieval entry point (ADR-0046 決定 2). ---
   // Was three tools (`search` / `recall.search` / `search.hybrid`), which pushed
@@ -236,7 +260,9 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "calendar events — a starts_after/starts_before window over the event's " +
         "own start time (ADR-0044). Returns " +
         "`truncated: true` when more rows match than `limit` returned (ADR-0007 — " +
-        "page with a tighter window rather than trusting a full page is complete).",
+        "page with a tighter window rather than trusting a full page is complete). " +
+        "Each row carries a bounded `excerpt` (not the full body) by default — " +
+        "fetch full text via source.get, or pass fullBody=true (ADR-0018).",
       inputSchema: {
         sourceType: z.string().min(1).optional().describe("Filter by source_type."),
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
@@ -252,10 +278,21 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           .optional()
           .describe("Calendar events only: exclusive upper bound on the event's own start time."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
+        fullBody: fullBodyShape,
+        maxBodyChars: maxBodyCharsShape,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ sourceType, observedAfter, observedBefore, startsAfter, startsBefore, limit }) => {
+    async ({
+      sourceType,
+      observedAfter,
+      observedBefore,
+      startsAfter,
+      startsBefore,
+      limit,
+      fullBody,
+      maxBodyChars,
+    }) => {
       const effLimit = limit ?? DEFAULT_LIST_LIMIT;
       const { rows: sources, truncated } = listWithTruncation(effLimit, (probeLimit) =>
         listSources(sqlite, {
@@ -267,7 +304,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           limit: probeLimit,
         }),
       );
-      return jsonResult({ sources, truncated });
+      return jsonResult({
+        sources: sources.map((s) => projectBody(s, { fullBody, maxBodyChars })),
+        truncated,
+      });
     },
   );
 
@@ -435,7 +475,9 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "hidden so 'unprocessed' is true (ADR-0041 supersedes ADR-0012 決定 4). Pass " +
         "includeSeen=true to return all with `seenState` populated. Use as the priority " +
         "signal in next-actions / personal-brief. Returns `truncated: true` when more rows " +
-        "match than `limit` returned (ADR-0007).",
+        "match than `limit` returned (ADR-0007). Each row carries a bounded `excerpt` " +
+        "(not the full body) by default — fetch full text via source.get, or pass " +
+        "fullBody=true (ADR-0018).",
       inputSchema: {
         selfUserId: z
           .string()
@@ -460,10 +502,22 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         observedAfter: isoDateTime.optional().describe("Inclusive lower bound on observed_at."),
         observedBefore: isoDateTime.optional().describe("Exclusive upper bound on observed_at."),
         limit: limitShape.describe(`Max rows (default ${DEFAULT_LIST_LIMIT}).`),
+        fullBody: fullBodyShape,
+        maxBodyChars: maxBodyCharsShape,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ selfUserId, source, kinds, includeSeen, observedAfter, observedBefore, limit }) => {
+    async ({
+      selfUserId,
+      source,
+      kinds,
+      includeSeen,
+      observedAfter,
+      observedBefore,
+      limit,
+      fullBody,
+      maxBodyChars,
+    }) => {
       const selfUserIds = selfUserId ? [selfUserId] : (deps.slackSelfUserIds ?? []);
       const effLimit = limit ?? DEFAULT_LIST_LIMIT;
       const { rows: demand, truncated } = listWithTruncation(effLimit, (probeLimit) =>
@@ -477,7 +531,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           limit: probeLimit,
         }),
       );
-      return jsonResult({ demand, truncated });
+      return jsonResult({
+        demand: demand.map((d) => projectBody(d, { fullBody, maxBodyChars })),
+        truncated,
+      });
     },
   );
 
@@ -534,15 +591,19 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "(ADR-0017). Default window: the last 24h. Carries a per-section " +
         "`truncated: { sources, tasks, decisions, inbox, demand }` map — a section is " +
         "`true` when it held more rows than `limit` returned (ADR-0007 'no silent wrong " +
-        "answer'); narrow the window or page via the matching list tool when set.",
+        "answer'); narrow the window or page via the matching list tool when set. " +
+        "Body-bearing rows (sources / demand) carry a bounded `excerpt` (not the full " +
+        "body) by default — fetch full text via source.get, or pass fullBody=true (ADR-0018).",
       inputSchema: {
         since: isoDateTime.optional().describe("Window start (inclusive). Default: 24h ago."),
         until: isoDateTime.optional().describe("Window end (exclusive). Default: now."),
         limit: limitShape.describe(`Per-section max rows (default ${DEFAULT_LIST_LIMIT}).`),
+        fullBody: fullBodyShape,
+        maxBodyChars: maxBodyCharsShape,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ since, until, limit }) => {
+    async ({ since, until, limit, fullBody, maxBodyChars }) => {
       const now = new Date();
       const effSince = since ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
       const effUntil = until ?? now.toISOString();
@@ -570,7 +631,13 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           commitmentScan: deriveCommitmentScanStaleness(sqlite),
         }),
       });
-      return jsonResult(brief);
+      // Project the two body-bearing sections (Issue #564) — the other sections
+      // (tasks / decisions / inbox / commitments) carry titles, not source bodies.
+      return jsonResult({
+        ...brief,
+        sources: brief.sources.map((s) => projectBody(s, { fullBody, maxBodyChars })),
+        demand: brief.demand.map((d) => projectBody(d, { fullBody, maxBodyChars })),
+      });
     },
   );
 
