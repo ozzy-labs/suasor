@@ -24,6 +24,7 @@
  */
 import { z } from "zod";
 import { ConfigError } from "../config/error.ts";
+import { parseSinceMs } from "../shared/since.ts";
 import type {
   Connector,
   ConnectorConfig,
@@ -172,27 +173,17 @@ export function slackCredentials(): CredentialRequirement {
   };
 }
 
-/** `<n><unit>` relative-duration syntax for {@link parseSinceToTs} (d/w/h). */
-const RELATIVE_SINCE = /^(\d+)([dwh])$/;
-const UNIT_SECONDS: Record<string, number> = { h: 3600, d: 86400, w: 604800 };
-
 /**
  * Convert a `since` floor (ADR-0016) to a Slack `oldest` ts (`<seconds>.000000`),
  * or `null` when it cannot be parsed. Accepts a relative `30d` / `4w` / `12h`
- * (relative to `nowMs`) or an ISO date / datetime (`2026-01-01`). Exported for
- * direct unit testing of the conversion.
+ * (relative to `nowMs`) or an ISO date / datetime (`2026-01-01`) — the shared
+ * duration/ISO dialect every time-filter flag speaks (`src/shared/since.ts`,
+ * Issue #561). Exported for direct unit testing of the conversion.
  */
 export function parseSinceToTs(since: string, nowMs: number): string | null {
-  const rel = RELATIVE_SINCE.exec(since.trim());
-  if (rel) {
-    const amount = Number(rel[1]);
-    const unit = UNIT_SECONDS[rel[2] as string] as number;
-    const seconds = Math.floor(nowMs / 1000) - amount * unit;
-    return `${Math.max(0, seconds)}.000000`;
-  }
-  const parsed = Date.parse(since.trim());
-  if (Number.isNaN(parsed)) return null;
-  return `${Math.floor(parsed / 1000)}.000000`;
+  const ms = parseSinceMs(since, nowMs);
+  if (ms === null) return null;
+  return `${Math.max(0, Math.floor(ms / 1000))}.000000`;
 }
 
 /**
