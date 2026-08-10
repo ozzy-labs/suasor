@@ -1118,6 +1118,46 @@ describe("Slack connector — thread_not_found is thread-scoped (#551)", () => {
     expect(result?.partialFailure ?? false).toBe(false);
   });
 
+  test("several stale threads collapse into one warn, not one warn each", async () => {
+    const P2 = "1799991000.000000"; // a second stale parent in the same channel
+    const warns: string[] = [];
+    // Both saved marks resolve to the same `thread_not_found` fake.
+    const client: SlackClientLike = {
+      conversations: {
+        history: async () => ({ messages: [] }),
+        replies: async () => {
+          const error = new Error("An API error occurred: thread_not_found") as Error & {
+            data?: { error: string };
+          };
+          error.data = { error: "thread_not_found" };
+          throw error;
+        },
+      },
+    };
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      { clientFactory: () => client, now: () => NOW_MS },
+    );
+    await collect(
+      connector.sync(
+        ctx({
+          cursor: JSON.stringify({ C1: M, [`C1#${P}`]: R1, [`C1#${P2}`]: R1 }),
+          onWarn: (m: string) => warns.push(m),
+        }),
+      ),
+    );
+    // One aggregated warn naming both, mirroring the unreachable-channel warn —
+    // not one line per thread (which would scale with the stale-cursor count).
+    const dropped = warns.filter((w) => w.includes("thread cursor(s) dropped"));
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toContain("2 thread cursor(s) dropped");
+    expect(dropped[0]).toContain(`C1#${P} (thread_not_found)`);
+    expect(dropped[0]).toContain(`C1#${P2} (thread_not_found)`);
+    // Both stale marks are gone; the channel cursor survives.
+    const result = await connector.finalize?.();
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: M });
+  });
+
   test("a non-thread error from replies stays token-wide (rate limit is not swallowed)", async () => {
     const client: SlackClientLike = {
       conversations: {
