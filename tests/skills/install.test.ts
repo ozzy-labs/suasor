@@ -14,6 +14,9 @@ import {
   installSkills,
   listBundledSkills,
   mirrorPath,
+  orphanStatuses,
+  pruneSkills,
+  readStamp,
   resolveSkillsSource,
   scopeHosts,
   skillStatuses,
@@ -154,6 +157,100 @@ describe("skillStatuses / detectDrift", () => {
     // After re-install, drift is empty.
     installSkills({ baseDir, scope: "claude", skills: bundled() });
     expect(detectDrift({ baseDir, scope: "claude", skills: bundled() })).toEqual([]);
+  });
+});
+
+describe("orphanStatuses / pruneSkills (#556)", () => {
+  /** Plant a mirror directory under a host dir, bypassing installSkills. */
+  function plantMirror(host: "claude" | "agents", name: string, body = `# ${name}\n`): string {
+    const target = mirrorPath(baseDir, host, name);
+    mkdirSync(join(baseDir, host === "claude" ? ".claude" : ".agents", "skills", name), {
+      recursive: true,
+    });
+    writeFileSync(target, body);
+    return target;
+  }
+
+  test("a retired-name mirror outside the catalog is reported as orphan", () => {
+    installSkills({ baseDir, scope: "claude", skills: bundled() });
+    plantMirror("claude", "catchup"); // folded into brief by ADR-0046
+    const statuses = skillStatuses({ baseDir, scope: "claude", skills: bundled() });
+    const hit = statuses.find((s) => s.name === "catchup");
+    expect(hit?.state).toBe("orphan");
+    expect(hit?.mirrorPath).toBe(mirrorPath(baseDir, "claude", "catchup"));
+    // Catalog rows are unaffected.
+    expect(statuses.find((s) => s.name === "next-actions")?.state).toBe("installed");
+  });
+
+  test("a catalog name is never an orphan, even when it is also a retired name", () => {
+    // The fixture catalog deliberately bundles 'personal-brief' (a RETIRED_SKILLS
+    // member): catalog membership must win over the historical list.
+    installSkills({ baseDir, scope: "claude", skills: bundled() });
+    const statuses = skillStatuses({ baseDir, scope: "claude", skills: bundled() });
+    const rows = statuses.filter((s) => s.name === "personal-brief");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.state).toBe("installed");
+  });
+
+  test("a foreign skill dir (ecosystem dev skill) is never reported nor pruned", () => {
+    installSkills({ baseDir, scope: "claude", skills: bundled(), version: "1.0.0" });
+    const foreign = plantMirror("claude", "drive"); // @ozzylabs/skills namespace
+    expect(orphanStatuses({ baseDir, scope: "claude", skills: bundled() })).toEqual([]);
+    const pruned = pruneSkills({ baseDir, scope: "claude", skills: bundled() });
+    expect(pruned).toEqual([]);
+    expect(existsSync(foreign)).toBe(true);
+  });
+
+  test("the stamp records installed names and tracks a later-dropped skill as orphan", () => {
+    // v1 installs the full fixture catalog; 'next-actions' is not a retired
+    // name, so only the stamp record can prove suasor owned it.
+    installSkills({ baseDir, scope: "claude", skills: bundled(), version: "1.0.0" });
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["next-actions", "personal-brief"]);
+
+    // v2 drops 'next-actions' from the catalog; its mirror survives install.
+    const contracted = bundled().filter((s) => s.name === "personal-brief");
+    installSkills({ baseDir, scope: "claude", skills: contracted, version: "2.0.0" });
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["next-actions", "personal-brief"]);
+    const orphans = orphanStatuses({ baseDir, scope: "claude", skills: contracted });
+    expect(orphans.map((o) => o.name)).toEqual(["next-actions"]);
+    expect(orphans[0]?.state).toBe("orphan");
+
+    // Pruning removes the mirror; the next stamp write drops the record.
+    pruneSkills({ baseDir, scope: "claude", skills: contracted });
+    expect(existsSync(mirrorPath(baseDir, "claude", "next-actions"))).toBe(false);
+    installSkills({ baseDir, scope: "claude", skills: contracted, version: "2.0.0" });
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["personal-brief"]);
+    expect(orphanStatuses({ baseDir, scope: "claude", skills: contracted })).toEqual([]);
+  });
+
+  test("pruneSkills removes the orphan mirror dir; dryRun only reports", () => {
+    installSkills({ baseDir, skills: bundled() });
+    const claudeMirror = plantMirror("claude", "weekly-review");
+    const agentsMirror = plantMirror("agents", "weekly-review");
+
+    const dry = pruneSkills({ baseDir, dryRun: true, skills: bundled() });
+    expect(dry.map((r) => r.removed)).toEqual([false, false]);
+    expect(existsSync(claudeMirror)).toBe(true);
+    expect(existsSync(agentsMirror)).toBe(true);
+
+    const wet = pruneSkills({ baseDir, skills: bundled() });
+    expect(wet.map((r) => r.removed)).toEqual([true, true]);
+    expect(existsSync(join(baseDir, ".claude", "skills", "weekly-review"))).toBe(false);
+    expect(existsSync(join(baseDir, ".agents", "skills", "weekly-review"))).toBe(false);
+    // Catalog mirrors are untouched.
+    expect(existsSync(mirrorPath(baseDir, "claude", "next-actions"))).toBe(true);
+  });
+
+  test("a directory without SKILL.md is not a mirror and never an orphan", () => {
+    mkdirSync(join(baseDir, ".claude", "skills", "catchup"), { recursive: true });
+    expect(orphanStatuses({ baseDir, scope: "claude", skills: bundled() })).toEqual([]);
+  });
+
+  test("detectDrift surfaces orphans alongside missing / modified", () => {
+    installSkills({ baseDir, scope: "claude", skills: bundled() });
+    plantMirror("claude", "catchup");
+    const drift = detectDrift({ baseDir, scope: "claude", skills: bundled() });
+    expect(drift.map((d) => `${d.name}:${d.state}`)).toEqual(["catchup:orphan"]);
   });
 });
 

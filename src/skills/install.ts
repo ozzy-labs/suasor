@@ -7,12 +7,15 @@
  * live in a disjoint namespace and are never touched here.
  *
  * `skillStatuses` reports per-skill, per-host status (`installed` / `missing` /
- * `modified`) for `suasor skills list`. `detectDrift` reduces that to the
- * out-of-sync subset, which is what makes `modified` reportable at all.
+ * `modified` / `orphan`) for `suasor skills list`. `detectDrift` reduces that
+ * to the out-of-sync subset, which is what makes `modified` reportable at all.
+ * `orphanStatuses` / `pruneSkills` (#556) detect and delete mirrors whose names
+ * have left the catalog (ADR-0046 folded 32 skills into 22, and install never
+ * removed the retired mirrors), without ever touching foreign skill dirs.
  *
  * No heavy dependencies: only `node:fs` / `node:path` (NFR-PRF-1).
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type Dirent, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type BundledSkill,
@@ -40,7 +43,43 @@ export {
 } from "./catalog.ts";
 
 /** One skill's installed state relative to the SSOT, per host. */
-export type SkillState = "installed" | "missing" | "modified";
+export type SkillState = "installed" | "missing" | "modified" | "orphan";
+
+/**
+ * Skill names that were once bundled but have been removed or folded away
+ * (ADR-0046 agent-surface contraction, 0.3.0). An upgraded install still
+ * carries their mirrors — `installSkills` overwrites but never deletes — so
+ * orphan detection must recognise them even when no stamp recorded them
+ * (pre-#556 stamps carried no name list).
+ *
+ * This list only ever grows: a name added here stays even if a future skill
+ * reuses it (catalog membership wins over this list, so a re-adopted name is
+ * simply never reported as orphan).
+ */
+export const RETIRED_SKILLS: readonly string[] = [
+  // → brief (ADR-0046 decision 3)
+  "personal-brief",
+  "catchup",
+  "weekly-review",
+  "external-brief",
+  "health-check",
+  // → source-review
+  "doc-review",
+  "pr-review",
+  "doc-diff",
+  // → find
+  "find-document",
+  "research",
+  // → meeting
+  "meeting-prep",
+  "action-item-status",
+  // → decisions
+  "decision-log",
+  "decision-rationale",
+  // → draft
+  "announcement-draft",
+  "handoff-draft",
+];
 
 export interface SkillStatus {
   readonly name: string;
@@ -126,12 +165,23 @@ export function installSkills(options: InstallOptions = {}): InstallResult[] {
   // beside the mirrors, never inside them — a mirror must stay byte-identical
   // to its SSOT or drift detection would flag every skill.
   if (!dryRun && options.version !== undefined && skills.length > 0) {
+    const names = skills.map((s) => s.name);
     for (const host of hosts) {
       const path = stampPath(baseDir, host);
       mkdirSync(dirname(path), { recursive: true });
+      // The stamp also records which skill names suasor wrote (#556), so a
+      // future run can tell "suasor installed this, then the catalog dropped
+      // it" (orphan) apart from a foreign skill it must never touch. Names a
+      // previous stamp tracked are carried forward while their mirror still
+      // exists on disk — otherwise re-installing would forget the very
+      // orphans the record exists to identify.
+      const carried = (readStamp(baseDir, host)?.skills ?? []).filter(
+        (name) => !names.includes(name) && readTextOrNull(mirrorPath(baseDir, host, name)) !== null,
+      );
       const stamp: SkillsStamp = {
         version: options.version,
         installedAt: new Date().toISOString(),
+        skills: [...names, ...carried].sort((a, b) => a.localeCompare(b)),
       };
       writeFileSync(path, `${JSON.stringify(stamp, null, 2)}\n`);
     }
@@ -143,7 +193,9 @@ export function installSkills(options: InstallOptions = {}): InstallResult[] {
  * Report per-skill, per-host status against the SSOT for `skills list`.
  *
  * `missing` = no mirror; `installed` = mirror matches SSOT; `modified` = mirror
- * exists but differs from SSOT (local edit / SSOT moved on).
+ * exists but differs from SSOT (local edit / SSOT moved on); `orphan` = a
+ * mirror suasor once wrote whose name has since left the catalog (#556) —
+ * appended after the catalog rows so the cleanup signal actually exists.
  */
 export function skillStatuses(options: InstallOptions = {}): SkillStatus[] {
   const baseDir = options.baseDir ?? process.cwd();
@@ -162,11 +214,82 @@ export function skillStatuses(options: InstallOptions = {}): SkillStatus[] {
       statuses.push({ name: skill.name, host, mirrorPath: target, state });
     }
   }
-  return statuses;
+  return [...statuses, ...orphanStatuses(options)];
 }
 
 /**
- * Drift = any mirror that is `missing` or `modified` relative to the SSOT.
+ * Mirrors present in a host dir for skills the catalog no longer bundles
+ * (#556): the pre-ADR-0046 skill set survives every upgrade because
+ * `installSkills` only ever iterates the current catalog.
+ *
+ * Ownership guard — ecosystem dev skills (`@ozzylabs/skills`: drive / commit /
+ * review …) share the same host dirs, so "not in the catalog" alone is not
+ * evidence suasor wrote it. A directory only counts as an orphan when suasor
+ * demonstrably owned the name: it appears in the host dir's stamp name record
+ * ({@link SkillsStamp.skills}) or in the historical {@link RETIRED_SKILLS}
+ * list (which covers pre-#556 installs whose stamps carried no names).
+ * Anything else is left alone, unreported.
+ */
+export function orphanStatuses(options: InstallOptions = {}): SkillStatus[] {
+  const baseDir = options.baseDir ?? process.cwd();
+  const scope: Scope = options.scope ?? "all";
+  const hosts = options.hosts ?? scopeHosts(scope);
+  const skills = options.skills ?? listBundledSkills();
+  const catalog = new Set(skills.map((s) => s.name));
+
+  const orphans: SkillStatus[] = [];
+  for (const host of hosts) {
+    const owned = new Set([...(readStamp(baseDir, host)?.skills ?? []), ...RETIRED_SKILLS]);
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(join(baseDir, HOSTS[host]), { withFileTypes: true });
+    } catch {
+      continue; // host dir absent → nothing installed, nothing orphaned
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || catalog.has(entry.name) || !owned.has(entry.name)) continue;
+      const target = mirrorPath(baseDir, host, entry.name);
+      if (readTextOrNull(target) === null) continue; // no SKILL.md → not a mirror
+      orphans.push({ name: entry.name, host, mirrorPath: target, state: "orphan" });
+    }
+  }
+  return orphans.sort((a, b) => a.name.localeCompare(b.name) || a.host.localeCompare(b.host));
+}
+
+/** What `pruneSkills` did (or, with `dryRun`, would do) to one orphaned mirror. */
+export interface PruneResult {
+  readonly name: string;
+  readonly host: Host;
+  /** Absolute path of the removed mirror's `SKILL.md`. */
+  readonly mirrorPath: string;
+  /** False under `dryRun` (the orphan was only reported). */
+  readonly removed: boolean;
+}
+
+/**
+ * Delete orphaned mirrors ({@link orphanStatuses}) from the host dirs (#556).
+ *
+ * Removes each orphan's whole `<host>/<name>/` directory, since the mirror dir
+ * is install output owned by suasor. Restricted to the same ownership guard as
+ * detection — foreign skill dirs are never candidates. With `dryRun`, reports
+ * the candidates without deleting anything.
+ */
+export function pruneSkills(options: InstallOptions = {}): PruneResult[] {
+  const dryRun = options.dryRun ?? false;
+  return orphanStatuses(options).map((orphan) => {
+    if (!dryRun) rmSync(dirname(orphan.mirrorPath), { recursive: true, force: true });
+    return {
+      name: orphan.name,
+      host: orphan.host,
+      mirrorPath: orphan.mirrorPath,
+      removed: !dryRun,
+    };
+  });
+}
+
+/**
+ * Drift = any mirror that is `missing`, `modified` or `orphan` relative to the
+ * SSOT catalog.
  *
  * A **derivation, not an enforcement point**: nothing runs this on commit. The
  * git hook it once described was removed with the in-repo mirror commits
@@ -188,6 +311,13 @@ export interface SkillsStamp {
   readonly version: string;
   /** ISO 8601 write time (informational; drift is judged on `version`). */
   readonly installedAt: string;
+  /**
+   * Names of every skill mirror suasor has written into this host dir and not
+   * yet pruned (#556) — the ownership record orphan detection diffs against
+   * the catalog. Absent on stamps written before this field existed (those
+   * installs fall back to {@link RETIRED_SKILLS}).
+   */
+  readonly skills?: readonly string[];
 }
 
 /** Absolute path of a host dir's stamp file. */
@@ -208,7 +338,14 @@ export function readStamp(baseDir: string, host: Host): SkillsStamp | null {
   try {
     const parsed = JSON.parse(raw) as Partial<SkillsStamp>;
     if (typeof parsed.version !== "string" || parsed.version.length === 0) return null;
-    return { version: parsed.version, installedAt: parsed.installedAt ?? "" };
+    const skills = Array.isArray(parsed.skills)
+      ? parsed.skills.filter((name): name is string => typeof name === "string")
+      : undefined;
+    return {
+      version: parsed.version,
+      installedAt: parsed.installedAt ?? "",
+      ...(skills === undefined ? {} : { skills }),
+    };
   } catch {
     return null;
   }

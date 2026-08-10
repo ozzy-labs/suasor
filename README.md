@@ -49,8 +49,9 @@ the agent surface was contracted so a host stops choosing between near-duplicate
 If your host config, custom skills or scripts name `recall.search`, `search.hybrid`,
 `source.get.full`, `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `.dismiss`, or any
 of the 16 folded-away skills, they must be updated — the mechanical
-[migration table](docs/guide/troubleshooting.md) lists every old → new name, including how to
-remove skill mirrors that `skills install` overwrites but never deletes.
+[migration table](docs/guide/troubleshooting.md) lists every old → new name. Mirrors of the
+folded-away skills survive the upgrade (`skills install` overwrites but never deletes);
+`suasor skills list` reports them as `orphan` and `suasor skills prune` removes them.
 
 ## Quickstart (provisional)
 
@@ -94,7 +95,8 @@ suasor search "<query>"
 
 # Install the bundled assistant skills into your agent host(s).
 suasor skills install        # .claude/skills/ + .agents/skills/
-suasor skills list           # installed / missing / modified
+suasor skills list           # installed / missing / modified / orphan
+suasor skills prune          # remove mirrors of retired skills (orphans)
 
 # Maintenance.
 suasor db migrate            # apply the projection schema (idempotent)

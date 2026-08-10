@@ -41,17 +41,16 @@ MCP tool と skill の**名前が変わった**（後方互換の alias は残�
 | `decision-log` / `decision-rationale` | `decisions` |
 | `announcement-draft` / `handoff-draft` | `draft` |
 
-**旧 skill を install 済みの環境では、古い mirror が残る**（install は上書きするが削除はしない）。`suasor skills list` が旧名を `modified` / 孤児として出したら、mirror ディレクトリを手で消す:
+**旧 skill を install 済みの環境では、古い mirror が残る**（install は上書きするが削除はしない）。残った旧 mirror は host が新 skill と**併読**するためトリガ競合が復活し、旧 skill が改名前の MCP tool（`recall.search` 等）を呼んで失敗する（[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）。`suasor skills list` が旧名を `orphan` として報告し、`suasor skills install` も残骸があると stderr に 1 行警告するので、`suasor skills prune` で削除する:
 
 ```bash
-rm -rf ~/.claude/skills/{personal-brief,catchup,weekly-review,external-brief,health-check}
-rm -rf ~/.claude/skills/{doc-review,pr-review,doc-diff,find-document,research}
-rm -rf ~/.claude/skills/{meeting-prep,action-item-status,decision-log,decision-rationale}
-rm -rf ~/.claude/skills/{announcement-draft,handoff-draft}
-suasor skills install   # 新しい catalog を展開
+suasor skills install           # 新しい catalog を展開（orphan が残っていれば警告が出る）
+suasor skills list              # 旧 skill の mirror が orphan として並ぶ
+suasor skills prune --dry-run   # 削除対象の確認（何も消さない）
+suasor skills prune             # orphan mirror を削除（.claude/skills/ と .agents/skills/ の両方）
 ```
 
-`.agents/skills/` 側も同様。
+prune が消すのは suasor が書いたと証明できる mirror（stamp 記録済みの名前 + 既知の退役名）だけで、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills`）や手置きの skill には触れない。`--project` / `--host <dir>` でプロジェクトローカル install も同様に掃除できる。
 
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 

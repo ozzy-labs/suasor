@@ -15,13 +15,17 @@ suasor skills install --scope claude   # Claude Code（.claude/skills/）のみ
 suasor skills install --scope agents   # Codex / Copilot / Gemini（.agents/skills/）のみ
 suasor skills install --host /path/to/project   # 展開先を明示指定（--project より優先）
 suasor skills install --dry-run        # 書き込まず差分（created / updated / unchanged）だけ確認
+suasor skills prune                    # catalog から消えた旧 skill の mirror（orphan）を削除
+suasor skills prune --dry-run          # 削除対象を確認するだけ
 ```
 
 **既定は user scope**（`$HOME` 配下）。skill は「どのプロジェクトで作業していても使いたい」ものなので、1 回入れれば全プロジェクトで発火する user scope を既定にしている。特定プロジェクトにだけ置きたい場合のみ `--project`（または `--host <path>`）を使う。
 
 展開は冪等。内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated`。`suasor init` は本コマンドを案内するのみで自動展開はしない。
 
-install 時、展開先 skill ディレクトリの直下に `.suasor-skills.json`（展開した suasor の version と時刻）を残す。mirror 自体は SSOT とバイト一致を保つ必要がある（drift 検出）ため、stamp は mirror の**外**に置く。version が現在の suasor と食い違うと `suasor skills list` と `suasor mcp serve` の起動時に stderr へ 1 行だけ再 install を促す（`list` の結果自体は汚さない）。
+**install は上書きするだけで削除はしない**。catalog から消えた・改名された skill（[ADR-0046](../adr/0046-agent-surface-contraction.md) の収縮など）の mirror はアップグレード後も残り、現行 skill とトリガが衝突したり、存在しない MCP tool を指示したりする（[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）。この残骸は `skills list` が `orphan` として報告し、install 実行時にも stderr へ 1 行警告する。削除は opt-in の `suasor skills prune` で行う（`--dry-run` で削除対象だけ確認できる）。**対象になるのは suasor が書いたと証明できる mirror のみ** — stamp に記録された名前と既知の退役名だけを見るため、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills` の drive / commit 等）や手置きの skill には決して触れない。
+
+install 時、展開先 skill ディレクトリの直下に `.suasor-skills.json`（展開した suasor の version・時刻・書き込んだ skill 名の一覧）を残す。mirror 自体は SSOT とバイト一致を保つ必要がある（drift 検出）ため、stamp は mirror の**外**に置く。version が現在の suasor と食い違うと `suasor skills list` と `suasor mcp serve` の起動時に stderr へ 1 行だけ再 install を促す（`list` の結果自体は汚さない）。skill 名の一覧は orphan 検出の所有権記録で、将来 catalog から skill が消えたときに「suasor が入れたが今は無い」を機械的に判定するために使う。
 
 ## 2. 起動（自然文トリガ）
 
@@ -30,19 +34,19 @@ skill は **専用コマンドではなく、エージェントへの自然文�
 | 言いかた | 発火する skill | 種別 |
 |---|---|---|
 | 「次に何やる?」「優先度高いのは?」 | `next-actions` | read |
-| 「今日のまとめ」「最近どう」 | `personal-brief` | read |
-| 「あの資料どこ」「<語>含むファイル」 | `find-document` | read |
+| 「今日のまとめ」「最近どう」 | `brief` | read |
+| 「あの資料どこ」「<語>含むファイル」 | `find` | read |
 | 「この資料から task 抽出」 | `source-extract` | write（HITL） |
 | 「返信案考えて」「下書き作って」 | `reply-draft` | write（HITL） |
 
-read 系（自律 OK・20）はエージェントが自律実行してよい。write 系（HITL・9）は候補生成までで、**適用はユーザー承認が必須**（auto-apply 経路は無い、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read 系（自律 OK・9）はエージェントが自律実行してよい。write 系（HITL・13）は候補生成までで、**適用はユーザー承認が必須**（auto-apply 経路は無い、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ## 3. 確認（list / search / info）
 
 どの skill があるか・何をするか・どう起動するかは CLI から機械的に確認できる（[ADR-0032](../adr/0032-skill-frontmatter-schema.md)）。
 
 ```bash
-# 状態一覧（installed / missing / modified）
+# 状態一覧（installed / missing / modified / orphan）
 suasor skills list
 suasor skills list --scope claude
 suasor skills list --json                      # SkillStatus[]（name / host / state / mirrorPath）
@@ -87,6 +91,10 @@ description: 「次に何をする?」「やること教えて」…
 ### `modified` / drift と表示される
 
 mirror（`.claude/skills/` / `.agents/skills/`）が SSOT（`docs/skills/`）と差分がある状態。`suasor skills install` で SSOT 内容に再展開すると `installed` に戻る。なお [ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo の mirror commit と `skills-drift` フックは廃止された。**host dir（`.claude/skills/` / `.agents/skills/`）配下は現在すべてローカル install 物で、commit されるものは無い** — dev skill の project-scope vendoring も 2026-07-04 に撤回され user-scope install へ移行した。
+
+### `orphan` と表示される
+
+catalog がもう同梱していない skill の mirror が host dir に残っている状態（install は上書きするだけで削除しないため、[ADR-0046](../adr/0046-agent-surface-contraction.md) で改名・統合された旧 skill が残る。[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）。放置すると旧 skill が現行 skill とトリガ競合し、改名前の MCP tool（例: `recall.search`）を呼んで失敗する。`suasor skills prune` で削除する（`--dry-run` で対象確認）。suasor が書いた記録のある mirror だけが対象で、同居する dev skill 等には触れない。
 
 ### read / write 境界が分からない
 

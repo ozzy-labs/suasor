@@ -5,7 +5,7 @@
  * shapes.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -208,6 +208,79 @@ describe("suasor skills install — scope + version stamp (#445)", () => {
     expect(err).toContain("another suasor version");
     expect(err).toContain("0.0.1-old");
     expect(err).toContain("skills install");
+  });
+
+  test("orphaned mirrors are detected, warned about, and pruned (#556)", async () => {
+    await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    // A retired mirror left behind by a pre-ADR-0046 install, plus a foreign
+    // ecosystem dev skill that must never be touched.
+    for (const name of ["personal-brief", "drive"]) {
+      mkdirSync(join(dir, ".claude", "skills", name), { recursive: true });
+      writeFileSync(join(dir, ".claude", "skills", name, "SKILL.md"), `# ${name}\n`);
+    }
+
+    // list appends the orphan row + summary count and points at prune.
+    const list = await run(["skills", "list", "--host", dir, "--scope", "claude"]);
+    expect(list.code).toBe(0);
+    expect(list.out).toContain("orphan");
+    expect(list.out).toContain("personal-brief");
+    expect(list.out).toContain("1 orphan");
+    expect(list.err).toContain("skills prune");
+    expect(list.out).not.toContain("drive"); // foreign dir: not even reported
+
+    // install re-run warns (cleanup signal) but removes nothing by itself.
+    const install = await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    expect(install.code).toBe(0);
+    expect(install.err).toContain("outside the catalog");
+    expect(install.err).toContain("personal-brief");
+    expect(install.err).toContain("skills prune");
+    expect(existsSync(join(dir, ".claude", "skills", "personal-brief", "SKILL.md"))).toBe(true);
+
+    // --dry-run previews without deleting.
+    const dry = await run(["skills", "prune", "--host", dir, "--scope", "claude", "--dry-run"]);
+    expect(dry.code).toBe(0);
+    expect(dry.out).toContain("would remove");
+    expect(existsSync(join(dir, ".claude", "skills", "personal-brief", "SKILL.md"))).toBe(true);
+
+    // prune removes the orphan, leaves the foreign dev skill alone.
+    const prune = await run(["skills", "prune", "--host", dir, "--scope", "claude"]);
+    expect(prune.code).toBe(0);
+    expect(prune.out).toContain("removed");
+    expect(prune.out).toContain("personal-brief");
+    expect(existsSync(join(dir, ".claude", "skills", "personal-brief"))).toBe(false);
+    expect(existsSync(join(dir, ".claude", "skills", "drive", "SKILL.md"))).toBe(true);
+
+    // Idempotent: a second prune finds nothing.
+    const again = await run(["skills", "prune", "--host", dir, "--scope", "claude"]);
+    expect(again.code).toBe(0);
+    expect(again.out).toContain("No orphaned mirrors found");
+  });
+
+  test("skills prune --json emits PruneResult[] and rejects an invalid --scope", async () => {
+    await run(["skills", "install", "--host", dir, "--scope", "claude"]);
+    mkdirSync(join(dir, ".claude", "skills", "doc-review"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "skills", "doc-review", "SKILL.md"), "# doc-review\n");
+
+    const { code, out } = await run(["skills", "prune", "--host", dir, "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out) as Array<{
+      name: string;
+      host: string;
+      mirrorPath: string;
+      removed: boolean;
+    }>;
+    expect(parsed).toEqual([
+      {
+        name: "doc-review",
+        host: "claude",
+        mirrorPath: join(dir, ".claude", "skills", "doc-review", "SKILL.md"),
+        removed: true,
+      },
+    ]);
+
+    const bad = await run(["skills", "prune", "--scope", "bogus"]);
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain("invalid --scope");
   });
 
   test("skills list is quiet when the stamp matches, and when nothing is installed", async () => {
