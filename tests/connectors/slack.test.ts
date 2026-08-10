@@ -1001,6 +1001,145 @@ describe("Slack connector — steady-state thread re-poll (ADR-0015 R1, #418)", 
   });
 });
 
+describe("Slack connector — thread_not_found is thread-scoped (#551)", () => {
+  // A fixed "now" (2027) so the 30d active-thread window is deterministic.
+  const NOW_MS = 1_800_000_000_000;
+  const P = "1799990000.000000"; // stale thread parent (active window, but gone on Slack)
+  const R1 = "1799990100.000000"; // its last captured reply — the saved thread mark
+  const M = "1799995000.000000"; // channel high-water mark
+
+  /**
+   * A pool-friendly fake: `history` serves per-channel messages, `replies`
+   * throws `thread_not_found` for `goneTs` and otherwise returns the parent echo
+   * plus any configured replies.
+   */
+  function threadGoneClient(
+    goneTs: string,
+    historyByChannel: Record<string, Msg[]> = {},
+    repliesByTs: Record<string, Msg[]> = {},
+  ): { client: SlackClientLike; replyCalls: ReplyCall[] } {
+    const replyCalls: ReplyCall[] = [];
+    const client: SlackClientLike = {
+      authTest: async () => ({ ok: true, team_id: "TA", team: "Acme", user_id: "U0SELF" }),
+      conversations: {
+        async history(args) {
+          return { messages: historyByChannel[args.channel] ?? [] };
+        },
+        async replies(args) {
+          replyCalls.push({ channel: args.channel, ts: args.ts, oldest: args.oldest });
+          // Slack raises a SlackAPIError carrying `data.error`; mirror that shape.
+          if (args.ts === goneTs) {
+            const error = new Error("An API error occurred: thread_not_found") as Error & {
+              data?: { error: string };
+            };
+            error.data = { error: "thread_not_found" };
+            throw error;
+          }
+          return { messages: repliesByTs[args.ts] ?? [] };
+        },
+      },
+    };
+    return { client, replyCalls };
+  }
+
+  test("pass 2 (re-poll): later channels still sync, only the stale mark is dropped", async () => {
+    const warns: string[] = [];
+    const { client, replyCalls } = threadGoneClient(P, { C2: [{ ts: "200.000000" }] });
+    const connector = createSlackConnector(
+      { channels: ["C1", "C2"] },
+      {
+        clientFactory: () => client,
+        now: () => NOW_MS,
+        conversationsTransport: offlineConversations,
+      },
+    );
+    const records = await collect(
+      connector.sync(
+        ctx({
+          cursor: JSON.stringify({ C1: M, [`C1#${P}`]: R1 }),
+          onWarn: (m: string) => warns.push(m),
+        }),
+      ),
+    );
+    // The stale thread was re-polled once and gave up there — C2 (a later
+    // channel on the same token) still ingested, instead of the token being
+    // dropped from the pool and C2 read as unreachable.
+    expect(replyCalls).toEqual([{ channel: "C1", ts: P, oldest: R1 }]);
+    expect(records.map((r) => r.externalId)).toEqual(["slack:C2:200.000000"]);
+    // The warn pinpoints the channel id and the thread ts.
+    const warn = warns.find((w) => w.includes("thread_not_found"));
+    expect(warn).toBeDefined();
+    expect(warn).toContain(`C1#${P}`);
+    // No token-wide failure, no unreachable-channel noise.
+    expect(warns.some((w) => w.includes("failed mid-sync"))).toBe(false);
+    expect(warns.some((w) => w.includes("unreachable"))).toBe(false);
+    const result = await connector.finalize?.();
+    // Only the stale thread mark is gone: the channel cursor is preserved and
+    // C2 advanced, so the next run cannot replay the same thread_not_found.
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: M, C2: "200.000000" });
+    expect(result?.partialFailure ?? false).toBe(false);
+    // The single healthy token stays terse — no `=failed (cursor preserved)`
+    // summary line, which is what the operator saw before this fix.
+    expect(result?.summaryLines).toBeUndefined();
+  });
+
+  test("pass 1 (in-window parent): the channel keeps ingesting, no cursor for the gone thread", async () => {
+    const warns: string[] = [];
+    const { client } = threadGoneClient(
+      P,
+      // The gone parent surfaces in this history window (deleted between the
+      // history page and the replies call), followed by a normal message.
+      {
+        C1: [
+          { ts: P, reply_count: 1, thread_ts: P },
+          { ts: M, text: "later" },
+        ],
+      },
+    );
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      {
+        clientFactory: () => client,
+        now: () => NOW_MS,
+        conversationsTransport: offlineConversations,
+      },
+    );
+    const records = await collect(connector.sync(ctx({ onWarn: (m: string) => warns.push(m) })));
+    // The parent itself was already yielded from `history`; only its reply
+    // expansion is skipped, and the rest of the window still streams.
+    expect(records.map((r) => r.externalId)).toEqual([`slack:C1:${P}`, `slack:C1:${M}`]);
+    expect(warns.find((w) => w.includes("thread_not_found"))).toContain(`C1#${P}`);
+    const result = await connector.finalize?.();
+    // The channel cursor advances; no `<channel>#<thread_ts>` mark is written.
+    expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: M });
+    expect(result?.partialFailure ?? false).toBe(false);
+  });
+
+  test("a non-thread error from replies stays token-wide (rate limit is not swallowed)", async () => {
+    const client: SlackClientLike = {
+      conversations: {
+        history: async () => ({ messages: [] }),
+        replies: async () => {
+          throw new Error("ratelimited");
+        },
+      },
+    };
+    const connector = createSlackConnector(
+      { channels: ["C1"] },
+      { clientFactory: () => client, now: () => NOW_MS },
+    );
+    // The re-poll hits a rate limit → still the pre-existing token-wide path
+    // (single token, nothing ingested → the error propagates).
+    await expect(
+      collect(
+        connector.sync(
+          ctx({ cursor: JSON.stringify({ C1: M, [`C1#${P}`]: R1 }), onWarn: () => {} }),
+        ),
+      ),
+    ).rejects.toThrow(/ratelimited/);
+  });
+});
+
 describe("Slack cursor helpers (ADR-0016 / ADR-0042)", () => {
   test("cursorToChannelMap reads flat, legacy nested, and bare-ts cursors", () => {
     expect(cursorToChannelMap(JSON.stringify({ C1: "1.0" }))).toEqual({ C1: "1.0" });

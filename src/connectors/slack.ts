@@ -259,22 +259,41 @@ function higherTs(a: string | undefined, b: string | undefined): string | undefi
 const UNREACHABLE_CHANNEL_ERRORS = new Set(["not_in_channel", "channel_not_found", "is_archived"]);
 
 /**
- * Extract the Slack `error` code from a thrown error, or `null`. `@slack/web-api`
- * raises a `SlackAPIError` carrying `data.error` (the `ok:false` code); fakes /
- * raw-fetch transports may instead surface the code in the message. Only codes in
- * {@link UNREACHABLE_CHANNEL_ERRORS} are recovered from the message (so an
+ * Slack error codes that mean a *single thread* is gone — `conversations.replies`
+ * was called with a `ts` that no longer resolves to a thread parent (the parent
+ * was deleted, or a saved active-thread cursor points at a ts Slack no longer
+ * knows). Scoped narrower than {@link UNREACHABLE_CHANNEL_ERRORS}: the channel
+ * itself is still readable, so only this thread's expansion is skipped and its
+ * stale cursor dropped, while the channel and the rest of the run continue
+ * (Issue #551).
+ */
+const THREAD_GONE_ERRORS = new Set(["thread_not_found"]);
+
+/**
+ * Extract a Slack `error` code from a thrown error when it is one of `codes`, or
+ * `null`. `@slack/web-api` raises a `SlackAPIError` carrying `data.error` (the
+ * `ok:false` code); fakes / raw-fetch transports may instead surface the code in
+ * the message. Only the listed codes are recovered from the message (so an
  * unrelated message that merely contains the word is not misclassified).
  */
-function unreachableChannelCode(error: unknown): string | null {
+function slackErrorCode(error: unknown, codes: ReadonlySet<string>): string | null {
   const data = (error as { data?: { error?: unknown } } | null)?.data;
-  if (data && typeof data.error === "string" && UNREACHABLE_CHANNEL_ERRORS.has(data.error)) {
-    return data.error;
-  }
+  if (data && typeof data.error === "string" && codes.has(data.error)) return data.error;
   const message = error instanceof Error ? error.message : String(error);
-  for (const code of UNREACHABLE_CHANNEL_ERRORS) {
+  for (const code of codes) {
     if (message.includes(code)) return code;
   }
   return null;
+}
+
+/** The channel-scoped Slack error code carried by `error`, or `null`. */
+function unreachableChannelCode(error: unknown): string | null {
+  return slackErrorCode(error, UNREACHABLE_CHANNEL_ERRORS);
+}
+
+/** The thread-scoped Slack error code carried by `error`, or `null`. */
+function threadGoneCode(error: unknown): string | null {
+  return slackErrorCode(error, THREAD_GONE_ERRORS);
 }
 
 /**
@@ -933,6 +952,7 @@ class SlackConnector implements Connector {
             savedThreadCursors,
             nowMs,
             threadOut,
+            (message) => ctx.onWarn?.(message),
           )) {
             // History messages and thread replies advance the same per-channel
             // cursor — the highest ts seen resumes next run. A failover retry
@@ -1209,6 +1229,12 @@ class SlackConnector implements Connector {
  * The surviving per-thread high-water marks (last captured reply ts) are written
  * into `out`, keyed by `thread_ts`; the caller persists them as
  * `<channel>#<thread_ts>` cursor entries.
+ *
+ * A {@link THREAD_GONE_ERRORS} failure from either pass is **thread-scoped**
+ * (Issue #551): only that thread's expansion is skipped, it is left out of `out`
+ * so its stale cursor is dropped rather than replayed into the same failure next
+ * run, and the channel — plus every later channel on this token — keeps syncing.
+ * Anything else (auth, rate limit, network) propagates to the caller unchanged.
  */
 async function* fetchChannelItems(
   client: SlackClientLike,
@@ -1217,6 +1243,7 @@ async function* fetchChannelItems(
   savedThreadCursors: ReadonlyMap<string, string>,
   nowMs: number,
   out: Map<string, string>,
+  onWarn?: (message: string) => void,
 ): AsyncIterable<SlackMessageItem> {
   const handled = new Set<string>();
   let cursor: string | undefined;
@@ -1237,9 +1264,19 @@ async function* fetchChannelItems(
         // saved thread mark, so already-captured replies are never re-fetched.
         const replyOldest = higherTs(oldest, savedHwm);
         let hwm = higherTs(savedHwm, threadTs) ?? threadTs;
-        for await (const reply of fetchThreadReplies(client, channel, threadTs, replyOldest)) {
-          yield reply;
-          hwm = maxTs(hwm, reply.ts);
+        let gone: string | null = null;
+        try {
+          for await (const reply of fetchThreadReplies(client, channel, threadTs, replyOldest)) {
+            yield reply;
+            hwm = maxTs(hwm, reply.ts);
+          }
+        } catch (error) {
+          gone = threadGoneCode(error);
+          if (gone === null) throw error; // token-wide: auth / rate limit / network
+        }
+        if (gone !== null) {
+          onWarn?.(threadGoneWarning(channel, threadTs, gone));
+          continue; // skip `out` → the stale thread cursor is dropped
         }
         // Only track a thread that is still active, so cold-start-old threads
         // don't linger in the cursor to be pruned one run later.
@@ -1254,12 +1291,34 @@ async function* fetchChannelItems(
     if (handled.has(threadTs)) continue; // already re-fetched inline this run
     if (!isThreadActive(savedHwm, nowMs)) continue; // prune: drop the cursor, no call
     let hwm = savedHwm;
-    for await (const reply of fetchThreadReplies(client, channel, threadTs, savedHwm)) {
-      yield reply;
-      hwm = maxTs(hwm, reply.ts);
+    let gone: string | null = null;
+    try {
+      for await (const reply of fetchThreadReplies(client, channel, threadTs, savedHwm)) {
+        yield reply;
+        hwm = maxTs(hwm, reply.ts);
+      }
+    } catch (error) {
+      gone = threadGoneCode(error);
+      if (gone === null) throw error; // token-wide: auth / rate limit / network
+    }
+    if (gone !== null) {
+      onWarn?.(threadGoneWarning(channel, threadTs, gone));
+      continue; // skip `out` → the stale thread cursor is dropped
     }
     out.set(threadTs, hwm);
   }
+}
+
+/**
+ * The warn for a thread Slack no longer resolves. Names the channel id and the
+ * thread `ts` so the operator can pinpoint which cursor entry was dropped, and
+ * states the recovery (none needed — the drop is the fix).
+ */
+function threadGoneWarning(channel: string, threadTs: string, code: string): string {
+  return (
+    `thread ${channel}#${threadTs} is gone (${code}) — skipping its replies and dropping ` +
+    "its cursor; the channel keeps syncing"
+  );
 }
 
 /**
