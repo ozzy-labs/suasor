@@ -77,10 +77,12 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 
 引数は `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit` / `fullBody?` / `maxBodyChars?`）。embedding backend が有効なときは query を埋め込み、`vec0` の KNN で最近傍 source を引いて `search` と同形の hits を返す（`strategy` は無く、`score` は L2 distance ＝ 小さいほど近い・best-first）。hits も `search` と同様、既定は上限付き `excerpt`（recall は先頭 N chars）で `fullBody` / `maxBodyChars` に対応する（retrieval-m2）。`sourceType` / `observed*` フィルタは JOIN 済み `sources` 行への post-filter で適用する（KNN は多めに引いてから絞る、#142）。詳細は [retrieval](retrieval.md)。
 
+成功時の戻り値は `{ "hits": [...], "truncated": bool }`。`truncated` は `limit` で最近傍リストが打ち切られたか（`limit + 1` 件プローブで判定）で、FTS の `truncated` と同じ「full page = 完全と決めつけない」透明性シグナル（ADR-0007、[#565](https://github.com/ozzy-labs/suasor/issues/565)）。**`totalHits` は無い**: KNN は全 embedded source を距離順に並べるため「limit 適用前の総マッチ数」が match count として意味を持たない。`reason` は degrade 時のみ（成功時には現れない）。
+
 graceful degradation（host は常に `signal === "embedding_disabled"` だけで FTS フォールバックを判断できる）:
 
-- `[embedding].backend = "disabled"`（既定）/ 外部 backend（openai・voyage）の API キー未設定 → `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_disabled" }`
-- backend 有効だがサイドカー / 外部 API 到達不能（Ollama down・API エラー等）→ `{ "hits": [], "signal": "embedding_disabled", "reason": "backend_unreachable" }`
+- `[embedding].backend = "disabled"`（既定）/ 外部 backend（openai・voyage）の API キー未設定 → `{ "hits": [], "truncated": false, "signal": "embedding_disabled", "reason": "backend_disabled" }`
+- backend 有効だがサイドカー / 外部 API 到達不能（Ollama down・API エラー等）→ `{ "hits": [], "truncated": false, "signal": "embedding_disabled", "reason": "backend_unreachable" }`
 
 `reason` は診断用の補助（host は `signal` を見る）。ingest 時の文書 embedding と query embedding は同一モデルで、`[embedding].model` が両者を駆動する（[config](config.md) / [retrieval](retrieval.md)）。
 
@@ -104,12 +106,14 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
       "rrfScore": 0.0328         // RRF 融合スコア（降順=より関連、best-first）
     }
   ],
+  "truncated": false,            // いずれかの経路が limit で打ち切られた / 融合後の union が limit を超えた（#565）
   "signal": "embedding_disabled" // embedding 無効/未到達で FTS のみに degrade した場合のみ
 }
 ```
 
 - **融合**: 各リストの 0-based rank に `1 / (k + rank)`（`k` 既定 60）を寄与とし `externalId` ごとに合算。両リストにヒットした文書は両寄与を得て上位化。重複 `externalId` は dedup（両側に居れば FTS 側 hit を代表とし lexical の `excerpt` / `body` / `score` を保持）。同点は `externalId` 昇順で決定的
 - **graceful degrade**: embedding 無効 / サイドカー到達不能のときは FTS のみで融合（実質パススルー）し、`mode=semantic` と同じ `embedding_disabled` シグナルを付与する（hard error にしない）
+- **透明性（[#565](https://github.com/ozzy-labs/suasor/issues/565)）**: `truncated` は「FTS 側が打ち切り or vec 側が打ち切り or 融合後 union > limit」のいずれかで `true`（capped vs complete のシグナルが融合を生き延びる）。**`totalHits` は無い**: fetch したページの外にある union の真のサイズは知り得ない
 
 ### `source.list` / `source.get`
 

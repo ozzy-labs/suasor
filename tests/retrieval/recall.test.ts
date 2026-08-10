@@ -129,7 +129,10 @@ describe("recallSearch", () => {
     ]);
 
     const result = await recallSearch(store.connection.sqlite, embedder, "deploy cluster");
-    expect(result.reason).toBe("ok");
+    // Success carries no diagnostic `reason` (degrade-only field, #565) and the
+    // page is complete, so `truncated` is false.
+    expect(result.reason).toBeUndefined();
+    expect(result.truncated).toBe(false);
     expect(result.signal).toBeUndefined();
     expect(result.hits.map((h) => h.externalId)).toEqual(["gh:1", "gh:2"]);
     // best-first: distances ascending
@@ -154,12 +157,15 @@ describe("recallSearch", () => {
     const result = await recallSearch(store.connection.sqlite, embedder, "q", { limit: 2 });
     expect(result.hits).toHaveLength(2);
     expect(result.hits.map((h) => h.externalId)).toEqual(["gh:0", "gh:1"]);
+    // 5 embedded neighbours, page of 2 → the cut-off is visible (#565).
+    expect(result.truncated).toBe(true);
   });
 
   test("degrades to embedding_disabled signal when the embedder is null", async () => {
     seed("gh:1", "alpha");
     const result = await recallSearch(store.connection.sqlite, null, "alpha");
     expect(result.hits).toEqual([]);
+    expect(result.truncated).toBe(false);
     expect(result.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
     expect(result.reason).toBe("backend_disabled");
   });
@@ -175,7 +181,8 @@ describe("recallSearch", () => {
     };
     const result = await recallSearch(store.connection.sqlite, embedder, "   ");
     expect(result.hits).toEqual([]);
-    expect(result.reason).toBe("ok");
+    expect(result.truncated).toBe(false);
+    expect(result.reason).toBeUndefined();
     expect(called).toBe(false);
   });
 

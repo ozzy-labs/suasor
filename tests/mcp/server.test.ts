@@ -576,12 +576,27 @@ describe("MCP read surface", () => {
       });
       const parsed = parseResult(res as never) as {
         hits: { externalId: string }[];
-        reason: string;
+        reason?: string;
+        truncated?: boolean;
         signal?: string;
       };
       expect(parsed.signal).toBeUndefined();
-      expect(parsed.reason).toBe("ok");
+      // `reason` is degrade-only; success carries `truncated` instead (#565).
+      expect(parsed.reason).toBeUndefined();
+      expect(parsed.truncated).toBe(false);
       expect(parsed.hits[0]?.externalId).toBe("gh:1"); // nearest neighbour
+
+      // A capped page is announced: 2 embedded sources, limit 1 → truncated.
+      const capped = await client.callTool({
+        name: "search",
+        arguments: { query: "deploy to the cluster", mode: "semantic", limit: 1 },
+      });
+      const cappedParsed = parseResult(capped as never) as {
+        hits: unknown[];
+        truncated?: boolean;
+      };
+      expect(cappedParsed.hits).toHaveLength(1);
+      expect(cappedParsed.truncated).toBe(true);
     } finally {
       knnStore.close();
     }
@@ -624,11 +639,14 @@ describe("MCP read surface", () => {
     });
     const parsed = parseResult(res as never) as {
       hits: { externalId: string; rrfScore: number }[];
+      truncated?: boolean;
       signal?: string;
     };
     expect(parsed.signal).toBe(EMBEDDING_DISABLED_SIGNAL);
     expect(parsed.hits[0]?.externalId).toBe("gh:1");
     expect(parsed.hits[0]?.rrfScore).toBeGreaterThan(0);
+    // The FTS-only page is complete, and hybrid says so (#565).
+    expect(parsed.truncated).toBe(false);
   });
 
   test("search mode=hybrid fuses FTS + vec hits (RRF) when an embedder is enabled", async () => {
@@ -677,12 +695,27 @@ describe("MCP read surface", () => {
       });
       const parsed = parseResult(res as never) as {
         hits: { externalId: string; rrfScore: number }[];
+        truncated?: boolean;
         signal?: string;
       };
       expect(parsed.signal).toBeUndefined();
       // Both paths contribute: gh:1 (FTS) and gh:2 (vec) both appear, deduped.
       expect(parsed.hits.map((h) => h.externalId).sort()).toEqual(["gh:1", "gh:2"]);
       expect(parsed.hits.every((h) => h.rrfScore > 0)).toBe(true);
+      expect(parsed.truncated).toBe(false);
+
+      // With limit 1 the fused union (2 docs) outgrows the page — the trim
+      // itself must be observable, not silent (#565).
+      const capped = await client.callTool({
+        name: "search",
+        arguments: { query: "rocket", mode: "hybrid", limit: 1 },
+      });
+      const cappedParsed = parseResult(capped as never) as {
+        hits: unknown[];
+        truncated?: boolean;
+      };
+      expect(cappedParsed.hits).toHaveLength(1);
+      expect(cappedParsed.truncated).toBe(true);
     } finally {
       knnStore.close();
     }

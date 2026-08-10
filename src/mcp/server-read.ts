@@ -144,7 +144,9 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "(ADR-0005) — never an error. Optionally filter by source_type and an " +
         "observed_after/observed_before window (lower bound inclusive, upper " +
         "exclusive). Each hit carries a bounded `excerpt` (not the full body) by " +
-        "default — fetch full text via source.get, or pass fullBody=true (ADR-0018).",
+        "default — fetch full text via source.get, or pass fullBody=true (ADR-0018). " +
+        "Every mode reports `truncated` (whether hits were cut off by `limit`); " +
+        "`fts` additionally reports `totalHits`, the pre-limit match count.",
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
         mode: z
@@ -202,7 +204,13 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       if (effMode === "semantic") {
         const effLimit = limit ?? DEFAULT_RECALL_LIMIT;
         const degraded = (reason: string) =>
-          jsonResult({ hits: [], signal: EMBEDDING_DISABLED_SIGNAL, reason, mode: "semantic" });
+          jsonResult({
+            hits: [],
+            truncated: false,
+            signal: EMBEDDING_DISABLED_SIGNAL,
+            reason,
+            mode: "semantic",
+          });
         if (embedder === null) return degraded("backend_disabled");
         try {
           const result = await recallSearch(sqlite, embedder, query, {
@@ -224,6 +232,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
       const effLimit = limit ?? DEFAULT_SEARCH_LIMIT;
       const fts = searchSources(sqlite, query, { limit: effLimit, ...filters, ...bodyOpts });
       let vecHits = [] as Awaited<ReturnType<typeof recallSearch>>["hits"];
+      let vecTruncated = false;
       let signal: typeof EMBEDDING_DISABLED_SIGNAL | undefined;
       if (embedder === null) {
         signal = EMBEDDING_DISABLED_SIGNAL;
@@ -235,6 +244,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
             ...bodyOpts,
           });
           vecHits = recall.hits;
+          vecTruncated = recall.truncated;
           signal = recall.signal;
         } catch (error) {
           if (error instanceof EmbeddingError) {
@@ -244,8 +254,14 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           }
         }
       }
-      const hits = fuseRrf(fts.hits, vecHits, { k: DEFAULT_RRF_K, limit: effLimit });
-      return jsonResult({ hits, mode: "hybrid", ...(signal ? { signal } : {}) });
+      // Fuse without a limit first so the trim itself is observable: `truncated`
+      // is true when either input page was cut off by `limit` or the fused union
+      // outgrew it (#565 — the "capped vs complete" signal must survive fusion).
+      // No `totalHits`: the true union size beyond the fetched pages is unknown.
+      const fused = fuseRrf(fts.hits, vecHits, { k: DEFAULT_RRF_K });
+      const hits = fused.slice(0, effLimit);
+      const truncated = fts.truncated || vecTruncated || fused.length > effLimit;
+      return jsonResult({ hits, mode: "hybrid", truncated, ...(signal ? { signal } : {}) });
     },
   );
 
