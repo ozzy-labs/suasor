@@ -409,17 +409,32 @@ export class OnboardCommand extends SuasorCommand {
             );
           }
         } else if (stored === "no-token") {
+          // Empty input with nothing stored: skip this connector's auth instead
+          // of aborting the whole run (Issue #559) — aborting here left every
+          // later connector unprocessed and printed no recap. The config slice
+          // still lands below (same shape as --skip-auth), so the re-run /
+          // `auth set` advice stays actionable.
+          const authAccount = this.account === undefined ? "" : ` --account ${this.account}`;
           stderr.write(
-            `error: no token provided for ${who} ` +
-              "(pipe it on stdin or use --skip-auth with an env override)\n",
+            `warning: no token provided for ${who} and none is stored — auth skipped for this ` +
+              `connector; set it later with \`suasor ${connector} auth set${authAccount}\` or an env ` +
+              "override, then re-run `auth test`\n",
           );
-          return 1;
         } else if (stored === "store-failed") {
           // storeTokenFor already printed the failure + env-override recovery.
           return 1;
         } else {
+          // `stored` wrote the pasted token; `kept` means a credential already
+          // resolved and the user pressed Enter to keep it (Issue #559). Both
+          // leave a usable credential in place, so both probe it below.
           report.authStored = true;
-          if (!this.json) stdout.write(`${who}: token stored in the OS keychain.\n`);
+          if (!this.json) {
+            stdout.write(
+              stored === "kept"
+                ? `${who}: keeping the already-configured token.\n`
+                : `${who}: token stored in the OS keychain.\n`,
+            );
+          }
           const test = await this.authTest(connector, this.account);
           report.authTest = test.ok ? "ok" : "failed";
           report.authTestDetail = test.detail;
@@ -866,12 +881,20 @@ export class OnboardCommand extends SuasorCommand {
     return accountSlices(merged).find((a) => a.name === account) as AccountSlice;
   }
 
-  /** Read a token from stdin and store it in the keychain. Returns a status tag. */
+  /**
+   * Read a token from stdin and store it in the keychain. Returns a status tag.
+   *
+   * A credential that already resolves (keychain or env override — a re-run of
+   * the wizard, Issue #559) turns the prompt into "press Enter to keep it": the
+   * recap explicitly tells users to fix things and re-run, and demanding a
+   * re-paste of a token that is already stored made every re-run abort at the
+   * first Enter.
+   */
   private async storeTokenFor(
     connector: string,
     interactive: boolean,
     account?: string,
-  ): Promise<"stored" | "no-token" | "no-spec" | "store-failed"> {
+  ): Promise<"stored" | "kept" | "no-token" | "no-spec" | "store-failed"> {
     const { AUTH_SPECS } = await import("../../connectors/auth-specs.ts");
     const spec = AUTH_SPECS[connector];
     if (!spec) return "no-spec";
@@ -890,10 +913,20 @@ export class OnboardCommand extends SuasorCommand {
             spec.secretName,
           );
 
+    // Presence only, never the value (NFR-PRV-4): decides whether an empty
+    // Enter means "keep the stored token" (re-run, Issue #559) or "no token".
+    const { resolveSecret, storeSecret, storeSecretErrorMessage } = await import(
+      "../../connectors/secrets.ts"
+    );
+    const alreadyStored =
+      (await resolveSecret(connector, secretName, this.keychainOptions())) !== null;
+
     if (interactive) {
       const forAccount = account === undefined ? "" : ` for account '${account}'`;
       this.context.stdout.write(
-        `Paste the ${connector} ${spec.secretLabel}${forAccount} and press Enter (input is read from stdin):\n`,
+        alreadyStored
+          ? `A ${connector} ${spec.secretLabel}${forAccount} is already configured — press Enter to keep it, or paste a new one (input is read from stdin):\n`
+          : `Paste the ${connector} ${spec.secretLabel}${forAccount} and press Enter (input is read from stdin):\n`,
       );
     }
     // Line-based, echo-suppressed read (Issue #383): on a TTY this resolves on
@@ -903,9 +936,8 @@ export class OnboardCommand extends SuasorCommand {
     const token = (
       await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
     ).trim();
-    if (!token) return "no-token";
+    if (!token) return alreadyStored ? "kept" : "no-token";
 
-    const { storeSecret, storeSecretErrorMessage } = await import("../../connectors/secrets.ts");
     try {
       await storeSecret(connector, secretName, token, this.keychainOptions());
     } catch (cause) {
