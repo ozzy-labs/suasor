@@ -243,3 +243,21 @@ describe("slackChannelLabel — kind-aware display (ADR-0037)", () => {
     expect(slackChannelLabel("Ada, Grace", "group")).toBe("Ada, Grace");
   });
 });
+
+describe("slack auth set — keychain write failure (#557)", () => {
+  test("a keychain write failure prints the token-pool env override, not a raw throw", async () => {
+    const failing: KeychainBackend = {
+      get: () => null,
+      set: () => {
+        throw new Error("no Secret Service available (headless host)");
+      },
+    };
+    const { code, err } = await run(["slack", "auth", "set", "--token", "xoxb-x"], {
+      keychain: failing,
+    });
+    expect(code).toBe(1);
+    expect(err).toContain("could not store the slack secret");
+    expect(err).toContain("no Secret Service available");
+    expect(err).toContain("SUASOR_CONNECTOR_SLACK_TOKENS=<value>");
+  });
+});

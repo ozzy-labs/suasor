@@ -22,6 +22,8 @@ import { Command, Option } from "clipanion";
 // and keep the lazy-import discipline (NFR-PRF-1) intact.
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import type { ConversationType, SlackConversation } from "../../connectors/slack/conversations.ts";
+import { SuasorCommand } from "../base-command.ts";
+import { standaloneGate } from "../build-target.ts";
 import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
 const SLACK = "slack";
@@ -43,7 +45,7 @@ export function formatConversationRow(
 }
 
 /** `slack auth set` — replace the Slack token pool in the OS keychain. */
-export class SlackAuthSetCommand extends Command {
+export class SlackAuthSetCommand extends SuasorCommand {
   static override paths = [[SLACK, "auth", "set"]];
 
   static override usage = Command.Usage({
@@ -69,6 +71,21 @@ export class SlackAuthSetCommand extends Command {
   });
 
   override async execute(): Promise<number> {
+    // `auth set` writes to the OS keychain (@napi-rs/keyring), which is external
+    // to the standalone binary (ADR-0010) — the same gate as the generic
+    // `<connector> auth set` verbs (Issue #557). Checked before the token is
+    // read so nothing is pasted into a flow that cannot store it.
+    const setGate = standaloneGate(
+      "'slack auth set' (the OS keychain is not available in the binary)",
+      {
+        hint: "set the token pool via the env override instead: SUASOR_CONNECTOR_SLACK_TOKENS=<value>",
+      },
+    );
+    if (!setGate.ok) {
+      this.context.stderr.write(setGate.message);
+      return 1;
+    }
+
     let raw = this.token?.trim();
     if (!raw) {
       // On a TTY prompt to stderr (stdout stays machine-readable over a pipe).
@@ -82,10 +99,11 @@ export class SlackAuthSetCommand extends Command {
       raw = (await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })).trim();
     }
 
-    const [{ storeSecret }, { parseTokenPool, SLACK_TOKENS_SECRET }] = await Promise.all([
-      import("../../connectors/secrets.ts"),
-      import("../../connectors/slack.ts"),
-    ]);
+    const [{ storeSecret, storeSecretErrorMessage }, { parseTokenPool, SLACK_TOKENS_SECRET }] =
+      await Promise.all([
+        import("../../connectors/secrets.ts"),
+        import("../../connectors/slack.ts"),
+      ]);
     const pool = parseTokenPool(raw);
     if (pool.length === 0) {
       this.context.stderr.write("error: no token provided (pass --token or pipe it on stdin)\n");
@@ -94,7 +112,14 @@ export class SlackAuthSetCommand extends Command {
 
     const keychain = (this.context as { keychain?: KeychainBackend }).keychain;
     // Canonical storage form: newline-separated (replace-all, ADR-0042 決定 2).
-    await storeSecret(SLACK, SLACK_TOKENS_SECRET, pool.join("\n"), keychain ? { keychain } : {});
+    try {
+      await storeSecret(SLACK, SLACK_TOKENS_SECRET, pool.join("\n"), keychain ? { keychain } : {});
+    } catch (cause) {
+      // Headless host (Docker / server): no Secret Service — print the
+      // env-override recovery instead of the raw native error (Issue #557).
+      this.context.stderr.write(storeSecretErrorMessage(SLACK, SLACK_TOKENS_SECRET, cause));
+      return 1;
+    }
     this.context.stdout.write(
       `Stored ${pool.length} Slack token(s) in the OS keychain (service 'suasor'); ` +
         "the pool was replaced as a whole.\n",
@@ -105,7 +130,7 @@ export class SlackAuthSetCommand extends Command {
 }
 
 /** `slack auth test` — verify every pool token and report scopes + readiness. */
-export class SlackAuthTestCommand extends Command {
+export class SlackAuthTestCommand extends SuasorCommand {
   static override paths = [[SLACK, "auth", "test"]];
 
   static override usage = Command.Usage({
@@ -212,7 +237,7 @@ interface SweepTeam {
 }
 
 /** `slack conversations` — list conversations the pool can see + a config block. */
-export class SlackConversationsCommand extends Command {
+export class SlackConversationsCommand extends SuasorCommand {
   static override paths = [[SLACK, "conversations"]];
 
   static override usage = Command.Usage({
@@ -743,7 +768,7 @@ export class SlackConversationsCommand extends Command {
 }
 
 /** `slack status` — show the saved resume cursor (per channel). */
-export class SlackStatusCommand extends Command {
+export class SlackStatusCommand extends SuasorCommand {
   static override paths = [[SLACK, "status"]];
 
   static override usage = Command.Usage({
@@ -815,7 +840,7 @@ export class SlackStatusCommand extends Command {
 }
 
 /** `slack cursor reset` — clear saved cursors so channels re-fetch from the floor. */
-export class SlackCursorResetCommand extends Command {
+export class SlackCursorResetCommand extends SuasorCommand {
   static override paths = [[SLACK, "cursor", "reset"]];
 
   static override usage = Command.Usage({
@@ -932,7 +957,7 @@ export class SlackCursorResetCommand extends Command {
 }
 
 /** `slack cursor backfill` — lower a channel's cursor to re-fetch older history. */
-export class SlackCursorBackfillCommand extends Command {
+export class SlackCursorBackfillCommand extends SuasorCommand {
   static override paths = [[SLACK, "cursor", "backfill"]];
 
   static override usage = Command.Usage({
@@ -952,7 +977,9 @@ export class SlackCursorBackfillCommand extends Command {
   });
 
   channel = Option.String("--channel", { description: "Channel id to backfill." });
-  since = Option.String("--since", { description: "Floor to lower to (30d / 4w / 2026-01-01)." });
+  since = Option.String("--since", {
+    description: "Floor to lower to (12h / 30d / 4w / 2026-01-01).",
+  });
   yes = Option.Boolean("--yes", false, {
     description: "Apply the backfill (without it, preview only).",
   });
@@ -969,7 +996,7 @@ export class SlackCursorBackfillCommand extends Command {
     const floorTs = parseSinceToTs(this.since, Date.now());
     if (floorTs === null) {
       this.context.stderr.write(
-        `error: invalid --since: ${this.since} (use 30d / 4w / 2026-01-01)\n`,
+        `error: invalid --since: ${this.since} (use 12h / 30d / 4w / 2026-01-01)\n`,
       );
       return 1;
     }
@@ -1051,7 +1078,7 @@ export class SlackCursorBackfillCommand extends Command {
  * uses — appending `SlackChannelObserved` / `PersonIdentityObserved` so the
  * projections enrich last-write-wins. Read-of-Slack only (ADR-0003); no egress.
  */
-export class SlackResolveNamesCommand extends Command {
+export class SlackResolveNamesCommand extends SuasorCommand {
   static override paths = [[SLACK, "resolve-names"]];
 
   static override usage = Command.Usage({

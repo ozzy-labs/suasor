@@ -14,9 +14,10 @@
  * `execute` (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
-export class ExtractionStatusCommand extends Command {
+export class ExtractionStatusCommand extends SuasorCommand {
   static override paths = [["extraction", "status"]];
 
   static override usage = Command.Usage({
@@ -94,7 +95,7 @@ export class ExtractionStatusCommand extends Command {
   }
 }
 
-export class ExtractionListPendingCommand extends Command {
+export class ExtractionListPendingCommand extends SuasorCommand {
   static override paths = [["extraction", "list-pending"]];
 
   static override usage = Command.Usage({
@@ -186,7 +187,7 @@ export class ExtractionListPendingCommand extends Command {
   }
 }
 
-export class ExtractionServeCommand extends Command {
+export class ExtractionServeCommand extends SuasorCommand {
   static override paths = [["extraction", "serve"]];
 
   static override usage = Command.Usage({
@@ -198,7 +199,7 @@ export class ExtractionServeCommand extends Command {
       markitdown CLI once per request to convert Office/PDF bytes to Markdown. All
       ML runs in the markitdown subprocess — Suasor holds no in-process parser
       (ADR-0006). Point [extraction].backend = "markitdown" at this sidecar and it
-      powers search / recall / research over document bodies (Issue #439).
+      powers search / semantic recall / find over document bodies (Issue #439).
 
       Binds to the host/port from [extraction].baseUrl by default
       (http://localhost:8929); override with --host / --port. Requires the

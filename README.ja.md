@@ -22,7 +22,7 @@ Suasor はローカルファーストの AI 秘書です。チャット・メー
 これらの線引きが、Suasor をローカルファースト・HITL（人が承認する）助言者として保ちます（[docs/requirements/scope.md](docs/requirements/scope.md) 参照）:
 
 - **承認なしの egress / 自動送信なし** — 取り込みは read 専用で、あなたの明示的な承認なしに外部へ何も出しません。承認済みの操作（`task.publish` / `task.act` によるタスク公開・Issue 状態遷移など）は Suasor があなたの代わりに実行します — ただし承認後のみで、自動実行はしません（[ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md) / [ADR-0036](docs/adr/0036-task-external-home.md)）。
-- **常駐の能動エージェントなし** — デーモンや非要求の通知は持たず、すべて人/エージェント起点です。
+- **デーモンなし・非要求通知なし** — 常駐するものはありません。能動的な digest（`suasor digest`）はありますが、あくまで OS スケジューラから起動する cron の one-shot で、事前設定した名前付き job（standing consent）を送るだけです — job が未設定なら何も送られず、イベント単位の write 承認もそのまま変わりません（[ADR-0040](docs/adr/0040-proactive-push-lane.md) / [ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
 - **重い in-process ML なし** — モデルの学習・推論は委譲し、in-process では実行しません（[ADR-0006](docs/adr/0006-ml-delegation.md)）。
 - **単一ユーザー・ローカル限定** — マルチユーザー / チーム共有 / サーバ集約はしません。
 - **Web / モバイル UI なし** — 境界は CLI と MCP です。
@@ -48,7 +48,7 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 ほぼ同義の入口から選ばされる状態を解消するための表面積収縮）。host 設定・自作 skill・スクリプトが
 `recall.search` / `search.hybrid` / `source.get.full` / `commitment.resolve`・`.dismiss`・`.reopen` /
 `demand.ack`・`.dismiss`、あるいは統合で消えた 16 の skill 名を参照している場合は更新が要る。
-新旧の対応は[移行表](docs/guide/troubleshooting.md)にすべて載せてある。統合で消えた skill の
+新旧の対応は[移行表](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046)にすべて載せてある。統合で消えた skill の
 mirror はアップグレード後も残る（`skills install` は上書きするが削除はしない）ため、
 `suasor skills list` が `orphan` として報告し、`suasor skills prune` で削除できる。
 
@@ -66,17 +66,21 @@ mirror はアップグレード後も残る（`skills install` は上書きす�
 
 以下の例は `suasor <cmd>` 形を使います。clone から動かす場合は [ソースから](#ソースから) を参照してください。
 
+> **Docker + 対話 verb:** プロンプトを出す setup verb（`onboard` / `<connector> auth set`）は TTY が必要です — `-it` を付けてください（`docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard`）。`-it` なしの `onboard` は `--connector is required when stdin is not a TTY` で終了します。
+
 ```bash
 suasor --version
 
 # 初回セットアップ: ~/.config/suasor/config.toml とローカル SQLite ストアを作成。
-# 成功時にネクストステップ（doctor -> connector -> sync -> 定期実行 -> skills）を多段案内。
+# 成功時にネクストステップ（doctor -> onboard -> sync -> skills）を多段案内。
 suasor init
 
 # ガイド付きセットアップ: connector を選び、トークンを保存し、[connectors.X] config
 # スライス（enabled = true）を組み、初回 sync を実行し、scheduler + MCP のスニペットを
 # 出力 — すべて正しい順序で（ADR-0029）。
-suasor onboard --connector github   # TTY では対話式・--json で要約出力
+suasor onboard --connector github,slack   # TTY では対話式・--json で要約出力
+# slack もここで完結: onboard が workspace-less セットアップを橋渡しし、1 つの
+# token プールで全 workspace をカバーします（`suasor slack auth set`・ADR-0042）。
 
 # 設定 / DB / connector の準備状況を確認（診断専用・何も作らない）。
 suasor doctor
@@ -120,7 +124,7 @@ bun run src/index.ts doctor          # `suasor doctor` と同じ診断
 bun run src/index.ts sync            # `suasor sync` と同じ一括取り込み
 ```
 
-`bun run dev` は `bun run src/index.ts` のショートハンドです。開発・検証フロー（`bun test` / `bun run typecheck` / lint）は [AGENTS.md](AGENTS.md) を参照してください。
+`bun run dev` は `bun run src/index.ts` のショートハンドです。開発・検証フロー（`bun test` / `bun run typecheck` / lint）は [AGENTS.md](AGENTS.md) を参照してください。品質ゲートの正本は CI（`.github/workflows/ci.yaml`）です: typecheck + test（coverage 付き）+ build、Biome + markdownlint + doc-link ターゲット、セキュリティスキャン（gitleaks / Trivy / actionlint）— ローカルフックを迂回した PR もここで守られます。
 
 ### 定期 sync
 
@@ -132,6 +136,13 @@ bun run src/index.ts sync            # `suasor sync` と同じ一括取り込み
 ```
 
 launchd / systemd timer の例と失敗監視は [docs/guide/scheduling.md](docs/guide/scheduling.md)（[ADR-0027](docs/adr/0027-bulk-sync-orchestration.md)）を参照してください。
+
+同じ cron モデルが**能動 push レーン**（[ADR-0040](docs/adr/0040-proactive-push-lane.md)）も駆動します: 名前付きの `[digest.jobs]` エントリを設定すると（standing consent）、`suasor digest` が上位の優先事項（期限超過 / demand / 期日接近・[ADR-0041](docs/adr/0041-neutral-demand-priority-substrate.md)）を束ね、チャネル — OS 通知・export sandbox 内のファイル・Slack の自分宛 DM — へ push します。job が未設定なら何も送られません。
+
+```cron
+# 毎朝ファイル digest を書き出す。平日毎時なら緊急項目を DM する形も組める。
+0 8 * * *  suasor digest --job morning >> "$HOME/.local/state/suasor/digest.log" 2>&1
+```
 
 ## エージェントホストと接続する（MCP）
 

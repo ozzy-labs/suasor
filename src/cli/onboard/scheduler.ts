@@ -232,7 +232,7 @@ export function splitSystemdUnits(snippet: string): Array<{ relativePath: string
       if (current !== null)
         files.push({
           relativePath: current.relativePath,
-          body: current.body.join("\n").trim() + "\n",
+          body: `${current.body.join("\n").trim()}\n`,
         });
       current = { relativePath: marker[1], body: [] };
       continue;
@@ -240,6 +240,6 @@ export function splitSystemdUnits(snippet: string): Array<{ relativePath: string
     if (current !== null) current.body.push(line);
   }
   if (current !== null)
-    files.push({ relativePath: current.relativePath, body: current.body.join("\n").trim() + "\n" });
+    files.push({ relativePath: current.relativePath, body: `${current.body.join("\n").trim()}\n` });
   return files;
 }

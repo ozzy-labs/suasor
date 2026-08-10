@@ -774,6 +774,122 @@ describe("suasor onboard — interactive token entry (Issue #383)", () => {
   });
 });
 
+describe("suasor onboard — re-run keeps a stored token / empty input skips (Issue #559)", () => {
+  const realFetch = globalThis.fetch;
+  const secretEnvs = ["SUASOR_CONNECTOR_GITHUB_TOKEN", "SUASOR_CONNECTOR_BOX_TOKEN"];
+  const saved = secretEnvs.map((k) => [k, process.env[k]] as const);
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  /** No env overrides (so the stored-credential check reads the injected keychain). */
+  function clearEnvAndDisableNetwork(): void {
+    for (const k of secretEnvs) delete process.env[k];
+    globalThis.fetch = (async () => {
+      throw new Error("network disabled in test");
+    }) as unknown as typeof fetch;
+  }
+
+  test("a stored token turns the prompt into 'press Enter to keep it' and Enter keeps it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    clearEnvAndDisableNetwork();
+    const keychain = memoryKeychain();
+    keychain.set(KEYCHAIN_SERVICE, keychainAccount("github", "token"), "ghp_previous_run");
+    try {
+      // Re-run shape: the credential is already in the keychain; the user
+      // answers the prompt with a bare Enter. Previously this produced
+      // "no-token" → the whole wizard aborted with exit 1 and no recap.
+      const { out } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("\n"),
+        keychain,
+      });
+      expect(out).toContain("press Enter to keep it");
+      expect(out).toContain("github: keeping the already-configured token.");
+      // The stored token survives (an empty line is never written over it).
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
+        "ghp_previous_run",
+      );
+      // The wizard ran to the end: the recap printed instead of an early abort.
+      expect(out).toContain("Setup recap:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("pasting a new token on a re-run overwrites the stored one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    clearEnvAndDisableNetwork();
+    const keychain = memoryKeychain();
+    keychain.set(KEYCHAIN_SERVICE, keychainAccount("github", "token"), "ghp_stale");
+    try {
+      await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_rotated\n"),
+        keychain,
+      });
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
+        "ghp_rotated",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("empty input with no stored token skips that connector's auth instead of aborting", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    clearEnvAndDisableNetwork();
+    const keychain = memoryKeychain();
+    try {
+      const { code, out, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("\n"),
+        keychain,
+      });
+      // A warning, not the old hard abort (`error: no token provided …` → 1).
+      expect(err).toContain("warning: no token provided for github and none is stored");
+      expect(err).toContain("suasor github auth set");
+      expect(err).not.toContain("error: no token provided");
+      // The structural fix still lands: the config slice is appended and the
+      // recap closes the run, so the re-run advice stays actionable.
+      const toml = await Bun.file(join(dir, "config.toml")).text();
+      expect(toml).toContain("[connectors.github]");
+      expect(out).toContain("Setup recap:");
+      expect(out).toContain("auth skipped");
+      // Skipped auth is not a failure (same as --skip-auth): exit 0.
+      expect(code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty line for one connector no longer aborts the ones after it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    clearEnvAndDisableNetwork();
+    const keychain = memoryKeychain();
+    try {
+      // github gets an empty line (skip), box gets a real token — previously
+      // the github abort left box unprocessed.
+      const { err } = await run(["onboard", "--connector", "github,box", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("\n", "box_token\n"),
+        keychain,
+      });
+      expect(err).toContain("warning: no token provided for github");
+      expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("box", "token")}`)).toBe(
+        "box_token",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("suasor onboard — final recap + exit code (Issue #388 item 1)", () => {
   const realFetch = globalThis.fetch;
   const realToken = process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
@@ -847,7 +963,7 @@ describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", () 
       // hard-coded "suasor" — the test runner launches from a .ts entry, so the
       // wizard substitutes the from-source `bun` invocation here.
       const block = out.slice(mcpIdx);
-      expect(block).toMatch(/"command": "(suasor|bun|bunx)"/);
+      expect(block).toMatch(/"command": "(suasor|bun|bunx|docker)"/);
       // An MCP-specific note is printed directly *after* the snippet (Issue #388
       // item 2). Asserting on the post-snippet slice (not the whole output) so the
       // scheduler's own note earlier on cannot stand in for it.
@@ -1451,6 +1567,59 @@ describe("onboard first sync (embedding + extraction)", () => {
       expect(err).toContain("extraction truncated (36 > 8 chars): spec.docx");
     } finally {
       server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suasor onboard — binary menu filter + keychain write failure (#557)", () => {
+  test("binary build: the interactive menu offers only bundled connectors, with a note", async () => {
+    const { FORCE_BINARY_ENV } = await import("../../src/cli/build-target.ts");
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    const savedForce = process.env[FORCE_BINARY_ENV];
+    process.env[FORCE_BINARY_ENV] = "1";
+    try {
+      // --skip-auth passes the up-front keychain gate; the menu must not list
+      // slack / google / box / ms-graph / web (pasting a token there could
+      // neither be stored nor verified by this build).
+      const { code, out } = await run(["onboard", "--skip-auth", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyStdin("github"),
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("this standalone binary bundles only");
+      expect(out).toContain("Select connector(s)");
+      // No numbered menu entry offers an external connector (the wording
+      // "github slack" in the selection example line is not a menu entry).
+      expect(out).not.toMatch(/\d+\) (slack|google|box|ms-graph|web)\b/);
+      expect(out).toMatch(/\d+\) github\b/);
+    } finally {
+      if (savedForce === undefined) delete process.env[FORCE_BINARY_ENV];
+      else process.env[FORCE_BINARY_ENV] = savedForce;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a keychain write failure prints the env override + --skip-auth recovery, not a raw throw", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    const failing: KeychainBackend = {
+      get: () => null,
+      set: () => {
+        throw new Error("no Secret Service available (headless host)");
+      },
+    };
+    try {
+      const { code, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_paste\n"),
+        keychain: failing,
+      });
+      expect(code).toBe(1);
+      expect(err).toContain("could not store the github secret");
+      expect(err).toContain("no Secret Service available");
+      expect(err).toContain("SUASOR_CONNECTOR_GITHUB_TOKEN=<value>");
+      expect(err).toContain("--skip-auth");
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

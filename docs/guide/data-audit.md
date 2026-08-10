@@ -14,16 +14,17 @@ Suasor は取り込んだ source をすべてローカル SQLite に保持する
 suasor source list                       # 直近 50 件（既定）
 suasor source list --type github_issue   # source_type で絞る
 suasor source list --limit 100           # 件数上限を上げる
+suasor source list --since 7d                                                 # 直近 7 日（相対 duration）
 suasor source list --since 2026-06-01T00:00:00Z --until 2026-07-01T00:00:00Z  # observed_at の窓で絞る
 suasor source list --json                # {externalId, sourceType, observedAt}[] を機械可読出力
 ```
 
 - `--type T`: `source_type` 完全一致（例: `github_issue` / `slack_message`）
-- `--since ISO` / `--until ISO`: `observed_at` の下限（inclusive `>=`）/ 上限（exclusive `<`）
+- `--since <dur|iso>` / `--until <dur|iso>`: `observed_at` の下限（inclusive `>=`）/ 上限（exclusive `<`）。相対（`24h` / `7d` / `2w`）または ISO date（不正値は error・#561）
 - `--limit N`: 返す行の最大数（既定 50・正の整数）
 - `--json`: 本文を含まない `{externalId, sourceType, observedAt}[]` を出力（NFR-PRV-4）
 
-本文そのものを確認したい場合は MCP の `source.get` / `find-document` skill を使う（CLI の監査一覧は本文を出さない）。
+本文そのものを確認したい場合は MCP の `source.get` / `find` skill を使う（CLI の監査一覧は本文を出さない）。
 
 ## source を forget する（`source forget`）
 

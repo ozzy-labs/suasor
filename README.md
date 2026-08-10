@@ -49,7 +49,7 @@ the agent surface was contracted so a host stops choosing between near-duplicate
 If your host config, custom skills or scripts name `recall.search`, `search.hybrid`,
 `source.get.full`, `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `.dismiss`, or any
 of the 16 folded-away skills, they must be updated — the mechanical
-[migration table](docs/guide/troubleshooting.md) lists every old → new name. Mirrors of the
+[migration table](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046) lists every old → new name. Mirrors of the
 folded-away skills survive the upgrade (`skills install` overwrites but never deletes);
 `suasor skills list` reports them as `orphan` and `suasor skills prune` removes them.
 
@@ -66,6 +66,8 @@ These commands assume Suasor is **installed** via one of the channels above, so 
 | Docker | `docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest <cmd>` |
 
 The examples below use the `suasor <cmd>` form. Working from a clone instead? See [From source](#from-source).
+
+> **Docker + interactive verbs:** setup verbs that prompt (`onboard`, `<connector> auth set`) need a TTY — add `-it` (`docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard`). Without it, `onboard` exits with `--connector is required when stdin is not a TTY`.
 
 ```bash
 suasor --version

@@ -22,6 +22,7 @@
 import { homedir } from "node:os";
 import { Command, Option } from "clipanion";
 import { VERSION } from "../../version.ts";
+import { SuasorCommand } from "../base-command.ts";
 
 /** Install targets for assistant skills (ADR-0008). Mirrors `skills` module. */
 const SCOPES = ["claude", "agents", "all"] as const;
@@ -38,7 +39,7 @@ function resolveBaseDir(host: string | undefined, project: boolean): string {
   return project ? process.cwd() : homedir();
 }
 
-export class SkillsInstallCommand extends Command {
+export class SkillsInstallCommand extends SuasorCommand {
   static override paths = [["skills", "install"]];
 
   static override usage = Command.Usage({
@@ -168,7 +169,7 @@ export class SkillsInstallCommand extends Command {
   }
 }
 
-export class SkillsPruneCommand extends Command {
+export class SkillsPruneCommand extends SuasorCommand {
   static override paths = [["skills", "prune"]];
 
   static override usage = Command.Usage({
@@ -258,7 +259,7 @@ export class SkillsPruneCommand extends Command {
   }
 }
 
-export class SkillsListCommand extends Command {
+export class SkillsListCommand extends SuasorCommand {
   static override paths = [["skills", "list"]];
 
   static override usage = Command.Usage({
@@ -390,7 +391,7 @@ export class SkillsListCommand extends Command {
   }
 }
 
-export class SkillsSearchCommand extends Command {
+export class SkillsSearchCommand extends SuasorCommand {
   static override paths = [["skills", "search"]];
 
   static override usage = Command.Usage({
@@ -450,7 +451,7 @@ export class SkillsSearchCommand extends Command {
   }
 }
 
-export class SkillsInfoCommand extends Command {
+export class SkillsInfoCommand extends SuasorCommand {
   static override paths = [["skills", "info"]];
 
   static override usage = Command.Usage({
@@ -462,7 +463,7 @@ export class SkillsInfoCommand extends Command {
     `,
     examples: [
       ["Show the next-actions skill", "suasor skills info next-actions"],
-      ["Machine-readable output", "suasor skills info research --json"],
+      ["Machine-readable output", "suasor skills info find --json"],
     ],
   });
 

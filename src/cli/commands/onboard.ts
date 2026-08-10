@@ -24,12 +24,18 @@
 import { Command, Option } from "clipanion";
 import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import type { AccountSlice } from "../../connectors/multi-account.ts";
-import { connectorNames } from "../../connectors/registry.ts";
+import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
+import { SuasorCommand } from "../base-command.ts";
+import { BINARY_SCOPE_DOC, currentBuildIsBinary, standaloneGate } from "../build-target.ts";
 import { noPerAccountConfigMessage } from "../connector-account.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { loadOnboardBridge, onboardBridgeNames } from "../onboard/bridges.ts";
-import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
+import {
+  DOCKER_RUN_COMMAND,
+  detectInvocationChannel,
+  invocationNote,
+} from "../onboard/invocation.ts";
 import {
   mcpInvocationNote,
   renderMcpSnippet,
@@ -177,7 +183,7 @@ interface OnboardReport {
   embeddings: EmbeddingRecap | null;
 }
 
-export class OnboardCommand extends Command {
+export class OnboardCommand extends SuasorCommand {
   static override paths = [["onboard"]];
 
   static override usage = Command.Usage({
@@ -262,6 +268,27 @@ export class OnboardCommand extends Command {
 
     const interactive = isInteractive(this.context.stdin);
 
+    // 0. Standalone-binary gates (Issue #557). The binary keeps the OS keychain
+    // (@napi-rs/keyring) external (ADR-0010), so the wizard's token-storage step
+    // — the `auth set` path — would otherwise crash with an opaque
+    // `Cannot find module` *after* the user pasted a secret. Gate it up front,
+    // before any prompt, and surface the escape hatch (`auth set` gates the
+    // same way; the wizard was the one keychain writer left ungated).
+    if (!this.skipAuth) {
+      const authGate = standaloneGate(
+        "'onboard' keychain token storage (the OS keychain is not available in the binary)",
+        {
+          hint:
+            "re-run with --skip-auth and set each secret via its env override " +
+            "(SUASOR_CONNECTOR_<NAME>_<SECRET>, e.g. SUASOR_CONNECTOR_GITHUB_TOKEN=<value>)",
+        },
+      );
+      if (!authGate.ok) {
+        stderr.write(authGate.message);
+        return 1;
+      }
+    }
+
     // 1. Resolve the connector set. With --connector we validate the explicit
     // list; without it we prompt interactively on a TTY (ADR-0029 §2) and keep
     // the explicit "--connector required" error on a non-TTY (ADR-0029 §4).
@@ -272,6 +299,22 @@ export class OnboardCommand extends Command {
       return 1;
     }
     const connectors = selected.connectors;
+
+    // 1a. SDK gate (Issue #557): the connectors kept external to the binary
+    // (slack / ms-graph / google / box / web) cannot auth-test or sync there at
+    // all, so onboarding one would configure a connector this build can never
+    // run. Refused by name (the interactive menu already filters them out; this
+    // catches the explicit `--connector` path).
+    const external = connectors.filter((name) => !connectorBundledInBinary(name));
+    if (external.length > 0) {
+      const sdkGate = standaloneGate(
+        `'onboard' for ${external.join(", ")} (the connector SDK is not shipped in the binary)`,
+      );
+      if (!sdkGate.ok) {
+        stderr.write(sdkGate.message);
+        return 1;
+      }
+    }
 
     // A single non-TTY stdin stream cannot unambiguously carry N tokens, so
     // multi-connector token entry over a pipe is rejected up front (rather than
@@ -366,14 +409,32 @@ export class OnboardCommand extends Command {
             );
           }
         } else if (stored === "no-token") {
+          // Empty input with nothing stored: skip this connector's auth instead
+          // of aborting the whole run (Issue #559) — aborting here left every
+          // later connector unprocessed and printed no recap. The config slice
+          // still lands below (same shape as --skip-auth), so the re-run /
+          // `auth set` advice stays actionable.
+          const authAccount = this.account === undefined ? "" : ` --account ${this.account}`;
           stderr.write(
-            `error: no token provided for ${who} ` +
-              "(pipe it on stdin or use --skip-auth with an env override)\n",
+            `warning: no token provided for ${who} and none is stored — auth skipped for this ` +
+              `connector; set it later with \`suasor ${connector} auth set${authAccount}\` or an env ` +
+              "override, then re-run `auth test`\n",
           );
+        } else if (stored === "store-failed") {
+          // storeTokenFor already printed the failure + env-override recovery.
           return 1;
         } else {
+          // `stored` wrote the pasted token; `kept` means a credential already
+          // resolved and the user pressed Enter to keep it (Issue #559). Both
+          // leave a usable credential in place, so both probe it below.
           report.authStored = true;
-          if (!this.json) stdout.write(`${who}: token stored in the OS keychain.\n`);
+          if (!this.json) {
+            stdout.write(
+              stored === "kept"
+                ? `${who}: keeping the already-configured token.\n`
+                : `${who}: token stored in the OS keychain.\n`,
+            );
+          }
           const test = await this.authTest(connector, this.account);
           report.authTest = test.ok ? "ok" : "failed";
           report.authTestDetail = test.detail;
@@ -486,11 +547,25 @@ export class OnboardCommand extends Command {
     // a global `suasor` on PATH; from source / bunx no such binary exists, so we
     // detect the likely invocation channel and append a substitution note (and,
     // when --write-cron resolves to a non-PATH channel, a louder warning).
-    const command = invocationCommand();
-    const channel = detectInvocationChannel(process.argv, process.execPath);
-    const scheduler = renderSchedulerSnippet(process.platform, command);
+    // Inside the Docker image (Issue #558) the templates are for the HOST, so the
+    // command becomes the host-side `docker run` form and the kind is forced to
+    // cron (the container's `linux` platform says nothing about the host OS;
+    // cron is the portable POSIX fallback).
+    const channel = detectInvocationChannel(process.argv, process.execPath, process.env);
+    const command = channel === "docker" ? DOCKER_RUN_COMMAND : invocationCommand();
+    const scheduler = renderSchedulerSnippet(
+      process.platform,
+      command,
+      channel === "docker" ? "cron" : undefined,
+    );
     if (this.writeCron) {
-      if (channel !== "global") {
+      if (channel === "docker") {
+        stderr.write(
+          "warning: --write-cron writes to the CONTAINER's crontab, which dies with the " +
+            "container. Copy the cron line from the template below into the host's crontab " +
+            "instead.\n",
+        );
+      } else if (channel !== "global") {
         stderr.write(
           `warning: --write-cron wrote a literal \`${command}\` line, but you appear to be running ` +
             `via ${channel} — \`${command}\` is likely not on PATH for cron. ` +
@@ -507,6 +582,13 @@ export class OnboardCommand extends Command {
     // wizard never installs a background job the operator did not ask for
     // (ADR-0027: Suasor runs no daemon, and it does not quietly arrange one).
     if (this.writeLaunchd || this.writeSystemd) {
+      if (channel === "docker") {
+        stderr.write(
+          "warning: --write-launchd / --write-systemd writes inside the CONTAINER's " +
+            "filesystem, which the host's scheduler never reads. Install the unit on " +
+            "the host instead (see the template below).\n",
+        );
+      }
       const kind = this.writeLaunchd ? "launchd" : "systemd";
       const written = await this.writeSchedulerUnit(kind, command);
       if (!this.json && written !== null) {
@@ -672,7 +754,18 @@ export class OnboardCommand extends Command {
           "(non-interactive setup cannot prompt for the connector selection)",
       };
     }
-    const candidates = connectorNames();
+    // In the standalone binary the menu offers only the bundled connectors
+    // (Issue #557): listing slack / google / box / ms-graph there invites the
+    // user to paste a token into a flow that cannot store or verify it.
+    const all = connectorNames();
+    const binary = currentBuildIsBinary();
+    const candidates = binary ? all.filter((name) => connectorBundledInBinary(name)) : all;
+    if (binary && candidates.length < all.length) {
+      this.context.stdout.write(
+        `note: this standalone binary bundles only: ${candidates.join(", ")} — ` +
+          `set up the rest via the npm package or Docker (see ${BINARY_SCOPE_DOC}).\n`,
+      );
+    }
     this.context.stdout.write(renderConnectorMenu(candidates));
     const raw = (await readLine(this.context.stdin)).trim();
     return resolveSelection(raw, candidates);
@@ -788,12 +881,20 @@ export class OnboardCommand extends Command {
     return accountSlices(merged).find((a) => a.name === account) as AccountSlice;
   }
 
-  /** Read a token from stdin and store it in the keychain. Returns a status tag. */
+  /**
+   * Read a token from stdin and store it in the keychain. Returns a status tag.
+   *
+   * A credential that already resolves (keychain or env override — a re-run of
+   * the wizard, Issue #559) turns the prompt into "press Enter to keep it": the
+   * recap explicitly tells users to fix things and re-run, and demanding a
+   * re-paste of a token that is already stored made every re-run abort at the
+   * first Enter.
+   */
   private async storeTokenFor(
     connector: string,
     interactive: boolean,
     account?: string,
-  ): Promise<"stored" | "no-token" | "no-spec"> {
+  ): Promise<"stored" | "kept" | "no-token" | "no-spec" | "store-failed"> {
     const { AUTH_SPECS } = await import("../../connectors/auth-specs.ts");
     const spec = AUTH_SPECS[connector];
     if (!spec) return "no-spec";
@@ -812,10 +913,20 @@ export class OnboardCommand extends Command {
             spec.secretName,
           );
 
+    // Presence only, never the value (NFR-PRV-4): decides whether an empty
+    // Enter means "keep the stored token" (re-run, Issue #559) or "no token".
+    const { resolveSecret, storeSecret, storeSecretErrorMessage } = await import(
+      "../../connectors/secrets.ts"
+    );
+    const alreadyStored =
+      (await resolveSecret(connector, secretName, this.keychainOptions())) !== null;
+
     if (interactive) {
       const forAccount = account === undefined ? "" : ` for account '${account}'`;
       this.context.stdout.write(
-        `Paste the ${connector} ${spec.secretLabel}${forAccount} and press Enter (input is read from stdin):\n`,
+        alreadyStored
+          ? `A ${connector} ${spec.secretLabel}${forAccount} is already configured — press Enter to keep it, or paste a new one (input is read from stdin):\n`
+          : `Paste the ${connector} ${spec.secretLabel}${forAccount} and press Enter (input is read from stdin):\n`,
       );
     }
     // Line-based, echo-suppressed read (Issue #383): on a TTY this resolves on
@@ -825,10 +936,17 @@ export class OnboardCommand extends Command {
     const token = (
       await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
     ).trim();
-    if (!token) return "no-token";
+    if (!token) return alreadyStored ? "kept" : "no-token";
 
-    const { storeSecret } = await import("../../connectors/secrets.ts");
-    await storeSecret(connector, secretName, token, this.keychainOptions());
+    try {
+      await storeSecret(connector, secretName, token, this.keychainOptions());
+    } catch (cause) {
+      // A headless host (Docker, a server) has no Secret Service: surface the
+      // env-override escape hatch instead of the raw native error (Issue #557).
+      this.context.stderr.write(storeSecretErrorMessage(connector, secretName, cause));
+      this.context.stderr.write("hint: then re-run this wizard with --skip-auth\n");
+      return "store-failed";
+    }
     return "stored";
   }
 

@@ -142,6 +142,12 @@ describe("loadConfig fail-fast", () => {
       expect(err.issues.some((i) => i.includes("embedding.backend"))).toBe(true);
     }
   });
+
+  test("ConfigError dedupes repeated issue lines (#560)", () => {
+    const err = new ConfigError("invalid configuration", ["a: bad", "a: bad", "b: bad"]);
+    expect(err.issues).toEqual(["a: bad", "b: bad"]);
+    expect(err.message).toBe("invalid configuration\n  a: bad\n  b: bad");
+  });
 });
 
 describe("Config schema", () => {

@@ -459,3 +459,24 @@ describe("auth verbs — per-account targeting", () => {
     }
   });
 });
+
+describe("auth set — keychain write failure (#557)", () => {
+  test("a keychain write failure prints the env override recovery, not a raw throw", async () => {
+    const failing: KeychainBackend = {
+      get: () => null,
+      set: () => {
+        throw new Error("no Secret Service available (headless host)");
+      },
+    };
+    const { code, out, err } = await run(
+      ["github", "auth", "set", "--token", "ghp_x"],
+      (async function* () {})(),
+      failing,
+    );
+    expect(code).toBe(1);
+    expect(out).not.toContain("Stored");
+    expect(err).toContain("could not store the github secret");
+    expect(err).toContain("no Secret Service available");
+    expect(err).toContain("SUASOR_CONNECTOR_GITHUB_TOKEN=<value>");
+  });
+});
