@@ -29,7 +29,11 @@ import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { noPerAccountConfigMessage } from "../connector-account.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { loadOnboardBridge, onboardBridgeNames } from "../onboard/bridges.ts";
-import { detectInvocationChannel, invocationNote } from "../onboard/invocation.ts";
+import {
+  DOCKER_RUN_COMMAND,
+  detectInvocationChannel,
+  invocationNote,
+} from "../onboard/invocation.ts";
 import {
   mcpInvocationNote,
   renderMcpSnippet,
@@ -486,11 +490,25 @@ export class OnboardCommand extends Command {
     // a global `suasor` on PATH; from source / bunx no such binary exists, so we
     // detect the likely invocation channel and append a substitution note (and,
     // when --write-cron resolves to a non-PATH channel, a louder warning).
-    const command = invocationCommand();
-    const channel = detectInvocationChannel(process.argv, process.execPath);
-    const scheduler = renderSchedulerSnippet(process.platform, command);
+    // Inside the Docker image (Issue #558) the templates are for the HOST, so the
+    // command becomes the host-side `docker run` form and the kind is forced to
+    // cron (the container's `linux` platform says nothing about the host OS;
+    // cron is the portable POSIX fallback).
+    const channel = detectInvocationChannel(process.argv, process.execPath, process.env);
+    const command = channel === "docker" ? DOCKER_RUN_COMMAND : invocationCommand();
+    const scheduler = renderSchedulerSnippet(
+      process.platform,
+      command,
+      channel === "docker" ? "cron" : undefined,
+    );
     if (this.writeCron) {
-      if (channel !== "global") {
+      if (channel === "docker") {
+        stderr.write(
+          "warning: --write-cron writes to the CONTAINER's crontab, which dies with the " +
+            "container. Copy the cron line from the template below into the host's crontab " +
+            "instead.\n",
+        );
+      } else if (channel !== "global") {
         stderr.write(
           `warning: --write-cron wrote a literal \`${command}\` line, but you appear to be running ` +
             `via ${channel} — \`${command}\` is likely not on PATH for cron. ` +
@@ -507,6 +525,13 @@ export class OnboardCommand extends Command {
     // wizard never installs a background job the operator did not ask for
     // (ADR-0027: Suasor runs no daemon, and it does not quietly arrange one).
     if (this.writeLaunchd || this.writeSystemd) {
+      if (channel === "docker") {
+        stderr.write(
+          "warning: --write-launchd / --write-systemd writes inside the CONTAINER's " +
+            "filesystem, which the host's scheduler never reads. Install the unit on " +
+            "the host instead (see the template below).\n",
+        );
+      }
       const kind = this.writeLaunchd ? "launchd" : "systemd";
       const written = await this.writeSchedulerUnit(kind, command);
       if (!this.json && written !== null) {

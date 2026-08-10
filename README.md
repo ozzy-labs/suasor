@@ -66,6 +66,8 @@ These commands assume Suasor is **installed** via one of the channels above, so 
 
 The examples below use the `suasor <cmd>` form. Working from a clone instead? See [From source](#from-source).
 
+> **Docker + interactive verbs:** setup verbs that prompt (`onboard`, `<connector> auth set`) need a TTY — add `-it` (`docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard`). Without it, `onboard` exits with `--connector is required when stdin is not a TTY`.
+
 ```bash
 suasor --version
 

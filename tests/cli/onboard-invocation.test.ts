@@ -26,6 +26,32 @@ describe("detectInvocationChannel", () => {
       "global",
     );
   });
+
+  // Issue #558: inside the image the entry is `bun /app/dist/index.js`, which
+  // argv/execPath alone would classify as `global` — the env marker wins.
+  test("SUASOR_CHANNEL=docker is docker (baked into the image)", () => {
+    expect(
+      detectInvocationChannel(["bun", "/app/dist/index.js"], "/usr/local/bin/bun", {
+        SUASOR_CHANNEL: "docker",
+      }),
+    ).toBe("docker");
+  });
+
+  test("the image's preset SUASOR_CONFIG_DIR=/data is docker (pre-marker images)", () => {
+    expect(
+      detectInvocationChannel(["bun", "/app/dist/index.js"], "/usr/local/bin/bun", {
+        SUASOR_CONFIG_DIR: "/data",
+      }),
+    ).toBe("docker");
+  });
+
+  test("a non-/data SUASOR_CONFIG_DIR does not classify as docker", () => {
+    expect(
+      detectInvocationChannel(["/usr/local/bin/suasor"], "/usr/local/bin/suasor", {
+        SUASOR_CONFIG_DIR: "/home/u/.config/suasor",
+      }),
+    ).toBe("global");
+  });
 });
 
 describe("invocationNote", () => {
@@ -43,6 +69,13 @@ describe("invocationNote", () => {
     const note = invocationNote("bunx");
     expect(note).toContain("not on PATH");
     expect(note).toContain("bunx suasor");
+  });
+
+  test("docker points at the host's scheduler (Issue #558)", () => {
+    const note = invocationNote("docker");
+    expect(note).toContain("Docker container");
+    expect(note).toContain("HOST's");
+    expect(note).toContain("docker run");
   });
 });
 
@@ -67,6 +100,24 @@ describe("resolveMcpInvocation (Issue #388 item 2)", () => {
       args: ["suasor", "mcp", "serve"],
     });
   });
+
+  // Issue #558: the HOST spawns the container; `-i` keeps stdin open for the
+  // stdio MCP transport (without it the server exits immediately).
+  test("docker → host-side docker run -i … mcp serve", () => {
+    expect(resolveMcpInvocation("docker", "/ignored")).toEqual({
+      command: "docker",
+      args: [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "suasor-data:/data",
+        "ghcr.io/ozzy-labs/suasor:latest",
+        "mcp",
+        "serve",
+      ],
+    });
+  });
 });
 
 describe("mcpInvocationNote (Issue #388 item 2)", () => {
@@ -89,5 +140,12 @@ describe("mcpInvocationNote (Issue #388 item 2)", () => {
     const note = mcpInvocationNote("bunx");
     expect(note).toContain("already uses");
     expect(note).toContain("bunx suasor");
+  });
+
+  test("docker explains the block already uses the host-side docker run form", () => {
+    const note = mcpInvocationNote("docker");
+    expect(note).toContain("already uses");
+    expect(note).toContain("docker run -i");
+    expect(note).toContain("HOST's");
   });
 });

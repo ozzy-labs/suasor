@@ -88,9 +88,17 @@ docker run --rm -i \
 
 # run a CLI subcommand instead
 docker run --rm -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest --version
+
+# interactive setup verbs (`onboard`, `<connector> auth set`) prompt on a TTY —
+# add `-it`, or onboard exits with "--connector is required when stdin is not a TTY"
+docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard
 ```
 
 - Config + DB live under `/data` (`SUASOR_CONFIG_DIR=/data`); mount a volume to persist.
+- `onboard` detects the container (`SUASOR_CHANNEL=docker`, baked into the image)
+  and renders the **host-side** `docker run` forms in its MCP / scheduler
+  templates (Issue #558) — paste them on the host; a container crontab dies with
+  the container.
 - `SUASOR_EMBEDDING__BACKEND=ollama` is preset; the entrypoint starts `ollama serve`
   and then **best-effort pulls the embedding model** (`SUASOR_EMBEDDING__MODEL`,
   default `bge-m3`) on first run so the first `sync` / 意味検索 does not
