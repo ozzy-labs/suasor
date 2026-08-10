@@ -505,7 +505,8 @@ export class OnboardCommand extends Command {
       if (channel === "docker") {
         stderr.write(
           "warning: --write-cron writes to the CONTAINER's crontab, which dies with the " +
-            "container. Copy the cron line above into the host's crontab instead.\n",
+            "container. Copy the cron line from the template below into the host's crontab " +
+            "instead.\n",
         );
       } else if (channel !== "global") {
         stderr.write(
@@ -528,7 +529,7 @@ export class OnboardCommand extends Command {
         stderr.write(
           "warning: --write-launchd / --write-systemd writes inside the CONTAINER's " +
             "filesystem, which the host's scheduler never reads. Install the unit on " +
-            "the host instead (see the template above).\n",
+            "the host instead (see the template below).\n",
         );
       }
       const kind = this.writeLaunchd ? "launchd" : "systemd";
