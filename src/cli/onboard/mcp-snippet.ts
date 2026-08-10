@@ -13,7 +13,7 @@
  * `invocationNote` used for the scheduler block.
  */
 
-import type { InvocationChannel } from "./invocation.ts";
+import { DOCKER_IMAGE, type InvocationChannel } from "./invocation.ts";
 
 /** A resolved MCP-server invocation: the host `command` plus its full `args`. */
 export interface McpInvocation {
@@ -31,6 +31,11 @@ export interface McpInvocation {
  * - `from-source`: `bun run <entry> mcp serve`, where `entry` is the absolute
  *   path to the source entry (`process.argv[1]`, e.g. `<repo>/src/index.ts`).
  * - `bunx`: `bunx suasor mcp serve`.
+ * - `docker`: the HOST spawns the container — `docker run --rm -i -v
+ *   suasor-data:/data <image> mcp serve` (Issue #558). `-i` is required: the
+ *   MCP transport is stdio, and without it the container's stdin is closed and
+ *   the server exits immediately. A `"command": "suasor"` block would point at
+ *   a binary that exists only inside the image, so it is unusable on the host.
  *
  * Pure and injectable (the channel + entry are passed in) so the mapping is
  * unit-testable without depending on how the process itself was launched.
@@ -41,6 +46,12 @@ export function resolveMcpInvocation(channel: InvocationChannel, entry: string):
   }
   if (channel === "bunx") {
     return { command: "bunx", args: ["suasor", "mcp", "serve"] };
+  }
+  if (channel === "docker") {
+    return {
+      command: "docker",
+      args: ["run", "--rm", "-i", "-v", "suasor-data:/data", DOCKER_IMAGE, "mcp", "serve"],
+    };
   }
   return { command: "suasor", args: ["mcp", "serve"] };
 }
@@ -84,6 +95,14 @@ export function mcpInvocationNote(channel: InvocationChannel): string {
     return [
       "Note: you appear to be running via bunx — the block above already uses",
       "`bunx suasor mcp serve` (or install globally for a plain `suasor`).",
+    ].join("\n");
+  }
+  if (channel === "docker") {
+    return [
+      "Note: you appear to be running in the Suasor Docker container — the block",
+      "above already uses the host-side `docker run -i` form (the host spawns the",
+      "container; `-i` keeps stdin open for the stdio MCP transport). Paste it into",
+      "the HOST's config, adjusting the volume name / image tag if yours differ.",
     ].join("\n");
   }
   return "Note: the block above assumes a global `suasor` on PATH (ready to use as-is).";

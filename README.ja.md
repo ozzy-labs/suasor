@@ -65,6 +65,8 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 
 以下の例は `suasor <cmd>` 形を使います。clone から動かす場合は [ソースから](#ソースから) を参照してください。
 
+> **Docker + 対話 verb:** プロンプトを出す setup verb（`onboard` / `<connector> auth set`）は TTY が必要です — `-it` を付けてください（`docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard`）。`-it` なしの `onboard` は `--connector is required when stdin is not a TTY` で終了します。
+
 ```bash
 suasor --version
 
