@@ -49,7 +49,7 @@ the agent surface was contracted so a host stops choosing between near-duplicate
 If your host config, custom skills or scripts name `recall.search`, `search.hybrid`,
 `source.get.full`, `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `.dismiss`, or any
 of the 16 folded-away skills, they must be updated — the mechanical
-[migration table](docs/guide/troubleshooting.md) lists every old → new name, including how to
+[migration table](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046) lists every old → new name, including how to
 remove skill mirrors that `skills install` overwrites but never deletes.
 
 ## Quickstart (provisional)

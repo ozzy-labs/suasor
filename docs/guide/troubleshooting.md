@@ -11,28 +11,28 @@ suasor store info                   # store-size snapshot
 suasor store info --breakdown       # aggregate the event log by type (for rebuild/replay debugging)
 ```
 
-## v0.3 へのアップグレード: agent surface の収縮（ADR-0046）
+## Upgrading to v0.3: the agent-surface contraction (ADR-0046)
 
-MCP tool と skill の**名前が変わった**（後方互換の alias は残していない・[ADR-0046](../adr/0046-agent-surface-contraction.md) 決定 5）。host 設定・自作 skill・スクリプトが旧名を参照している場合は機械的に置換する。
+MCP tools and skills were **renamed with no backward-compatible aliases** ([ADR-0046](../adr/0046-agent-surface-contraction.md) decision 5). If a host config, custom skill, or script references an old name, replace it mechanically:
 
-### MCP tool（45 → 39）
+### MCP tools (45 → 39)
 
-| 旧 | 新 |
+| Old | New |
 |---|---|
-| `recall.search` | `search`（`mode: "semantic"`） |
-| `search.hybrid` | `search`（`mode: "hybrid"`） |
-| `source.get.full` | `source.get`（`include: ["links", "extraction"]`） |
-| `commitment.resolve` | `commitment.set`（`state: "resolved"`） |
-| `commitment.dismiss` | `commitment.set`（`state: "dismissed"`） |
-| `commitment.reopen` | `commitment.set`（`state: "open"`） |
-| `demand.ack` | `demand.mark`（`state: "acked"`） |
-| `demand.dismiss` | `demand.mark`（`state: "dismissed"`） |
+| `recall.search` | `search` (`mode: "semantic"`) |
+| `search.hybrid` | `search` (`mode: "hybrid"`) |
+| `source.get.full` | `source.get` (`include: ["links", "extraction"]`) |
+| `commitment.resolve` | `commitment.set` (`state: "resolved"`) |
+| `commitment.dismiss` | `commitment.set` (`state: "dismissed"`) |
+| `commitment.reopen` | `commitment.set` (`state: "open"`) |
+| `demand.ack` | `demand.mark` (`state: "acked"`) |
+| `demand.dismiss` | `demand.mark` (`state: "dismissed"`) |
 
-`search` の既定は `mode: "auto"`（embedding があれば hybrid、無ければ FTS）。**呼び出し側でアルゴリズムを選ぶ必要はなくなった**。
+`search` defaults to `mode: "auto"` (hybrid when an embedding backend is enabled, FTS otherwise) — **callers no longer have to pick the algorithm**.
 
-### skill（32 → 22）
+### Skills (32 → 22)
 
-| 旧 | 新 |
+| Old | New |
 |---|---|
 | `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` |
 | `doc-review` / `pr-review` / `doc-diff` | `source-review` |
@@ -41,17 +41,17 @@ MCP tool と skill の**名前が変わった**（後方互換の alias は残�
 | `decision-log` / `decision-rationale` | `decisions` |
 | `announcement-draft` / `handoff-draft` | `draft` |
 
-**旧 skill を install 済みの環境では、古い mirror が残る**（install は上書きするが削除はしない）。`suasor skills list` が旧名を `modified` / 孤児として出したら、mirror ディレクトリを手で消す:
+**Environments that installed the old skills keep their stale mirrors** (`skills install` overwrites but never deletes). If `suasor skills list` reports an old name as `modified` / an orphan, remove the mirror directories by hand:
 
 ```bash
 rm -rf ~/.claude/skills/{personal-brief,catchup,weekly-review,external-brief,health-check}
 rm -rf ~/.claude/skills/{doc-review,pr-review,doc-diff,find-document,research}
 rm -rf ~/.claude/skills/{meeting-prep,action-item-status,decision-log,decision-rationale}
 rm -rf ~/.claude/skills/{announcement-draft,handoff-draft}
-suasor skills install   # 新しい catalog を展開
+suasor skills install   # deploy the new catalog
 ```
 
-`.agents/skills/` 側も同様。
+The same applies to `.agents/skills/`.
 
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 

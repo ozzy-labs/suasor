@@ -126,7 +126,7 @@ source の metadata + body・**outgoing** provenance links・extraction_meta sid
 
 ### `source.history`（確定・read・#121）
 
-source の本文版を **event log から**新しい順に返す read tool（実体は `src/mcp/queries.ts` の `listSourceHistory`、`readOnlyHint: true`）。`source.get` が projection の**現本文のみ**を返すのに対し、`source.history` は append-only `events` の `SourceObserved` / `SourceBodyUpdated`（いずれも全文 `body` を保持、[ADR-0002](../adr/0002-event-sourced-architecture.md)）を `json_extract(payload,'$.externalId')` で引き、真の before/after 差分を可能にする（`doc-diff` skill が使う）。
+source の本文版を **event log から**新しい順に返す read tool（実体は `src/mcp/queries.ts` の `listSourceHistory`、`readOnlyHint: true`）。`source.get` が projection の**現本文のみ**を返すのに対し、`source.history` は append-only `events` の `SourceObserved` / `SourceBodyUpdated`（いずれも全文 `body` を保持、[ADR-0002](../adr/0002-event-sourced-architecture.md)）を `json_extract(payload,'$.externalId')` で引き、真の before/after 差分を可能にする（`source-review` skill が使う）。
 
 引数（Zod）: `externalId: string`（min 1）/ `limit?: int`（新しい順・既定 50）。
 

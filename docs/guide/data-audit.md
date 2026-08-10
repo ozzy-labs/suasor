@@ -23,7 +23,7 @@ suasor source list --json                # {externalId, sourceType, observedAt}[
 - `--limit N`: 返す行の最大数（既定 50・正の整数）
 - `--json`: 本文を含まない `{externalId, sourceType, observedAt}[]` を出力（NFR-PRV-4）
 
-本文そのものを確認したい場合は MCP の `source.get` / `find-document` skill を使う（CLI の監査一覧は本文を出さない）。
+本文そのものを確認したい場合は MCP の `source.get` / `find` skill を使う（CLI の監査一覧は本文を出さない）。
 
 ## source を forget する（`source forget`）
 
