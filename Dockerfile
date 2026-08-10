@@ -32,10 +32,13 @@ COPY docker-entrypoint.sh /usr/local/bin/suasor-entrypoint
 RUN chmod +x /usr/local/bin/suasor-entrypoint
 
 # Local-first defaults: embedding via the bundled Ollama sidecar, data under a
-# mountable volume.
+# mountable volume. SUASOR_CHANNEL marks the invocation channel so `onboard`
+# renders host-side `docker run` MCP / scheduler templates instead of a
+# `suasor`-on-PATH form the host cannot use (Issue #558).
 ENV SUASOR_EMBEDDING__BACKEND=ollama \
     SUASOR_EMBEDDING__BASEURL=http://localhost:11434 \
-    SUASOR_CONFIG_DIR=/data
+    SUASOR_CONFIG_DIR=/data \
+    SUASOR_CHANNEL=docker
 VOLUME ["/data"]
 
 # The Ollama base image sets its own ENTRYPOINT; override it to run the sidecar

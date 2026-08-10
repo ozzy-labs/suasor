@@ -21,11 +21,12 @@
 import { Command, Option } from "clipanion";
 import { connectorBundledInBinary, connectorNames } from "../../connectors/registry.ts";
 import type { BulkSyncResult } from "../../connectors/sync-all.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { BINARY_SCOPE_DOC, currentBuildIsBinary } from "../build-target.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { createProgress } from "../progress.ts";
 
-export class SyncAllCommand extends Command {
+export class SyncAllCommand extends SuasorCommand {
   static override paths = [["sync"]];
 
   static override usage = Command.Usage({
@@ -80,7 +81,7 @@ export class SyncAllCommand extends Command {
 
   override async execute(): Promise<number> {
     const [
-      { ConfigError, loadConfig },
+      { loadConfig },
       { Store },
       { loadConnector },
       { runBulkSync, selectEnabledConnectors },
@@ -98,16 +99,9 @@ export class SyncAllCommand extends Command {
     // `loadConfig` validates each `[connectors.<name>]` slice against the
     // connector's schema (#162); a typo / invalid value fails fast for the whole
     // run (before any connector syncs), independent of `--continue-on-error`.
-    let config: Awaited<ReturnType<typeof loadConfig>>;
-    try {
-      config = await loadConfig();
-    } catch (cause) {
-      if (cause instanceof ConfigError) {
-        this.context.stderr.write(`error: ${cause.message}\n`);
-        return 1;
-      }
-      throw cause;
-    }
+    // A `ConfigError` escapes to the shared base command, which renders the
+    // uniform `error:` + `hint:` pair (#560).
+    const config = await loadConfig();
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
       this.context.stderr.write("error: storage.dbPath is not configured\n");
@@ -293,7 +287,7 @@ export class SyncAllCommand extends Command {
  * are listed as "never synced" so a missing connector is not silently absent.
  * `--json` emits a machine-readable array for cron monitoring (ADR-0027 parity).
  */
-export class SyncStatusCommand extends Command {
+export class SyncStatusCommand extends SuasorCommand {
   static override paths = [["sync", "status"]];
 
   static override usage = Command.Usage({

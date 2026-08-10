@@ -133,6 +133,31 @@ describe("suasor source list", () => {
     expect(out).not.toContain("gh:old");
   });
 
+  test("--since accepts a relative duration (7d)", async () => {
+    await seed("gh:ancient", "old", { observedAt: "2020-01-01T00:00:00.000Z" });
+    await seed("gh:recent", "new", {
+      observedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const { code, out } = await run(["source", "list", "--since", "7d"]);
+    expect(code).toBe(0);
+    expect(out).toContain("gh:recent");
+    expect(out).not.toContain("gh:ancient");
+  });
+
+  test("rejects an unparseable --since instead of silently matching nothing (#561)", async () => {
+    await seed("gh:1", "x");
+    const { code, err } = await run(["source", "list", "--since", "banana"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--since must be a duration (24h / 7d / 2w) or ISO date");
+  });
+
+  test("rejects an unparseable --until", async () => {
+    await seed("gh:1", "x");
+    const { code, err } = await run(["source", "list", "--until", "2026-13-99"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--until must be a duration (24h / 7d / 2w) or ISO date");
+  });
+
   test("--json emits {externalId, sourceType, observedAt}[] without bodies", async () => {
     await seed("gh:1", "secret rocket plans");
     const { code, out } = await run(["source", "list", "--json"]);

@@ -47,7 +47,11 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
 }
 
 /** Seed the db the CLI will open (default path under SUASOR_CONFIG_DIR). */
-async function seed(body: string, externalId = "gh:1"): Promise<void> {
+async function seed(
+  body: string,
+  externalId = "gh:1",
+  observedAt = "2026-06-14T00:00:00.000Z",
+): Promise<void> {
   const { Store } = await import("../../src/db/index.ts");
   const store = Store.open({ path: join(dir, "suasor.db") });
   store.record({
@@ -55,7 +59,7 @@ async function seed(body: string, externalId = "gh:1"): Promise<void> {
     externalId,
     sourceType: "github_issue",
     body,
-    observedAt: "2026-06-14T00:00:00.000Z",
+    observedAt,
     fingerprint: externalId,
     meta: {},
   });
@@ -130,9 +134,48 @@ describe("suasor search", () => {
     expect(JSON.parse(out).hits).toHaveLength(0); // the seeded row is before the lower bound
   });
 
+  test("--since / --until are the canonical names for the observed window", async () => {
+    await seed("deploy the rocket", "gh:1"); // observedAt 2026-06-14T00:00:00.000Z
+    const { code, out } = await run([
+      "search",
+      "--json",
+      "--since",
+      "2026-06-15T00:00:00.000Z",
+      "rocket",
+    ]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out).hits).toHaveLength(0); // the seeded row is before the lower bound
+  });
+
+  test("--since accepts a relative duration (7d)", async () => {
+    await seed("old rocket", "gh:old", "2020-01-01T00:00:00.000Z");
+    await seed("recent rocket", "gh:recent", new Date(Date.now() - 3_600_000).toISOString());
+    const { code, out } = await run(["search", "--json", "--since", "7d", "rocket"]);
+    expect(code).toBe(0);
+    const hits = JSON.parse(out).hits;
+    expect(hits).toHaveLength(1); // only the row inside the window
+    expect(hits[0].externalId).toBe("gh:recent");
+  });
+
+  test("rejects an unparseable --since instead of silently matching nothing (#561)", async () => {
+    await seed("deploy the rocket");
+    const { code, err } = await run(["search", "--since", "banana", "rocket"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--since must be a duration (24h / 7d / 2w) or ISO date");
+  });
+
+  test("rejects an unparseable --until", async () => {
+    await seed("deploy the rocket");
+    const { code, err } = await run(["search", "--until", "2026-13-99", "rocket"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--until must be a duration (24h / 7d / 2w) or ISO date");
+  });
+
   test("help documents the filters and the literal-operator note", async () => {
     const { out } = await run(["search", "--help"]);
     expect(out).toContain("--source-type");
+    expect(out).toContain("--since");
+    expect(out).toContain("--until");
     expect(out).toContain("--observed-after");
     expect(out).toContain("--observed-before");
     expect(out).toContain("literal");

@@ -847,7 +847,7 @@ describe("suasor onboard — channel-aware MCP snippet (Issue #388 item 2)", () 
       // hard-coded "suasor" — the test runner launches from a .ts entry, so the
       // wizard substitutes the from-source `bun` invocation here.
       const block = out.slice(mcpIdx);
-      expect(block).toMatch(/"command": "(suasor|bun|bunx)"/);
+      expect(block).toMatch(/"command": "(suasor|bun|bunx|docker)"/);
       // An MCP-specific note is printed directly *after* the snippet (Issue #388
       // item 2). Asserting on the post-snippet slice (not the whole output) so the
       // scheduler's own note earlier on cannot stand in for it.
@@ -1451,6 +1451,59 @@ describe("onboard first sync (embedding + extraction)", () => {
       expect(err).toContain("extraction truncated (36 > 8 chars): spec.docx");
     } finally {
       server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suasor onboard — binary menu filter + keychain write failure (#557)", () => {
+  test("binary build: the interactive menu offers only bundled connectors, with a note", async () => {
+    const { FORCE_BINARY_ENV } = await import("../../src/cli/build-target.ts");
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    const savedForce = process.env[FORCE_BINARY_ENV];
+    process.env[FORCE_BINARY_ENV] = "1";
+    try {
+      // --skip-auth passes the up-front keychain gate; the menu must not list
+      // slack / google / box / ms-graph / web (pasting a token there could
+      // neither be stored nor verified by this build).
+      const { code, out } = await run(["onboard", "--skip-auth", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyStdin("github"),
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("this standalone binary bundles only");
+      expect(out).toContain("Select connector(s)");
+      // No numbered menu entry offers an external connector (the wording
+      // "github slack" in the selection example line is not a menu entry).
+      expect(out).not.toMatch(/\d+\) (slack|google|box|ms-graph|web)\b/);
+      expect(out).toMatch(/\d+\) github\b/);
+    } finally {
+      if (savedForce === undefined) delete process.env[FORCE_BINARY_ENV];
+      else process.env[FORCE_BINARY_ENV] = savedForce;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a keychain write failure prints the env override + --skip-auth recovery, not a raw throw", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    const failing: KeychainBackend = {
+      get: () => null,
+      set: () => {
+        throw new Error("no Secret Service available (headless host)");
+      },
+    };
+    try {
+      const { code, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_paste\n"),
+        keychain: failing,
+      });
+      expect(code).toBe(1);
+      expect(err).toContain("could not store the github secret");
+      expect(err).toContain("no Secret Service available");
+      expect(err).toContain("SUASOR_CONNECTOR_GITHUB_TOKEN=<value>");
+      expect(err).toContain("--skip-auth");
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

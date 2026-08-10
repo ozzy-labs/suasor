@@ -64,9 +64,10 @@ suasor skills install --scope claude  # Claude Code（.claude/skills/）のみ
 suasor skills install --scope agents  # Codex / Copilot / Gemini（.agents/skills/）のみ
 suasor skills install --host /path/to/project   # 展開先を明示指定（--project より優先）
 suasor skills install --dry-run       # 書き込まず差分だけ確認
-suasor skills list                    # 各 skill の状態（installed / missing / modified）
+suasor skills list                    # 各 skill の状態（installed / missing / modified / orphan）
 suasor skills list --format=detailed  # 状態 + category + read/write 境界を併記
 suasor skills list --json             # 機械可読（SkillStatus[]）
+suasor skills prune                   # catalog から消えた旧 skill の mirror（orphan）を削除（--dry-run で確認）
 suasor skills search <kw>             # name / description / category / triggers 横断検索
 suasor skills info <name>             # 単一 skill の category / 境界 / triggers / pairs / MCP tools
 ```

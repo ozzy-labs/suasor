@@ -11,28 +11,28 @@ suasor store info                   # store-size snapshot
 suasor store info --breakdown       # aggregate the event log by type (for rebuild/replay debugging)
 ```
 
-## v0.3 へのアップグレード: agent surface の収縮（ADR-0046）
+## Upgrading to v0.3: the agent-surface contraction (ADR-0046)
 
-MCP tool と skill の**名前が変わった**（後方互換の alias は残していない・[ADR-0046](../adr/0046-agent-surface-contraction.md) 決定 5）。host 設定・自作 skill・スクリプトが旧名を参照している場合は機械的に置換する。
+MCP tools and skills were **renamed with no backward-compatible aliases** ([ADR-0046](../adr/0046-agent-surface-contraction.md) decision 5). If a host config, custom skill, or script references an old name, replace it mechanically:
 
-### MCP tool（45 → 39）
+### MCP tools (45 → 39)
 
-| 旧 | 新 |
+| Old | New |
 |---|---|
-| `recall.search` | `search`（`mode: "semantic"`） |
-| `search.hybrid` | `search`（`mode: "hybrid"`） |
-| `source.get.full` | `source.get`（`include: ["links", "extraction"]`） |
-| `commitment.resolve` | `commitment.set`（`state: "resolved"`） |
-| `commitment.dismiss` | `commitment.set`（`state: "dismissed"`） |
-| `commitment.reopen` | `commitment.set`（`state: "open"`） |
-| `demand.ack` | `demand.mark`（`state: "acked"`） |
-| `demand.dismiss` | `demand.mark`（`state: "dismissed"`） |
+| `recall.search` | `search` (`mode: "semantic"`) |
+| `search.hybrid` | `search` (`mode: "hybrid"`) |
+| `source.get.full` | `source.get` (`include: ["links", "extraction"]`) |
+| `commitment.resolve` | `commitment.set` (`state: "resolved"`) |
+| `commitment.dismiss` | `commitment.set` (`state: "dismissed"`) |
+| `commitment.reopen` | `commitment.set` (`state: "open"`) |
+| `demand.ack` | `demand.mark` (`state: "acked"`) |
+| `demand.dismiss` | `demand.mark` (`state: "dismissed"`) |
 
-`search` の既定は `mode: "auto"`（embedding があれば hybrid、無ければ FTS）。**呼び出し側でアルゴリズムを選ぶ必要はなくなった**。
+`search` defaults to `mode: "auto"` (hybrid when an embedding backend is enabled, FTS otherwise) — **callers no longer have to pick the algorithm**.
 
-### skill（32 → 22）
+### Skills (32 → 22)
 
-| 旧 | 新 |
+| Old | New |
 |---|---|
 | `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` |
 | `doc-review` / `pr-review` / `doc-diff` | `source-review` |
@@ -41,17 +41,16 @@ MCP tool と skill の**名前が変わった**（後方互換の alias は残�
 | `decision-log` / `decision-rationale` | `decisions` |
 | `announcement-draft` / `handoff-draft` | `draft` |
 
-**旧 skill を install 済みの環境では、古い mirror が残る**（install は上書きするが削除はしない）。`suasor skills list` が旧名を `modified` / 孤児として出したら、mirror ディレクトリを手で消す:
+**Environments that installed the old skills keep their stale mirrors** (`skills install` overwrites but never deletes). The host reads the leftover mirrors **alongside** the new skills, so the trigger collisions return, and the stale skills call pre-rename MCP tools (`recall.search` etc.) that no longer exist ([Issue #556](https://github.com/ozzy-labs/suasor/issues/556)). `suasor skills list` reports the old names as `orphan`, and `suasor skills install` prints a one-line stderr warning while any remain; remove them with `suasor skills prune`:
 
 ```bash
-rm -rf ~/.claude/skills/{personal-brief,catchup,weekly-review,external-brief,health-check}
-rm -rf ~/.claude/skills/{doc-review,pr-review,doc-diff,find-document,research}
-rm -rf ~/.claude/skills/{meeting-prep,action-item-status,decision-log,decision-rationale}
-rm -rf ~/.claude/skills/{announcement-draft,handoff-draft}
-suasor skills install   # 新しい catalog を展開
+suasor skills install           # deploy the new catalog (warns if orphans remain)
+suasor skills list              # stale mirrors of the old skills appear as orphan
+suasor skills prune --dry-run   # preview what would be removed (deletes nothing)
+suasor skills prune             # remove the orphan mirrors (both .claude/skills/ and .agents/skills/)
 ```
 
-`.agents/skills/` 側も同様。
+Prune only removes mirrors it can prove suasor wrote (stamp-recorded names plus the known retired names); it never touches ecosystem dev skills (`@ozzylabs/skills`) or hand-authored skills living in the same directories. A hand-authored skill that happens to reuse a known retired name cannot be distinguished from an unstamped old install and will be listed as a candidate — run `--dry-run` first if that might apply to you. `--project` / `--host <dir>` clean project-local installs the same way.
 
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 
@@ -84,6 +83,7 @@ Each check carries `ok` / `info` / `warn` / `error`, and **a single `error` make
 - **embedding** — the `[embedding].backend` setting (`disabled` is INFO). When a backend is enabled it also probes `embedding.dim` to check that **the model's output dimension matches `[embedding].dim`** (see "Dimension mismatch" below).
 - **connectors** — whether enabled connectors have credentials configured (missing is WARN). A *dangling credential* — `auth set` done but `[connectors.<name>]` not enabled — is also WARN.
 - **connectors.config** — an enabled connector missing a **required non-secret setting** (google `clientId`, ms-graph `tenantId` / `clientId`, jira `host`) is an **ERROR**: unlike an empty ingest scope, the connector cannot address its API at all and the sync fails with the vendor's own opaque message ([ADR-0049](../adr/0049-connector-readiness-parity.md)). Reported as its own line, never folded into the empty-scope WARN.
+- **keychain** — probes whether the OS keychain backend is reachable at all ([#557](https://github.com/ozzy-labs/suasor/issues/557)). On a headless host (Docker, a server with no Secret Service) an unreadable backend and an absent entry both resolve to "missing credential", so the probe disambiguates: unavailable + missing credentials is WARN ("missing" may mean *unreadable*, not unset — use the `SUASOR_CONNECTOR_<NAME>_<SECRET>` env overrides instead of `auth set`); unavailable with nothing missing is INFO (env-override installs are a supported headless path).
 - **maintenance** — surfaces drainable backlog such as `pending embeddings` / `stale embeddings` / `extraction version drift` as WARN (a maintenance hint; does not affect the exit code).
 
 ### `suasor store info --breakdown`

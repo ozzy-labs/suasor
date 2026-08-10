@@ -126,7 +126,7 @@ source の metadata + body・**outgoing** provenance links・extraction_meta sid
 
 ### `source.history`（確定・read・#121）
 
-source の本文版を **event log から**新しい順に返す read tool（実体は `src/mcp/queries.ts` の `listSourceHistory`、`readOnlyHint: true`）。`source.get` が projection の**現本文のみ**を返すのに対し、`source.history` は append-only `events` の `SourceObserved` / `SourceBodyUpdated`（いずれも全文 `body` を保持、[ADR-0002](../adr/0002-event-sourced-architecture.md)）を `json_extract(payload,'$.externalId')` で引き、真の before/after 差分を可能にする（`doc-diff` skill が使う）。
+source の本文版を **event log から**新しい順に返す read tool（実体は `src/mcp/queries.ts` の `listSourceHistory`、`readOnlyHint: true`）。`source.get` が projection の**現本文のみ**を返すのに対し、`source.history` は append-only `events` の `SourceObserved` / `SourceBodyUpdated`（いずれも全文 `body` を保持、[ADR-0002](../adr/0002-event-sourced-architecture.md)）を `json_extract(payload,'$.externalId')` で引き、真の before/after 差分を可能にする（`source-review` skill が使う）。
 
 引数（Zod）: `externalId: string`（min 1）/ `limit?: int`（新しい順・既定 50）。
 
@@ -282,13 +282,13 @@ entity 軸の時系列ビューを返す read tool（実体は `src/mcp/queries.
 
 **完全性の境界**: graph walk は `depth` と内部の graphLimit（既定 `max(limit*4, 50)`）で打ち切る。打ち切りは BFS（hop 距離）順で newest-first sort の**前**に起こるため、到達ノード数が graphLimit を超える dense な entity では「より新しいが遠い（hop が多い）」item が落ちうる。newest-first 保証は graph 到達可能な部分集合内でのみ成り立つ。疎で遠い provenance を網羅したい場合は `depth` を上げる。
 
-### `catchup` skill のバックエンド方針（レビュー D1 確定）
+### catchup（「前回以降の差分」）のバックエンド方針（レビュー D1 確定）
 
-assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）のうち、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
+assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）のうち、catchup 挙動 —「前回以降の差分」「久しぶりに確認」。旧 `catchup` skill、[ADR-0046](../adr/0046-agent-surface-contraction.md) で `brief` に統合 — だけが専用 MCP tool を持たない。**専用 tool は追加しない**。この挙動は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
 
 - marker は host（Claude Code 等）側に保持する。server は永続 marker を持たない（local-first / stateless read surface を保つ）。
 - 上記 4 tool が下限 inclusive の時間フィルタを備えているため、`since = last_seen` を各 `*After` に渡すだけで「前回以降の差分」を合成できる。
-- server 側に永続 marker が必要と判断された場合に限り、別 Issue で `catchup` read tool（since-marker 差分 + marker 更新）を追加する。本 Issue の scope では追加しない。
+- server 側に永続 marker が必要と判断された場合に限り、別 Issue で catchup 用 read tool（since-marker 差分 + marker 更新）を追加する。本 Issue の scope では追加しない。
 
 ## Write tools（HITL・人の承認なしに適用/送信しない）
 
