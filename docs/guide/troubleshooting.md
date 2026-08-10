@@ -11,28 +11,28 @@ suasor store info                   # store-size snapshot
 suasor store info --breakdown       # aggregate the event log by type (for rebuild/replay debugging)
 ```
 
-## v0.3 へのアップグレード: agent surface の収縮（ADR-0046）
+## Upgrading to v0.3: the agent-surface contraction (ADR-0046)
 
-MCP tool と skill の**名前が変わった**（後方互換の alias は残していない・[ADR-0046](../adr/0046-agent-surface-contraction.md) 決定 5）。host 設定・自作 skill・スクリプトが旧名を参照している場合は機械的に置換する。
+MCP tools and skills were **renamed with no backward-compatible aliases** ([ADR-0046](../adr/0046-agent-surface-contraction.md) decision 5). If a host config, custom skill, or script references an old name, replace it mechanically:
 
-### MCP tool（45 → 39）
+### MCP tools (45 → 39)
 
-| 旧 | 新 |
+| Old | New |
 |---|---|
-| `recall.search` | `search`（`mode: "semantic"`） |
-| `search.hybrid` | `search`（`mode: "hybrid"`） |
-| `source.get.full` | `source.get`（`include: ["links", "extraction"]`） |
-| `commitment.resolve` | `commitment.set`（`state: "resolved"`） |
-| `commitment.dismiss` | `commitment.set`（`state: "dismissed"`） |
-| `commitment.reopen` | `commitment.set`（`state: "open"`） |
-| `demand.ack` | `demand.mark`（`state: "acked"`） |
-| `demand.dismiss` | `demand.mark`（`state: "dismissed"`） |
+| `recall.search` | `search` (`mode: "semantic"`) |
+| `search.hybrid` | `search` (`mode: "hybrid"`) |
+| `source.get.full` | `source.get` (`include: ["links", "extraction"]`) |
+| `commitment.resolve` | `commitment.set` (`state: "resolved"`) |
+| `commitment.dismiss` | `commitment.set` (`state: "dismissed"`) |
+| `commitment.reopen` | `commitment.set` (`state: "open"`) |
+| `demand.ack` | `demand.mark` (`state: "acked"`) |
+| `demand.dismiss` | `demand.mark` (`state: "dismissed"`) |
 
-`search` の既定は `mode: "auto"`（embedding があれば hybrid、無ければ FTS）。**呼び出し側でアルゴリズムを選ぶ必要はなくなった**。
+`search` defaults to `mode: "auto"` (hybrid when an embedding backend is enabled, FTS otherwise) — **callers no longer have to pick the algorithm**.
 
-### skill（32 → 22）
+### Skills (32 → 22)
 
-| 旧 | 新 |
+| Old | New |
 |---|---|
 | `personal-brief` / `catchup` / `weekly-review` / `external-brief` / `health-check` | `brief` |
 | `doc-review` / `pr-review` / `doc-diff` | `source-review` |
@@ -41,16 +41,16 @@ MCP tool と skill の**名前が変わった**（後方互換の alias は残�
 | `decision-log` / `decision-rationale` | `decisions` |
 | `announcement-draft` / `handoff-draft` | `draft` |
 
-**旧 skill を install 済みの環境では、古い mirror が残る**（install は上書きするが削除はしない）。残った旧 mirror は host が新 skill と**併読**するためトリガ競合が復活し、旧 skill が改名前の MCP tool（`recall.search` 等）を呼んで失敗する（[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）。`suasor skills list` が旧名を `orphan` として報告し、`suasor skills install` も残骸があると stderr に 1 行警告するので、`suasor skills prune` で削除する:
+**Environments that installed the old skills keep their stale mirrors** (`skills install` overwrites but never deletes). The host reads the leftover mirrors **alongside** the new skills, so the trigger collisions return, and the stale skills call pre-rename MCP tools (`recall.search` etc.) that no longer exist ([Issue #556](https://github.com/ozzy-labs/suasor/issues/556)). `suasor skills list` reports the old names as `orphan`, and `suasor skills install` prints a one-line stderr warning while any remain; remove them with `suasor skills prune`:
 
 ```bash
-suasor skills install           # 新しい catalog を展開（orphan が残っていれば警告が出る）
-suasor skills list              # 旧 skill の mirror が orphan として並ぶ
-suasor skills prune --dry-run   # 削除対象の確認（何も消さない）
-suasor skills prune             # orphan mirror を削除（.claude/skills/ と .agents/skills/ の両方）
+suasor skills install           # deploy the new catalog (warns if orphans remain)
+suasor skills list              # stale mirrors of the old skills appear as orphan
+suasor skills prune --dry-run   # preview what would be removed (deletes nothing)
+suasor skills prune             # remove the orphan mirrors (both .claude/skills/ and .agents/skills/)
 ```
 
-prune が消すのは suasor が書いたと証明できる mirror（stamp 記録済みの名前 + 既知の退役名）だけで、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills`）や手置きの skill には触れない。ただし**既知の退役名と同名の手置き skill** は stamp の無い旧 install と区別できず候補に載るため、心当たりがある場合は `--dry-run` で対象を確認してから実行する。`--project` / `--host <dir>` でプロジェクトローカル install も同様に掃除できる。
+Prune only removes mirrors it can prove suasor wrote (stamp-recorded names plus the known retired names); it never touches ecosystem dev skills (`@ozzylabs/skills`) or hand-authored skills living in the same directories. A hand-authored skill that happens to reuse a known retired name cannot be distinguished from an unstamped old install and will be listed as a candidate — run `--dry-run` first if that might apply to you. `--project` / `--host <dir>` clean project-local installs the same way.
 
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 

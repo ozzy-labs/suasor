@@ -431,7 +431,7 @@ export class SkillsInfoCommand extends Command {
     `,
     examples: [
       ["Show the next-actions skill", "suasor skills info next-actions"],
-      ["Machine-readable output", "suasor skills info research --json"],
+      ["Machine-readable output", "suasor skills info find --json"],
     ],
   });
 

@@ -7,6 +7,7 @@
  * docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { resolveSince, SINCE_SYNTAX_HINT } from "../../shared/since.ts";
 
 export class SearchCommand extends Command {
   static override paths = [["search"]];
@@ -27,8 +28,12 @@ export class SearchCommand extends Command {
       path) without changing ranking:
 
       - --source-type <type>      restrict to one source_type (e.g. github_issue)
-      - --observed-after <iso>    inclusive lower bound on observed_at (>=)
-      - --observed-before <iso>   exclusive upper bound on observed_at (<)
+      - --since <dur|iso>         inclusive lower bound on observed_at (>=):
+                                  relative (24h / 7d / 2w) or ISO date
+                                  (alias: --observed-after)
+      - --until <dur|iso>         exclusive upper bound on observed_at (<):
+                                  relative (24h / 7d / 2w) or ISO date
+                                  (alias: --observed-before)
 
       The human output annotates the strategy used ([fts] or [like-fallback]);
       --json additionally reports totalHits / truncated / analyzedQuery so a
@@ -45,9 +50,10 @@ export class SearchCommand extends Command {
       ["Limit and emit JSON", "suasor search --limit 5 --json deploy"],
       ["Restrict to one source type", "suasor search --source-type github_issue rocket"],
       ["Include the full body per hit", "suasor search --full-body rocket"],
+      ["Restrict to the last week", "suasor search --since 7d rocket"],
       [
         "Restrict to an observed window",
-        "suasor search --observed-after 2026-06-01T00:00:00Z --observed-before 2026-07-01T00:00:00Z rocket",
+        "suasor search --since 2026-06-01T00:00:00Z --until 2026-07-01T00:00:00Z rocket",
       ],
     ],
   });
@@ -60,12 +66,12 @@ export class SearchCommand extends Command {
     description: "Restrict to a single source_type (e.g. github_issue).",
   });
 
-  observedAfter = Option.String("--observed-after", {
-    description: "Inclusive lower bound on observed_at (ISO 8601, >=).",
+  since = Option.String("--since,--observed-after", {
+    description: "Inclusive lower bound on observed_at (>=): relative (24h / 7d / 2w) or ISO date.",
   });
 
-  observedBefore = Option.String("--observed-before", {
-    description: "Exclusive upper bound on observed_at (ISO 8601, <).",
+  until = Option.String("--until,--observed-before", {
+    description: "Exclusive upper bound on observed_at (<): relative (24h / 7d / 2w) or ISO date.",
   });
 
   fullBody = Option.Boolean("--full-body", false, {
@@ -113,6 +119,30 @@ export class SearchCommand extends Command {
       maxBodyChars = parsed;
     }
 
+    // Resolve the time filters through the shared duration/ISO parser and
+    // reject unparseable values (Issue #561): raw strings would be compared
+    // lexicographically against observed_at and silently match nothing
+    // (ADR-0007 "no silent wrong answer").
+    const now = Date.now();
+    let observedAfter: string | undefined;
+    if (this.since !== undefined) {
+      const resolved = resolveSince(this.since, now);
+      if (resolved === null) {
+        this.context.stderr.write(`error: --since must be ${SINCE_SYNTAX_HINT}\n`);
+        return 1;
+      }
+      observedAfter = resolved;
+    }
+    let observedBefore: string | undefined;
+    if (this.until !== undefined) {
+      const resolved = resolveSince(this.until, now);
+      if (resolved === null) {
+        this.context.stderr.write(`error: --until must be ${SINCE_SYNTAX_HINT}\n`);
+        return 1;
+      }
+      observedBefore = resolved;
+    }
+
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
@@ -130,8 +160,8 @@ export class SearchCommand extends Command {
       const result = searchSources(store.connection.sqlite, this.query, {
         limit,
         ...(this.sourceType !== undefined ? { sourceType: this.sourceType } : {}),
-        ...(this.observedAfter !== undefined ? { observedAfter: this.observedAfter } : {}),
-        ...(this.observedBefore !== undefined ? { observedBefore: this.observedBefore } : {}),
+        ...(observedAfter !== undefined ? { observedAfter } : {}),
+        ...(observedBefore !== undefined ? { observedBefore } : {}),
         ...(this.fullBody ? { fullBody: true } : {}),
         ...(maxBodyChars !== undefined ? { maxBodyChars } : {}),
       });

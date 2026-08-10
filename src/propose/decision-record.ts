@@ -4,7 +4,7 @@
  *
  * The write half of the decision loop: `decision.list` reads recorded decisions,
  * and `decision.record` is the human's own "log this decision" path (the
- * decision-rationale skill surfaces the rationale the user dictates). It is HITL
+ * `decisions` skill surfaces the rationale the user dictates). It is HITL
  * — the host gates it behind approval (`readOnlyHint: false`, no auto-apply,
  * ADR-0004) — and appends a `DecisionRecorded` event that folds into the
  * `decisions` projection (ADR-0002).

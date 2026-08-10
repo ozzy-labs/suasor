@@ -1,6 +1,6 @@
 # アシスタント skill 利用ガイド
 
-Suasor は 22 個のアシスタント skill を同梱する（[ADR-0008](../adr/0008-assistant-skills.md)）。自然文で頼むと該当 skill が発火し、Suasor MCP の read / write tool を組み合わせて「次にやること」「今日のまとめ」「この資料から task 抽出」などを返す。本ガイドは **install → 起動 → 確認 → トラブルシュート** を 1 本にまとめる。
+Suasor はアシスタント skill 群を同梱する（[ADR-0008](../adr/0008-assistant-skills.md)）。自然文で頼むと該当 skill が発火し、Suasor MCP の read / write tool を組み合わせて「次にやること」「今日のまとめ」「この資料から task 抽出」などを返す。本ガイドは **install → 起動 → 確認 → トラブルシュート** を 1 本にまとめる。
 
 > skill の責務一覧（catalog）は [docs/skills/README.md](../skills/README.md)。frontmatter の機械可読フィールド仕様は [ADR-0032](../adr/0032-skill-frontmatter-schema.md)。CLI verb の一覧は [docs/design/cli.md](../design/cli.md)。
 
@@ -34,12 +34,13 @@ skill は **専用コマンドではなく、エージェントへの自然文�
 | 言いかた | 発火する skill | 種別 |
 |---|---|---|
 | 「次に何やる?」「優先度高いのは?」 | `next-actions` | read |
-| 「今日のまとめ」「最近どう」 | `brief` | read |
-| 「あの資料どこ」「<語>含むファイル」 | `find` | read |
+| 「今日のまとめ」「週次の棚卸し」「上司向け週次報告」 | `brief` | read |
+| 「あの資料どこ」「<語> について調べて」 | `find` | read |
+| 「この設計書レビューして」「前回から何が変わった」 | `source-review` | read |
 | 「この資料から task 抽出」 | `source-extract` | write（HITL） |
 | 「返信案考えて」「下書き作って」 | `reply-draft` | write（HITL） |
 
-read 系（自律 OK・9）はエージェントが自律実行してよい。write 系（HITL・13）は候補生成までで、**適用はユーザー承認が必須**（auto-apply 経路は無い、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
+read 系（自律 OK）はエージェントが自律実行してよい。write 系（HITL）は候補生成までで、**適用はユーザー承認が必須**（auto-apply 経路は無い、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 
 ## 3. 確認（list / search / info）
 
@@ -102,7 +103,7 @@ catalog がもう同梱していない skill の mirror が host dir に残っ�
 
 ### standalone binary の skill
 
-standalone binary でも `skills install` / `list` / `search` / `info` は **npm / Docker と同じく全 22 skill で動く**（Issue #445）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、SSOT は `src/skills/embedded.ts`（生成物・commit 済み）としてソースに inline してある。`docs/skills/` が実在する repo / npm 実行ではそちらをディスクから読み、無ければ埋め込みへフォールバックする。
+standalone binary でも `skills install` / `list` / `search` / `info` は **npm / Docker と同じく全 skill で動く**（Issue #445）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、SSOT は `src/skills/embedded.ts`（生成物・commit 済み）としてソースに inline してある。`docs/skills/` が実在する repo / npm 実行ではそちらをディスクから読み、無ければ埋め込みへフォールバックする。
 
 SSOT を編集したら `node scripts/generate-embedded-skills.mjs` で再生成する（忘れると `tests/skills/embedded.test.ts` の drift テストが落ちる）。
 
@@ -111,5 +112,5 @@ SSOT を編集したら `node scripts/generate-embedded-skills.mjs` で再生成
 - [ADR-0008](../adr/0008-assistant-skills.md) — アシスタント skill の SSOT / install / drift
 - [ADR-0032](../adr/0032-skill-frontmatter-schema.md) — frontmatter 機械可読フィールド + `skills search` / `info`
 - [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md) — read 自律 / write HITL 境界
-- [docs/skills/README.md](../skills/README.md) — skill catalog（全 22 件の責務と発火例）
+- [docs/skills/README.md](../skills/README.md) — skill catalog（各 skill の責務と発火例）
 - [docs/design/cli.md](../design/cli.md) — CLI verb 一覧

@@ -12,27 +12,7 @@
  * lazily inside `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
-
-/** `<n><unit>` relative-duration syntax for `--since` (h/d/w). */
-const RELATIVE_SINCE = /^(\d+)([hdw])$/;
-const UNIT_MS: Record<string, number> = { h: 3_600_000, d: 86_400_000, w: 604_800_000 };
-
-/**
- * Resolve a `--since` value to an ISO 8601 instant: a relative `24h` / `7d` /
- * `2w` (before `nowMs`) or an absolute ISO date / datetime. Returns `null` when
- * it parses as neither. Exported for unit testing.
- */
-export function resolveSince(since: string, nowMs: number): string | null {
-  const rel = RELATIVE_SINCE.exec(since.trim());
-  if (rel) {
-    const amount = Number(rel[1]);
-    const unit = UNIT_MS[rel[2] as string] as number;
-    return new Date(nowMs - amount * unit).toISOString();
-  }
-  const parsed = Date.parse(since.trim());
-  if (Number.isNaN(parsed)) return null;
-  return new Date(parsed).toISOString();
-}
+import { resolveSince, SINCE_SYNTAX_HINT } from "../../shared/since.ts";
 
 export class BriefCommand extends Command {
   static override paths = [["brief"]];
@@ -58,7 +38,7 @@ export class BriefCommand extends Command {
   });
 
   until = Option.String("--until", {
-    description: "Window end (exclusive), ISO date/datetime. Default: now.",
+    description: "Window end (exclusive): relative (24h / 7d / 2w) or ISO date. Default: now.",
   });
 
   limit = Option.String("--limit", { description: "Per-section max rows (default 50)." });
@@ -91,18 +71,18 @@ export class BriefCommand extends Command {
     const now = Date.now();
     const since = resolveSince(this.since ?? "24h", now);
     if (since === null) {
-      this.context.stderr.write("error: --since must be a duration (24h / 7d / 2w) or ISO date\n");
+      this.context.stderr.write(`error: --since must be ${SINCE_SYNTAX_HINT}\n`);
       return 1;
     }
 
     let until = new Date(now).toISOString();
     if (this.until !== undefined) {
-      const parsed = Date.parse(this.until.trim());
-      if (Number.isNaN(parsed)) {
-        this.context.stderr.write("error: --until must be an ISO date/datetime\n");
+      const resolved = resolveSince(this.until, now);
+      if (resolved === null) {
+        this.context.stderr.write(`error: --until must be ${SINCE_SYNTAX_HINT}\n`);
         return 1;
       }
-      until = new Date(parsed).toISOString();
+      until = resolved;
     }
 
     let limit: number | undefined;
