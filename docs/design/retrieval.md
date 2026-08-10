@@ -44,11 +44,12 @@ FTS-first（ADR-0005）を保ったままの additive 拡張。`search` read too
 - **dedup**: 同一 `externalId` は 1 エントリに融合（重複排除）。両リストに居る場合は **FTS 側 hit を代表**（lexical の `body` / `score` を保持）とする。融合結果は `rrfScore` 降順（best-first）、同点は `externalId` 昇順で決定的
 - **純粋関数**: `fuseRrf(ftsHits, vecHits, { k?, limit? })` は SQLite / embedder に依存せず単体テスト可能。各入力は best-first 前提
 - **graceful degrade**: embedding 無効 / サイドカー到達不能のときは **FTS のみで融合**（実質 FTS パススルー）し、`mode=semantic` と同じ `embedding_disabled` シグナルを返す（hard error にはしない）
+- **透明性（[#565](https://github.com/ozzy-labs/suasor/issues/565)）**: hybrid の戻り値は `truncated` を伴う（FTS 側打ち切り / vec 側打ち切り / 融合後 union > limit のいずれかで `true`）。`totalHits` は FTS 経路のみ（KNN・融合 union には match count の意味を持たせられない）
 
 ## Graceful degradation
 
 - 意味検索（`search` の `mode=semantic` / `hybrid`）は backend=disabled / 外部 backend のキー未設定（embedder が `null`）のとき **hard error にせず空 + `embedding_disabled` シグナル**を返す（`reason: "backend_disabled"`）→ host が `search`(FTS) に寄る
-- backend 有効でも**サイドカー到達不能**（Ollama down 等）のときは同じく degrade（`reason: "backend_unreachable"`）。**ただし帰属する層が異なる**: core の `recallSearch`（`src/retrieval/embedding/recall.ts`）の `RecallReason` は `backend_disabled | ok` のみで、サイドカー失敗時は `EmbeddingError` を **throw** する。これを `search` の MCP handler（`src/mcp/server-read.ts`）が catch し、空 hits + `embedding_disabled` シグナル + `reason: "backend_unreachable"` を**合成して返す**（host を hard-error から守る境界）。`signal` はいずれも `embedding_disabled` で host の fallback 判断は一貫
+- backend 有効でも**サイドカー到達不能**（Ollama down 等）のときは同じく degrade（`reason: "backend_unreachable"`）。**ただし帰属する層が異なる**: core の `recallSearch`（`src/retrieval/embedding/recall.ts`）の `RecallReason` は `backend_disabled` のみ（`reason` は degrade 時だけ現れ、成功時は `{ hits, truncated }` を返す。`truncated` は `limit + 1` プローブで判定する打ち切りシグナル、[#565](https://github.com/ozzy-labs/suasor/issues/565)）で、サイドカー失敗時は `EmbeddingError` を **throw** する。これを `search` の MCP handler（`src/mcp/server-read.ts`）が catch し、空 hits + `embedding_disabled` シグナル + `reason: "backend_unreachable"` を**合成して返す**（host を hard-error から守る境界）。`signal` はいずれも `embedding_disabled` で host の fallback 判断は一貫
 - `vec0` は基盤として常設（安価）。populate は backend 次第。埋め込みは event replay で再構築できない sidecar substrate なので、`projections rebuild` は **`vec0` と provenance サイドカー `embeddings_meta` を両方 truncate** し、正直な「全件 pending」状態に戻す（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md) §5）。片方だけ消すと `embeddings status` / `doctor` / `drain` が「埋め込み済み」と偽り recall が無音全損するため、対称に消すのが不変条件で、`doctor` が `vec0`↔`embeddings_meta` の行数乖離を error で検出する。rebuild 後の復旧は `suasor embeddings drain` 一発（次回 sync では未変更 source が再埋め込みされないため復旧しない）
 
 ## 使い分け

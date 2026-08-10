@@ -37,17 +37,25 @@ export const RECALL_FILTER_OVERFETCH = 4;
 /** Signal returned when recall has no embedding backend (graceful degrade). */
 export const EMBEDDING_DISABLED_SIGNAL = "embedding_disabled";
 
-/** Why recall returned no semantic hits (diagnostic; `signal` is canonical). */
-export type RecallReason = "backend_disabled" | "ok";
+/** Why recall degraded to no semantic hits (diagnostic; `signal` is canonical). */
+export type RecallReason = "backend_disabled";
 
 /** A recall result: either ranked semantic hits, or a graceful-degrade signal. */
 export interface RecallResult {
   /** Nearest-neighbour hits, best-first (smallest distance). Empty on degrade. */
   hits: SearchHit[];
+  /**
+   * `true` when the neighbour list was cut off by `limit` (more neighbours
+   * remain beyond the returned page). Mirrors `SearchResult.truncated` so the
+   * "capped vs complete" signal survives the semantic path (ADR-0007 "no silent
+   * wrong answer", #565). There is no `totalHits` counterpart: KNN ranks *every*
+   * embedded source by distance, so a pre-limit total is not a match count.
+   */
+  truncated: boolean;
   /** `embedding_disabled` when no embedder is available, else absent. */
   signal?: typeof EMBEDDING_DISABLED_SIGNAL;
-  /** Diagnostic reason (host keys off `signal`, not this). */
-  reason: RecallReason;
+  /** Diagnostic degrade reason; present only alongside `signal`, never on success. */
+  reason?: RecallReason;
 }
 
 export interface RecallOptions extends SearchFilters {
@@ -187,12 +195,17 @@ export async function recallSearch(
   options: RecallOptions = {},
 ): Promise<RecallResult> {
   if (embedder === null) {
-    return { hits: [], signal: EMBEDDING_DISABLED_SIGNAL, reason: "backend_disabled" };
+    return {
+      hits: [],
+      truncated: false,
+      signal: EMBEDDING_DISABLED_SIGNAL,
+      reason: "backend_disabled",
+    };
   }
 
   const trimmed = query.trim();
   if (trimmed.length === 0) {
-    return { hits: [], reason: "ok" };
+    return { hits: [], truncated: false };
   }
 
   const limit = options.limit ?? DEFAULT_RECALL_LIMIT;
@@ -223,8 +236,11 @@ export async function recallSearch(
     filterParams.push(options.observedBefore);
   }
   const hasFilter = filterClauses.length > 0;
-  // Over-fetch when filtering so post-filtering can still reach `limit` hits.
-  const k = hasFilter ? limit * RECALL_FILTER_OVERFETCH : limit;
+  // Fetch one row beyond `limit` so `truncated` can report whether the page was
+  // cut off (#565) — the same `limit + 1` probe the list tools use.
+  const fetchLimit = limit + 1;
+  // Over-fetch when filtering so post-filtering can still reach `fetchLimit` hits.
+  const k = hasFilter ? fetchLimit * RECALL_FILTER_OVERFETCH : fetchLimit;
   const postFilter = hasFilter ? ` AND ${filterClauses.join(" AND ")}` : "";
 
   const rows = sqlite
@@ -240,14 +256,18 @@ export async function recallSearch(
         ORDER BY v.distance ASC
         LIMIT ?`,
     )
-    .all(toVectorBlob(vector), k, ...filterParams, limit);
+    .all(toVectorBlob(vector), k, ...filterParams, fetchLimit);
+
+  // The probe row (if present) proves more neighbours exist beyond the page.
+  const truncated = rows.length > limit;
+  const page = truncated ? rows.slice(0, limit) : rows;
 
   // Payload suppression (retrieval-m2 / ADR-0018): default to a bounded excerpt
   // (leading N chars — there is no lexical token to centre on for a semantic
   // hit) and delegate the full body to `source.get`. `fullBody` opts back in.
   const fullBody = options.fullBody ?? false;
   const maxChars = options.maxBodyChars ?? DEFAULT_EXCERPT_CHARS;
-  const hits: SearchHit[] = rows.map((r) => {
+  const hits: SearchHit[] = page.map((r) => {
     const hit: SearchHit = {
       externalId: r.external_id,
       sourceType: r.source_type,
@@ -258,5 +278,5 @@ export async function recallSearch(
     else hit.excerpt = buildExcerpt(r.body, maxChars);
     return hit;
   });
-  return { hits, reason: "ok" };
+  return { hits, truncated };
 }
