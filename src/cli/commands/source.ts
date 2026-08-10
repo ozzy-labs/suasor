@@ -27,6 +27,7 @@
  * imported inside `execute`.
  */
 import { Command, Option } from "clipanion";
+import { resolveSince, SINCE_SYNTAX_HINT } from "../../shared/since.ts";
 import { SuasorCommand } from "../base-command.ts";
 
 export class SourceListCommand extends SuasorCommand {
@@ -47,14 +48,17 @@ export class SourceListCommand extends SuasorCommand {
       Filters narrow the set:
 
       - --type <type>             restrict to one source_type (e.g. github_issue)
-      - --since <iso>             inclusive lower bound on observed_at (>=)
-      - --until <iso>             exclusive upper bound on observed_at (<)
+      - --since <dur|iso>         inclusive lower bound on observed_at (>=):
+                                  relative (24h / 7d / 2w) or ISO date
+      - --until <dur|iso>         exclusive upper bound on observed_at (<):
+                                  relative (24h / 7d / 2w) or ISO date
       - --limit N                 max rows (default 50)
     `,
     examples: [
       ["List recent sources", "suasor source list"],
       ["Restrict to one type", "suasor source list --type github_issue"],
       ["Emit JSON", "suasor source list --json --limit 100"],
+      ["Audit the last week", "suasor source list --since 7d"],
       [
         "Audit an observed window",
         "suasor source list --since 2026-06-01T00:00:00Z --until 2026-07-01T00:00:00Z",
@@ -67,11 +71,11 @@ export class SourceListCommand extends SuasorCommand {
   });
 
   since = Option.String("--since", {
-    description: "Inclusive lower bound on observed_at (ISO 8601, >=).",
+    description: "Inclusive lower bound on observed_at (>=): relative (24h / 7d / 2w) or ISO date.",
   });
 
   until = Option.String("--until", {
-    description: "Exclusive upper bound on observed_at (ISO 8601, <).",
+    description: "Exclusive upper bound on observed_at (<): relative (24h / 7d / 2w) or ISO date.",
   });
 
   limit = Option.String("--limit", { description: "Maximum number of rows (default 50)." });
@@ -97,20 +101,43 @@ export class SourceListCommand extends SuasorCommand {
       limit = parsed;
     }
 
+    // Resolve the time filters through the shared duration/ISO parser and
+    // reject unparseable values (Issue #561): raw strings would be compared
+    // lexicographically against observed_at and silently match nothing
+    // (ADR-0007 "no silent wrong answer").
+    const now = Date.now();
+    let after: string | undefined;
+    if (this.since !== undefined) {
+      const resolved = resolveSince(this.since, now);
+      if (resolved === null) {
+        this.context.stderr.write(`error: --since must be ${SINCE_SYNTAX_HINT}\n`);
+        return 1;
+      }
+      after = resolved;
+    }
+    let before: string | undefined;
+    if (this.until !== undefined) {
+      const resolved = resolveSince(this.until, now);
+      if (resolved === null) {
+        this.context.stderr.write(`error: --until must be ${SINCE_SYNTAX_HINT}\n`);
+        return 1;
+      }
+      before = resolved;
+    }
+    const observed =
+      after !== undefined || before !== undefined
+        ? {
+            ...(after !== undefined ? { after } : {}),
+            ...(before !== undefined ? { before } : {}),
+          }
+        : undefined;
+
     const config = await loadConfig();
     const dbPath = config.storage.dbPath;
     if (dbPath === null) {
       this.context.stderr.write("error: storage.dbPath is not configured\n");
       return 1;
     }
-
-    const observed =
-      this.since !== undefined || this.until !== undefined
-        ? {
-            ...(this.since !== undefined ? { after: this.since } : {}),
-            ...(this.until !== undefined ? { before: this.until } : {}),
-          }
-        : undefined;
 
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {

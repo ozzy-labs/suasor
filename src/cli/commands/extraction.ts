@@ -199,7 +199,7 @@ export class ExtractionServeCommand extends SuasorCommand {
       markitdown CLI once per request to convert Office/PDF bytes to Markdown. All
       ML runs in the markitdown subprocess — Suasor holds no in-process parser
       (ADR-0006). Point [extraction].backend = "markitdown" at this sidecar and it
-      powers search / recall / research over document bodies (Issue #439).
+      powers search / semantic recall / find over document bodies (Issue #439).
 
       Binds to the host/port from [extraction].baseUrl by default
       (http://localhost:8929); override with --host / --port. Requires the
