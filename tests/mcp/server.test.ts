@@ -710,6 +710,76 @@ describe("MCP read surface", () => {
     expect(got.source?.body).toBe("first source");
   }, 15_000);
 
+  test("source.list returns bounded excerpts by default; fullBody opts back in (#564)", async () => {
+    const long = "rocket to mars ".repeat(50); // 750 chars — over DEFAULT_EXCERPT_CHARS
+    seedSource("gh:long", long);
+    const client = await connect();
+
+    const bounded = parseResult(
+      (await client.callTool({ name: "source.list", arguments: {} })) as never,
+    ) as { sources: { externalId: string; excerpt?: string; body?: string }[] };
+    expect(bounded.sources[0]?.body).toBeUndefined();
+    // 240 code points + the trailing ellipsis marker.
+    expect([...(bounded.sources[0]?.excerpt ?? "")].length).toBeLessThanOrEqual(241);
+
+    const capped = parseResult(
+      (await client.callTool({ name: "source.list", arguments: { maxBodyChars: 10 } })) as never,
+    ) as { sources: { excerpt?: string }[] };
+    expect([...(capped.sources[0]?.excerpt ?? "")].length).toBeLessThanOrEqual(11);
+
+    const full = parseResult(
+      (await client.callTool({ name: "source.list", arguments: { fullBody: true } })) as never,
+    ) as { sources: { excerpt?: string; body?: string }[] };
+    expect(full.sources[0]?.excerpt).toBeUndefined();
+    expect(full.sources[0]?.body).toBe(long);
+  });
+
+  test("demand.list returns bounded excerpts by default; fullBody opts back in (#564)", async () => {
+    const long = "please look at this ".repeat(50); // 1000 chars
+    store.record({
+      type: "SourceObserved",
+      externalId: "dm:long",
+      sourceType: "slack_message",
+      body: long,
+      observedAt: "2026-06-14T00:00:00.000Z",
+      fingerprint: "dm:long",
+      meta: { team: "T1", channel: "D9" },
+    });
+    const client = await connect();
+
+    const bounded = parseResult(
+      (await client.callTool({ name: "demand.list", arguments: {} })) as never,
+    ) as { demand: { externalId: string; kind: string; excerpt?: string; body?: string }[] };
+    expect(bounded.demand[0]?.kind).toBe("dm");
+    expect(bounded.demand[0]?.body).toBeUndefined();
+    expect([...(bounded.demand[0]?.excerpt ?? "")].length).toBeLessThanOrEqual(241);
+
+    const full = parseResult(
+      (await client.callTool({ name: "demand.list", arguments: { fullBody: true } })) as never,
+    ) as { demand: { excerpt?: string; body?: string }[] };
+    expect(full.demand[0]?.excerpt).toBeUndefined();
+    expect(full.demand[0]?.body).toBe(long);
+  });
+
+  test("brief projects sources / demand bodies to excerpts by default (#564)", async () => {
+    const long = "quarterly report body ".repeat(50); // 1100 chars
+    seedSource("gh:long", long);
+    const client = await connect();
+    const args = { since: "2026-01-01T00:00:00.000Z" };
+
+    const bounded = parseResult(
+      (await client.callTool({ name: "brief", arguments: args })) as never,
+    ) as { sources: { excerpt?: string; body?: string }[] };
+    expect(bounded.sources[0]?.body).toBeUndefined();
+    expect([...(bounded.sources[0]?.excerpt ?? "")].length).toBeLessThanOrEqual(241);
+
+    const full = parseResult(
+      (await client.callTool({ name: "brief", arguments: { ...args, fullBody: true } })) as never,
+    ) as { sources: { excerpt?: string; body?: string }[] };
+    expect(full.sources[0]?.excerpt).toBeUndefined();
+    expect(full.sources[0]?.body).toBe(long);
+  });
+
   test("source.get returns null source for an unknown id", async () => {
     const client = await connect();
     const res = await client.callTool({ name: "source.get", arguments: { externalId: "nope" } });

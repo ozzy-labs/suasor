@@ -1,6 +1,6 @@
 # Draft export (local files)
 
-`draft.export`（MCP write tool）は下書き（返信 / 引き継ぎ / 告知 / 計画テキスト）を**ローカルファイルに書き出す**（[ADR-0025](../adr/0025-local-draft-export.md)）。**送信しない・connector source に書き戻さない**（local-first / no-egress）。`reply-draft` / `handoff-draft` / `announcement-draft` / `external-brief` / `plan-draft` が作った下書きを、ユーザーの承認後にファイル化する用途。
+`draft.export`（MCP write tool）は下書き（返信 / 引き継ぎ / 告知 / 計画テキスト）を**ローカルファイルに書き出す**（[ADR-0025](../adr/0025-local-draft-export.md)）。**送信しない・connector source に書き戻さない**（local-first / no-egress）。`reply-draft` / `draft`（引き継ぎ・告知）/ `brief`（外向きまとめ）/ `plan-draft` が作った下書きを、ユーザーの承認後にファイル化する用途。
 
 - **HITL**: 人の承認なしに書き出さない（auto-apply なし）
 - **sandbox**: `[export].dir`（既定 `<configDir>/exports/`）配下のみ。`filename` は basename（`/`・`..`・絶対パス拒否）。衝突は連番（`note.md` → `note-1.md`）で非破壊

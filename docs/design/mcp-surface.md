@@ -113,7 +113,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 
 ### `source.list` / `source.get`
 
-- `source.list`: `sourceType?: string` / `observedAfter?: iso` / `observedBefore?: iso` / `limit?: int` → `{ "sources": [...] }`（`observed_at` DESC）。各 source は `externalId` / `sourceType` / `body` / `fingerprint` / `observedAt` / `meta`。
+- `source.list`: `sourceType?: string` / `observedAfter?: iso` / `observedBefore?: iso` / `limit?: int` / `fullBody?: bool` / `maxBodyChars?: int` → `{ "sources": [...] }`（`observed_at` DESC）。各 source は `externalId` / `sourceType` / `fingerprint` / `observedAt` / `meta` に加え、既定は上限付き `excerpt`（`search` と同じ payload 抑制・[ADR-0018](../adr/0018-knowledge-graph-traversal.md)・[#564](https://github.com/ozzy-labs/suasor/issues/564)）。`fullBody: true` で代わりに `body`（全文）、`maxBodyChars` で excerpt 長を上書き。全文は `source.get` に委譲。
 - `source.get`: `externalId: string`（min 1）→ `{ "source": {...} | null }`（本文込み、無ければ `null`）。
 
 ### `source.get`（`include`）（確定・read・#279）
@@ -126,7 +126,7 @@ source の metadata + body・**outgoing** provenance links・extraction_meta sid
 
 ### `source.history`（確定・read・#121）
 
-source の本文版を **event log から**新しい順に返す read tool（実体は `src/mcp/queries.ts` の `listSourceHistory`、`readOnlyHint: true`）。`source.get` が projection の**現本文のみ**を返すのに対し、`source.history` は append-only `events` の `SourceObserved` / `SourceBodyUpdated`（いずれも全文 `body` を保持、[ADR-0002](../adr/0002-event-sourced-architecture.md)）を `json_extract(payload,'$.externalId')` で引き、真の before/after 差分を可能にする（`doc-diff` skill が使う）。
+source の本文版を **event log から**新しい順に返す read tool（実体は `src/mcp/queries.ts` の `listSourceHistory`、`readOnlyHint: true`）。`source.get` が projection の**現本文のみ**を返すのに対し、`source.history` は append-only `events` の `SourceObserved` / `SourceBodyUpdated`（いずれも全文 `body` を保持、[ADR-0002](../adr/0002-event-sourced-architecture.md)）を `json_extract(payload,'$.externalId')` で引き、真の before/after 差分を可能にする（`source-review` skill が使う）。
 
 引数（Zod）: `externalId: string`（min 1）/ `limit?: int`（新しい順・既定 50）。
 
@@ -159,9 +159,11 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
-| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
+| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` / `fullBody?: boolean` / `maxBodyChars?: int` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
 
 `selfUserId` も config も無いと slack mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は github mention notification のみ）。
+
+各行は既定で上限付き `excerpt`（全文 `body` ではない）を返す（`search` / `source.list` と同じ payload 抑制・[ADR-0018](../adr/0018-knowledge-graph-traversal.md)・[#564](https://github.com/ozzy-labs/suasor/issues/564)）。`fullBody: true` で全文、`maxBodyChars` で excerpt 長を上書き。全文は `source.get` に委譲。
 
 **並び順**: calendar 行が**開始時刻の昇順で先頭**、続いて他 source が `observed_at` の降順。鮮度と近接は別軸であり、1 つのキーに畳むとどちらかを誤って報告する。calendar を先頭に置くのは、`limit` の打切りが「20 分後に始まる会議」を落とさないようにするため。
 
@@ -206,18 +208,18 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 
 ### `brief`（[ADR-0017](../adr/0017-brief-period-bundle.md)）
 
-期間バンドルを 1 round-trip で返す read tool（実体は `src/mcp/queries.ts` の `buildBrief`、`readOnlyHint: true`）。各 section は自然な timestamp 列で期間フィルタする（`sources`=observed / `tasks`=updated / `decisions`=recorded）。`inbox` だけは「現在 open」（期間非依存）。既定 window は直近 24h。
+期間バンドルを 1 round-trip で返す read tool（実体は `src/mcp/queries.ts` の `buildBrief`、`readOnlyHint: true`）。各 section は自然な timestamp 列で期間フィルタする（`sources`=observed / `tasks`=updated / `decisions`=recorded）。`inbox` だけは「現在 open」（期間非依存）。既定 window は直近 24h。本文を持つ section（`sources` / `demand`）の各行は既定で上限付き `excerpt`（全文 `body` ではない）を返す（`search` と同じ payload 抑制・[ADR-0018](../adr/0018-knowledge-graph-traversal.md)・[#564](https://github.com/ozzy-labs/suasor/issues/564)）。`fullBody: true` で全文、`maxBodyChars` で excerpt 長を上書き。全文は `source.get` に委譲。
 
 戻り値:
 
 ```jsonc
 {
   "window": { "since": "...", "until": "..." },
-  "sources": [/* SourceRecord */],
+  "sources": [/* SourceRecord（既定は body の代わりに上限付き excerpt・#564） */],
   "tasks": [/* TaskRecord */],
   "decisions": [/* DecisionRecord */],
   "inbox": [/* InboxRecord（state=open） */],
-  "demand": [/* DemandRecord（un-acked のみ・ADR-0041） */],
+  "demand": [/* DemandRecord（un-acked のみ・ADR-0041。既定は excerpt・#564） */],
   "truncated": {                      // section ごとの打切りフラグ（ADR-0007）
     "sources": false, "tasks": false, "decisions": false, "inbox": false, "demand": false
   },
@@ -280,13 +282,13 @@ entity 軸の時系列ビューを返す read tool（実体は `src/mcp/queries.
 
 **完全性の境界**: graph walk は `depth` と内部の graphLimit（既定 `max(limit*4, 50)`）で打ち切る。打ち切りは BFS（hop 距離）順で newest-first sort の**前**に起こるため、到達ノード数が graphLimit を超える dense な entity では「より新しいが遠い（hop が多い）」item が落ちうる。newest-first 保証は graph 到達可能な部分集合内でのみ成り立つ。疎で遠い provenance を網羅したい場合は `depth` を上げる。
 
-### `catchup` skill のバックエンド方針（レビュー D1 確定）
+### catchup（「前回以降の差分」）のバックエンド方針（レビュー D1 確定）
 
-assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）のうち、`catchup`（「前回以降の差分」「久しぶりに確認」）だけが専用 MCP tool を持たない。**専用 tool は追加しない**。`catchup` は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
+assistant skill カタログ（[ADR-0008](../adr/0008-assistant-skills.md)）のうち、catchup 挙動 —「前回以降の差分」「久しぶりに確認」。旧 `catchup` skill、[ADR-0046](../adr/0046-agent-surface-contraction.md) で `brief` に統合 — だけが専用 MCP tool を持たない。**専用 tool は追加しない**。この挙動は既存の read tool（`source.list` / `task.list` / `decision.list` / `inbox.list`）を、**host 側で保持する seen-marker（最終確認時刻）+ 各 tool の時間フィルタ**（`*After` / `*Before`）で合成して差分を組み立てる方式を既定とする。
 
 - marker は host（Claude Code 等）側に保持する。server は永続 marker を持たない（local-first / stateless read surface を保つ）。
 - 上記 4 tool が下限 inclusive の時間フィルタを備えているため、`since = last_seen` を各 `*After` に渡すだけで「前回以降の差分」を合成できる。
-- server 側に永続 marker が必要と判断された場合に限り、別 Issue で `catchup` read tool（since-marker 差分 + marker 更新）を追加する。本 Issue の scope では追加しない。
+- server 側に永続 marker が必要と判断された場合に限り、別 Issue で catchup 用 read tool（since-marker 差分 + marker 更新）を追加する。本 Issue の scope では追加しない。
 
 ## Write tools（HITL・人の承認なしに適用/送信しない）
 

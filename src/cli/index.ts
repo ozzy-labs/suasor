@@ -51,6 +51,7 @@ import {
   SkillsInfoCommand,
   SkillsInstallCommand,
   SkillsListCommand,
+  SkillsPruneCommand,
   SkillsSearchCommand,
 } from "./commands/skills.ts";
 import {
@@ -123,6 +124,7 @@ export function registeredCommandClasses(): CommandClass[] {
     SlackResolveNamesCommand,
     SkillsInstallCommand,
     SkillsListCommand,
+    SkillsPruneCommand,
     SkillsSearchCommand,
     SkillsInfoCommand,
   ] as CommandClass[];
