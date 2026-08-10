@@ -1066,10 +1066,11 @@ describe("Slack connector — thread_not_found is thread-scoped (#551)", () => {
     // dropped from the pool and C2 read as unreachable.
     expect(replyCalls).toEqual([{ channel: "C1", ts: P, oldest: R1 }]);
     expect(records.map((r) => r.externalId)).toEqual(["slack:C2:200.000000"]);
-    // The warn pinpoints the channel id and the thread ts.
-    const warn = warns.find((w) => w.includes("thread_not_found"));
+    // One aggregated warn pinpoints the channel id and the thread ts.
+    const warn = warns.find((w) => w.includes("thread cursor(s) dropped"));
     expect(warn).toBeDefined();
-    expect(warn).toContain(`C1#${P}`);
+    expect(warn).toContain(`C1#${P} (thread_not_found)`);
+    expect(warn).toContain("1 thread cursor(s) dropped");
     // No token-wide failure, no unreachable-channel noise.
     expect(warns.some((w) => w.includes("failed mid-sync"))).toBe(false);
     expect(warns.some((w) => w.includes("unreachable"))).toBe(false);
@@ -1108,7 +1109,9 @@ describe("Slack connector — thread_not_found is thread-scoped (#551)", () => {
     // The parent itself was already yielded from `history`; only its reply
     // expansion is skipped, and the rest of the window still streams.
     expect(records.map((r) => r.externalId)).toEqual([`slack:C1:${P}`, `slack:C1:${M}`]);
-    expect(warns.find((w) => w.includes("thread_not_found"))).toContain(`C1#${P}`);
+    expect(warns.find((w) => w.includes("thread cursor(s) dropped"))).toContain(
+      `C1#${P} (thread_not_found)`,
+    );
     const result = await connector.finalize?.();
     // The channel cursor advances; no `<channel>#<thread_ts>` mark is written.
     expect(JSON.parse(result?.cursor ?? "{}")).toEqual({ C1: M });

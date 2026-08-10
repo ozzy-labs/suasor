@@ -906,6 +906,10 @@ class SlackConnector implements Connector {
     // Channels this run could not reach with any candidate token: collected and
     // surfaced as one aggregated warn (ADR-0011 / ADR-0042 決定 5).
     const unreachable: { channel: string; code: string }[] = [];
+    // Active-thread cursors dropped this run because Slack no longer resolves
+    // their parent (#551): collected across channels and surfaced as one
+    // aggregated warn, the same shape as `unreachable` (ADR-0042 決定 5).
+    const goneThreads: { channel: string; threadTs: string; code: string }[] = [];
     let ingestedChannels = 0;
     let tokenWideError: unknown;
 
@@ -944,6 +948,9 @@ class SlackConnector implements Connector {
       let lastCode: string | null = null;
       for (const id of attempts) {
         const threadOut = new Map<string, string>();
+        // Per attempt, like `threadOut`: only the winning attempt's drops are
+        // reported, so a failover never double-counts the same thread.
+        const threadGone: { threadTs: string; code: string }[] = [];
         try {
           for await (const item of fetchChannelItems(
             id.client,
@@ -952,7 +959,7 @@ class SlackConnector implements Connector {
             savedThreadCursors,
             nowMs,
             threadOut,
-            (message) => ctx.onWarn?.(message),
+            threadGone,
           )) {
             // History messages and thread replies advance the same per-channel
             // cursor — the highest ts seen resumes next run. A failover retry
@@ -985,6 +992,9 @@ class SlackConnector implements Connector {
           // Persist the surviving per-thread high-water marks (ADR-0015 R1).
           for (const [threadTs, hwm] of threadOut) {
             this.cursors[threadCursorKey(channel, threadTs)] = hwm;
+          }
+          for (const { threadTs, code } of threadGone) {
+            goneThreads.push({ channel, threadTs, code });
           }
           done = true;
           break;
@@ -1037,6 +1047,19 @@ class SlackConnector implements Connector {
         `${unreachable.length} channel(s) unreachable — ${detail}; no configured token can ` +
           "read them — join/invite the bot there, or add that workspace's token " +
           "(`suasor slack auth set`)",
+      );
+    }
+
+    // One aggregated warn naming every active-thread cursor dropped because its
+    // parent no longer exists on Slack (#551). Informational, not a failure: the
+    // drop IS the recovery — the channel synced and the next run will not retry
+    // the vanished thread.
+    if (goneThreads.length > 0) {
+      const detail = goneThreads.map((t) => `${t.channel}#${t.threadTs} (${t.code})`).join(", ");
+      ctx.onWarn?.(
+        `${goneThreads.length} thread cursor(s) dropped — ${detail}; their parent message is ` +
+          "gone from Slack, so their replies can no longer be re-polled (the channel itself " +
+          "synced normally)",
       );
     }
 
@@ -1234,6 +1257,7 @@ class SlackConnector implements Connector {
  * (Issue #551): only that thread's expansion is skipped, it is left out of `out`
  * so its stale cursor is dropped rather than replayed into the same failure next
  * run, and the channel — plus every later channel on this token — keeps syncing.
+ * Each such thread is appended to `gone` for the caller's aggregated warn.
  * Anything else (auth, rate limit, network) propagates to the caller unchanged.
  */
 async function* fetchChannelItems(
@@ -1243,7 +1267,7 @@ async function* fetchChannelItems(
   savedThreadCursors: ReadonlyMap<string, string>,
   nowMs: number,
   out: Map<string, string>,
-  onWarn?: (message: string) => void,
+  gone: { threadTs: string; code: string }[],
 ): AsyncIterable<SlackMessageItem> {
   const handled = new Set<string>();
   let cursor: string | undefined;
@@ -1264,18 +1288,18 @@ async function* fetchChannelItems(
         // saved thread mark, so already-captured replies are never re-fetched.
         const replyOldest = higherTs(oldest, savedHwm);
         let hwm = higherTs(savedHwm, threadTs) ?? threadTs;
-        let gone: string | null = null;
+        let goneCode: string | null = null;
         try {
           for await (const reply of fetchThreadReplies(client, channel, threadTs, replyOldest)) {
             yield reply;
             hwm = maxTs(hwm, reply.ts);
           }
         } catch (error) {
-          gone = threadGoneCode(error);
-          if (gone === null) throw error; // token-wide: auth / rate limit / network
+          goneCode = threadGoneCode(error);
+          if (goneCode === null) throw error; // token-wide: auth / rate limit / network
         }
-        if (gone !== null) {
-          onWarn?.(threadGoneWarning(channel, threadTs, gone));
+        if (goneCode !== null) {
+          gone.push({ threadTs, code: goneCode });
           continue; // skip `out` → the stale thread cursor is dropped
         }
         // Only track a thread that is still active, so cold-start-old threads
@@ -1291,34 +1315,22 @@ async function* fetchChannelItems(
     if (handled.has(threadTs)) continue; // already re-fetched inline this run
     if (!isThreadActive(savedHwm, nowMs)) continue; // prune: drop the cursor, no call
     let hwm = savedHwm;
-    let gone: string | null = null;
+    let goneCode: string | null = null;
     try {
       for await (const reply of fetchThreadReplies(client, channel, threadTs, savedHwm)) {
         yield reply;
         hwm = maxTs(hwm, reply.ts);
       }
     } catch (error) {
-      gone = threadGoneCode(error);
-      if (gone === null) throw error; // token-wide: auth / rate limit / network
+      goneCode = threadGoneCode(error);
+      if (goneCode === null) throw error; // token-wide: auth / rate limit / network
     }
-    if (gone !== null) {
-      onWarn?.(threadGoneWarning(channel, threadTs, gone));
+    if (goneCode !== null) {
+      gone.push({ threadTs, code: goneCode });
       continue; // skip `out` → the stale thread cursor is dropped
     }
     out.set(threadTs, hwm);
   }
-}
-
-/**
- * The warn for a thread Slack no longer resolves. Names the channel id and the
- * thread `ts` so the operator can pinpoint which cursor entry was dropped, and
- * states the recovery (none needed — the drop is the fix).
- */
-function threadGoneWarning(channel: string, threadTs: string, code: string): string {
-  return (
-    `thread ${channel}#${threadTs} is gone (${code}) — skipping its replies and dropping ` +
-    "its cursor; the channel keeps syncing"
-  );
 }
 
 /**
