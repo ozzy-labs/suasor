@@ -26,6 +26,7 @@ import { connectorBundledInBinary } from "../../connectors/registry.ts";
 import type { ResourceReachabilityState } from "../../connectors/resource-probe.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import { secretEnvName } from "../../connectors/secrets.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { standaloneGate } from "../build-target.ts";
 import { ambiguousAccountMessage, resolveConnectorAccounts } from "../connector-account.ts";
 import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
@@ -49,7 +50,7 @@ async function hasConnectorSlice(connector: string): Promise<boolean> {
 }
 
 /** Base class for `<connector> auth set` — stores the connector secret in the keychain. */
-class ConnectorAuthSetCommand extends Command {
+class ConnectorAuthSetCommand extends SuasorCommand {
   static connectorName = "";
 
   token = Option.String("--token", { description: "Secret value (omit to read from stdin)." });
@@ -150,7 +151,7 @@ class ConnectorAuthSetCommand extends Command {
 }
 
 /** Base class for `<connector> auth test` — verifies the stored credential. */
-class ConnectorAuthTestCommand extends Command {
+class ConnectorAuthTestCommand extends SuasorCommand {
   static connectorName = "";
 
   json = Option.Boolean("--json", false, { description: "Emit the result as JSON." });

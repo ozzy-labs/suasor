@@ -12,6 +12,7 @@
  * lazily inside `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
 /** `<n><unit>` relative-duration syntax for `--since` (h/d/w). */
 const RELATIVE_SINCE = /^(\d+)([hdw])$/;
@@ -34,7 +35,7 @@ export function resolveSince(since: string, nowMs: number): string | null {
   return new Date(parsed).toISOString();
 }
 
-export class BriefCommand extends Command {
+export class BriefCommand extends SuasorCommand {
   static override paths = [["brief"]];
 
   static override usage = Command.Usage({

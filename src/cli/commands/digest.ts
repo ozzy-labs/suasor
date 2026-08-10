@@ -13,8 +13,9 @@
  * lazily inside `execute` to keep cold start light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class DigestCommand extends Command {
+export class DigestCommand extends SuasorCommand {
   static override paths = [["digest"]];
 
   static override usage = Command.Usage({

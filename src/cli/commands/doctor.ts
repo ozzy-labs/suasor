@@ -18,6 +18,7 @@
 import { existsSync } from "node:fs";
 import { Command, Option } from "clipanion";
 import { connectorNames, connectorSecretNames } from "../../connectors/registry.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
 /** Severity of a single check (worst across checks sets the exit code). */
@@ -47,7 +48,7 @@ const PROJECTION_TABLES = [
   "slack_teams",
 ];
 
-export class DoctorCommand extends Command {
+export class DoctorCommand extends SuasorCommand {
   static override paths = [["doctor"]];
 
   static override usage = Command.Usage({

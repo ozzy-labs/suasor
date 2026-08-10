@@ -27,8 +27,9 @@
  * imported inside `execute`.
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class SourceListCommand extends Command {
+export class SourceListCommand extends SuasorCommand {
   static override paths = [["source", "list"]];
 
   static override usage = Command.Usage({
@@ -147,7 +148,7 @@ export class SourceListCommand extends Command {
   }
 }
 
-export class SourceForgetCommand extends Command {
+export class SourceForgetCommand extends SuasorCommand {
   static override paths = [["source", "forget"]];
 
   static override usage = Command.Usage({
@@ -315,7 +316,7 @@ export class SourceForgetCommand extends Command {
   }
 }
 
-export class SourceUnforgetCommand extends Command {
+export class SourceUnforgetCommand extends SuasorCommand {
   static override paths = [["source", "unforget"]];
 
   static override usage = Command.Usage({

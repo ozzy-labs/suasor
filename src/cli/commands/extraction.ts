@@ -14,9 +14,10 @@
  * `execute` (NFR-PRF-1).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
-export class ExtractionStatusCommand extends Command {
+export class ExtractionStatusCommand extends SuasorCommand {
   static override paths = [["extraction", "status"]];
 
   static override usage = Command.Usage({
@@ -94,7 +95,7 @@ export class ExtractionStatusCommand extends Command {
   }
 }
 
-export class ExtractionListPendingCommand extends Command {
+export class ExtractionListPendingCommand extends SuasorCommand {
   static override paths = [["extraction", "list-pending"]];
 
   static override usage = Command.Usage({
@@ -186,7 +187,7 @@ export class ExtractionListPendingCommand extends Command {
   }
 }
 
-export class ExtractionServeCommand extends Command {
+export class ExtractionServeCommand extends SuasorCommand {
   static override paths = [["extraction", "serve"]];
 
   static override usage = Command.Usage({

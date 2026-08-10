@@ -8,7 +8,10 @@ export class ConfigError extends Error {
   readonly issues: string[];
 
   constructor(message: string, issues: string[] = []) {
-    super(issues.length > 0 ? `${message}\n  ${issues.join("\n  ")}` : message);
-    this.issues = issues;
+    // Zod can report the same path/message pair more than once (e.g. via
+    // unions); dedupe so the rendered error lists each finding once (#560).
+    const unique = [...new Set(issues)];
+    super(unique.length > 0 ? `${message}\n  ${unique.join("\n  ")}` : message);
+    this.issues = unique;
   }
 }

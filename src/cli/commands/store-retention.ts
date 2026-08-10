@@ -12,9 +12,10 @@
  */
 import { existsSync } from "node:fs";
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 import { docsUrl } from "../doc-ref.ts";
 
-export class StoreRetentionCommand extends Command {
+export class StoreRetentionCommand extends SuasorCommand {
   static override paths = [["store", "retention"]];
 
   static override usage = Command.Usage({

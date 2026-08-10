@@ -22,6 +22,7 @@ import { Command, Option } from "clipanion";
 // and keep the lazy-import discipline (NFR-PRF-1) intact.
 import type { KeychainBackend } from "../../connectors/secrets.ts";
 import type { ConversationType, SlackConversation } from "../../connectors/slack/conversations.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { isInteractiveStdin, readSecretLine } from "../read-secret.ts";
 
 const SLACK = "slack";
@@ -43,7 +44,7 @@ export function formatConversationRow(
 }
 
 /** `slack auth set` — replace the Slack token pool in the OS keychain. */
-export class SlackAuthSetCommand extends Command {
+export class SlackAuthSetCommand extends SuasorCommand {
   static override paths = [[SLACK, "auth", "set"]];
 
   static override usage = Command.Usage({
@@ -105,7 +106,7 @@ export class SlackAuthSetCommand extends Command {
 }
 
 /** `slack auth test` — verify every pool token and report scopes + readiness. */
-export class SlackAuthTestCommand extends Command {
+export class SlackAuthTestCommand extends SuasorCommand {
   static override paths = [[SLACK, "auth", "test"]];
 
   static override usage = Command.Usage({
@@ -212,7 +213,7 @@ interface SweepTeam {
 }
 
 /** `slack conversations` — list conversations the pool can see + a config block. */
-export class SlackConversationsCommand extends Command {
+export class SlackConversationsCommand extends SuasorCommand {
   static override paths = [[SLACK, "conversations"]];
 
   static override usage = Command.Usage({
@@ -743,7 +744,7 @@ export class SlackConversationsCommand extends Command {
 }
 
 /** `slack status` — show the saved resume cursor (per channel). */
-export class SlackStatusCommand extends Command {
+export class SlackStatusCommand extends SuasorCommand {
   static override paths = [[SLACK, "status"]];
 
   static override usage = Command.Usage({
@@ -815,7 +816,7 @@ export class SlackStatusCommand extends Command {
 }
 
 /** `slack cursor reset` — clear saved cursors so channels re-fetch from the floor. */
-export class SlackCursorResetCommand extends Command {
+export class SlackCursorResetCommand extends SuasorCommand {
   static override paths = [[SLACK, "cursor", "reset"]];
 
   static override usage = Command.Usage({
@@ -932,7 +933,7 @@ export class SlackCursorResetCommand extends Command {
 }
 
 /** `slack cursor backfill` — lower a channel's cursor to re-fetch older history. */
-export class SlackCursorBackfillCommand extends Command {
+export class SlackCursorBackfillCommand extends SuasorCommand {
   static override paths = [[SLACK, "cursor", "backfill"]];
 
   static override usage = Command.Usage({
@@ -1051,7 +1052,7 @@ export class SlackCursorBackfillCommand extends Command {
  * uses — appending `SlackChannelObserved` / `PersonIdentityObserved` so the
  * projections enrich last-write-wins. Read-of-Slack only (ADR-0003); no egress.
  */
-export class SlackResolveNamesCommand extends Command {
+export class SlackResolveNamesCommand extends SuasorCommand {
   static override paths = [[SLACK, "resolve-names"]];
 
   static override usage = Command.Usage({
