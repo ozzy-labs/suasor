@@ -50,7 +50,7 @@ export function detectInvocationChannel(
   execPath: string,
   env: Readonly<Record<string, string | undefined>> = {},
 ): InvocationChannel {
-  if (env["SUASOR_CHANNEL"] === "docker" || env["SUASOR_CONFIG_DIR"] === "/data") {
+  if (env.SUASOR_CHANNEL === "docker" || env.SUASOR_CONFIG_DIR === "/data") {
     return "docker";
   }
   const entry = argv[1] ?? "";
