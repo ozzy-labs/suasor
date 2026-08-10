@@ -67,8 +67,9 @@
     "@hono/node-server": "^2.0.5",
     "axios": "^1.18.1",
     "body-parser": "^2.3.0",
-    "fast-uri": "^3.1.4",
+    "fast-uri": "^3.1.5",
     "hono": "^4.12.27",
+    "ip-address": "^10.3.1",
     "uuid": "^14.0.0"
   }
 }
