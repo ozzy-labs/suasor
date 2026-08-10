@@ -12,7 +12,7 @@ the simplest option if you don't already run Bun:
 | You... | Use | Runtime on the host | Connectors | Secrets | Assistant skills |
 | --- | --- | --- | --- | --- | --- |
 | just want it to run / have no JS toolchain | **Standalone binary** | none (Bun compiled in) | GitHub + local files only | env vars only | **all 22, bundled** |
-| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | keychain or env | all 22 (needs a mount, below) |
+| want local embedding with zero egress | **Docker (+Ollama)** | none (container only) | all | env vars only (no Secret Service in the container) | all 22 (needs a mount, below) |
 | already use Bun | **npm** (`bunx`) | Bun ≥ 1.2 | all | keychain or env | all 22 |
 
 The binary trades connector breadth for zero setup — the capability columns are
@@ -72,6 +72,7 @@ keyring failure):
 | `skills install` / `skills list` / `skills search` / `skills info` | **available** (catalog compiled in, #445) | — |
 | `<connector> sync` for slack / ms-graph / google / box / web | unavailable (SDK external) | npm / Docker |
 | `<connector> auth set` (all connectors) | unavailable (keychain external) | set `SUASOR_CONNECTOR_<NAME>_<SECRET>` directly |
+| `onboard` | keychain step unavailable; the menu offers only the bundled connectors | `--skip-auth` + `SUASOR_CONNECTOR_<NAME>_<SECRET>` |
 | `<connector> auth test` for ms-graph / google / box | unavailable (SDK external) | npm / Docker |
 | `github sync` / `github auth test`, `local sync` | **available** | env-override secret for `github` |
 | `suasor sync` (bulk) | runs the bundled connectors; skips the external ones with a warning | npm / Docker for the rest |
@@ -95,6 +96,12 @@ docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard
 ```
 
 - Config + DB live under `/data` (`SUASOR_CONFIG_DIR=/data`); mount a volume to persist.
+- **Secrets are env-only in the container.** A headless container has no OS
+  keychain (Secret Service), so `auth set` and the wizard's keychain step cannot
+  store secrets there — pass each one as an env override instead
+  (`-e SUASOR_CONNECTOR_<NAME>_<SECRET>=…`, e.g. `SUASOR_CONNECTOR_GITHUB_TOKEN`),
+  and run the wizard with `--skip-auth`. `suasor doctor` reports the missing
+  keychain explicitly.
 - `onboard` detects the container (`SUASOR_CHANNEL=docker`, baked into the image)
   and renders the **host-side** `docker run` forms in its MCP / scheduler
   templates (Issue #558) — paste them on the host; a container crontab dies with
