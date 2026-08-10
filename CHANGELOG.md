@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/ozzy-labs/suasor/compare/v0.4.0...v0.4.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **deps:** override fast-uri and ip-address to patched versions ([#553](https://github.com/ozzy-labs/suasor/issues/553)) ([ae7a66f](https://github.com/ozzy-labs/suasor/commit/ae7a66f6a402de2f6eac00416451e199531829d0))
+* **slack:** handle thread_not_found per thread instead of failing the token ([#554](https://github.com/ozzy-labs/suasor/issues/554)) ([53a0ab8](https://github.com/ozzy-labs/suasor/commit/53a0ab82a7d776a1fa3db4db70cf2ae7d4d53a31))
+
 ## [0.4.0](https://github.com/ozzy-labs/suasor/compare/v0.3.0...v0.4.0) (2026-07-26)
 
 
