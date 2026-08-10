@@ -23,9 +23,10 @@ import {
   type DiscoveryScope,
   discoveryConnectorNames,
 } from "../../connectors/discovery-specs.ts";
+import { SuasorCommand } from "../base-command.ts";
 
 /** Base class for `<connector> <verb>` — enumerates ids + prints a config block. */
-class ConnectorDiscoveryCommand extends Command {
+class ConnectorDiscoveryCommand extends SuasorCommand {
   static connectorName = "";
   static discoveryVerb = "";
 

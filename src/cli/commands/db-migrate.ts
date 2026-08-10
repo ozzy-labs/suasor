@@ -9,8 +9,9 @@
  * light (NFR-PRF-1, docs/design/cli.md).
  */
 import { Command, Option } from "clipanion";
+import { SuasorCommand } from "../base-command.ts";
 
-export class DbMigrateCommand extends Command {
+export class DbMigrateCommand extends SuasorCommand {
   static override paths = [["db", "migrate"]];
 
   static override usage = Command.Usage({

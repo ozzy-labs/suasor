@@ -13,8 +13,9 @@
  */
 import { Command, Option } from "clipanion";
 import { resolveSince, SINCE_SYNTAX_HINT } from "../../shared/since.ts";
+import { SuasorCommand } from "../base-command.ts";
 
-export class BriefCommand extends Command {
+export class BriefCommand extends SuasorCommand {
   static override paths = [["brief"]];
 
   static override usage = Command.Usage({

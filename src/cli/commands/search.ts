@@ -8,8 +8,9 @@
  */
 import { Command, Option } from "clipanion";
 import { resolveSince, SINCE_SYNTAX_HINT } from "../../shared/since.ts";
+import { SuasorCommand } from "../base-command.ts";
 
-export class SearchCommand extends Command {
+export class SearchCommand extends SuasorCommand {
   static override paths = [["search"]];
 
   static override usage = Command.Usage({

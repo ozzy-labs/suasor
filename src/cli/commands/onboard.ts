@@ -26,6 +26,7 @@ import { authConnectorNames } from "../../connectors/auth-specs.ts";
 import type { AccountSlice } from "../../connectors/multi-account.ts";
 import { connectorNames } from "../../connectors/registry.ts";
 import type { KeychainBackend } from "../../connectors/secrets.ts";
+import { SuasorCommand } from "../base-command.ts";
 import { noPerAccountConfigMessage } from "../connector-account.ts";
 import { docsUrl } from "../doc-ref.ts";
 import { loadOnboardBridge, onboardBridgeNames } from "../onboard/bridges.ts";
@@ -181,7 +182,7 @@ interface OnboardReport {
   embeddings: EmbeddingRecap | null;
 }
 
-export class OnboardCommand extends Command {
+export class OnboardCommand extends SuasorCommand {
   static override paths = [["onboard"]];
 
   static override usage = Command.Usage({
