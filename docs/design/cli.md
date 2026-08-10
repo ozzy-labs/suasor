@@ -35,11 +35,11 @@ suasor embeddings rebuild [--full] [--json] [--no-progress]  # 現行 model と�
 suasor embeddings drain [--json] [--no-progress]  # pending（ベクトル未生成）の catch-up 再埋め込み
 suasor embeddings list-failed [--limit N] [--json]  # 現行 model ベクトルを欠く source の drilldown（pending / stale）
 suasor embeddings find-duplicates [--threshold T] [--json] [--no-progress]  # cosine 類似度が閾値超の near-dup ペア列挙
-suasor search [--limit N] [--source-type T] [--observed-after ISO] [--observed-before ISO] [--full-body] [--max-body-chars N] [--json] <query>  # FTS 検索
-suasor source list [--type T] [--limit N] [--since ISO] [--until ISO] [--json]  # 取り込み済み source の監査一覧（本文・secret 非表示・ADR-0026）
+suasor search [--limit N] [--source-type T] [--since D|ISO] [--until D|ISO] [--full-body] [--max-body-chars N] [--json] <query>  # FTS 検索（--observed-after / --observed-before は --since / --until の alias）
+suasor source list [--type T] [--limit N] [--since D|ISO] [--until D|ISO] [--json]  # 取り込み済み source の監査一覧（本文・secret 非表示・ADR-0026）
 suasor source forget <externalId> [--reason R] [--cascade] [--yes]  # source をローカル purge（本文 redaction + projection 削除・破壊的・--yes で適用・--cascade で派生 content も redact・ADR-0026）
 suasor source unforget <externalId>   # forget の tombstone を解除し再取り込みを許可（redact 済み本文は復元しない・冪等・ADR-0026 R1）
-suasor brief [--since D] [--until ISO] [--limit N] [--json]  # 期間ダイジェスト（brief バンドル）を stdout 出力
+suasor brief [--since D|ISO] [--until D|ISO] [--limit N] [--json]  # 期間ダイジェスト（brief バンドル）を stdout 出力
 suasor digest [--job N] [--dry-run] [--json]  # proactive push lane：構成済み job の digest をチャネルへ送る（cron one-shot・ADR-0040）
 suasor mcp serve                       # MCP server（stdio）起動（read + HITL write tools）
 suasor mcp tools [--json]              # MCP 登録ツールを server 起動せず一覧（name / read·write / 概要）
@@ -79,21 +79,21 @@ suasor --version                       # バージョン出力
 | `db migrate` | `--vec` / `--no-vec` | true | sqlite-vec の vec0 substrate を作る／作らない |
 | `search` | `--limit N` | 20 | 返す hit の最大数（正の整数。非正値は error） |
 | `search` | `--source-type <type>` | （任意） | `source_type` 完全一致で絞る（例: `github_issue`） |
-| `search` | `--observed-after <iso>` | （任意） | `observed_at` 下限（ISO 8601、inclusive `>=`） |
-| `search` | `--observed-before <iso>` | （任意） | `observed_at` 上限（ISO 8601、exclusive `<`） |
+| `search` | `--since <dur\|iso>` | （任意） | `observed_at` 下限（inclusive `>=`）。相対（`24h` / `7d` / `2w`）または ISO date。不正値は error（#561）。alias: `--observed-after` |
+| `search` | `--until <dur\|iso>` | （任意） | `observed_at` 上限（exclusive `<`）。相対（`24h` / `7d` / `2w`）または ISO date。不正値は error（#561）。alias: `--observed-before` |
 | `search` | `--full-body` | false | excerpt ではなく hit ごとの全文 `body` を返す（既定は上限付き excerpt・retrieval-m2） |
 | `search` | `--max-body-chars <N>` | 240 | excerpt の最大文字数（正の整数。非正値は error） |
 | `search` | `--json` | false | 人間可読リストの代わりに `SearchResult`（hits + strategy + totalHits / truncated / analyzedQuery）を JSON で出力 |
 | `source list` | `--type <type>` | （任意） | `source_type` 完全一致で絞る（例: `github_issue`） |
-| `source list` | `--since <iso>` | （任意） | `observed_at` 下限（ISO 8601、inclusive `>=`） |
-| `source list` | `--until <iso>` | （任意） | `observed_at` 上限（ISO 8601、exclusive `<`） |
+| `source list` | `--since <dur\|iso>` | （任意） | `observed_at` 下限（inclusive `>=`）。相対（`24h` / `7d` / `2w`）または ISO date。不正値は error（#561） |
+| `source list` | `--until <dur\|iso>` | （任意） | `observed_at` 上限（exclusive `<`）。相対（`24h` / `7d` / `2w`）または ISO date。不正値は error（#561） |
 | `source list` | `--limit N` | 50 | 返す行の最大数（正の整数。非正値は error） |
 | `source list` | `--json` | false | 人間可読リストの代わりに `{externalId, sourceType, observedAt}[]` を JSON で出力（本文は出さない・NFR-PRV-4） |
 | `source forget` | `--reason R` | （任意） | 監査イベント（`SourceForgotten`）に記録する人間可読の理由 |
 | `source forget` | `--cascade` | false | 派生 entity（task/decision title・rationale・reply draft 本文・commitment title・proposal summary）の引用文も redact（ADR-0026 R1-2）。省略時は派生を開示するのみ |
 | `source forget` | `--yes` | false | 破壊的 purge を適用。省略時は対象を preview のみ（適用なし・ADR-0004 HITL） |
-| `brief` | `--since D` | `24h` | 期間下限。相対（`24h` / `7d` / `2w`）または ISO date。下限 inclusive |
-| `brief` | `--until ISO` | now | 期間上限（exclusive）、ISO date/datetime |
+| `brief` | `--since <dur\|iso>` | `24h` | 期間下限。相対（`24h` / `7d` / `2w`）または ISO date。下限 inclusive |
+| `brief` | `--until <dur\|iso>` | now | 期間上限（exclusive）。相対（`24h` / `7d` / `2w`）または ISO date |
 | `brief` | `--limit N` | 50 | セクションごとの最大行数（正の整数。非正値は error）。打切りが起きた section は人間可読出力に `[⚠ truncated: ...]` を付記し、`--json` はバンドルの `truncated` フラグで示す（ADR-0007「no silent wrong answer」） |
 | `brief` | `--json` | false | 人間可読サマリの代わりに `Brief` バンドル全体を JSON で出力 |
 | `digest` | `--job N` | 全 job | 実行する `[digest.jobs]` を名前で 1 件に絞る（未知名は error） |
@@ -176,7 +176,7 @@ suasor --version                       # バージョン出力
 | `slack cursor reset` | `--all` | false | 全 channel を reset |
 | `slack cursor reset` | `--yes` | false | 実適用（無指定は preview のみ） |
 | `slack cursor backfill` | `--channel C1` | （必須） | 対象 channel id。`--since` と併せて必須（未指定は error）（#57） |
-| `slack cursor backfill` | `--since 180d` | （必須） | 下げ先 floor（過去）。相対（`30d` / `4w`）または ISO date。`--channel` と併せて必須 |
+| `slack cursor backfill` | `--since 180d` | （必須） | 下げ先 floor（過去）。相対（`12h` / `30d` / `4w`）または ISO date。`--channel` と併せて必須 |
 | `slack cursor backfill` | `--yes` | false | 実適用（無指定は preview のみ） |
 | `slack resolve-names` | `--force` | false | 既に名前がある id も再解決（既定は skip、[ADR-0037](../adr/0037-slack-name-enrichment.md) §7） |
 | `slack resolve-names` | `--no-progress` | false | 進捗インジケータを無効化（stderr が非 TTY のときは自動 off） |
@@ -198,7 +198,7 @@ suasor --version                       # バージョン出力
 - `search <query>` は FTS-first（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)）。trigram FTS5 を既定経路とし、3-gram に満たない短クエリ（日本語の 1–2 文字等）は LIKE substring fallback に切り替わる（[retrieval](retrieval.md)）。サービス本体は `src/retrieval/`
   - **透明性（ADR-0007「no silent wrong answer」）**: 人間向け出力は使われた strategy を併記（`3 result(s) [fts]:` / `No results [fts].`）し、`--limit` で打ち切られた場合は `3 of 12 result(s) [fts]:` と総数を示す。`--json` は `totalHits` / `truncated` / `analyzedQuery`（トークン化結果）を加えて返し、「打ち切り」と「完全」をエージェントが区別できる
   - **クエリはリテラル**: FTS5 演算子（`AND`/`OR`/`NOT`・`*`・`""`・`()`・`NEAR`）は解釈されず、各トークンをそのまま検索する（インジェクション・構文エラー防止、[retrieval](retrieval.md)）
-  - **フィルタ**: `--source-type` / `--observed-after` / `--observed-before` は FTS / 短クエリ fallback の両経路に同一適用（ランキング不変、候補集合を絞るのみ・#142）
+  - **フィルタ**: `--source-type` / `--since` / `--until`（`--observed-after` / `--observed-before` は alias・#561）は FTS / 短クエリ fallback の両経路に同一適用（ランキング不変、候補集合を絞るのみ・#142）
   - **短クエリ fallback（retrieval-2）**: 複数短トークン（例: 「予算 承認」）は per-token AND の `LIKE '%token%'` に分割して検索し、body 中の出現回数合計でランクする（[retrieval](retrieval.md)）
   - **payload（retrieval-m2 / [ADR-0018](../adr/0018-knowledge-graph-traversal.md)）**: 既定は hit ごとの上限付き excerpt（240 文字）を返し、全文は `source.get` / `source list` に委譲する。`--full-body` で全文 `body`、`--max-body-chars N` で excerpt 長を上書き
 - `brief` は `brief` MCP tool（[ADR-0017](../adr/0017-brief-period-bundle.md)）と同じ `buildBrief` バンドル（tasks/decisions/sources/demand + open inbox）を **非対話に stdout 出力**する read CLI。対話エージェント不在の **定期実行**（cron / CI、knowledge `ai/practice` の「AI エージェント定期実行」）で日次/週次ダイジェストを出す用途。要約はプロセス外（`--json` を外部 summarizer にパイプ、ML 委譲 [ADR-0006](../adr/0006-ml-delegation.md)）。`--since` は相対（`24h`/`7d`/`2w`）または ISO、Slack demand の `selfUserIds` は `[connectors.slack]` config から解決する。サービス本体は `src/cli/commands/brief.ts`（query は `src/mcp/queries.ts` の `buildBrief` を流用）

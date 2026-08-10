@@ -952,7 +952,9 @@ export class SlackCursorBackfillCommand extends Command {
   });
 
   channel = Option.String("--channel", { description: "Channel id to backfill." });
-  since = Option.String("--since", { description: "Floor to lower to (30d / 4w / 2026-01-01)." });
+  since = Option.String("--since", {
+    description: "Floor to lower to (12h / 30d / 4w / 2026-01-01).",
+  });
   yes = Option.Boolean("--yes", false, {
     description: "Apply the backfill (without it, preview only).",
   });
@@ -969,7 +971,7 @@ export class SlackCursorBackfillCommand extends Command {
     const floorTs = parseSinceToTs(this.since, Date.now());
     if (floorTs === null) {
       this.context.stderr.write(
-        `error: invalid --since: ${this.since} (use 30d / 4w / 2026-01-01)\n`,
+        `error: invalid --since: ${this.since} (use 12h / 30d / 4w / 2026-01-01)\n`,
       );
       return 1;
     }
