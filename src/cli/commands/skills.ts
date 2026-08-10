@@ -151,8 +151,10 @@ export class SkillsPruneCommand extends Command {
 
       Only mirrors suasor demonstrably installed are touched: names recorded in
       the host dir's .suasor-skills.json stamp, plus the known retired names.
-      Ecosystem dev skills (@ozzylabs/skills) and any other foreign skill dirs
-      are never candidates.
+      Ecosystem dev skills (@ozzylabs/skills) and other foreign skill dirs are
+      never candidates — except a hand-placed skill reusing a known retired
+      name, which is indistinguishable from an unstamped old install; check
+      with --dry-run first if that might apply.
     `,
     examples: [
       ["Remove orphaned mirrors (user scope)", "suasor skills prune"],

@@ -275,8 +275,9 @@ export interface PruneResult {
  * the candidates without deleting anything.
  */
 export function pruneSkills(options: InstallOptions = {}): PruneResult[] {
+  const baseDir = options.baseDir ?? process.cwd();
   const dryRun = options.dryRun ?? false;
-  return orphanStatuses(options).map((orphan) => {
+  const results = orphanStatuses(options).map((orphan) => {
     if (!dryRun) rmSync(dirname(orphan.mirrorPath), { recursive: true, force: true });
     return {
       name: orphan.name,
@@ -285,6 +286,20 @@ export function pruneSkills(options: InstallOptions = {}): PruneResult[] {
       removed: !dryRun,
     };
   });
+  // Drop the pruned names from each host stamp's ownership roster. A stale
+  // roster would keep claiming names suasor no longer has anything on disk
+  // for — and if the user later hand-placed their own skill under such a
+  // name, the next prune would delete content suasor never wrote.
+  if (!dryRun) {
+    for (const host of new Set(results.map((r) => r.host))) {
+      const stamp = readStamp(baseDir, host);
+      if (stamp?.skills === undefined) continue;
+      const prunedHere = new Set(results.filter((r) => r.host === host).map((r) => r.name));
+      const skills = stamp.skills.filter((name) => !prunedHere.has(name));
+      writeFileSync(stampPath(baseDir, host), `${JSON.stringify({ ...stamp, skills }, null, 2)}\n`);
+    }
+  }
+  return results;
 }
 
 /**

@@ -23,7 +23,7 @@ suasor skills prune --dry-run          # 削除対象を確認するだけ
 
 展開は冪等。内容一致は `unchanged`・欠落は `created`・差分は SSOT 内容で `updated`。`suasor init` は本コマンドを案内するのみで自動展開はしない。
 
-**install は上書きするだけで削除はしない**。catalog から消えた・改名された skill（[ADR-0046](../adr/0046-agent-surface-contraction.md) の収縮など）の mirror はアップグレード後も残り、現行 skill とトリガが衝突したり、存在しない MCP tool を指示したりする（[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）。この残骸は `skills list` が `orphan` として報告し、install 実行時にも stderr へ 1 行警告する。削除は opt-in の `suasor skills prune` で行う（`--dry-run` で削除対象だけ確認できる）。**対象になるのは suasor が書いたと証明できる mirror のみ** — stamp に記録された名前と既知の退役名だけを見るため、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills` の drive / commit 等）や手置きの skill には決して触れない。
+**install は上書きするだけで削除はしない**。catalog から消えた・改名された skill（[ADR-0046](../adr/0046-agent-surface-contraction.md) の収縮など）の mirror はアップグレード後も残り、現行 skill とトリガが衝突したり、存在しない MCP tool を指示したりする（[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）。この残骸は `skills list` が `orphan` として報告し、install 実行時にも stderr へ 1 行警告する。削除は opt-in の `suasor skills prune` で行う（`--dry-run` で削除対象だけ確認できる）。**対象になるのは suasor が書いたと証明できる mirror のみ** — stamp に記録された名前と既知の退役名だけを見るため、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills` の drive / commit 等）や手置きの skill には触れない。唯一の例外は**既知の退役名と同名の手置き skill**（例: 自作の `research`）で、stamp の無い旧 install と区別できないため候補に載る — 消したくない同名 skill がある場合は `--dry-run` で対象を確認してから実行する。
 
 install 時、展開先 skill ディレクトリの直下に `.suasor-skills.json`（展開した suasor の version・時刻・書き込んだ skill 名の一覧）を残す。mirror 自体は SSOT とバイト一致を保つ必要がある（drift 検出）ため、stamp は mirror の**外**に置く。version が現在の suasor と食い違うと `suasor skills list` と `suasor mcp serve` の起動時に stderr へ 1 行だけ再 install を促す（`list` の結果自体は汚さない）。skill 名の一覧は orphan 検出の所有権記録で、将来 catalog から skill が消えたときに「suasor が入れたが今は無い」を機械的に判定するために使う。
 

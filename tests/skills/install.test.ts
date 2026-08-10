@@ -223,6 +223,23 @@ describe("orphanStatuses / pruneSkills (#556)", () => {
     expect(orphanStatuses({ baseDir, scope: "claude", skills: contracted })).toEqual([]);
   });
 
+  test("pruneSkills drops pruned names from the stamp roster so a later hand-placed dir is safe", () => {
+    // v1 installs both fixture skills; v2 drops 'next-actions' (not a retired
+    // name — the stamp roster is the only ownership evidence).
+    installSkills({ baseDir, scope: "claude", skills: bundled(), version: "1.0.0" });
+    const contracted = bundled().filter((s) => s.name === "personal-brief");
+    installSkills({ baseDir, scope: "claude", skills: contracted, version: "2.0.0" });
+    pruneSkills({ baseDir, scope: "claude", skills: contracted });
+
+    // The roster no longer claims the pruned name...
+    expect(readStamp(baseDir, "claude")?.skills).toEqual(["personal-brief"]);
+    // ...so a user skill later hand-placed under that name is never a candidate.
+    const handPlaced = plantMirror("claude", "next-actions", "# my own skill\n");
+    expect(orphanStatuses({ baseDir, scope: "claude", skills: contracted })).toEqual([]);
+    expect(pruneSkills({ baseDir, scope: "claude", skills: contracted })).toEqual([]);
+    expect(existsSync(handPlaced)).toBe(true);
+  });
+
   test("pruneSkills removes the orphan mirror dir; dryRun only reports", () => {
     installSkills({ baseDir, skills: bundled() });
     const claudeMirror = plantMirror("claude", "weekly-review");

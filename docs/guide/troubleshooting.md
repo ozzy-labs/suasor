@@ -50,7 +50,7 @@ suasor skills prune --dry-run   # 削除対象の確認（何も消さない）
 suasor skills prune             # orphan mirror を削除（.claude/skills/ と .agents/skills/ の両方）
 ```
 
-prune が消すのは suasor が書いたと証明できる mirror（stamp 記録済みの名前 + 既知の退役名）だけで、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills`）や手置きの skill には触れない。`--project` / `--host <dir>` でプロジェクトローカル install も同様に掃除できる。
+prune が消すのは suasor が書いたと証明できる mirror（stamp 記録済みの名前 + 既知の退役名）だけで、同じディレクトリに同居するエコシステム dev skill（`@ozzylabs/skills`）や手置きの skill には触れない。ただし**既知の退役名と同名の手置き skill** は stamp の無い旧 install と区別できず候補に載るため、心当たりがある場合は `--dry-run` で対象を確認してから実行する。`--project` / `--host <dir>` でプロジェクトローカル install も同様に掃除できる。
 
 ## Every command fails right after an upgrade (`invalid connector configuration`)
 
