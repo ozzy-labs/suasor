@@ -113,7 +113,7 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 
 ### `source.list` / `source.get`
 
-- `source.list`: `sourceType?: string` / `observedAfter?: iso` / `observedBefore?: iso` / `limit?: int` → `{ "sources": [...] }`（`observed_at` DESC）。各 source は `externalId` / `sourceType` / `body` / `fingerprint` / `observedAt` / `meta`。
+- `source.list`: `sourceType?: string` / `observedAfter?: iso` / `observedBefore?: iso` / `limit?: int` / `fullBody?: bool` / `maxBodyChars?: int` → `{ "sources": [...] }`（`observed_at` DESC）。各 source は `externalId` / `sourceType` / `fingerprint` / `observedAt` / `meta` に加え、既定は上限付き `excerpt`（`search` と同じ payload 抑制・[ADR-0018](../adr/0018-knowledge-graph-traversal.md)・[#564](https://github.com/ozzy-labs/suasor/issues/564)）。`fullBody: true` で代わりに `body`（全文）、`maxBodyChars` で excerpt 長を上書き。全文は `source.get` に委譲。
 - `source.get`: `externalId: string`（min 1）→ `{ "source": {...} | null }`（本文込み、無ければ `null`）。
 
 ### `source.get`（`include`）（確定・read・#279）
@@ -159,9 +159,11 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
-| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
+| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` / `fullBody?: boolean` / `maxBodyChars?: int` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
 
 `selfUserId` も config も無いと slack mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は github mention notification のみ）。
+
+各行は既定で上限付き `excerpt`（全文 `body` ではない）を返す（`search` / `source.list` と同じ payload 抑制・[ADR-0018](../adr/0018-knowledge-graph-traversal.md)・[#564](https://github.com/ozzy-labs/suasor/issues/564)）。`fullBody: true` で全文、`maxBodyChars` で excerpt 長を上書き。全文は `source.get` に委譲。
 
 **並び順**: calendar 行が**開始時刻の昇順で先頭**、続いて他 source が `observed_at` の降順。鮮度と近接は別軸であり、1 つのキーに畳むとどちらかを誤って報告する。calendar を先頭に置くのは、`limit` の打切りが「20 分後に始まる会議」を落とさないようにするため。
 
@@ -206,18 +208,18 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 
 ### `brief`（[ADR-0017](../adr/0017-brief-period-bundle.md)）
 
-期間バンドルを 1 round-trip で返す read tool（実体は `src/mcp/queries.ts` の `buildBrief`、`readOnlyHint: true`）。各 section は自然な timestamp 列で期間フィルタする（`sources`=observed / `tasks`=updated / `decisions`=recorded）。`inbox` だけは「現在 open」（期間非依存）。既定 window は直近 24h。
+期間バンドルを 1 round-trip で返す read tool（実体は `src/mcp/queries.ts` の `buildBrief`、`readOnlyHint: true`）。各 section は自然な timestamp 列で期間フィルタする（`sources`=observed / `tasks`=updated / `decisions`=recorded）。`inbox` だけは「現在 open」（期間非依存）。既定 window は直近 24h。本文を持つ section（`sources` / `demand`）の各行は既定で上限付き `excerpt`（全文 `body` ではない）を返す（`search` と同じ payload 抑制・[ADR-0018](../adr/0018-knowledge-graph-traversal.md)・[#564](https://github.com/ozzy-labs/suasor/issues/564)）。`fullBody: true` で全文、`maxBodyChars` で excerpt 長を上書き。全文は `source.get` に委譲。
 
 戻り値:
 
 ```jsonc
 {
   "window": { "since": "...", "until": "..." },
-  "sources": [/* SourceRecord */],
+  "sources": [/* SourceRecord（既定は body の代わりに上限付き excerpt・#564） */],
   "tasks": [/* TaskRecord */],
   "decisions": [/* DecisionRecord */],
   "inbox": [/* InboxRecord（state=open） */],
-  "demand": [/* DemandRecord（un-acked のみ・ADR-0041） */],
+  "demand": [/* DemandRecord（un-acked のみ・ADR-0041。既定は excerpt・#564） */],
   "truncated": {                      // section ごとの打切りフラグ（ADR-0007）
     "sources": false, "tasks": false, "decisions": false, "inbox": false, "demand": false
   },
