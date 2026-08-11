@@ -18,7 +18,6 @@ mcp_tools_read:
   - search
   - graph.related
   - task.list
-  - decision.list
 mcp_tools_write: []
 ---
 

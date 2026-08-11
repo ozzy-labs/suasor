@@ -17,6 +17,8 @@ mcp_tools_write:
   - propose.reject
   - propose.batch
   - proposal.feedback
+mcp_tools_referenced:
+  - propose.generate
 ---
 
 # proposal-review

@@ -16,7 +16,6 @@ pairs:
 mcp_tools_read:
   - search
   - source.get
-  - source.list
   - graph.related
   - brief
 mcp_tools_write: []

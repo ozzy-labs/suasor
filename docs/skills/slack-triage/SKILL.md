@@ -11,12 +11,16 @@ triggers:
 pairs: []
 mcp_tools_read:
   - demand.list
+  - propose.list
   - source.get
 mcp_tools_write:
   - inbox.add
   - propose.generate
   - propose.apply
   - demand.mark
+mcp_tools_referenced:
+  - brief
+  - priority.list
 ---
 
 # slack-triage

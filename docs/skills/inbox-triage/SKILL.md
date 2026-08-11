@@ -11,9 +11,16 @@ triggers:
 pairs: []
 mcp_tools_read:
   - inbox.list
+  - propose.list
 mcp_tools_write:
-  - propose.generate
+  - inbox.add
+  - inbox.triage
   - propose.apply
+  - propose.generate
+  - propose.reject
+mcp_tools_referenced:
+  - decision.record
+  - task.create
 ---
 
 # inbox-triage

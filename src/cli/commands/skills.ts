@@ -524,6 +524,10 @@ export class SkillsInfoCommand extends SuasorCommand {
     if (fm.mcp_tools_write && fm.mcp_tools_write.length > 0) {
       w.write(`mcp (write): ${fm.mcp_tools_write.join(", ")}\n`);
     }
+    if (fm.mcp_tools_referenced && fm.mcp_tools_referenced.length > 0) {
+      // Mentioned in the body but never called — excluded from any allowlist.
+      w.write(`mcp (referenced, not called): ${fm.mcp_tools_referenced.join(", ")}\n`);
+    }
     w.write(`description: ${fm.description}\n`);
     return 0;
   }

@@ -18,6 +18,9 @@ mcp_tools_read:
   - demand.list
   - commitment.list
 mcp_tools_write: []
+mcp_tools_referenced:
+  - demand.mark
+  - task.create
 ---
 
 # next-actions
