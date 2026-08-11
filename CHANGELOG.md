@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.2](https://github.com/ozzy-labs/suasor/compare/v0.4.1...v0.4.2) (2026-08-11)
+
+
+### Bug Fixes
+
+* **cli:** catch ConfigError centrally in a shared base command ([#578](https://github.com/ozzy-labs/suasor/issues/578)) ([997dad8](https://github.com/ozzy-labs/suasor/commit/997dad832f4bdd935d0f00a005ed4e9a036d8cee))
+* **cli:** hoist the Setup category to the top of the root help ([#585](https://github.com/ozzy-labs/suasor/issues/585)) ([69dab59](https://github.com/ozzy-labs/suasor/commit/69dab592119981593a8e0882404537ff19ef55de))
+* **cli:** preserve rejected edits, config validate co-path, search body flags, typo hints ([#590](https://github.com/ozzy-labs/suasor/issues/590)) ([548934e](https://github.com/ozzy-labs/suasor/commit/548934e22772050e759f01d3fe5f1cf8e916d803))
+* **cli:** validate date filters through a shared duration/ISO parser ([#577](https://github.com/ozzy-labs/suasor/issues/577)) ([2502370](https://github.com/ozzy-labs/suasor/commit/2502370f6ec40ae6f110a6f1eea0cd508dffdceb))
+* **deps:** bump the hono override past four disclosed CVEs ([#595](https://github.com/ozzy-labs/suasor/issues/595)) ([bce4f43](https://github.com/ozzy-labs/suasor/commit/bce4f4359edc708c28da41d15b5a5d3b73406816))
+* **mcp:** bound source.list / demand.list / brief bodies with excerpt projection ([#581](https://github.com/ozzy-labs/suasor/issues/581)) ([92be8ee](https://github.com/ozzy-labs/suasor/commit/92be8eec513717105590dfa0843f37825a96b4c7))
+* **mcp:** schema & description accuracy — enum vocabularies, egress disclosure, doc drift ([#593](https://github.com/ozzy-labs/suasor/issues/593)) ([437851b](https://github.com/ozzy-labs/suasor/commit/437851bda47eabf07f8f6cb45a62ccc7348e0bb0))
+* **mcp:** write-tool error contract — typed service errors, no unwrapped throws ([#589](https://github.com/ozzy-labs/suasor/issues/589)) ([f364748](https://github.com/ozzy-labs/suasor/commit/f3647483857881c48966bd48aaca4411559555e9))
+* **onboard:** add docker invocation channel for host-usable MCP/cron templates ([#576](https://github.com/ozzy-labs/suasor/issues/576)) ([8045fbb](https://github.com/ozzy-labs/suasor/commit/8045fbbe018eb5c91ae43531fb694d9692728f22))
+* **onboard:** add the sync verb to the cron scheduler template ([#601](https://github.com/ozzy-labs/suasor/issues/601)) ([13d63b7](https://github.com/ozzy-labs/suasor/commit/13d63b7128866dc08881a72790f0ad2ffb0ccf8c))
+* **onboard:** guidance-quality bundle — auth-failure classification, token hints, doctor pointer, --json prompts ([#567](https://github.com/ozzy-labs/suasor/issues/567)) ([#591](https://github.com/ozzy-labs/suasor/issues/591)) ([4540a0d](https://github.com/ozzy-labs/suasor/commit/4540a0d84d6106e7e6a669762bdb063c6bff0e87))
+* **onboard:** keep the empty-input skip a TTY affordance ([#597](https://github.com/ozzy-labs/suasor/issues/597)) ([910eabd](https://github.com/ozzy-labs/suasor/commit/910eabdc24e47d06a65c20ebe75d6e26a3527f45))
+* **onboard:** re-running the wizard keeps a stored token; empty input skips instead of aborting ([#583](https://github.com/ozzy-labs/suasor/issues/583)) ([9cb658a](https://github.com/ozzy-labs/suasor/commit/9cb658a78e546a78e3891ee778c10291e1f2bc3c))
+* **onboard:** wizard crashes at token entry on the standalone binary and Docker ([#557](https://github.com/ozzy-labs/suasor/issues/557)) ([#580](https://github.com/ozzy-labs/suasor/issues/580)) ([f515be7](https://github.com/ozzy-labs/suasor/commit/f515be7305d6ce768c3c6928446b6b1e035c3146))
+* **retrieval:** carry truncated through semantic and hybrid search paths ([#582](https://github.com/ozzy-labs/suasor/issues/582)) ([8982309](https://github.com/ozzy-labs/suasor/commit/8982309b164f82811e9aefb2a35bcac18536db6d))
+* **skills:** declare body-used MCP tools in frontmatter, validate body vs frontmatter ([#592](https://github.com/ozzy-labs/suasor/issues/592)) ([d1801b9](https://github.com/ozzy-labs/suasor/commit/d1801b9acab5580f0a9e48f0d99b73a4a01736a9))
+* **skills:** detect and prune orphaned mirrors of retired skills ([#579](https://github.com/ozzy-labs/suasor/issues/579)) ([8db7391](https://github.com/ozzy-labs/suasor/commit/8db73910f709d4c44d189e64862c4db1cfe04118))
+* **skills:** skip user-authored skills on install unless --force ([#584](https://github.com/ozzy-labs/suasor/issues/584)) ([862bac2](https://github.com/ozzy-labs/suasor/commit/862bac2055d938fcb52fd648d5293ec1ec9b9ecc))
+
 ## [0.4.1](https://github.com/ozzy-labs/suasor/compare/v0.4.0...v0.4.1) (2026-08-10)
 
 
