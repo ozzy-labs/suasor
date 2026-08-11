@@ -22,11 +22,18 @@ export class DbMigrateCommand extends SuasorCommand {
       they do not already exist. The append-only event log is never modified;
       projections can always be rebuilt with \`suasor projections rebuild\`.
     `,
-    examples: [["Apply the projection schema", "suasor db migrate"]],
+    examples: [
+      ["Apply the projection schema", "suasor db migrate"],
+      ["Machine-readable output", "suasor db migrate --json"],
+    ],
   });
 
   vec = Option.Boolean("--vec", true, {
     description: "Create the sqlite-vec substrate (default true; --no-vec to skip).",
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the migration result (dbPath, vec) as JSON.",
   });
 
   override async execute(): Promise<number> {
@@ -48,6 +55,14 @@ export class DbMigrateCommand extends SuasorCommand {
       embeddingDim: config.embedding.dim,
     });
     try {
+      if (this.json) {
+        // Envelope (Issue #573): `ok` + named fields, pretty-printed — the
+        // shape convention for new --json surfaces.
+        this.context.stdout.write(
+          `${JSON.stringify({ ok: true, dbPath, vec: this.vec }, null, 2)}\n`,
+        );
+        return 0;
+      }
       this.context.stdout.write(`Applied projection schema to ${dbPath}.\n`);
       return 0;
     } finally {

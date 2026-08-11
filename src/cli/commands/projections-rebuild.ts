@@ -24,11 +24,18 @@ export class ProjectionsRebuildCommand extends SuasorCommand {
       vectors were present, semantic recall is empty until you run
       \`suasor embeddings drain\` to re-embed; the command prints a reminder.
     `,
-    examples: [["Rebuild projections", "suasor projections rebuild"]],
+    examples: [
+      ["Rebuild projections", "suasor projections rebuild"],
+      ["Machine-readable output", "suasor projections rebuild --json"],
+    ],
   });
 
   noProgress = Option.Boolean("--no-progress", false, {
     description: "Disable the progress indicator (auto-off when stderr is not a TTY).",
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the rebuild result (events, clearedEmbeddings) as JSON.",
   });
 
   override async execute(): Promise<number> {
@@ -58,6 +65,17 @@ export class ProjectionsRebuildCommand extends SuasorCommand {
     try {
       const result = store.rebuild({ onProgress: () => progress.tick() });
       progress.finish();
+      if (this.json) {
+        // Envelope (Issue #573): `ok` + named fields, pretty-printed — the
+        // shape convention for new --json surfaces.
+        const envelope = {
+          ok: true,
+          events: result.events,
+          clearedEmbeddings: result.clearedEmbeddings,
+        };
+        this.context.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+        return 0;
+      }
       this.context.stdout.write(`Rebuilt projections from ${result.events} event(s).\n`);
       // The embedding sidecar is not replayable (ADR-0006), so rebuild left it
       // empty. When vectors were actually cleared, semantic recall is now empty

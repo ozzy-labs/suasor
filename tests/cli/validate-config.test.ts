@@ -228,4 +228,59 @@ roots = [
       expect(out).toContain("[llm] is retired");
     });
   });
+
+  // Issue #573: --json for a CI config gate (exit code + structured findings).
+  describe("--json (#573)", () => {
+    test("a valid config emits an ok envelope", async () => {
+      writeFileSync(configPath, '[embedding]\nbackend = "disabled"\n', "utf8");
+      const { code, out } = await run(["validate-config", "--json"]);
+      expect(code).toBe(0);
+      const parsed = JSON.parse(out) as { ok: boolean; configPath: string; findings: unknown[] };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.configPath).toBe(configPath);
+      expect(parsed.findings).toEqual([]);
+      expect(out).toContain('\n  "ok"'); // pretty-printed, CLI-wide convention
+    });
+
+    test("findings emit as structured objects and gate the exit code", async () => {
+      writeFileSync(configPath, '[connectors.github]\nrepo = ["a/b"]\n', "utf8");
+      const { code, out } = await run(["validate-config", "--json"]);
+      expect(code).toBe(1);
+      const parsed = JSON.parse(out) as {
+        ok: boolean;
+        findings: { kind: string; path: string; message: string; fixable: boolean }[];
+      };
+      expect(parsed.ok).toBe(false);
+      const typo = parsed.findings.find((f) => f.kind === "unknown-key");
+      expect(typo?.path).toBe("connectors.github.repo");
+      expect(typo?.fixable).toBe(true);
+    });
+
+    test("--fix --json reports applied repairs and remaining findings", async () => {
+      writeFileSync(
+        configPath,
+        `[embedding]\nbackend = "nope"\n[connectors.github]\nrepo = ["a/b"]\n`,
+        "utf8",
+      );
+      const { code, out } = await run(["validate-config", "--fix", "--json"]);
+      expect(code).toBe(1);
+      const parsed = JSON.parse(out) as {
+        ok: boolean;
+        applied: string[];
+        remaining: { kind: string; path: string }[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.applied).toEqual(["connectors.github.repo"]);
+      expect(parsed.remaining.some((f) => f.path === "embedding.backend")).toBe(true);
+    });
+
+    test("invalid TOML emits an error envelope on stdout (still exit 1)", async () => {
+      writeFileSync(configPath, "not [[[ valid = = toml", "utf8");
+      const { code, out } = await run(["validate-config", "--json"]);
+      expect(code).toBe(1);
+      const parsed = JSON.parse(out) as { ok: boolean; error: string };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error).toContain("not valid TOML");
+    });
+  });
 });

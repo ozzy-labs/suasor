@@ -1051,3 +1051,23 @@ describe("suasor doctor — keychain availability probe (#557)", () => {
     expect(connectors?.detail).toContain("github");
   });
 });
+
+// Issue #573: a multi-line detail (ConfigError's newline-joined issue list) must
+// render as continuation lines indented under the detail column, not as orphan
+// lines that break the aligned table.
+describe("suasor doctor — multi-line detail rendering (#573)", () => {
+  test("continuation lines are indented to the detail column", async () => {
+    await run(["init"]);
+    // An invalid connector value makes the loader throw a ConfigError whose
+    // message embeds the per-field issues on their own lines.
+    await writeConfig('[connectors.github]\nrepos = ["no-slash"]\n');
+    const { code, out } = await run(["doctor"]);
+    expect(code).toBe(1);
+    const lines = out.split("\n");
+    const issueLine = lines.find((l) => l.includes("connectors.github.repos"));
+    expect(issueLine).toBeDefined();
+    // Continuation indent = "  [XXXX] " (9) + name column — well past the
+    // 2-space indent ConfigError itself uses, so the table stays aligned.
+    expect(issueLine).toMatch(/^ {10,}/);
+  });
+});

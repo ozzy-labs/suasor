@@ -162,6 +162,12 @@ export interface BulkSyncOptions {
   onConnectorError?: (connector: string, error: Error) => void;
   /** Called right before a connector's pass starts (e.g. to reset a progress label). */
   onConnectorStart?: (connector: string) => void;
+  /**
+   * Called when a connector's pass finishes — success, partial failure, or
+   * throw (always paired with `onConnectorStart`). Lets the caller keep a live
+   * "currently syncing" set for progress display (Issue #573).
+   */
+  onConnectorEnd?: (connector: string) => void;
 }
 
 /**
@@ -247,6 +253,12 @@ async function runOneConnector(
     const error = cause instanceof Error ? cause : new Error(String(cause));
     options.onConnectorError?.(name, error);
     return { entry: { connector: name, ok: false, error: error.message }, ok: false };
+  } finally {
+    // Inside the finally so every start is paired with an end on all outcomes
+    // (success / partial failure / throw). A throwing end-callback would reject
+    // the worker promise, but it is caller-owned display code, same trust level
+    // as `onConnectorError` above.
+    options.onConnectorEnd?.(name);
   }
 }
 

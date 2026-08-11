@@ -200,6 +200,13 @@ export class SyncAllCommand extends SuasorCommand {
       this.noProgress ? false : undefined,
     );
 
+    // Fold the currently-syncing connector names into the progress label
+    // (`sync [slack,notion]: N processed…`, Issue #573): one counter for the
+    // whole pool cannot distinguish a hung connector from a slow one, but the
+    // active-set label shows exactly which connectors are still running.
+    const active = new Set<string>();
+    const activeLabel = () => (active.size > 0 ? `sync [${[...active].join(",")}]` : "sync");
+
     const store = Store.open({ path: dbPath, embeddingDim: config.embedding.dim });
     try {
       const result = await runBulkSync(store, {
@@ -224,7 +231,15 @@ export class SyncAllCommand extends SuasorCommand {
           onExtractError: (error) =>
             this.context.stderr.write(`warning: extraction skipped: ${error.message}\n`),
         },
-        onConnectorStart: () => progress.tick(),
+        onConnectorStart: (connector) => {
+          active.add(connector);
+          progress.setLabel(activeLabel());
+          progress.tick();
+        },
+        onConnectorEnd: (connector) => {
+          active.delete(connector);
+          progress.setLabel(activeLabel());
+        },
         onConnectorError: (connector, error) => {
           progress.finish();
           this.context.stderr.write(`error: ${connector} sync failed: ${error.message}\n`);

@@ -155,6 +155,9 @@ describe("suasor skills list --format", () => {
     // Status shape only — no frontmatter fields leaked into the JSON.
     expect(parsed[0]).toHaveProperty("state");
     expect(parsed[0]).not.toHaveProperty("category");
+    // Pretty-printed (Issue #573): every --json surface uses the same 2-space
+    // indent, not single-line output.
+    expect(out).toContain('\n    "name"');
   });
 });
 

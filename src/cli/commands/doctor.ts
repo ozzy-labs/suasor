@@ -847,8 +847,13 @@ export class DoctorCommand extends SuasorCommand {
     // column stays aligned even when a long name (e.g. `slack.discovery`, 15) is
     // present (Issue #388). A fixed width mis-aligned those rows.
     const nameWidth = Math.max(...checks.map((c) => c.name.length));
+    // A multi-line detail (e.g. ConfigError's newline-joined issue list) would
+    // otherwise dump orphan lines that break the aligned table (Issue #573):
+    // indent continuation lines to the detail column so they read as one row.
+    const continuationIndent = " ".repeat("  [XXXX] ".length + nameWidth + 1);
     for (const c of checks) {
-      this.context.stdout.write(`  [${label[c.status]}] ${c.name.padEnd(nameWidth)} ${c.detail}\n`);
+      const detail = c.detail.split("\n").join(`\n${continuationIndent}`);
+      this.context.stdout.write(`  [${label[c.status]}] ${c.name.padEnd(nameWidth)} ${detail}\n`);
     }
     const warnings = checks.filter((c) => c.status === "warn").length;
     const errors = checks.filter((c) => c.status === "error").length;

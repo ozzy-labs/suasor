@@ -18,6 +18,13 @@ export interface ProgressStream {
 export interface Progress {
   /** Count one processed item (renders, throttled). */
   tick(): void;
+  /**
+   * Replace the label and re-render immediately (unthrottled). Used to fold
+   * dynamic context — e.g. the connectors currently syncing — into the line
+   * (`sync [slack,notion]: N processed…`, Issue #573), so a hung connector is
+   * distinguishable from a slow one even between ticks.
+   */
+  setLabel(label: string): void;
   /** Clear the progress line — call before the final stdout summary. */
   finish(): void;
 }
@@ -38,8 +45,9 @@ export function createProgress(
   now: () => number = () => Date.now(),
 ): Progress {
   const on = enabled ?? stream.isTTY === true;
-  if (!on) return { tick() {}, finish() {} };
+  if (!on) return { tick() {}, setLabel() {}, finish() {} };
 
+  let current = label;
   let count = 0;
   let lastRender = 0;
   return {
@@ -47,9 +55,17 @@ export function createProgress(
       count += 1;
       const t = now();
       if (t - lastRender >= RENDER_INTERVAL_MS) {
-        stream.write(`${CLEAR_LINE}${label}: ${count} processed…`);
+        stream.write(`${CLEAR_LINE}${current}: ${count} processed…`);
         lastRender = t;
       }
+    },
+    setLabel(next: string) {
+      if (next === current) return;
+      current = next;
+      // Unthrottled: a label change carries new information (which connectors
+      // are active), and changes are rare (one per connector start/finish).
+      stream.write(`${CLEAR_LINE}${current}: ${count} processed…`);
+      lastRender = now();
     },
     finish() {
       stream.write(CLEAR_LINE);

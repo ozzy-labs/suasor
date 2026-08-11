@@ -108,4 +108,15 @@ describe("suasor db migrate", () => {
     expect(out).toContain("Applied projection schema");
     expect(existsSync(join(dir, "suasor.db"))).toBe(true);
   });
+
+  // Issue #573: --json for scripting (CI migration gates).
+  test("--json emits a pretty-printed ok envelope", async () => {
+    const { code, out } = await run(["db", "migrate", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out) as { ok: boolean; dbPath: string; vec: boolean };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.dbPath).toBe(join(dir, "suasor.db"));
+    expect(parsed.vec).toBe(true);
+    expect(out).toContain('\n  "ok"'); // pretty-printed, CLI-wide convention
+  });
 });

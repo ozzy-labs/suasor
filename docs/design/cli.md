@@ -7,8 +7,8 @@ clipanion ベース。lazy import で cold start を軽く保つ（[ADR-0001](..
 ```bash
 suasor init [--force]                  # 設定 + DB 初期化 + ネクストステップ案内（skills install は別コマンド）
 suasor onboard [--connector a,b] [--account <name>] [--skip-auth] [--skip-sync] [--write-cron] [--write-launchd] [--write-systemd] [--json]  # 対話セットアップウィザード（connector 選択 → token 格納 → auth test → config slice 追記 → 初回 sync → scheduler/MCP 雛形・[ADR-0029]。slack は独自経路（auth set/test・conversations）を関数として bridge・token pool（ADR-0042）・[#384]。`--account` は 2 つ目の account 追加＝ADR-0050 の `[connectors.<name>.accounts.<account>]`・[#538]）
-suasor db migrate [--vec]              # projection schema 適用（idempotent）
-suasor projections rebuild [--no-progress]  # event replay で projection 再構築
+suasor db migrate [--vec] [--json]     # projection schema 適用（idempotent）
+suasor projections rebuild [--no-progress] [--json]  # event replay で projection 再構築
 suasor <connector> sync [--full] [--json] [--discover | --no-discover]  # 取り込み（github / slack / ms-graph / google / box / web / local / notion / jira）。--discover/--no-discover は Slack の discovery sweep 単発トグル（ADR-0039）
 suasor sync [--connector a,b] [--concurrency N] [--continue-on-error] [--full] [--json] [--no-progress]  # 有効 connector を一括取り込み（connector 間並列・one-shot・定期実行は OS スケジューラへ委譲）
 suasor sync status [--json]            # connector 別の sync 鮮度（最終 sync 時刻 / 件数 / 直近の成否）を表示（ADR-0033）
@@ -23,8 +23,8 @@ suasor connectors list [--json]        # 登録 connector の enabled / token �
 suasor doctor [--json]                 # config/DB/embedding/connector + 保守ヒントを一括ヘルスチェック（error 検出で exit 1）
 suasor config show [--effective] [--json]  # 実効 config（env > file > defaults の合成値）を表示。secret は常にマスク
 suasor config edit [--editor <cmd>]    # $EDITOR で config.toml を開き、保存後に schema 検証。不正なら差し戻し（rollback）
-suasor validate-config [--fix]         # config.toml の構造検証（必須欠落 / invalid / dangling / typo）。--fix で安全な除去のみ自動修正
-suasor export backup [--out <path>] [--format sqlite|tgz]  # store dir の整合バックアップ（VACUUM INTO・無副作用）。既定 sqlite 単一ファイル
+suasor validate-config [--fix] [--json]  # config.toml の構造検証（必須欠落 / invalid / dangling / typo）。--fix で安全な除去のみ自動修正
+suasor export backup [--out <path>] [--format sqlite|tgz] [--json]  # store dir の整合バックアップ（VACUUM INTO・無副作用）。既定 sqlite 単一ファイル
 suasor store retention [--dry-run] [--json]  # 設定した保持期間より古い本文を落とす（opt-in・既定 OFF・[ADR-0047]）
 suasor store info [--breakdown] [--json]  # store 規模（event 数 / projection 行数 / DB ファイルサイズ / vec0 件数 / FTS 規模 / 本文の保存先内訳 / 平均成長率）。--breakdown で event type 別ヒストグラム
 suasor extraction status [--json]      # 文書抽出カバレッジ（extracted / stale / pending）+ backend / version
@@ -78,6 +78,7 @@ suasor --version                       # バージョン出力
 | `onboard` | `--write-systemd` | false | systemd user unit（service + timer）を `~/.config/systemd/user/` に書き、`systemctl --user enable --now` コマンドを表示する（既存ファイルは上書きしない） |
 | `onboard` | `--json` | false | 各ステップ結果（auth / config 追記有無 / sync / scheduler 種別）を機械可読出力 |
 | `db migrate` | `--vec` / `--no-vec` | true | sqlite-vec の vec0 substrate を作る／作らない |
+| `db migrate` | `--json` | false | `{ok, dbPath, vec}` envelope を JSON で出力（[#573](https://github.com/ozzy-labs/suasor/issues/573)） |
 | `search` | `--limit N` | 20 | 返す hit の最大数（正の整数。非正値は error） |
 | `search` | `--source-type <type>` | （任意） | `source_type` 完全一致で絞る（例: `github_issue`） |
 | `search` | `--since <dur\|iso>` | （任意） | `observed_at` 下限（inclusive `>=`）。相対（`24h` / `7d` / `2w`）または ISO date。不正値は error（#561）。alias: `--observed-after` |
@@ -105,6 +106,7 @@ suasor --version                       # バージョン出力
 | `<connector> sync` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
 | `<connector> sync` | `--discover` / `--no-discover` | config 依存 | 単発の discovery-drift sweep トグル（Slack のみ honor・[ADR-0039](../adr/0039-conversation-discovery-drift.md) Layer 2）。`--discover` は 24h cadence（および `discover_new = false` opt-out）を無視して即時 sweep、`--no-discover` はその回の sweep を抑止。未指定は config（`discover_new` + cadence）に従う。両指定は error。config / cursor marker は不変で Slack 以外は no-op |
 | `projections rebuild` | `--no-progress` | false | 進捗表示を無効化（stderr が TTY でないとき自動 off） |
+| `projections rebuild` | `--json` | false | `{ok, events, clearedEmbeddings}` envelope を JSON で出力（[#573](https://github.com/ozzy-labs/suasor/issues/573)） |
 | `sync` | `--connector a,b` | all enabled | 一括対象を絞り込む connector 名のカンマ列（有効かつ登録済みのみ。非該当は error） |
 | `sync` | `--continue-on-error` / `--no-continue-on-error` | true | 1 connector の失敗で全体を止めない（既定 on）。`--no-` で fail-fast（最初の失敗で停止）。いずれも失敗が 1 つでもあれば exit 1 |
 | `sync` | `--full` | false | 各 connector の保存済み cursor を無視して全件再スキャン |
@@ -140,8 +142,10 @@ suasor --version                       # バージョン出力
 | `config show` | `--json` | false | 人間可読レポートの代わりに `{config, credentials}` を JSON で出力（secret はマスク済み） |
 | `config edit` | `--editor <cmd>` | `$EDITOR` → `$VISUAL` | 起動するエディタコマンド。`--editor "code --wait"` 形式（引数付き）も可。未設定かつ env も無ければ error |
 | `validate-config` | `--fix` | false | 安全な除去のみ自動修正（unknown/typo キー・dangling local root）。コメント/整形を保つ surgical TOML 編集。値の捏造はしない（missing/invalid は報告のみ） |
+| `validate-config` | `--json` | false | `{ok, configPath, findings[], advisories[]}`（`--fix` 併用時は `applied[]` / `remaining[]` 追加）envelope を JSON で出力。exit code は人間可読時と同一（CI gate 用・[#573](https://github.com/ozzy-labs/suasor/issues/573)） |
 | `export backup` | `--out <path>` | DB と同ディレクトリの timestamped 名 | バックアップ出力先。既存ファイルがあれば error（上書き拒否） |
 | `export backup` | `--format sqlite\|tgz` | sqlite | `sqlite`＝自己完結の単一 `.db`（VACUUM INTO スナップショット・正本）/ `tgz`＝同スナップショットの gzip tar（アーカイブ向け） |
+| `export backup` | `--json` | false | `{ok, outPath, format, sizeBytes, events}` envelope を JSON で出力（backup cron 用・[#573](https://github.com/ozzy-labs/suasor/issues/573)） |
 | `store retention` | `--dry-run` | false | 書き込まず対象と削減量だけ報告する |
 | `store retention` | `--json` | false | `RetentionResult`（cutoff / candidates / dropped / bytesFreed / dryRun）を JSON で出力 |
 | `store info` | `--breakdown` | false | event ログを type 別に集計（`COUNT(*) GROUP BY type`）して追加表示。`--json` 併用時は `eventBreakdown`（`{type, count}[]`）を追加 |
@@ -253,7 +257,8 @@ suasor --version                       # バージョン出力
 - install は展開先に `.suasor-skills.json`（`{ version, installedAt, skills }`）を残す。mirror 自体は SSOT とバイト一致でなければ drift 検出（`modified`）が壊れるため、stamp は **mirror の外**（`<host>/.claude/skills/.suasor-skills.json` / `<host>/.agents/skills/.suasor-skills.json`）に置く。stamp の version が実行中の suasor と食い違うと `skills list` と `mcp serve` 起動時に stderr へ 1 行だけ再 install を促す（stdout の一覧 / JSON-RPC ストリームは汚さない）。未 install なら黙る
 - **standalone binary でも skills 系 verb は全て動く**（[Issue #445](https://github.com/ozzy-labs/suasor/issues/445)）。`bun build --compile` は module graph が静的参照する内容しか埋め込まないため、catalog を `src/skills/embedded.ts`（生成物・commit 済み・`node scripts/generate-embedded-skills.mjs`）としてソースに inline した。`docs/skills/` を解決できる repo / npm 実行ではディスクを読み、解決できなければ埋め込みへフォールバックする。drift は `tests/skills/embedded.test.ts` が検出する
 - `skills list` は host dir ごとに各 skill を `installed`（SSOT と一致）/ `missing`（未展開）/ `modified`（展開済みだが SSOT と差分）/ `orphan`（catalog に無い退役 mirror・[Issue #556](https://github.com/ozzy-labs/suasor/issues/556)）で報告する。[ADR-0035](../adr/0035-project-skills-vendor-dev-skills.md) で in-repo dogfood-commit と `skills-drift` フックは廃止された。assistant mirror は `.gitignore` 済みのローカル install 物（commit しない）で、host dir に commit されるのは vendored dev skill（drive / lint 等）のみ。install 正しさは `tests/skills/install.test.ts` が担保する
-- 長時間コマンド（`<connector> sync` / `sync` / `projections rebuild` / `embeddings rebuild` / `embeddings drain` / discovery verb 群 / `slack conversations` / `slack resolve-names`）の TTY 進捗表示は実装済み（`src/cli/progress.ts` の `createProgress`・stderr / TTY 限定・`--no-progress` で無効化）。env 上書きは現状未導入（必要が出れば別途検討）
+- 長時間コマンド（`<connector> sync` / `sync` / `projections rebuild` / `embeddings rebuild` / `embeddings drain` / discovery verb 群 / `slack conversations` / `slack resolve-names`）の TTY 進捗表示は実装済み（`src/cli/progress.ts` の `createProgress`・stderr / TTY 限定・`--no-progress` で無効化）。env 上書きは現状未導入（必要が出れば別途検討）。一括 `sync` の進捗ラベルは**現在 sync 中の connector 名**を畳み込む（`sync [slack,notion]: N processed…`・`Progress.setLabel` + `runBulkSync` の `onConnectorStart` / `onConnectorEnd` ペア・hung connector と slow connector の判別用・[#573](https://github.com/ozzy-labs/suasor/issues/573)）
+- `--json` 出力の共通規約（[#573](https://github.com/ozzy-labs/suasor/issues/573)）: **常に `JSON.stringify(x, null, 2)` の 2-space pretty-print**（`skills list/search/info/prune` の単一行出力もここに統一）。トップレベル shape は既存 verb の bare array（`sync status` / `source list` / skills 系）は互換維持のため不変とし、**新規 surface は `{ok, …}` の envelope を採用する**（`doctor` / `digest` / `db migrate` / `projections rebuild` / `validate-config` / `export backup` が該当）
 
 ## 規約
 

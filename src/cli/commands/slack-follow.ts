@@ -156,7 +156,7 @@ export class SlackFollowCommand extends SuasorCommand {
       --suggest proposes the joined public/private channels not yet in config
       (DMs / group-DMs stay opt-in via an explicit follow) and applies them
       after one confirmation — the suggest-and-confirm onboarding shape
-      (ADR-0042 決定 6). Pass --yes to skip the prompt (headless).
+      (ADR-0042 decision 6). Pass --yes to skip the prompt (headless).
     `,
     examples: [
       ["Follow one channel by name", "suasor slack follow '#eng-team'"],
