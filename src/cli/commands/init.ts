@@ -41,7 +41,7 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 #                                       #   ollama bge-m3=1024, openai text-embedding-3-small=1536,
 #                                       #   voyage voyage-3=1024. A mismatch silently breaks recall;
 #                                       #   changing it needs a fresh DB / re-sync (run \`suasor
-#                                       #   validate-config\` / \`suasor doctor\` to detect drift).
+#                                       #   config validate\` / \`suasor doctor\` to detect drift).
 # maxBatch = 64                         # max texts per request; larger inputs split in order
 # maxInputChars = 8000                  # max chars per text; longer bodies truncated before embed; 0 disables
 # requestTimeoutMs = 60000              # per-request timeout (ms); 0 disables

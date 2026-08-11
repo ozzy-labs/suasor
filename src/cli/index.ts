@@ -7,7 +7,8 @@
  *   <connector> sync · sync · sync status ·
  *   <connector> auth set/test (github/ms-graph/google/box) ·
  *   <connector> discovery verbs (github repos; ADR-0030) · connectors list ·
- *   config show · config edit · validate-config · export backup ·
+ *   config show · config edit · config validate (alias: validate-config) ·
+ *   export backup ·
  *   embeddings status/rebuild/drain/find-duplicates · mcp serve · mcp tools ·
  *   slack auth set/test · slack conversations · slack status · slack cursor reset ·
  *   skills install/list/search/info
@@ -301,6 +302,78 @@ export function categoryHelp(
   return renderCategoryHelp(prefix, subcommands, binaryName);
 }
 
+/** Levenshtein edit distance between two short command tokens. */
+function editDistance(a: string, b: string): number {
+  const prev: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = prev[0] as number;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = prev[j] as number;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      prev[j] = Math.min(above + 1, (prev[j - 1] as number) + 1, diagonal + cost);
+      diagonal = above;
+    }
+  }
+  return prev[b.length] as number;
+}
+
+/** How many "did you mean" candidates an unknown command shows at most. */
+const UNKNOWN_SUGGESTIONS = 3;
+
+/**
+ * Pre-parse interceptor for an unknown top-level command token (Issue #572).
+ *
+ * clipanion answers an unknown command with its "did you mean one of:" list of
+ * *every* registered command — ~75 lines that bury the one the user mistyped.
+ * That rendering lives in clipanion's internal error path and is not reachable
+ * through the public builder (same limitation as `categoryHelp()` above, the
+ * #395 precedent), so the unknown token is recognised before clipanion parses.
+ *
+ * Fires only when the first token is not an option (no leading `-`) and does
+ * not open any registered command path — every valid invocation, option-first
+ * invocation, and the bare root help are left for clipanion untouched. Prints
+ * the closest {@link UNKNOWN_SUGGESTIONS} first tokens by edit distance
+ * (bounded, so `suasor zzz` gets no absurd guesses), derived from the registry
+ * so the candidate set cannot drift from what is wired.
+ *
+ * @returns the error text to print on stderr (the caller then exits 1), or
+ * `null` to defer to clipanion's own resolution.
+ */
+export function unknownCommandHelp(
+  argv: string[],
+  commands: CommandClass[],
+  binaryName: string,
+): string | null {
+  const first = argv[0];
+  if (first === undefined || first.startsWith("-")) return null;
+
+  const known = new Set<string>();
+  for (const command of commands) {
+    for (const segments of command.paths ?? []) {
+      const head = segments[0];
+      if (head !== undefined && !head.startsWith("-")) known.add(head);
+    }
+  }
+  if (known.has(first)) return null;
+
+  // Suggest only plausible typos: distance capped at 3 and at half the typed
+  // token's length (so short garbage never "matches" a real verb).
+  const threshold = Math.min(3, Math.max(1, Math.floor(first.length / 2)));
+  const ranked = [...known]
+    .map((token) => ({ token, distance: editDistance(first, token) }))
+    .filter(({ distance }) => distance <= threshold)
+    .sort((a, b) => a.distance - b.distance || a.token.localeCompare(b.token))
+    .slice(0, UNKNOWN_SUGGESTIONS);
+
+  const lines = [`error: unknown command '${first}'`];
+  if (ranked.length > 0) {
+    lines.push("", "Did you mean:", ...ranked.map(({ token }) => `  ${binaryName} ${token}`));
+  }
+  lines.push("", `Run \`${binaryName} --help\` for the full command list.`, "");
+  return lines.join("\n");
+}
+
 /** Render the readable subcommand listing for a verb prefix. */
 function renderCategoryHelp(
   prefix: string[],
@@ -338,6 +411,11 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<nu
   if (help !== null) {
     process.stdout.write(help);
     return 0;
+  }
+  const unknown = unknownCommandHelp(argv, commands, "suasor");
+  if (unknown !== null) {
+    process.stderr.write(unknown);
+    return 1;
   }
   const cli = buildCli(commands);
   if (isRootHelp(argv)) {

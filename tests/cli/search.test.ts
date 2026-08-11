@@ -248,3 +248,28 @@ describe("suasor search", () => {
     expect(JSON.parse(out).strategy).toBe("fts");
   });
 });
+
+describe("suasor search — body flags in human output (Issue #572)", () => {
+  test("default human output stays capped at a compact 120-char line", async () => {
+    await seed(`rocket ${"x".repeat(400)}`);
+    const { code, out } = await run(["search", "rocket"]);
+    expect(code).toBe(0);
+    expect(out).not.toMatch(/x{150}/);
+  });
+
+  test("--full-body prints the full body in human output", async () => {
+    await seed(`rocket ${"x".repeat(400)}`);
+    const { code, out } = await run(["search", "--full-body", "rocket"]);
+    expect(code).toBe(0);
+    expect(out).toContain("x".repeat(400));
+  });
+
+  test("--max-body-chars sizes the human excerpt beyond the display cap", async () => {
+    await seed(`rocket ${"x".repeat(400)}`);
+    const { code, out } = await run(["search", "--max-body-chars", "300", "rocket"]);
+    expect(code).toBe(0);
+    // Longer than the 120-char display default, bounded by the requested size.
+    expect(out).toMatch(/x{250}/);
+    expect(out).not.toMatch(/x{350}/);
+  });
+});

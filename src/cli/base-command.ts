@@ -8,7 +8,7 @@
  * status` into a developer-style crash dump with raw stack frames.
  *
  * Catching it centrally here gives every command the same clean failure:
- * `error: <message>` plus a `hint:` pointing at `suasor validate-config`,
+ * `error: <message>` plus a `hint:` pointing at `suasor config validate`,
  * written to stderr with exit code 1. Commands that need a different policy
  * (e.g. `validate-config` itself, or auth commands that tolerate a broken
  * config) still catch `ConfigError` closer to the call site — this base class
@@ -29,7 +29,7 @@ export abstract class SuasorCommand extends Command {
       const { ConfigError } = await import("../config/error.ts");
       if (error instanceof ConfigError) {
         this.context.stderr.write(
-          `error: ${error.message}\nhint: run \`suasor validate-config\`\n`,
+          `error: ${error.message}\nhint: run \`suasor config validate\`\n`,
         );
         return 1;
       }

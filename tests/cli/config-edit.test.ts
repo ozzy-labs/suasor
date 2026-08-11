@@ -5,7 +5,7 @@
  * one (bad TOML / schema violation) is rolled back and reported.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigEditCommand } from "../../src/cli/commands/config-edit.ts";
@@ -124,5 +124,29 @@ describe("suasor config edit", () => {
     expect(err).toContain("editor exited with code 1");
     // File untouched because the stub does not write when editorExit != 0.
     expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+});
+
+describe("suasor config edit — rejected-edit preservation (Issue #572)", () => {
+  test("an invalid edit is saved to config.toml.rej before the rollback", async () => {
+    const original = '[embedding]\nbackend = "disabled"\n';
+    writeFileSync(configPath, original, "utf8");
+    const bad = '[connectors.github]\nrepo = ["a/b"]\n';
+    const { code, err } = await runEdit(() => bad);
+    expect(code).toBe(1);
+    // The config itself is still rolled back verbatim…
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    // …but the rejected text survives next to it, and the user is told where.
+    expect(readFileSync(`${configPath}.rej`, "utf8")).toBe(bad);
+    expect(err).toContain(`${configPath}.rej`);
+  });
+
+  test("a valid edit does not create a .rej file", async () => {
+    writeFileSync(configPath, '[embedding]\nbackend = "disabled"\n', "utf8");
+    const { code } = await runEdit(
+      (cur) => `${cur}\n[connectors.github]\nrepos = ["owner/repo"]\n`,
+    );
+    expect(code).toBe(0);
+    expect(existsSync(`${configPath}.rej`)).toBe(false);
   });
 });

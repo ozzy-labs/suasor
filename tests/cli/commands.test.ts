@@ -68,7 +68,7 @@ describe("suasor --version / --help", () => {
       "brief",
       "doctor",
       "config edit",
-      "validate-config",
+      "config validate",
       "export backup",
       "Ingest from every enabled connector",
       "mcp serve",

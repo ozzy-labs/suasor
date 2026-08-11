@@ -8,7 +8,9 @@
  * loader the runtime uses (schema + strict connector slices, ADR-0007). If the
  * edit produced invalid TOML or a schema violation, the original file is
  * restored and the command exits non-zero so a broken config is never left
- * behind.
+ * behind. The rejected text is not discarded: it is saved to `config.toml.rej`
+ * (visudo-style, Issue #572) so a multi-section edit is never lost to one typo
+ * — fix the .rej file and re-apply it instead of retyping everything.
  *
  * This is a write verb (mutates config.toml), but it is human-in-the-loop by
  * construction — the user types the change in their editor; nothing is applied
@@ -32,7 +34,9 @@ export class ConfigEditCommand extends SuasorCommand {
       micro-edit, then re-validates it with the same loader the runtime uses
       (schema + strict per-connector slices, ADR-0007). If the saved file is
       invalid TOML or violates the schema, the original is restored and the
-      command exits non-zero — so a broken config is never left in place.
+      command exits non-zero — so a broken config is never left in place. The
+      rejected text is saved next to the config as config.toml.rej so the edit
+      is not lost: fix it there and re-apply, instead of retyping everything.
 
       Complements \`onboard\` (adds a connector) and \`config show\` (displays
       the effective config). Human-in-the-loop by construction (ADR-0004): you
@@ -109,14 +113,20 @@ export class ConfigEditCommand extends SuasorCommand {
 
     // Validate the edited file with the real loader (TOML parse + schema + strict
     // connector slices). On failure, restore the original so a broken config is
-    // never left behind, and surface the structured issues to the user.
+    // never left behind, and surface the structured issues to the user. The
+    // rejected text is preserved as `config.toml.rej` (visudo-style, Issue #572)
+    // so a multi-section edit is never lost to one typo.
     try {
       await loadConfig({ configDir });
     } catch (err) {
+      const rejPath = `${configPath}.rej`;
+      await fs.writeFile(rejPath, edited, "utf8");
       await fs.writeFile(configPath, original, "utf8");
       const message = err instanceof Error ? err.message : String(err);
       this.context.stderr.write(`error: edited config is invalid; reverted.\n  ${message}\n`);
-      this.context.stderr.write("(your edit was rolled back — re-run to try again)\n");
+      this.context.stderr.write(
+        `(your edit was saved to ${rejPath} — fix it there, then copy it back or re-run \`suasor config edit\`)\n`,
+      );
       return 1;
     }
 

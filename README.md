@@ -105,10 +105,10 @@ suasor db migrate            # apply the projection schema (idempotent)
 suasor projections rebuild   # replay the event log into projections
 suasor export backup         # consistent store backup (--format sqlite|tgz)
 suasor config edit           # edit config.toml in $EDITOR, validate on save
-suasor validate-config       # check config.toml (--fix applies safe repairs)
+suasor config validate       # check config.toml (--fix applies safe repairs)
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). Edit it with `suasor config edit` (validates on save, rolls back a bad edit) and check it with `suasor validate-config [--fix]`. `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local / notion / jira — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Back up your local store with `suasor export backup` and audit / purge ingested data with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). Edit it with `suasor config edit` (validates on save, rolls back a bad edit — the rejected text is kept in `config.toml.rej`) and check it with `suasor config validate [--fix]` (alias: `validate-config`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local / notion / jira — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Back up your local store with `suasor export backup` and audit / purge ingested data with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
 
 ### From source
 
