@@ -242,6 +242,16 @@ roots = [
       expect(out).toContain('\n  "ok"'); // pretty-printed, CLI-wide convention
     });
 
+    test("a clean config with --fix still carries the applied/remaining pair", async () => {
+      writeFileSync(configPath, '[embedding]\nbackend = "disabled"\n', "utf8");
+      const { code, out } = await run(["validate-config", "--fix", "--json"]);
+      expect(code).toBe(0);
+      const parsed = JSON.parse(out) as { ok: boolean; applied: unknown[]; remaining: unknown[] };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.applied).toEqual([]);
+      expect(parsed.remaining).toEqual([]);
+    });
+
     test("findings emit as structured objects and gate the exit code", async () => {
       writeFileSync(configPath, '[connectors.github]\nrepo = ["a/b"]\n', "utf8");
       const { code, out } = await run(["validate-config", "--json"]);

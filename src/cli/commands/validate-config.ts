@@ -181,7 +181,15 @@ export class ValidateConfigCommand extends SuasorCommand {
 
     if (findings.length === 0) {
       if (this.json) {
-        this.writeJson({ ok: true, configPath, findings: [], advisories });
+        // With --fix the documented envelope always carries the applied /
+        // remaining pair, even when a clean config left nothing to repair.
+        this.writeJson({
+          ok: true,
+          configPath,
+          findings: [],
+          ...(this.fix ? { applied: [], remaining: [] } : {}),
+          advisories,
+        });
         return 0;
       }
       this.context.stdout.write(`config is valid: ${configPath}\n`);
