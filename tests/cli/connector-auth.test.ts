@@ -234,6 +234,33 @@ describe("AUTH_SPECS table (SSOT)", () => {
       expect(specSecret).toBe(registryPrimary);
     }
   });
+
+  test("each spec's docsAnchor resolves to a real connectors.md heading (#567)", async () => {
+    // The onboard wizard prints `guide/connectors.md#<docsAnchor>` before the
+    // token prompt; a heading rename would silently 404 the guidance line, so
+    // regenerate the GitHub-style anchors from the doc and require membership.
+    const doc = await Bun.file(new URL("../../docs/guide/connectors.md", import.meta.url)).text();
+    const anchors = new Set(
+      [...doc.matchAll(/^#{1,6} (.+)$/gm)].map((m) =>
+        (m[1] as string)
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}\s-]/gu, "")
+          .trim()
+          .replace(/\s+/g, "-"),
+      ),
+    );
+    for (const name of authConnectorNames()) {
+      const spec = AUTH_SPECS[name];
+      expect(spec?.docsAnchor).toBeTruthy();
+      expect(spec?.minScopes).toBeTruthy();
+      expect(anchors.has(spec?.docsAnchor ?? "")).toBe(true);
+    }
+    // The credential-less connectors' guidance (onboard, #567 item 5) links the
+    // same doc with a `<name>-<name>` anchor; guard those headings too (the
+    // link checker cannot verify a dynamic docsUrl argument statically).
+    expect(anchors.has("web-web")).toBe(true);
+    expect(anchors.has("local-local")).toBe(true);
+  });
 });
 
 describe("AUTH_SPECS.test probe wiring (injected secret resolver)", () => {

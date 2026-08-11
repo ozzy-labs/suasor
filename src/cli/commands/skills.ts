@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { Command, Option } from "clipanion";
 import { VERSION } from "../../version.ts";
 import { SuasorCommand } from "../base-command.ts";
+import { docsUrl } from "../doc-ref.ts";
 
 /** Install targets for assistant skills (ADR-0008). Mirrors `skills` module. */
 const SCOPES = ["claude", "agents", "all"] as const;
@@ -150,6 +151,16 @@ export class SkillsInstallCommand extends SuasorCommand {
       `${this.dryRun ? "Dry run: " : ""}${created} created, ${updated} updated, ${unchanged} unchanged` +
         `${skipped.length > 0 ? `, ${skipped.length} skipped` : ""} (scope=${this.scope}).\n`,
     );
+    if (!this.dryRun) {
+      // Close with what happens next (Issue #567): counts alone dead-end. The
+      // skills load on the AI CLI's next session, and they reach Suasor over
+      // MCP — a registration `suasor onboard` prints (init step 2), not
+      // something this verb performs.
+      this.context.stdout.write(
+        "next: the skills load on your AI CLI's next session; they call Suasor via MCP " +
+          `(registration snippet: \`suasor onboard\`) — guide: ${docsUrl("guide/skills.md")}\n`,
+      );
+    }
     if (skipped.length > 0) {
       const names = [...new Set(skipped.map((r) => r.name))].join(", ");
       this.context.stderr.write(

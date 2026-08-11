@@ -30,6 +30,11 @@ import { SuasorCommand } from "../base-command.ts";
 import { BINARY_SCOPE_DOC, currentBuildIsBinary, standaloneGate } from "../build-target.ts";
 import { noPerAccountConfigMessage } from "../connector-account.ts";
 import { docsUrl } from "../doc-ref.ts";
+import {
+  type AuthFailureKind,
+  authFailureAdvice,
+  classifyAuthFailure,
+} from "../onboard/auth-advice.ts";
 import { loadOnboardBridge, onboardBridgeNames } from "../onboard/bridges.ts";
 import {
   DOCKER_RUN_COMMAND,
@@ -85,6 +90,13 @@ interface ConnectorReport {
   authStored: boolean;
   authTest: "ok" | "failed" | "skipped";
   authTestDetail?: string;
+  /**
+   * Why the probe failed (additive; only set when `authTest === "failed"`,
+   * Issue #567): `network` — the API was unreachable (the token may be fine),
+   * `credential` — the API rejected the token. Drives which recovery command
+   * the wizard and the recap name.
+   */
+  authFailureKind?: AuthFailureKind;
   configAppended: boolean;
   /**
    * How the appended `[connectors.X]` slice was produced (ADR-0030, Issue #195):
@@ -98,6 +110,18 @@ interface ConnectorReport {
   /** Count of ids discovered when `configSource === "discovery"`. */
   discovered?: number;
 }
+
+/**
+ * Connectors with no credential at all, mapped to the config key that IS their
+ * setup (Issue #567 item 5): the actionable step for `web` is listing `urls`,
+ * for `local` it is listing `roots` — not "set credentials". Their guide
+ * sections are headed `Web (\`web\`)` / `Local (\`local\`)`, so the doc anchor
+ * is `<name>-<name>`.
+ */
+const CREDENTIAL_LESS_SCOPE_KEY: Record<string, string> = {
+  web: "urls",
+  local: "roots",
+};
 
 /** Outcome of the per-connector config-slice append (discovery vs template). */
 interface ConfigAppendOutcome {
@@ -404,8 +428,16 @@ export class OnboardCommand extends SuasorCommand {
           // with no token at all (web / local). Bridge connectors (slack) are
           // dispatched above and never reach this branch (#458).
           if (!this.json) {
+            // web / local need no credentials at all — telling their users to
+            // "set credentials" sends them hunting for a token that does not
+            // exist; what these connectors need is their ingest scope config
+            // (Issue #567 item 5).
+            const scopeKey = CREDENTIAL_LESS_SCOPE_KEY[connector];
             stdout.write(
-              `${connector}: no generic auth verb — set credentials per ${docsUrl("guide/connectors.md")}.\n`,
+              scopeKey !== undefined
+                ? `${connector}: needs no credentials — list ${scopeKey} in [connectors.${connector}] ` +
+                    `(see ${docsUrl(`guide/connectors.md#${connector}-${connector}`)}).\n`
+                : `${connector}: no generic auth verb — set credentials per ${docsUrl("guide/connectors.md")}.\n`,
             );
           }
         } else if (stored === "no-token") {
@@ -438,11 +470,18 @@ export class OnboardCommand extends SuasorCommand {
           const test = await this.authTest(connector, this.account);
           report.authTest = test.ok ? "ok" : "failed";
           report.authTestDetail = test.detail;
+          // Classify the failure (Issue #567): a transport error ("fetch
+          // failed", ECONNREFUSED, …) means the API was unreachable — the token
+          // may be fine and `auth set` is the wrong advice — while an API
+          // rejection means re-storing the credential IS the fix.
+          if (!test.ok) report.authFailureKind = classifyAuthFailure(test.detail);
           if (!this.json) {
+            const authAccount = this.account === undefined ? "" : ` --account ${this.account}`;
             stdout.write(
               test.ok
                 ? `${who}: auth test ok — ${test.detail}\n`
-                : `${who}: auth test FAILED — ${test.detail} (token saved; fix and re-run 'auth test')\n`,
+                : `${who}: auth test FAILED — ${test.detail} ` +
+                    `(${authFailureAdvice(report.authFailureKind ?? "credential", connector, authAccount)})\n`,
             );
           }
         }
@@ -672,6 +711,7 @@ export class OnboardCommand extends SuasorCommand {
         ...(r.account !== undefined ? { account: r.account } : {}),
         authFlow,
         authTest: r.authTest,
+        ...(r.authFailureKind !== undefined ? { authFailureKind: r.authFailureKind } : {}),
         configSource: r.configSource,
         ...(r.discovered !== undefined ? { discovered: r.discovered } : {}),
         ...(verb !== undefined ? { discoverySkippedVerb: verb } : {}),
@@ -760,13 +800,16 @@ export class OnboardCommand extends SuasorCommand {
     const all = connectorNames();
     const binary = currentBuildIsBinary();
     const candidates = binary ? all.filter((name) => connectorBundledInBinary(name)) : all;
+    // The menu is a prompt, so it goes to stderr (Issue #567 item 4): `--json`
+    // promises a machine-readable stdout, and a TTY run without --connector
+    // still has to solicit the selection.
     if (binary && candidates.length < all.length) {
-      this.context.stdout.write(
+      this.context.stderr.write(
         `note: this standalone binary bundles only: ${candidates.join(", ")} — ` +
           `set up the rest via the npm package or Docker (see ${BINARY_SCOPE_DOC}).\n`,
       );
     }
-    this.context.stdout.write(renderConnectorMenu(candidates));
+    this.context.stderr.write(renderConnectorMenu(candidates));
     const raw = (await readLine(this.context.stdin)).trim();
     return resolveSelection(raw, candidates);
   }
@@ -923,10 +966,21 @@ export class OnboardCommand extends SuasorCommand {
 
     if (interactive) {
       const forAccount = account === undefined ? "" : ` for account '${account}'`;
-      this.context.stdout.write(
+      // Prompts go to stderr: `--json` promises a machine-readable stdout, and
+      // on a TTY the wizard still has to solicit the token (Issue #567 item 4).
+      // The old "(input is read from stdin)" parenthetical is dropped — this
+      // branch only runs on a TTY, where it read as noise (item 2).
+      // One acquisition line first: where to issue the token and the minimum
+      // access it needs, so the prompt is answerable without leaving the
+      // terminal to search for "<connector> token" (item 2).
+      this.context.stderr.write(
+        `${connector}: token guide — ${docsUrl(`guide/connectors.md#${spec.docsAnchor}`)} ` +
+          `(minimum access: ${spec.minScopes})\n`,
+      );
+      this.context.stderr.write(
         alreadyStored
-          ? `A ${connector} ${spec.secretLabel}${forAccount} is already configured — press Enter to keep it, or paste a new one (input is read from stdin):\n`
-          : `Paste the ${connector} ${spec.secretLabel}${forAccount} and press Enter (input is read from stdin):\n`,
+          ? `A ${connector} ${spec.secretLabel}${forAccount} is already configured — press Enter to keep it, or paste a new one:\n`
+          : `Paste the ${connector} ${spec.secretLabel}${forAccount} and press Enter:\n`,
       );
     }
     // Line-based, echo-suppressed read (Issue #383): on a TTY this resolves on

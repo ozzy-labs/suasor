@@ -151,7 +151,10 @@ export class InitCommand extends SuasorCommand {
         "  2. suasor onboard          # guided setup: connector, token, config, first sync",
         `     …or configure by hand:  ${docsUrl("guide/connectors.md")}`,
         `  3. suasor sync             # re-ingest any time; schedule it: ${docsUrl("guide/scheduling.md")}`,
-        "  4. suasor skills install   # optional: assistant skills + MCP host registration",
+        // `skills install` only writes the skill mirrors — MCP host
+        // registration is a separate step (onboard prints the snippet), so this
+        // line must not claim it (Issue #567).
+        `  4. suasor skills install   # optional: assistant skills for your AI CLI (${docsUrl("guide/skills.md")})`,
         "",
       ].join("\n"),
     );

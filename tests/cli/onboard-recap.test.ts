@@ -43,6 +43,35 @@ describe("renderRecap", () => {
     expect(recapHasFailure(input)).toBe(true);
   });
 
+  test("a network-classified auth failure → connectivity advice, not `auth set` (#567)", () => {
+    const input = {
+      connectors: [
+        ok({ authTest: "failed", authFailureKind: "network", configSource: "template" }),
+      ],
+      synced: false,
+      syncExitCode: null,
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("could not reach the github API");
+    expect(text).toContain("check connectivity");
+    expect(text).toContain("suasor github auth test");
+    expect(text).not.toContain("auth set");
+    expect(recapHasFailure(input)).toBe(true);
+  });
+
+  test("a credential-classified auth failure → the `auth set` re-store path (#567)", () => {
+    const input = {
+      connectors: [
+        ok({ authTest: "failed", authFailureKind: "credential", configSource: "template" }),
+      ],
+      synced: false,
+      syncExitCode: null,
+    };
+    const text = renderRecap(input);
+    expect(text).toContain("suasor github auth set");
+    expect(text).toContain("suasor github auth test");
+  });
+
   test("a failed first sync → sync FAILED line + exit-worthy", () => {
     const input = { connectors: [ok()], synced: true, syncExitCode: 1 };
     const text = renderRecap(input);

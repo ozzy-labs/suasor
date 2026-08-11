@@ -13,7 +13,9 @@
  *
  * Lazy-import discipline (NFR-PRF-1): heavy modules load inside the functions.
  */
+import { docsUrl } from "../doc-ref.ts";
 import { readPlainLine, readSecretLine } from "../read-secret.ts";
+import { authFailureAdvice, classifyAuthFailure } from "./auth-advice.ts";
 import type { OnboardBridge, OnboardBridgeDeps } from "./bridges.ts";
 
 const SLACK = "slack";
@@ -75,7 +77,15 @@ async function runSlackBridge(deps: OnboardBridgeDeps): Promise<number | undefin
   // on a TTY and never echoes the token.
   if (!deps.skipAuth) {
     if (deps.interactive) {
-      stdout.write(
+      // Prompts go to stderr (Issue #567 item 4): `--json` promises a
+      // machine-readable stdout, and the wizard still has to solicit the token
+      // on a TTY. The acquisition line first (item 2): the bundled App manifest
+      // carries every required scope, so it is the guidance worth one line.
+      stderr.write(
+        `slack: token guide — ${docsUrl("guide/connectors.md#slack")} ` +
+          "(create the App from the bundled manifest — it carries every required scope; paste the xoxb-… Bot Token)\n",
+      );
+      stderr.write(
         "Paste the slack token(s) and press Enter — multiple tokens comma-separated " +
           "(the pool is replaced as a whole):\n",
       );
@@ -175,9 +185,13 @@ async function slackAuthTest(
     if (!deps.skipAuth) {
       deps.report.authTest = "failed";
       deps.report.authTestDetail = message;
+      // Classified advice (Issue #567): an unreachable API gets "check
+      // connectivity", a rejected token gets the `auth set` re-store path.
+      const kind = classifyAuthFailure(message);
+      deps.report.authFailureKind = kind;
       if (!deps.json) {
         deps.stdout.write(
-          `slack: auth test FAILED — ${message} (token saved; fix and re-run \`suasor slack auth test\`).\n`,
+          `slack: auth test FAILED — ${message} (${authFailureAdvice(kind, SLACK)}).\n`,
         );
       }
     }
