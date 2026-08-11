@@ -1,6 +1,6 @@
 ---
 name: slack-triage
-description: 「Slack の未処理を捌いて」「mention/DM まとめて」「Slack で呼ばれてるやつ」「Slack の未読対応」と頼まれたら、Suasor MCP の demand.list（source=slack の @mention / DM 未処理 signal）を集めて緊急度・種別で整理し、action が要るものは inbox.add で捕捉 / source.get → propose.generate(source_extract) で task・decision・返信下書き候補へ橋渡しし、対応済み / 不要は demand.mark / demand.mark で印を付ける。demand の列挙は read で自律 OK、書き込み橋渡しは HITL。
+description: 「Slack の未処理を捌いて」「mention/DM まとめて」「Slack で呼ばれてるやつ」「Slack の未読対応」と頼まれたら、Suasor MCP の demand.list（source=slack の @mention / DM 未処理 signal）を集めて緊急度・種別で整理し、action が要るものは inbox.add で捕捉 / source.get → propose.generate(source_extract) で task・decision・返信下書き候補へ橋渡しし、対応済み / 不要は demand.mark（acked / dismissed）で印を付ける。demand の列挙は read で自律 OK、書き込み橋渡しは HITL。
 readOnly: false
 category: triage
 triggers:

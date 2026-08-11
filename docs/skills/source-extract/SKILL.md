@@ -6,7 +6,7 @@ category: triage
 triggers:
   - この資料から task 抽出
   - これに含まれる decisions 教えて
-  - "<source_id> から候補を"
+  - この source から候補を
   - このドキュメントから ToDo 拾って
 pairs: []
 mcp_tools_read:
