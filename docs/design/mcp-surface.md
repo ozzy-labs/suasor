@@ -142,9 +142,9 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | tool | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|---|
-| `task.list` | `state?: string` / `dueBefore?: string` / `dueWithinDays?: int` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
+| `task.list` | `state?: "proposed"\|"open"\|"in_progress"\|"completed"\|"dropped"` / `dueBefore?: string` / `dueWithinDays?: int` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
 | `decision.list` | （なし） | `recorded_at`（`recordedAfter` / `recordedBefore`） | `{ "decisions": [...] }` |
-| `inbox.list` | `state?: string` / `sourceType?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
+| `inbox.list` | `state?: "open"\|"snoozed"\|"done"\|"dismissed"` / `sourceType?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
 
 `task.list` の各 task レコードは `dueDate` / `priority`（low / normal / high・null 可）と、read 時派生の `overdue`（`dueDate < now AND state ∈ {open, in_progress}`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）を持つ。`dueBefore` は `due_date < ?` で絞り（null due は除外）、`dueWithinDays: N` は「今日/今週の優先」観点で `due_date < now + N 日`（上限 exclusive、null due 除外）に絞る（`now` は overdue と同じく注入可能で決定論的）、`overdue: true` は overdue な task のみに絞る。overdue は projection に焼かず read 時に計算する（`now` は決定論テスト用に注入可能、replay 不変性を保つため・[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 
@@ -163,7 +163,7 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
-| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` / `fullBody?: boolean` / `maxBodyChars?: int` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
+| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: DemandKind[]`（enum: slack `mention`/`dm`、github reason（`assign`/`author`/`mention`/`review_requested`/`team_mention`）、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`。範囲外はスキーマエラー）/ `includeSeen?: boolean` / `fullBody?: boolean` / `maxBodyChars?: int` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
 
 `selfUserId` も config も無いと slack mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は github mention notification のみ）。
 
