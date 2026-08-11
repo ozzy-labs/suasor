@@ -18,6 +18,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { McpToolError } from "../mcp/errors.ts";
 
 /** Input to `person.merge`. */
 export const PersonMergeInput = z.object({
@@ -51,7 +52,11 @@ export function personMerge(
   const { targetPersonId, sourcePersonId } = PersonMergeInput.parse(input);
 
   if (targetPersonId === sourcePersonId) {
-    throw new Error("person.merge: cannot merge a person into itself");
+    throw new McpToolError(
+      "INVALID_INPUT",
+      "person.merge: cannot merge a person into itself",
+      "target and source must be distinct persons (no self-merge).",
+    );
   }
 
   const sqlite = store.connection.sqlite;
@@ -67,7 +72,11 @@ export function personMerge(
   if (movedIdentities === 0) {
     const exists = sqlite.query("SELECT 1 FROM persons WHERE id = ?").get(sourcePersonId);
     if (exists === null) {
-      throw new Error(`person.merge: unknown source person '${sourcePersonId}'`);
+      throw new McpToolError(
+        "MISSING_ENTITY",
+        `person.merge: unknown source person '${sourcePersonId}'`,
+        "Check both person ids via person.list.",
+      );
     }
     return { targetPersonId, sourcePersonId, movedIdentities: 0, status: "noop" };
   }

@@ -124,7 +124,16 @@ describe("MCP propose / task.create write surface (#12, HITL)", () => {
       },
     })) as { isError?: boolean; content: { text?: string }[] };
     expect(res.isError).toBe(true);
-    expect(res.content[0]?.text).toContain('not valid for mode "reply_draft"');
+    // Structured error contract (ADR-0031 / #568): the body is {code,message,
+    // hint} JSON, not a bare string, so the host can branch on the code.
+    const body = JSON.parse(res.content[0]?.text ?? "{}") as {
+      code: string;
+      message: string;
+      hint?: string;
+    };
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.message).toContain('not valid for mode "reply_draft"');
+    expect(body.hint).toBeTruthy();
   });
 
   test("propose.list is a read tool present on read-only and write servers", async () => {

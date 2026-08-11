@@ -20,6 +20,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { McpToolError } from "../mcp/errors.ts";
 import { publishedTaskExternalIds } from "../mcp/queries.ts";
 import { type Candidate, CandidateInput, MODE_ALLOWED_KINDS, ProposeMode } from "./candidates.ts";
 import { candidateId, entityId } from "./id.ts";
@@ -72,7 +73,8 @@ export interface ProposeGenerateOutput {
  * returns them for the host to present for approval.
  *
  * @throws {z.ZodError} when the input shape is invalid.
- * @throws {Error} when a candidate's `kind` is not allowed for the given mode.
+ * @throws {McpToolError} `INVALID_INPUT` when a candidate's `kind` is not
+ *   allowed for the given mode (ADR-0031 — the host branches on the code).
  */
 export function proposeGenerate(input: ProposeGenerateInput): ProposeGenerateOutput {
   const { mode, candidates } = ProposeGenerateInput.parse(input);
@@ -80,9 +82,11 @@ export function proposeGenerate(input: ProposeGenerateInput): ProposeGenerateOut
 
   const stamped: Candidate[] = candidates.map((candidate) => {
     if (!allowed.includes(candidate.kind)) {
-      throw new Error(
+      throw new McpToolError(
+        "INVALID_INPUT",
         `candidate kind "${candidate.kind}" is not valid for mode "${mode}" ` +
           `(allowed: ${allowed.join(", ")})`,
+        `Use one of the allowed kinds for mode "${mode}" (${allowed.join(", ")}), or pick the mode that allows "${candidate.kind}".`,
       );
     }
     return { ...candidate, candidateId: candidateId(mode, candidate) } as Candidate;

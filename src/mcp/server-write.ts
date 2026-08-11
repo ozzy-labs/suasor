@@ -38,7 +38,7 @@ import { demandAck, demandDismiss } from "../propose/demand.ts";
 import { proposeFeedback } from "../propose/feedback.ts";
 import { persistProposals } from "../propose/generate.ts";
 import { inboxAdd } from "../propose/inbox-add.ts";
-import { inboxTriage, TRIAGE_ACTIONS, TriageError } from "../propose/inbox-triage.ts";
+import { inboxTriage, TRIAGE_ACTIONS } from "../propose/inbox-triage.ts";
 import { linkAdd } from "../propose/link-add.ts";
 import { linkRemove } from "../propose/link-remove.ts";
 import { personMerge } from "../propose/person-merge.ts";
@@ -154,8 +154,15 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ mode, candidates }) => {
-      const result = persistProposals(write.store, { mode, candidates });
-      return jsonResult(result);
+      try {
+        const result = persistProposals(write.store, { mode, candidates });
+        return jsonResult(result);
+      } catch (error) {
+        // A kind not allowed for the mode throws a typed INVALID_INPUT
+        // McpToolError from the service (ADR-0031); anything else degrades to
+        // INTERNAL instead of escaping as an unstructured SDK error.
+        return toToolError(error);
+      }
     },
   );
 
@@ -241,11 +248,15 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ candidateId, reason }) => {
-      const result = proposeReject(write.store, {
-        candidateId,
-        ...(reason !== undefined ? { reason } : {}),
-      });
-      return jsonResult(result);
+      try {
+        const result = proposeReject(write.store, {
+          candidateId,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -332,8 +343,12 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ candidateId, reason }) => {
-      const result = proposeFeedback(write.store, { candidateId, reason });
-      return jsonResult(result);
+      try {
+        const result = proposeFeedback(write.store, { candidateId, reason });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -368,13 +383,17 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ title, dueDate, priority, sourceExternalIds }) => {
-      const result = taskCreate(write.store, {
-        title,
-        ...(dueDate !== undefined ? { dueDate } : {}),
-        ...(priority !== undefined ? { priority } : {}),
-        ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
-      });
-      return jsonResult(result);
+      try {
+        const result = taskCreate(write.store, {
+          title,
+          ...(dueDate !== undefined ? { dueDate } : {}),
+          ...(priority !== undefined ? { priority } : {}),
+          ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
+        });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -549,12 +568,16 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ title, rationale, sourceExternalIds }) => {
-      const result = decisionRecord(write.store, {
-        title,
-        ...(rationale !== undefined ? { rationale } : {}),
-        ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
-      });
-      return jsonResult(result);
+      try {
+        const result = decisionRecord(write.store, {
+          title,
+          ...(rationale !== undefined ? { rationale } : {}),
+          ...(sourceExternalIds !== undefined ? { sourceExternalIds } : {}),
+        });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -579,8 +602,12 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ sourceExternalId }) => {
-      const result = inboxAdd(write.store, { sourceExternalId });
-      return jsonResult(result);
+      try {
+        const result = inboxAdd(write.store, { sourceExternalId });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -620,19 +647,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         });
         return jsonResult(result);
       } catch (error) {
-        // Invalid state-machine transitions surface as structured tool errors
-        // (not a crash) so the host can branch on the code and show the user a
-        // fix. A missing item → MISSING_ENTITY; a non-`open` item → INVALID_STATE.
-        if (error instanceof TriageError) {
-          const missing = error.message.includes("not found");
-          return toolError({
-            code: missing ? "MISSING_ENTITY" : "INVALID_STATE",
-            message: error.message,
-            hint: missing
-              ? "Check the inbox id via inbox.list."
-              : "Only an 'open' inbox item can be triaged; list open items via inbox.list.",
-          });
-        }
+        // Invalid state-machine transitions throw a typed TriageError (a
+        // McpToolError carrying MISSING_ENTITY / INVALID_STATE + hint at the
+        // throw site, ADR-0031); toToolError keeps the code and anything else
+        // degrades to INTERNAL instead of asserting a wrong cause.
         return toToolError(error);
       }
     },
@@ -666,16 +684,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         const result = linkAdd(write.store, { fromKind, fromId, toKind, toId });
         return jsonResult(result);
       } catch (error) {
-        // A self-loop (or other invalid input) surfaces as a structured tool
-        // error (INVALID_INPUT) so the host can show the rejection rather than
-        // crash, and branch on the code.
-        if (error instanceof Error) {
-          return toolError({
-            code: "INVALID_INPUT",
-            message: error.message,
-            hint: "from and to must be distinct entities (no self-loop).",
-          });
-        }
+        // A self-loop throws a typed INVALID_INPUT McpToolError from the
+        // service (ADR-0031); toToolError keeps its code/hint and lets any
+        // other failure (e.g. SQLite I/O) degrade to INTERNAL instead of
+        // asserting a self-loop that never happened.
         return toToolError(error);
       }
     },
@@ -705,16 +717,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         const result = linkRemove(write.store, { linkId });
         return jsonResult(result);
       } catch (error) {
-        // Removing an absent link surfaces as a structured tool error
-        // (MISSING_ENTITY) so the host can branch on the code and the user can
-        // correct it.
-        if (error instanceof Error) {
-          return toolError({
-            code: "MISSING_ENTITY",
-            message: error.message,
-            hint: "Only manual links are removable; find the linkId via graph.related (manual_link edges carry it).",
-          });
-        }
+        // An absent link throws a typed MISSING_ENTITY McpToolError from the
+        // service (ADR-0031); toToolError keeps its code/hint and lets any
+        // other failure degrade to INTERNAL instead of claiming the link is
+        // missing.
         return toToolError(error);
       }
     },
@@ -760,18 +766,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         const result = personMerge(write.store, { targetPersonId, sourcePersonId });
         return jsonResult(result);
       } catch (error) {
-        // A self-merge is INVALID_INPUT; an unknown source person is
-        // MISSING_ENTITY — structured so the host can branch + show a fix.
-        if (error instanceof Error) {
-          const missing = error.message.includes("unknown source person");
-          return toolError({
-            code: missing ? "MISSING_ENTITY" : "INVALID_INPUT",
-            message: error.message,
-            hint: missing
-              ? "Check both person ids via person.list."
-              : "target and source must be distinct persons (no self-merge).",
-          });
-        }
+        // A self-merge throws INVALID_INPUT and an unknown source person
+        // MISSING_ENTITY — both typed McpToolErrors from the service
+        // (ADR-0031); toToolError keeps the code/hint and any other failure
+        // degrades to INTERNAL instead of asserting a wrong cause.
         return toToolError(error);
       }
     },
@@ -811,15 +809,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         });
         return jsonResult(result);
       } catch (error) {
-        // An unknown (connector, handle) identity is MISSING_ENTITY —
-        // structured so the host can branch on the code and show a fix.
-        if (error instanceof Error) {
-          return toolError({
-            code: "MISSING_ENTITY",
-            message: error.message,
-            hint: "Check the (connector, handle) identity via person.list.",
-          });
-        }
+        // An unknown (connector, handle) identity throws a typed
+        // MISSING_ENTITY McpToolError from the service (ADR-0031); toToolError
+        // keeps its code/hint and any other failure degrades to INTERNAL
+        // instead of claiming the identity is missing.
         return toToolError(error);
       }
     },
@@ -862,7 +855,11 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
           : state === "dismissed"
             ? commitmentDismiss
             : commitmentReopen;
-      return jsonResult(apply(write.store, { commitmentId }));
+      try {
+        return jsonResult(apply(write.store, { commitmentId }));
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -890,7 +887,11 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     },
     async ({ externalId, state }) => {
       const apply = state === "acked" ? demandAck : demandDismiss;
-      return jsonResult(apply(write.store, { externalId }));
+      try {
+        return jsonResult(apply(write.store, { externalId }));
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -933,21 +934,25 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       if (!decision.proceed) {
         return confirmationDeclined("source.forget", `source ${externalId} was not forgotten`);
       }
-      const result = sourceForget(write.store, {
-        externalId,
-        cascade,
-        ...(reason !== undefined ? { reason } : {}),
-      });
-      // Tombstone notice (ADR-0026 R1-1): when a connector is still enabled, tell
-      // the caller the tombstone is what keeps a still-upstream source from being
-      // re-ingested — and that source.unforget lifts it.
-      const note =
-        result.tombstoned && anyConnectorEnabled(write.config.connectors)
-          ? "A tombstone now prevents this source from being re-ingested while its " +
-            "connector remains enabled; if it still exists upstream it will not " +
-            "resurrect on the next sync. Use source.unforget to re-allow ingestion."
-          : undefined;
-      return jsonResult({ ...result, ...(note !== undefined ? { note } : {}) });
+      try {
+        const result = sourceForget(write.store, {
+          externalId,
+          cascade,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+        // Tombstone notice (ADR-0026 R1-1): when a connector is still enabled,
+        // tell the caller the tombstone is what keeps a still-upstream source
+        // from being re-ingested — and that source.unforget lifts it.
+        const note =
+          result.tombstoned && anyConnectorEnabled(write.config.connectors)
+            ? "A tombstone now prevents this source from being re-ingested while its " +
+              "connector remains enabled; if it still exists upstream it will not " +
+              "resurrect on the next sync. Use source.unforget to re-allow ingestion."
+            : undefined;
+        return jsonResult({ ...result, ...(note !== undefined ? { note } : {}) });
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
@@ -969,8 +974,12 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async ({ externalId }) => {
-      const result = sourceUnforget(write.store, { externalId });
-      return jsonResult(result);
+      try {
+        const result = sourceUnforget(write.store, { externalId });
+        return jsonResult(result);
+      } catch (error) {
+        return toToolError(error);
+      }
     },
   );
 
