@@ -184,4 +184,26 @@ describe("suasor export backup", () => {
     })();
     expect(after).toBe(before);
   });
+
+  // Issue #573: --json for scripting a backup cron without scraping human text.
+  test("--json emits a pretty-printed ok envelope", async () => {
+    await run(["init"]);
+    await seed("gh:1", "alpha");
+    const out = join(dir, "backup.db");
+    const { code, out: stdout } = await run(["export", "backup", "--out", out, "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout) as {
+      ok: boolean;
+      outPath: string;
+      format: string;
+      sizeBytes: number;
+      events: number;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.outPath).toBe(out);
+    expect(parsed.format).toBe("sqlite");
+    expect(parsed.events).toBe(1);
+    expect(parsed.sizeBytes).toBeGreaterThan(0);
+    expect(stdout).toContain('\n  "ok"'); // pretty-printed, CLI-wide convention
+  });
 });

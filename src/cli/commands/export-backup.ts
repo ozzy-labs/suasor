@@ -47,6 +47,7 @@ export class ExportBackupCommand extends SuasorCommand {
       ["Back up to a default-named file", "suasor export backup"],
       ["Back up to a chosen path", "suasor export backup --out /backups/suasor.db"],
       ["Compressed archive", "suasor export backup --format tgz"],
+      ["Machine-readable output for a backup cron", "suasor export backup --json"],
     ],
   });
 
@@ -56,6 +57,10 @@ export class ExportBackupCommand extends SuasorCommand {
 
   format = Option.String("--format", "sqlite", {
     description: "Backup format: sqlite (default, single .db) or tgz (gzip tar).",
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the backup result (path, format, size, events) as JSON.",
   });
 
   override async execute(): Promise<number> {
@@ -98,6 +103,19 @@ export class ExportBackupCommand extends SuasorCommand {
     // strictly read with no side effects on the live store (Issue invariant).
     try {
       const result = await backup.backupStoreFile(dbPath, outPath, format);
+      if (this.json) {
+        // Envelope (Issue #573): `ok` + named fields, pretty-printed — the
+        // shape convention for new --json surfaces (doctor / digest parity).
+        const envelope = {
+          ok: true,
+          outPath: result.outPath,
+          format: result.format,
+          sizeBytes: result.sizeBytes,
+          events: result.events,
+        };
+        this.context.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+        return 0;
+      }
       this.context.stdout.write(
         `backup written: ${result.outPath}\n` +
           `  format: ${result.format}\n` +

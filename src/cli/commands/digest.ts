@@ -26,7 +26,8 @@ export class DigestCommand extends SuasorCommand {
       priority scorer's top-N (overdue / demand / due-soon, ADR-0041) plus brief
       completeness warnings — and delivers it to the job's channel (os-notification
       / file / slack-dm). No daemon: schedule it with your OS scheduler (ADR-0027).
-      With no configured job, nothing is sent (事前同意のない通知なし, ADR-0040).
+      With no configured job, nothing is sent (no notification without prior
+      consent, ADR-0040).
       Bundle/render only — summarization stays out of process (ADR-0006).
     `,
     examples: [

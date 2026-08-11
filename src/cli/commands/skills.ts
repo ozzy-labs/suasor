@@ -251,7 +251,7 @@ export class SkillsPruneCommand extends SuasorCommand {
     }
 
     if (this.json) {
-      this.context.stdout.write(`${JSON.stringify(results)}\n`);
+      this.context.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
       return 0;
     }
 
@@ -350,7 +350,7 @@ export class SkillsListCommand extends SuasorCommand {
 
     // --json keeps the established SkillStatus[] shape unchanged (ADR-0032 §(d)).
     if (this.json) {
-      this.context.stdout.write(`${JSON.stringify(statuses)}\n`);
+      this.context.stdout.write(`${JSON.stringify(statuses, null, 2)}\n`);
       return 0;
     }
 
@@ -443,7 +443,11 @@ export class SkillsSearchCommand extends SuasorCommand {
 
     if (this.json) {
       this.context.stdout.write(
-        `${JSON.stringify(matches.map((m) => ({ ...m.frontmatter, name: m.name })))}\n`,
+        `${JSON.stringify(
+          matches.map((m) => ({ ...m.frontmatter, name: m.name })),
+          null,
+          2,
+        )}\n`,
       );
       return 0;
     }
@@ -503,7 +507,7 @@ export class SkillsInfoCommand extends SuasorCommand {
     }
 
     if (this.json) {
-      this.context.stdout.write(`${JSON.stringify({ ...fm, name: this.name })}\n`);
+      this.context.stdout.write(`${JSON.stringify({ ...fm, name: this.name }, null, 2)}\n`);
       return 0;
     }
 

@@ -62,4 +62,45 @@ describe("createProgress (ADR-0026 parity)", () => {
     const renders = s.out.filter((w) => w.includes("processed"));
     expect(renders.at(-1)).toContain("x: 5 processed");
   });
+
+  // Issue #573: `sync` folds the currently-syncing connector names into the label.
+  describe("setLabel", () => {
+    test("re-renders immediately (unthrottled) with the new label and running count", () => {
+      const s = fakeStream(true);
+      let clock = 0;
+      const p = createProgress(s, "sync", undefined, () => clock);
+      clock = 100;
+      p.tick(); // renders "sync: 1 processed…"
+      clock = 110; // within the throttle window — setLabel must still render
+      p.setLabel("sync [slack,notion]");
+      const renders = s.out.filter((w) => w.includes("processed"));
+      expect(renders.at(-1)).toContain("sync [slack,notion]: 1 processed");
+    });
+
+    test("subsequent ticks render under the new label", () => {
+      const s = fakeStream(true);
+      let clock = 0;
+      const p = createProgress(s, "sync", undefined, () => clock);
+      p.setLabel("sync [slack]");
+      clock = 200;
+      p.tick();
+      const renders = s.out.filter((w) => w.includes("processed"));
+      expect(renders.at(-1)).toContain("sync [slack]: 1 processed");
+    });
+
+    test("an unchanged label does not re-render", () => {
+      const s = fakeStream(true);
+      const p = createProgress(s, "sync", undefined, () => 0);
+      p.setLabel("sync");
+      expect(s.out).toEqual([]);
+    });
+
+    test("is a no-op when the stream is not a TTY", () => {
+      const s = fakeStream(false);
+      const p = createProgress(s, "sync");
+      p.setLabel("sync [slack]");
+      p.tick();
+      expect(s.out).toEqual([]);
+    });
+  });
 });

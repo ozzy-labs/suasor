@@ -139,4 +139,15 @@ describe("suasor projections rebuild", () => {
     expect(out).toContain("Rebuilt projections from 1 event(s).");
     expect(out).not.toContain("embeddings drain");
   });
+
+  // Issue #573: --json for scripting rebuild in maintenance automation.
+  test("--json emits a pretty-printed ok envelope", async () => {
+    const { code, out } = await run(["projections", "rebuild", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out) as { ok: boolean; events: number; clearedEmbeddings: number };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.events).toBe(0);
+    expect(parsed.clearedEmbeddings).toBe(0);
+    expect(out).toContain('\n  "ok"'); // pretty-printed, CLI-wide convention
+  });
 });

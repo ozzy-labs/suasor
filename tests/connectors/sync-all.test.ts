@@ -512,4 +512,25 @@ describe("runBulkSync — bounded concurrency (Issue #269)", () => {
     expect(result.succeeded).toBe(1);
     expect(result.failed).toBe(1);
   });
+
+  // Issue #573: `sync`'s progress label tracks the currently-syncing set, so
+  // every start must be paired with an end on all outcomes.
+  test("onConnectorEnd pairs with onConnectorStart on success and on throw", async () => {
+    const events: string[] = [];
+    const result = await runBulkSync(store, {
+      names: ["good", "bad"],
+      connectors: { good: {}, bad: {} },
+      loadConnector: async (name) => {
+        if (name === "bad") throw new Error("load failed");
+        return fakeConnector(name, [rec(`${name}:1`, "x")]);
+      },
+      continueOnError: true,
+      concurrency: 1,
+      onConnectorStart: (name) => events.push(`start:${name}`),
+      onConnectorEnd: (name) => events.push(`end:${name}`),
+    });
+    expect(events).toEqual(["start:good", "end:good", "start:bad", "end:bad"]);
+    expect(result.succeeded).toBe(1);
+    expect(result.failed).toBe(1);
+  });
 });

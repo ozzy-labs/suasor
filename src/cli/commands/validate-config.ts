@@ -28,6 +28,22 @@
 import { Command, Option } from "clipanion";
 import { SuasorCommand } from "../base-command.ts";
 
+/**
+ * Project findings to their stable machine-readable shape (kind / path /
+ * message / fixable). `value` (the raw string a dangling-root fix removes) is a
+ * --fix implementation detail, not part of the JSON contract.
+ */
+function toFindingsJson(
+  findings: readonly { kind: string; path: string; message: string; fixable: boolean }[],
+): { kind: string; path: string; message: string; fixable: boolean }[] {
+  return findings.map((f) => ({
+    kind: f.kind,
+    path: f.path,
+    message: f.message,
+    fixable: f.fixable,
+  }));
+}
+
 export class ValidateConfigCommand extends SuasorCommand {
   // `config validate` is the canonical spelling (keeps the `config` noun group
   // discoverable from `suasor config --help`); `validate-config` is the
@@ -60,12 +76,17 @@ export class ValidateConfigCommand extends SuasorCommand {
     examples: [
       ["Validate the config", "suasor config validate"],
       ["Apply safe repairs", "suasor config validate --fix"],
+      ["Machine-readable output for a CI config gate", "suasor config validate --json"],
       ["Historical alias", "suasor validate-config"],
     ],
   });
 
   fix = Option.Boolean("--fix", false, {
     description: "Apply the safe, removal-only repairs (unknown keys, dangling local roots).",
+  });
+
+  json = Option.Boolean("--json", false, {
+    description: "Emit the findings / advisories (and applied repairs) as JSON.",
   });
 
   override async execute(): Promise<number> {
@@ -90,7 +111,12 @@ export class ValidateConfigCommand extends SuasorCommand {
     try {
       text = await fs.readFile(configPath, "utf8");
     } catch {
-      this.context.stderr.write(`error: no config.toml at ${configPath} (run \`suasor init\`)\n`);
+      const message = `no config.toml at ${configPath} (run \`suasor init\`)`;
+      if (this.json) {
+        this.writeJson({ ok: false, configPath, error: message });
+        return 1;
+      }
+      this.context.stderr.write(`error: ${message}\n`);
       return 1;
     }
 
@@ -101,9 +127,12 @@ export class ValidateConfigCommand extends SuasorCommand {
     } catch (err) {
       // A syntactically broken TOML file is the most fundamental invalid-value:
       // we cannot parse a tree to classify, so report and stop (no fix possible).
-      this.context.stderr.write(
-        `error: config.toml is not valid TOML: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
+      const message = `config.toml is not valid TOML: ${err instanceof Error ? err.message : String(err)}`;
+      if (this.json) {
+        this.writeJson({ ok: false, configPath, error: message });
+        return 1;
+      }
+      this.context.stderr.write(`error: ${message}\n`);
       return 1;
     }
 
@@ -161,19 +190,37 @@ export class ValidateConfigCommand extends SuasorCommand {
     const findings = [...structural, ...dimFindings];
 
     if (findings.length === 0) {
+      if (this.json) {
+        // With --fix the documented envelope always carries the applied /
+        // remaining pair, even when a clean config left nothing to repair.
+        this.writeJson({
+          ok: true,
+          configPath,
+          findings: [],
+          ...(this.fix ? { applied: [], remaining: [] } : {}),
+          advisories,
+        });
+        return 0;
+      }
       this.context.stdout.write(`config is valid: ${configPath}\n`);
       this.writeAdvisories(advisories);
       return 0;
     }
 
     // Report all findings grouped by kind for a scannable summary.
-    this.context.stdout.write(`validate-config: ${configPath}\n`);
-    for (const f of findings) {
-      const tag = this.fix && f.fixable ? "FIX " : f.fixable ? "fixable" : "------";
-      this.context.stdout.write(`  [${f.kind}] ${tag} ${f.path}: ${f.message}\n`);
+    if (!this.json) {
+      this.context.stdout.write(`validate-config: ${configPath}\n`);
+      for (const f of findings) {
+        const tag = this.fix && f.fixable ? "FIX " : f.fixable ? "fixable" : "------";
+        this.context.stdout.write(`  [${f.kind}] ${tag} ${f.path}: ${f.message}\n`);
+      }
     }
 
     if (!this.fix) {
+      if (this.json) {
+        this.writeJson({ ok: false, configPath, findings: toFindingsJson(findings), advisories });
+        return 1;
+      }
       const fixableCount = findings.filter((f) => f.fixable).length;
       this.context.stdout.write(
         `\n${findings.length} finding(s)` +
@@ -214,6 +261,19 @@ export class ValidateConfigCommand extends SuasorCommand {
     }
 
     if (applied.length === 0) {
+      if (this.json) {
+        // No repair applied → every finding remains (documented --fix shape:
+        // `applied` + `remaining` are always present together).
+        this.writeJson({
+          ok: false,
+          configPath,
+          findings: toFindingsJson(findings),
+          applied: [],
+          remaining: toFindingsJson(findings),
+          advisories,
+        });
+        return 1; // findings remain
+      }
       this.context.stdout.write("\nno safe repairs to apply.\n");
       this.writeAdvisories(advisories);
       return 1; // findings remain
@@ -228,17 +288,32 @@ export class ValidateConfigCommand extends SuasorCommand {
     } catch (err) {
       // Should not happen (removals only), but never leave a broken file silently.
       await fs.writeFile(configPath, text, "utf8");
-      this.context.stderr.write(
-        `error: repair produced invalid TOML; reverted: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
+      const message = `repair produced invalid TOML; reverted: ${err instanceof Error ? err.message : String(err)}`;
+      if (this.json) {
+        this.writeJson({ ok: false, configPath, error: message });
+        return 1;
+      }
+      this.context.stderr.write(`error: ${message}\n`);
       return 1;
     }
     const after = await validateConfig(reparsed, false);
+    const remaining = after.findings;
+
+    if (this.json) {
+      this.writeJson({
+        ok: remaining.length === 0,
+        configPath,
+        findings: toFindingsJson(findings),
+        applied,
+        remaining: toFindingsJson(remaining),
+        advisories,
+      });
+      return remaining.length > 0 ? 1 : 0;
+    }
 
     this.context.stdout.write(`\napplied ${applied.length} repair(s):\n`);
     for (const p of applied) this.context.stdout.write(`  - ${p}\n`);
 
-    const remaining = after.findings;
     if (remaining.length > 0) {
       this.context.stdout.write(
         `\n${remaining.length} finding(s) remain (not auto-fixable — edit manually):\n`,
@@ -252,6 +327,11 @@ export class ValidateConfigCommand extends SuasorCommand {
     this.context.stdout.write("\nconfig is now valid.\n");
     this.writeAdvisories(advisories);
     return 0;
+  }
+
+  /** Emit one pretty-printed JSON envelope (Issue #573 --json convention). */
+  private writeJson(payload: unknown): void {
+    this.context.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   }
 
   /**
