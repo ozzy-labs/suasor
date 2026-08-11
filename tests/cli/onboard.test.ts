@@ -7,7 +7,7 @@
  * tests focus on the wizard's own glue and its only new side effect.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli } from "../../src/cli/index.ts";
@@ -92,6 +92,16 @@ function ttyTokenStdin(...lines: string[]): { isTTY: true } & AsyncIterable<stri
     return: () => Promise.resolve({ value: undefined, done: true }),
   };
   return { isTTY: true, [Symbol.asyncIterator]: () => iterator };
+}
+
+/** A non-TTY (piped) stdin that yields the given line(s) then EOF. */
+function pipedTokenStdin(...lines: string[]): { isTTY: false } & AsyncIterable<string> {
+  return {
+    isTTY: false,
+    async *[Symbol.asyncIterator]() {
+      for (const line of lines) yield line;
+    },
+  };
 }
 
 describe("suasor onboard — wiring + validation", () => {
@@ -943,6 +953,49 @@ describe("suasor onboard — re-run keeps a stored token / empty input skips (Is
       expect(out).toContain("auth skipped");
       // Skipped auth is not a failure (same as --skip-auth): exit 0.
       expect(code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty piped token aborts instead of enabling a credential-less connector", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    clearEnvAndDisableNetwork();
+    const keychain = memoryKeychain();
+    try {
+      const { code, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: pipedTokenStdin("\n"),
+        keychain,
+      });
+      // Over a pipe an empty line is a failed secret fetch, not a gesture: the
+      // #559 skip is a TTY affordance only (Issue #596).
+      expect(err).toContain("error: no token provided for github");
+      expect(err).not.toContain("warning: no token provided");
+      expect(code).toBe(1);
+      // No enabled-but-credential-less slice is left behind.
+      expect(existsSync(join(dir, "config.toml"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty piped token does not silently keep a stored one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    clearEnvAndDisableNetwork();
+    const keychain = memoryKeychain();
+    keychain.set(KEYCHAIN_SERVICE, keychainAccount("github", "token"), "ghp_stale");
+    try {
+      const { code, out, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: pipedTokenStdin("\n"),
+        keychain,
+      });
+      // A rotation script whose token variable expanded empty must fail, not
+      // report success against the stale credential (Issue #596).
+      expect(err).toContain("error: no token provided for github");
+      expect(out).not.toContain("keeping the already-configured token");
+      expect(code).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
