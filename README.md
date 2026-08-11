@@ -44,6 +44,8 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 
 ### Upgrading
 
+**0.4.2 bounds list payloads**: `source.list` / `demand.list` / `brief` return a bounded `excerpt` in place of the full `body` — pass `fullBody: true` to restore the old shape ([details](docs/guide/troubleshooting.md#upgrading-to-042-list-tools-return-excerpt-not-body)).
+
 **0.3.0 renamed MCP tools and assistant skills with no backward-compatible aliases** (ADR-0046) — the mechanical [migration table](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046) lists every old → new name, plus `suasor skills prune` for the orphaned mirrors.
 
 ## Quickstart

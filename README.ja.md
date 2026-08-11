@@ -44,6 +44,8 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 
 ### アップグレード
 
+**0.4.2 は list 系の payload を上限付きにした**: `source.list` / `demand.list` / `brief` は全文 `body` の代わりに上限付き `excerpt` を返す — 従来の形が要るなら `fullBody: true` を渡す（[詳細](docs/guide/troubleshooting.md#upgrading-to-042-list-tools-return-excerpt-not-body)）。
+
 **0.3.0 は MCP tool と assistant skill を後方互換 alias なしで改名した**（ADR-0046）— 新旧の対応は[移行表](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046)にすべて載せてある（orphan 化した mirror の掃除は `suasor skills prune`）。
 
 ## クイックスタート

@@ -23,6 +23,26 @@ Failures *before* the first successful command usually come from one of three ca
 
    In both cases the fix is the same: pass each secret as an env override — `SUASOR_CONNECTOR_<NAME>_<SECRET>` (e.g. `SUASOR_CONNECTOR_GITHUB_TOKEN`) — and run the wizard with `onboard --skip-auth`. Then verify with `suasor doctor`.
 
+## Upgrading to 0.4.2: list tools return `excerpt`, not `body`
+
+`source.list`, `demand.list`, and the `sources` / `demand` sections of `brief` now return a bounded **`excerpt`** (240 characters by default) **in place of** the full `body` ([#564](https://github.com/ozzy-labs/suasor/issues/564)). The `body` field is *absent* from those rows, not shortened — a host reading `sources[].body` gets `undefined` rather than a truncated string.
+
+This closes a context-overflow hole: `search` has always defaulted to a bounded excerpt so a multi-hit answer cannot swamp the host's context ([ADR-0018](../adr/0018-knowledge-graph-traversal.md) payload suppression), but a single `brief` call could still return 50 full extracted-PDF or email bodies, with no way for the agent to ask for less.
+
+Two ways to get the full text back:
+
+| You want | Pass |
+| --- | --- |
+| Full text for one source | `source.get` (unchanged — always returns the whole body) |
+| Full text for a whole list | `fullBody: true` on `source.list` / `demand.list` / `brief` |
+| A different excerpt length | `maxBodyChars: <n>` |
+
+`fullBody: true` restores the exact pre-0.4.2 shape, so an existing integration can be unblocked with one parameter while you decide whether it needs the whole body at all.
+
+**The bundled skills need no change** — they already use `source.list` to *find* sources and `source.get` to read them. Only a host config, custom skill, or script that reads `body` straight off a list result is affected.
+
+While you are here: closed vocabularies on the read tools (`task.list` / `inbox.list` `state`, `graph.related` / `graph.expand` `kind`, `demand.list` `kinds`) are now **enums instead of free strings** ([#569](https://github.com/ozzy-labs/suasor/issues/569)). A value outside the vocabulary used to return an empty list silently; it now fails validation with the accepted values in the message. Nothing that passed a valid value changes.
+
 ## Upgrading to v0.3: the agent-surface contraction (ADR-0046)
 
 MCP tools and skills were **renamed with no backward-compatible aliases** ([ADR-0046](../adr/0046-agent-surface-contraction.md) decision 5). If a host config, custom skill, or script references an old name, replace it mechanically:
