@@ -161,7 +161,9 @@ export class SyncAllCommand extends SuasorCommand {
       const detail =
         this.connector !== undefined
           ? "no matching enabled connectors"
-          : "no connectors enabled (add a [connectors.<name>] section)";
+          : // Same pointer doctor gives (Issue #567 item 3): onboard is the
+            // path that writes the [connectors.<name>] section for you.
+            "no connectors enabled — run `suasor onboard` (or add a [connectors.<name>] section)";
       if (this.json) {
         // Same shape as the real run's `BulkSyncResult` — including the empty
         // `preSyncAdvisories` (Issue #544). Nothing was selected, so nothing was

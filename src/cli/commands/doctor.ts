@@ -495,7 +495,11 @@ export class DoctorCommand extends SuasorCommand {
         checks.push({
           name: "connectors",
           status: "info",
-          detail: "no connectors enabled (add a [connectors.<name>] section)",
+          // Point back at the wizard first (Issue #567 item 3): init's printed
+          // chain is doctor → onboard, and onboard is the path that writes the
+          // [connectors.<name>] section for you.
+          detail:
+            "no connectors enabled — run `suasor onboard` (or add a [connectors.<name>] section)",
         });
       } else if (missingCred.length > 0) {
         checks.push({

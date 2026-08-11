@@ -153,12 +153,13 @@ describe("suasor onboard — interactive connector selection (ADR-0029 §2, Issu
       // Select by name (the menu's number order is the registry order, which is
       // not part of this contract); --skip-auth/--skip-sync so the prompt line
       // is the only stdin we consume.
-      const { code, out } = await run(["onboard", "--skip-auth", "--skip-sync"], {
+      const { code, out, err } = await run(["onboard", "--skip-auth", "--skip-sync"], {
         configDir: dir,
         stdin: ttyStdin("github"),
       });
       expect(code).toBe(0);
-      expect(out).toContain("Select connector(s)");
+      // The menu is a prompt → stderr (Issue #567: --json keeps stdout clean).
+      expect(err).toContain("Select connector(s)");
       expect(out).toContain("appended [connectors.github]");
       const toml = await Bun.file(join(dir, "config.toml")).text();
       expect(toml).toContain("[connectors.github]");
@@ -774,6 +775,83 @@ describe("suasor onboard — interactive token entry (Issue #383)", () => {
   });
 });
 
+describe("suasor onboard — guidance quality (Issue #567)", () => {
+  const realFetch = globalThis.fetch;
+  const savedToken = process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (savedToken === undefined) delete process.env.SUASOR_CONNECTOR_GITHUB_TOKEN;
+    else process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = savedToken;
+  });
+
+  test("the token prompt gets an acquisition guide on stderr; stdout stays prompt-free", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "env-token";
+    globalThis.fetch = (async () => {
+      throw new Error("network disabled in test");
+    }) as unknown as typeof fetch;
+    const keychain = memoryKeychain();
+    try {
+      const { out, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_guided\n"),
+        keychain,
+      });
+      // One line before the prompt: where to issue the token + minimum access.
+      expect(err).toContain("github: token guide —");
+      expect(err).toContain("guide/connectors.md#github");
+      expect(err).toContain("minimum access:");
+      // The prompt itself lives on stderr (item 4) and no longer carries the
+      // stdin parenthetical (this branch only runs on a TTY, item 2).
+      // (The env override counts as an already-stored credential, so the
+      // prompt is the keep-or-replace variant.)
+      expect(err).toContain("press Enter to keep it, or paste a new one");
+      expect(err).not.toContain("input is read from stdin");
+      expect(out).not.toContain("Paste the");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreachable API is reported as connectivity, not a bad token (item 1)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    process.env.SUASOR_CONNECTOR_GITHUB_TOKEN = "env-token";
+    globalThis.fetch = (async () => {
+      throw new Error("connect ECONNREFUSED 140.82.112.6:443");
+    }) as unknown as typeof fetch;
+    const keychain = memoryKeychain();
+    try {
+      const { code, out } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+        configDir: dir,
+        stdin: ttyTokenStdin("ghp_offline\n"),
+        keychain,
+      });
+      expect(code).toBe(1);
+      // Both the immediate line and the recap steer to connectivity + re-run.
+      expect(out).toContain("could not reach the github API");
+      expect(out).toContain("check connectivity");
+      expect(out).toContain("suasor github auth test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("credential-less connectors point at their ingest scope, not credentials (item 5)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "suasor-onboard-"));
+    try {
+      const { out } = await run(["onboard", "--connector", "web", "--skip-sync"], {
+        configDir: dir,
+      });
+      expect(out).toContain("web: needs no credentials — list urls in [connectors.web]");
+      expect(out).toContain("guide/connectors.md#web-web");
+      expect(out).not.toContain("set credentials");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("suasor onboard — re-run keeps a stored token / empty input skips (Issue #559)", () => {
   const realFetch = globalThis.fetch;
   const secretEnvs = ["SUASOR_CONNECTOR_GITHUB_TOKEN", "SUASOR_CONNECTOR_BOX_TOKEN"];
@@ -804,12 +882,14 @@ describe("suasor onboard — re-run keeps a stored token / empty input skips (Is
       // Re-run shape: the credential is already in the keychain; the user
       // answers the prompt with a bare Enter. Previously this produced
       // "no-token" → the whole wizard aborted with exit 1 and no recap.
-      const { out } = await run(["onboard", "--connector", "github", "--skip-sync"], {
+      const { out, err } = await run(["onboard", "--connector", "github", "--skip-sync"], {
         configDir: dir,
         stdin: ttyTokenStdin("\n"),
         keychain,
       });
-      expect(out).toContain("press Enter to keep it");
+      // The prompt is on stderr (Issue #567 item 4); the confirmation stays on
+      // stdout.
+      expect(err).toContain("press Enter to keep it");
       expect(out).toContain("github: keeping the already-configured token.");
       // The stored token survives (an empty line is never written over it).
       expect(keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("github", "token")}`)).toBe(
@@ -1282,14 +1362,17 @@ describe("suasor onboard — --account (multi-account, ADR-0050 / Issue #538)", 
       throw new Error("offline test");
     }) as unknown as typeof fetch;
     try {
-      const { code, out } = await run(
+      const { code, out, err } = await run(
         ["onboard", "--connector", "box", "--account", "work", "--skip-sync"],
         { configDir: dir, stdin: ttyTokenStdin("work-token\n"), keychain },
       );
       // The auth probe cannot reach Box, so the run reports a failed `auth test`
       // (exit 1) — expected, and not what this test is about.
       expect(code).toBe(1);
-      expect(out).toContain("for account 'work'");
+      // The prompt (stderr, #567) names the account; the stored-confirmation
+      // line (stdout) spells it the advisoryLabel way.
+      expect(err).toContain("for account 'work'");
+      expect(out).toContain("(account 'work')");
       expect(
         keychain.store.get(`${KEYCHAIN_SERVICE} ${keychainAccount("box", "work:token")}`),
       ).toBe("work-token");
@@ -1582,17 +1665,18 @@ describe("suasor onboard — binary menu filter + keychain write failure (#557)"
       // --skip-auth passes the up-front keychain gate; the menu must not list
       // slack / google / box / ms-graph / web (pasting a token there could
       // neither be stored nor verified by this build).
-      const { code, out } = await run(["onboard", "--skip-auth", "--skip-sync"], {
+      const { code, err } = await run(["onboard", "--skip-auth", "--skip-sync"], {
         configDir: dir,
         stdin: ttyStdin("github"),
       });
       expect(code).toBe(0);
-      expect(out).toContain("this standalone binary bundles only");
-      expect(out).toContain("Select connector(s)");
+      // The menu (a prompt) and its note live on stderr (Issue #567 item 4).
+      expect(err).toContain("this standalone binary bundles only");
+      expect(err).toContain("Select connector(s)");
       // No numbered menu entry offers an external connector (the wording
       // "github slack" in the selection example line is not a menu entry).
-      expect(out).not.toMatch(/\d+\) (slack|google|box|ms-graph|web)\b/);
-      expect(out).toMatch(/\d+\) github\b/);
+      expect(err).not.toMatch(/\d+\) (slack|google|box|ms-graph|web)\b/);
+      expect(err).toMatch(/\d+\) github\b/);
     } finally {
       if (savedForce === undefined) delete process.env[FORCE_BINARY_ENV];
       else process.env[FORCE_BINARY_ENV] = savedForce;
