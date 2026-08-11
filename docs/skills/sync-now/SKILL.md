@@ -1,6 +1,6 @@
 ---
 name: sync-now
-description: 「最新を取り込んでから状況教えて」「Slack 同期して」「sync して」「最新に更新して」「<connector> を今すぐ取り込んで」と頼まれたら、Suasor MCP の connector.sync で有効な connector の read 専用 ingest pass を走らせ、ソースの鮮度を担保する。brief / next-actions など読み取り系の前段に使える。
+description: 「最新を取り込んでから状況教えて」「Slack 同期して」「sync して」「最新に更新して」「<connector> を今すぐ取り込んで」と頼まれたら、Suasor MCP の connector.sync で有効な connector の read 専用 ingest pass を走らせ、ソースの鮮度を担保する。ingest は read 専用で外部送信・不可逆変更を伴わないため、write 系共通の承認定型は適用外 — 対象 connector の選択確認をもって実行してよい（明示的な例外）。brief / next-actions など読み取り系の前段に使える。
 readOnly: false
 category: retrieval
 triggers:
@@ -8,7 +8,7 @@ triggers:
   - Slack 同期して
   - sync して
   - 最新に更新して
-  - connector を今すぐ取り込んで
+  - GitHub を今すぐ取り込んで
 pairs: []
 mcp_tools_write:
   - connector.sync
@@ -33,6 +33,7 @@ mcp_tools_write:
 ## 制約
 
 - ingest は **read 専用**で外部への書き込み・送信は発生しない（egress ゼロ・[ADR-0003](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0003-local-first-and-content-minimization.md) / [ADR-0027](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0027-bulk-sync-orchestration.md)）。`connector.sync` は MCP 上は write tool（ローカルに event を append するため）だが、HITL 原則を破る外部送信は伴わない
+- **承認境界の例外（明示）** — 他の write skill が共有する「ユーザー確認後に承認分のみ適用する」定型は本 skill には置かない。`connector.sync` はローカルへの event append のみで、HITL が守る対象（外部送信・不可逆な適用）に当たらないため、手順 1 の「どの connector を対象にするか」の確認をもって実行してよい（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）
 - 1 connector の失敗が全体を止めない（continue-on-error）。失敗は status で報告する
 - **定期実行は本 skill の責務ではない**。常駐 watch は採らず、cron / launchd / systemd timer による `suasor sync` の定期実行に委譲する（[ADR-0027](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0027-bulk-sync-orchestration.md)・[docs/guide/scheduling.md](https://github.com/ozzy-labs/suasor/blob/main/docs/guide/scheduling.md)）。本 skill は「今すぐ取り込む」one-shot 用
 - 本 skill は手順書のみで実処理を持たない
