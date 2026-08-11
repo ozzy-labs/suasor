@@ -119,17 +119,26 @@ export class ConfigEditCommand extends SuasorCommand {
     try {
       await loadConfig({ configDir });
     } catch (err) {
-      const rejPath = `${configPath}.rej`;
-      await fs.writeFile(rejPath, edited, "utf8");
+      // Restore first: the rollback must never be skipped by a failing .rej
+      // write, or the invalid config would be left behind.
       await fs.writeFile(configPath, original, "utf8");
       const message = err instanceof Error ? err.message : String(err);
       this.context.stderr.write(`error: edited config is invalid; reverted.\n  ${message}\n`);
-      this.context.stderr.write(
-        `(your edit was saved to ${rejPath} — fix it there, then copy it back or re-run \`suasor config edit\`)\n`,
-      );
+      const rejPath = `${configPath}.rej`;
+      try {
+        await fs.writeFile(rejPath, edited, "utf8");
+        this.context.stderr.write(
+          `(your edit was saved to ${rejPath} — fix it there, then copy it back or re-run \`suasor config edit\`)\n`,
+        );
+      } catch {
+        this.context.stderr.write(`(could not save the rejected edit to ${rejPath})\n`);
+      }
       return 1;
     }
 
+    // A successful edit removes a stale .rej from an earlier failure, so
+    // obsolete rejected content never sits next to a now-valid config.
+    await fs.rm(`${configPath}.rej`, { force: true });
     this.context.stdout.write(`config saved and validated: ${configPath}\n`);
     return 0;
   }

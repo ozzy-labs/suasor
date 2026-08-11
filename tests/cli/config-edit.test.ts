@@ -128,7 +128,7 @@ describe("suasor config edit", () => {
 });
 
 describe("suasor config edit — rejected-edit preservation (Issue #572)", () => {
-  test("an invalid edit is saved to config.toml.rej before the rollback", async () => {
+  test("an invalid edit is rolled back and saved to config.toml.rej", async () => {
     const original = '[embedding]\nbackend = "disabled"\n';
     writeFileSync(configPath, original, "utf8");
     const bad = '[connectors.github]\nrepo = ["a/b"]\n';
@@ -139,6 +139,17 @@ describe("suasor config edit — rejected-edit preservation (Issue #572)", () =>
     // …but the rejected text survives next to it, and the user is told where.
     expect(readFileSync(`${configPath}.rej`, "utf8")).toBe(bad);
     expect(err).toContain(`${configPath}.rej`);
+  });
+
+  test("a later valid edit removes a stale config.toml.rej", async () => {
+    const original = '[embedding]\nbackend = "disabled"\n';
+    writeFileSync(configPath, original, "utf8");
+    await runEdit(() => '[connectors.github]\nrepo = ["a/b"]\n');
+    expect(existsSync(`${configPath}.rej`)).toBe(true);
+
+    const { code } = await runEdit((cur) => `${cur}\n# fixed\n`);
+    expect(code).toBe(0);
+    expect(existsSync(`${configPath}.rej`)).toBe(false);
   });
 
   test("a valid edit does not create a .rej file", async () => {
