@@ -244,11 +244,14 @@ export class ValidateConfigCommand extends SuasorCommand {
 
     if (applied.length === 0) {
       if (this.json) {
+        // No repair applied → every finding remains (documented --fix shape:
+        // `applied` + `remaining` are always present together).
         this.writeJson({
           ok: false,
           configPath,
           findings: toFindingsJson(findings),
           applied: [],
+          remaining: toFindingsJson(findings),
           advisories,
         });
         return 1; // findings remain
