@@ -36,7 +36,7 @@ export function schedulerKindForPlatform(platform: NodeJS.Platform): SchedulerKi
 function renderCron(command: string): string {
   return [
     "# Hourly bulk sync (add with `crontab -e`); gate on the exit code.",
-    `15 * * * * ${command} --json >> "$HOME/.local/state/suasor/sync.log" 2>&1`,
+    `15 * * * * ${command} sync --json >> "$HOME/.local/state/suasor/sync.log" 2>&1`,
   ].join("\n");
 }
 
