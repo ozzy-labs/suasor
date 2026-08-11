@@ -54,10 +54,10 @@ async function run(args: string[]): Promise<{ code: number; out: string; err: st
 }
 
 describe("suasor validate-config", () => {
-  test("--help lists the command", async () => {
+  test("--help lists the command under its canonical `config validate` path", async () => {
     const { code, out } = await run(["--help"]);
     expect(code).toBe(0);
-    expect(out).toContain("validate-config");
+    expect(out).toContain("config validate");
   });
 
   test("errors when config.toml does not exist", async () => {
@@ -227,5 +227,33 @@ roots = [
       expect(out).toContain("readiness advisories");
       expect(out).toContain("[llm] is retired");
     });
+  });
+});
+
+describe("suasor config validate — noun-group co-path (Issue #572)", () => {
+  test("`config validate` runs the same validation", async () => {
+    writeFileSync(
+      configPath,
+      `[embedding]\nbackend = "disabled"\n[connectors.github]\nrepos = ["owner/repo"]\n`,
+      "utf8",
+    );
+    const { code, out } = await run(["config", "validate"]);
+    expect(code).toBe(0);
+    expect(out).toContain("config is valid");
+  });
+
+  test("`config validate --fix` reaches the fixer", async () => {
+    writeFileSync(configPath, '[connectors.github]\nrepo = ["a/b"]\n', "utf8");
+    const { code, out } = await run(["config", "validate", "--fix"]);
+    expect(code).toBe(0);
+    expect(out).toContain("applied");
+    expect(readFileSync(configPath, "utf8")).not.toContain("repo =");
+  });
+
+  test("the historical `validate-config` alias still works", async () => {
+    writeFileSync(configPath, '[embedding]\nbackend = "nope"\n', "utf8");
+    const { code, out } = await run(["validate-config"]);
+    expect(code).toBe(1);
+    expect(out).toContain("invalid-value");
   });
 });
