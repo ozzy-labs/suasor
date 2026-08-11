@@ -46,6 +46,47 @@ jobs:
       - name: Build
         run: bun run build
 
+  # The `check` job validates the npm bundle on every push for the reason its
+  # Build step states — a broken build must not land on main unseen. Suasor
+  # ships three artifacts, though, and until #600 that principle covered only
+  # one: the standalone binary (its own --external list) and the Docker image
+  # were first built by the *release* workflow, on the tagged commit, with npm
+  # publish already queued behind them. 0.4.2 made that concrete by changing
+  # both Dockerfile (#558) and the lockfile the image installs from (#595).
+  artifacts:
+    name: artifacts (standalone binary + docker build stage)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.23
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Cross-checks the binary channel's own --external list (it differs from
+      # the npm bundle's), then proves the result actually starts.
+      - name: Compile the standalone binary
+        run: bun run compile
+
+      - name: Smoke-test the binary
+        run: ./dist/suasor --version
+
+      # Build stage only: deps layer + `bun install --frozen-lockfile` +
+      # `bun run build` inside the image. This is where the known failure mode
+      # lives — a package.json lifecycle script breaks the deps-only layer
+      # because of the COPY ordering (see the Dockerfile's own comment).
+      # The runtime stage is deliberately NOT built here: it is FROM
+      # ollama/ollama and the result is ~5.8 GB, too heavy for every PR, so
+      # runtime-stage breakage (ENV / entrypoint / COPY) is still only caught
+      # by the release workflow.
+      - name: Build the Docker build stage
+        run: docker build --target build -t suasor-ci-build .
+
   lint:
     name: lint (biome + markdown + doc links)
     runs-on: ubuntu-24.04
