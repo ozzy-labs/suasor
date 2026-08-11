@@ -441,7 +441,19 @@ export class OnboardCommand extends SuasorCommand {
             );
           }
         } else if (stored === "no-token") {
-          // Empty input with nothing stored: skip this connector's auth instead
+          if (!interactive) {
+            // Over a pipe an empty token line is a misconfigured secret source,
+            // not a "keep it" gesture, so the run must fail loudly rather than
+            // append an enabled config slice with no credential and exit 0
+            // (ADR-0007 no silent wrong answer). #559's skip is a TTY
+            // affordance only (Issue #596).
+            stderr.write(
+              `error: no token provided for ${who} ` +
+                "(pipe it on stdin or use --skip-auth with an env override)\n",
+            );
+            return 1;
+          }
+          // Empty Enter with nothing stored: skip this connector's auth instead
           // of aborting the whole run (Issue #559) — aborting here left every
           // later connector unprocessed and printed no recap. The config slice
           // still lands below (same shape as --skip-auth), so the re-run /
@@ -990,7 +1002,12 @@ export class OnboardCommand extends SuasorCommand {
     const token = (
       await readSecretLine(this.context.stdin, this.context.stderr, { mask: true })
     ).trim();
-    if (!token) return alreadyStored ? "kept" : "no-token";
+    // An empty line means opposite things on the two paths: on a TTY the user
+    // pressed Enter to keep the stored token (Issue #559), but over a pipe it is
+    // a secret source that came back empty — never a gesture. Only the TTY case
+    // may keep, so a piped run fails loudly instead of probing a stale token and
+    // reporting success (Issue #596).
+    if (!token) return alreadyStored && interactive ? "kept" : "no-token";
 
     try {
       await storeSecret(connector, secretName, token, this.keychainOptions());
