@@ -12,6 +12,8 @@ triggers:
 pairs: []
 mcp_tools_write:
   - connector.sync
+mcp_tools_referenced:
+  - brief
 ---
 
 # sync-now

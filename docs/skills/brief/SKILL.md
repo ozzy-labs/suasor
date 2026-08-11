@@ -14,13 +14,14 @@ pairs:
   - next-actions
 mcp_tools_read:
   - brief
-  - priority.list
-  - task.list
-  - decision.list
-  - inbox.list
-  - demand.list
   - commitment.list
+  - decision.list
+  - demand.list
+  - inbox.list
+  - priority.list
+  - propose.list
   - search
+  - task.list
 mcp_tools_write: []
 ---
 

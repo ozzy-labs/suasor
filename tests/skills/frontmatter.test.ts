@@ -13,7 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { mcpToolCatalog } from "../../src/mcp/tool-catalog.ts";
-import { listBundledSkills } from "../../src/skills/catalog.ts";
+import { listBundledSkills, readSkillSource } from "../../src/skills/catalog.ts";
 import {
   extractFrontmatterBlock,
   loadSkillInfos,
@@ -201,6 +201,62 @@ describe("bundled skill catalog invariants (ADR-0032)", () => {
           (info.frontmatter.mcp_tools_write ?? []).length,
           `${info.name} is readOnly:false so it must list its write tool(s)`,
         ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  // "The complete MCP tool list is in frontmatter" (docs/skills/README.md) was
+  // false for 8 skills: bodies called propose.list / propose.reject /
+  // inbox.add / inbox.triage / graph.related that frontmatter never declared,
+  // and the tests above only validate the tools that *are* declared — drift in
+  // the other direction was invisible to CI (Issue #571). Every backticked
+  // catalog tool in a body must now be accounted for in frontmatter: either as
+  // a call (mcp_tools_read/write) or as an explicit non-call mention
+  // (mcp_tools_referenced — e.g. provenance-trace naming `link.add` precisely
+  // to say it does NOT call it; folding those into the call list would poison
+  // allowlists and break the readOnly:true ⇒ no-write-tools invariant).
+  const catalogNames = new Set(catalog.map((t) => t.name));
+  const bodyOf = (name: string): string => {
+    const skill = listBundledSkills().find((s) => s.name === name);
+    if (!skill) throw new Error(`bundled skill '${name}' not found`);
+    return readSkillSource(skill).replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+  };
+
+  test("every backticked catalog tool in a body is declared in frontmatter (Issue #571)", () => {
+    for (const info of infos) {
+      const declared = new Set([
+        ...(info.frontmatter.mcp_tools_read ?? []),
+        ...(info.frontmatter.mcp_tools_write ?? []),
+        ...(info.frontmatter.mcp_tools_referenced ?? []),
+      ]);
+      const mentioned = new Set(
+        [...bodyOf(info.name).matchAll(/`([a-z_][a-z0-9_.]*)`/g)]
+          .map((m) => m[1] as string)
+          .filter((t) => catalogNames.has(t)),
+      );
+      const undeclared = [...mentioned].filter((t) => !declared.has(t));
+      expect(
+        undeclared,
+        `${info.name} body uses ${undeclared.join(", ")} — declare in mcp_tools_read/write (called) or mcp_tools_referenced (mentioned only)`,
+      ).toEqual([]);
+    }
+  });
+
+  test("mcp_tools_referenced tools exist in the catalog and are not also declared as calls", () => {
+    for (const info of infos) {
+      const called = new Set([
+        ...(info.frontmatter.mcp_tools_read ?? []),
+        ...(info.frontmatter.mcp_tools_write ?? []),
+      ]);
+      for (const tool of info.frontmatter.mcp_tools_referenced ?? []) {
+        expect(
+          catalogNames.has(tool),
+          `${info.name} references '${tool}' which must exist in the MCP catalog`,
+        ).toBe(true);
+        expect(
+          called.has(tool),
+          `${info.name} lists '${tool}' as both called and referenced — pick one`,
+        ).toBe(false);
       }
     }
   });

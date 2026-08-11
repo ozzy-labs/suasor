@@ -100,6 +100,15 @@ describe("suasor skills info", () => {
     expect(out).toContain("task.list");
   });
 
+  test("shows referenced (not called) tools separately (Issue #571)", async () => {
+    // next-actions mentions demand.mark / task.create only to say it does NOT
+    // call them — they must surface as referenced, never as read/write.
+    const { code, out } = await run(["skills", "info", "next-actions"]);
+    expect(code).toBe(0);
+    expect(out).toContain("mcp (referenced, not called): demand.mark, task.create");
+    expect(out).not.toContain("mcp (write)");
+  });
+
   test("marks a write skill as HITL", async () => {
     const { code, out } = await run(["skills", "info", "reply-draft"]);
     expect(code).toBe(0);

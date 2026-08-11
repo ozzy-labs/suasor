@@ -10,11 +10,14 @@ triggers:
 pairs:
   - draft
 mcp_tools_read:
+  - propose.list
+  - search
   - source.get
 mcp_tools_write:
-  - propose.generate
-  - propose.apply
   - draft.export
+  - propose.apply
+  - propose.generate
+  - propose.reject
 ---
 
 # reply-draft

@@ -10,10 +10,13 @@ triggers:
   - このドキュメントから ToDo 拾って
 pairs: []
 mcp_tools_read:
+  - propose.list
+  - search
   - source.get
 mcp_tools_write:
-  - propose.generate
   - propose.apply
+  - propose.generate
+  - propose.reject
 ---
 
 # source-extract

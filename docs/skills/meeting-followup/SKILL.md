@@ -11,12 +11,14 @@ triggers:
 pairs:
   - meeting
 mcp_tools_read:
+  - propose.list
   - search
-  - source.list
   - source.get
+  - source.list
 mcp_tools_write:
-  - propose.generate
   - propose.apply
+  - propose.generate
+  - propose.reject
 ---
 
 # meeting-followup

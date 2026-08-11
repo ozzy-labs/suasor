@@ -16,6 +16,9 @@ mcp_tools_read:
   - task.list
 mcp_tools_write:
   - task.update
+mcp_tools_referenced:
+  - brief
+  - task.create
 ---
 
 # task-update

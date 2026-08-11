@@ -17,6 +17,9 @@ mcp_tools_read:
   - search
   - source.get
 mcp_tools_write: []
+mcp_tools_referenced:
+  - decision.record
+  - link.add
 ---
 
 # decisions

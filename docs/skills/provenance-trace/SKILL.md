@@ -15,6 +15,9 @@ mcp_tools_read:
   - graph.expand
   - source.get
 mcp_tools_write: []
+mcp_tools_referenced:
+  - link.add
+  - link.remove
 ---
 
 # provenance-trace

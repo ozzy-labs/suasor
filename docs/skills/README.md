@@ -2,11 +2,11 @@
 
 [ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md)。自然文トリガのアシスタント skill 群。SSOT は `docs/skills/<name>/SKILL.md`、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開する。read 系はエージェント自律 OK、write 系は HITL（auto-apply なし、[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。install 後の起動・確認・トラブルシュートは [利用ガイド](https://github.com/ozzy-labs/suasor/blob/main/docs/guide/skills.md) を参照。
 
-> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
+> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`・言及のみの `mcp_tools_referenced[]`、[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
 ## Read 系（自律 OK・9）
 
-各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_*` が SSOT・[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
+各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_read/write` が呼ぶ tool の SSOT。本文が言及するだけの tool は `mcp_tools_referenced`・validator が本文との一致を検査・[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
 
 > **[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md) で 32 → 22 に収縮した。** 同じ意図の skill を 1 本に畳み、違いは引数（期間・読み手・対象・深さ）に逃がしている。ユーザーは skill 名を知らずに話しかけるので、「今週どうなってる」の一言で 5 本が競合する状態が問題だった。**read / write の承認境界は跨いでいない**（跨ぐと HITL が壊れる）ため、畳まれたのは read 系のみ。
 
