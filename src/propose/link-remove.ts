@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { McpToolError } from "../mcp/errors.ts";
 
 /** Input to `link.remove`. */
 export const LinkRemoveInput = z.object({
@@ -47,7 +48,11 @@ export function linkRemove(
     .query("SELECT 1 FROM links WHERE link_id = ?")
     .get(linkId);
   if (existing === null) {
-    throw new Error(`link.remove: no manual link with id ${linkId}`);
+    throw new McpToolError(
+      "MISSING_ENTITY",
+      `link.remove: no manual link with id ${linkId}`,
+      "Only manual links are removable; find the linkId via graph.related (manual_link edges carry it).",
+    );
   }
 
   store.record({ type: "LinkRemoved", linkId }, now);

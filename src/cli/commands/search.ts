@@ -10,6 +10,14 @@ import { Command, Option } from "clipanion";
 import { resolveSince, SINCE_SYNTAX_HINT } from "../../shared/since.ts";
 import { SuasorCommand } from "../base-command.ts";
 
+/**
+ * Display cap (in characters) for a hit's one-line excerpt in the default
+ * human output. Applies only when neither `--full-body` nor `--max-body-chars`
+ * was given — those flags take over the body length in the human path exactly
+ * as they do under `--json` (Issue #572).
+ */
+const HUMAN_EXCERPT_CHARS = 120;
+
 export class SearchCommand extends SuasorCommand {
   static override paths = [["search"]];
 
@@ -43,7 +51,8 @@ export class SearchCommand extends SuasorCommand {
       Each hit carries a bounded excerpt (not the full body) by default so a
       multi-hit result stays small; fetch full text via source.get / source list.
       Use --full-body to include the full body per hit, or --max-body-chars N to
-      size the excerpt.
+      size the excerpt. Both flags apply to the human output and --json alike;
+      without them the human list shows a compact 120-char line per hit.
     `,
     examples: [
       ["Search for a keyword", "suasor search rocket"],
@@ -188,7 +197,14 @@ export class SearchCommand extends SuasorCommand {
       this.context.stdout.write(`${header}\n`);
       for (const hit of result.hits) {
         // Default hits carry `excerpt`; `--full-body` swaps in the full `body`.
-        const text = (hit.body ?? hit.excerpt ?? "").replaceAll(/\s+/g, " ").slice(0, 120);
+        // The 120-char display cap applies only when neither body flag was
+        // given: with --full-body or --max-body-chars the human path honors
+        // the requested length just like --json does (Issue #572).
+        const collapsed = (hit.body ?? hit.excerpt ?? "").replaceAll(/\s+/g, " ");
+        const text =
+          this.fullBody || maxBodyChars !== undefined
+            ? collapsed
+            : collapsed.slice(0, HUMAN_EXCERPT_CHARS);
         this.context.stdout.write(`  ${hit.externalId} (${hit.sourceType})\n    ${text}\n`);
       }
       return 0;

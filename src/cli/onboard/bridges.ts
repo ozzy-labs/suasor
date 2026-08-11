@@ -24,6 +24,8 @@ export interface BridgeReport {
   authStored: boolean;
   authTest: "ok" | "failed" | "skipped";
   authTestDetail?: string;
+  /** Why the probe failed — `network` vs `credential` (Issue #567). */
+  authFailureKind?: import("./auth-advice.ts").AuthFailureKind;
   configAppended: boolean;
   configSource: "discovery" | "template" | "skipped";
   discovered?: number;
