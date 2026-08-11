@@ -90,8 +90,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
     {
       title: "Connector sync (ingest)",
       description:
-        "Run a read-only connector ingest pass into the local store (e.g. " +
-        "github). Write tool: hosts must gate behind human approval — no auto-apply. Incremental " +
+        "Fetch new/changed items from a connector's external service (reads the " +
+        "service only — posts nothing to it) and ingest them into the local " +
+        "store (e.g. github). Write tool because it mutates the local store: " +
+        "hosts must gate behind human approval — no auto-apply. Incremental " +
         "via fingerprint/cursor delta; pass cursor=null to force a full re-scan.",
       inputSchema: {
         connector: z.string().min(1).describe('Connector to run (e.g. "github").'),
@@ -370,7 +372,12 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
         "Optional dueDate / priority scheduling fields (ADR-0028).",
       inputSchema: {
         title: z.string().min(1).describe("Task title."),
-        dueDate: isoDateTime.optional().describe("Optional due date (ISO 8601, ADR-0028)."),
+        dueDate: isoDateTime
+          .optional()
+          .describe(
+            "Optional due date — ISO 8601 datetime WITH offset, e.g. " +
+              "2026-08-15T00:00:00+09:00 (a bare date like 2026-08-15 is rejected; ADR-0028).",
+          ),
         priority: z
           .enum(["low", "normal", "high"])
           .optional()
@@ -420,7 +427,10 @@ export function registerWriteTools(server: McpServer, write: WriteDeps): void {
           .describe("Lifecycle state to move the task to."),
         dueDate: isoDateTime
           .optional()
-          .describe("Optional due date to (re)set (ISO 8601, ADR-0028)."),
+          .describe(
+            "Optional due date to (re)set — ISO 8601 datetime WITH offset, e.g. " +
+              "2026-08-15T00:00:00+09:00 (a bare date like 2026-08-15 is rejected; ADR-0028).",
+          ),
         priority: z
           .enum(["low", "normal", "high"])
           .optional()

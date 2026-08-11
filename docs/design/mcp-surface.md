@@ -9,7 +9,7 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 | tool | 役割 | 状態 |
 |---|---|---|
 | `search` | FTS5 全文検索（`sourceType` / `observed*` フィルタ可、[retrieval](retrieval.md)） | #8 実装済（フィルタ #142） |
-| 意味検索 | 意味検索（embedding 有効時の vec0 KNN。`sourceType` / `observed*` フィルタ可。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]、フィルタ #142） |
+| `search（mode=semantic）` | 意味検索（embedding 有効時の vec0 KNN。`sourceType` / `observed*` フィルタ可。無効/未到達時は空 + シグナルで FTS フォールバック） | 実装済（[#11]、フィルタ #142） |
 | `search（mode=hybrid）` | FTS × 意味検索の RRF 融合（`sourceType` / `observed*` フィルタ可。embedding 無効時は FTS のみに degrade、[retrieval](retrieval.md)） | 実装済み（#142。下記参照） |
 | `source.list` / `source.get` | source 一覧 / 本文取得 | #8 実装済 |
 | `source.get`（`include`） | source の metadata + body + outgoing provenance links + extraction_meta を 1 コールでバンドル（`source.get` + `graph.related(out)` + 抽出 sidecar の再利用、#279） | 実装済み（#279。下記参照） |
@@ -17,10 +17,10 @@ read tool 群は `src/mcp/`（`server.ts` = factory のみ / `server-read.ts` = 
 | `task.list` / `decision.list` / `inbox.list` | projection 一覧（時間フィルタ可） | #8 実装済 |
 | `propose.list` | 提案候補の lifecycle ledger 一覧（state: `pending` / `applied` / `rejected`、kind フィルタ可） | 実装済み（#89。下記参照） |
 | `commitment.list` | commitment 台帳一覧（state: `open` / `resolved` / `dismissed`、direction: `owed_by_me` / `owed_to_me` フィルタ可、[ADR-0021](../adr/0021-commitment-ledger.md)） | 実装済み（#91。下記参照） |
-| `demand.list` | connector 中立 demand（Slack @mention/DM + github notification）の未処理 signal。既定は un-acked のみ（`sources` からの query 導出・追加 fetch なし、[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)。旧 `slack.demand.list` を置換） | 実装済（#419） |
+| `demand.list` | connector 中立 demand（Slack @mention/DM + github notification + 未返信 email（[ADR-0043](../adr/0043-email-demand-signals.md)）+ 直近 meeting（[ADR-0044](../adr/0044-calendar-proximity-signals.md)））の未処理 signal。既定は un-acked のみ（`sources` からの query 導出・追加 fetch なし、[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)。旧 `slack.demand.list` を置換） | 実装済（#419） |
 | `priority.list` | 決定論的 cross-entity scorer: tasks + open commitments + un-acked demand を固定 comparator で 1 本のランク付きリストに合成（overdue > demand 鮮度 > dueDate 近接 > priority > 更新順、[ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)） | 実装済（#419） |
 | `person.list` | 解決済み person 一覧 + 各 person の connector identity（`includeEmpty?`、[ADR-0022](../adr/0022-person-identity-resolution.md)） | 実装済み（#92。下記参照） |
-| `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
+| `brief` | 期間バンドル（tasks/decisions/inbox/sources/demand/commitments を期間で束ねる read tool。要約は host、[ADR-0017](../adr/0017-brief-period-bundle.md)） | 実装済み（#70） |
 | `sync.status` | 取り込み鮮度（connector 別の最新 run + `ok`/`stale`/`never`/`failing` 判定・[#442](https://github.com/ozzy-labs/suasor/issues/442)） | 実装済み（#442。下記参照） |
 | `activity.timeline` | entity 軸の時系列ビュー（person/project/source 等を起点に provenance 接続された source/task/decision をマージし新しい順に返す。`brief` の期間軸と対をなす entity 軸、#279） | 実装済み（#279。下記参照） |
 | `graph.related` / `graph.expand` | 既存 `links` projection 上の provenance traversal（`derived_from` / `replies_to` / `references` / `manual_link`。手動 link は `linkId` 付き、[ADR-0018](../adr/0018-knowledge-graph-traversal.md)）。`graph.expand` の `direction` で後方トレース（[ADR-0020](../adr/0020-multi-actor-coordination-scope.md)、下記参照） | 実装済み（#71・#90 / #97） |
@@ -73,7 +73,7 @@ FTS5 全文検索（[retrieval](retrieval.md) の search service を薄くラッ
 - ランキング・短クエリ fallback・クエリエスケープの詳細は [retrieval](retrieval.md) を参照
 - 意味検索が要るケースは 意味検索（embedding 有効時）へ
 
-### 意味検索（意味検索・graceful degradation・ADR-0005）
+### `search（mode=semantic）`（意味検索・graceful degradation・ADR-0005）
 
 引数は `search` と同じ（`query` / `sourceType?` / `observedAfter?` / `observedBefore?` / `limit` / `fullBody?` / `maxBodyChars?`）。embedding backend が有効なときは query を埋め込み、`vec0` の KNN で最近傍 source を引いて `search` と同形の hits を返す（`strategy` は無く、`score` は L2 distance ＝ 小さいほど近い・best-first）。hits も `search` と同様、既定は上限付き `excerpt`（recall は先頭 N chars）で `fullBody` / `maxBodyChars` に対応する（retrieval-m2）。`sourceType` / `observed*` フィルタは JOIN 済み `sources` 行への post-filter で適用する（KNN は多めに引いてから絞る、#142）。詳細は [retrieval](retrieval.md)。
 
@@ -124,9 +124,9 @@ graceful degradation（host は常に `signal === "embedding_disabled"` だけ�
 
 source の metadata + body・**outgoing** provenance links・extraction_meta sidecar を 1 コールでバンドルする read tool（実体は `src/mcp/queries.ts` の `getSourceFull`、`readOnlyHint: true`）。従来は `source.get` + `graph.related(direction=out)` + 抽出 sidecar 参照の 3 往復が必要だった read パターンを 1 往復に畳む。実装は既存 query 層の再利用（`getSource` + `listLinks(direction=out)` + `getExtractionMeta`）で、graph entity は `(kind=source, id=externalId)` として扱う。
 
-引数（Zod）: `externalId: string`（min 1）。
+引数（Zod）: `externalId: string`（min 1）/ `include?: ("links" | "extraction")[]`（既定: なし = source のみ。`links` で outgoing provenance links、`extraction` で extraction_meta sidecar を同一往復にバンドル）。
 
-戻り値: `{ "source": {...} | null, "links": [{ kind, id, relation, direction, linkId? }], "extractionMeta": { version, state, updatedAt } | null }`。`links` は source を `from` とする outgoing edge のみ（`graph.related` と同形）。`extractionMeta` は抽出されていない source（プレーンテキスト connector 本文等）では `null`（[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。未知 id は `{ source: null, links: [], extractionMeta: null }`（エラーにしない）。副作用なし。
+戻り値: `{ "source": {...} | null, "links"?: [{ kind, id, relation, direction, linkId? }], "extractionMeta"?: { version, state, updatedAt } | null }`（`links` / `extractionMeta` は `include` で要求した section のみ現れる）。`links` は source を `from` とする outgoing edge のみ（`graph.related` と同形）。`extractionMeta` は抽出されていない source（プレーンテキスト connector 本文等）では `null`（[ADR-0024](../adr/0024-document-extraction-sidecar.md)）。未知 id は `source: null` + 要求 section 空（エラーにしない）。副作用なし。
 
 ### `source.history`（確定・read・#121）
 
@@ -142,9 +142,9 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | tool | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|---|
-| `task.list` | `state?: string` / `dueBefore?: string` / `dueWithinDays?: int` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
+| `task.list` | `state?: "proposed"\|"open"\|"in_progress"\|"completed"\|"dropped"` / `dueBefore?: string` / `dueWithinDays?: int` / `overdue?: bool`（[ADR-0028](../adr/0028-task-scheduling-fields.md)） | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "tasks": [...] }` |
 | `decision.list` | （なし） | `recorded_at`（`recordedAfter` / `recordedBefore`） | `{ "decisions": [...] }` |
-| `inbox.list` | `state?: string` / `sourceType?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
+| `inbox.list` | `state?: "open"\|"snoozed"\|"done"\|"dismissed"` / `sourceType?: string` | `updated_at`（`updatedAfter` / `updatedBefore`） | `{ "items": [...] }` |
 
 `task.list` の各 task レコードは `dueDate` / `priority`（low / normal / high・null 可）と、read 時派生の `overdue`（`dueDate < now AND state ∈ {open, in_progress}`、[ADR-0028](../adr/0028-task-scheduling-fields.md)）を持つ。`dueBefore` は `due_date < ?` で絞り（null due は除外）、`dueWithinDays: N` は「今日/今週の優先」観点で `due_date < now + N 日`（上限 exclusive、null due 除外）に絞る（`now` は overdue と同じく注入可能で決定論的）、`overdue: true` は overdue な task のみに絞る。overdue は projection に焼かず read 時に計算する（`now` は決定論テスト用に注入可能、replay 不変性を保つため・[ADR-0002](../adr/0002-event-sourced-architecture.md)）。
 
@@ -163,7 +163,7 @@ projection 一覧。いずれも `limit?: int`、最近更新順（対象列 DES
 
 | 追加引数 | 時間窓の対象列 | 戻り値キー |
 |---|---|---|
-| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: string[]`（slack `mention`/`dm`、github reason、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`）/ `includeSeen?: boolean` / `fullBody?: boolean` / `maxBodyChars?: int` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
+| `selfUserId?: string`（slack mention 用、未指定時は config の `self_user_id`）/ `source?: "slack"\|"github"\|"email"\|"calendar"` / `kinds?: DemandKind[]`（enum: slack `mention`/`dm`、github reason（`assign`/`author`/`mention`/`review_requested`/`team_mention`）、email `to`/`cc`、calendar `meeting_soon`/`meeting_prep`。範囲外はスキーマエラー）/ `includeSeen?: boolean` / `fullBody?: boolean` / `maxBodyChars?: int` | `observed_at`（`observedAfter` / `observedBefore`） | `{ "demand": [{ ..., "source", "kind", "seenState" }], "truncated" }` |
 
 `selfUserId` も config も無いと slack mention は無効化され DM のみ返す（`kinds: ["mention"]` 指定時は github mention notification のみ）。
 
@@ -224,8 +224,10 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
   "decisions": [/* DecisionRecord */],
   "inbox": [/* InboxRecord（state=open） */],
   "demand": [/* DemandRecord（un-acked のみ・ADR-0041。既定は excerpt・#564） */],
+  "commitments": [/* CommitmentRecord（open のみ・緊急度順・#513） */],
   "truncated": {                      // section ごとの打切りフラグ（ADR-0007）
-    "sources": false, "tasks": false, "decisions": false, "inbox": false, "demand": false
+    "sources": false, "tasks": false, "decisions": false, "inbox": false, "demand": false,
+    "commitments": false
   },
   "warnings": [                       // 完全性シグナル（Issue #189）
     { "key": "slack_not_configured", "message": "Slack connector not configured — ..." },
@@ -236,7 +238,7 @@ merge で空になった person は既定で除外（`identity_count > 0`）。`
 
 `commitments`（open のみ・**非時間軸**＝inbox と同じ扱い。[#513](https://github.com/ozzy-labs/suasor/issues/513)）は、期限を過ぎた約束が窓の外で結ばれたからといって重要でなくなるわけではないため時間フィルタを掛けない。並びは緊急度順（[#509](https://github.com/ozzy-labs/suasor/issues/509)）なので、打切られても催促すべき行が先頭に残る。**以前は bundle から丸ごと欠落しており、生の `brief` を読む host は「誰に何を負っているか」を静かに落としていた。**
 
-`truncated`（section ごとの打切りフラグ・[ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer"）は、各 section が `limit`（既定 50・DEFAULT_LIST_LIMIT）で打ち切られたかを示す。list 系 tool の `truncated`（boolean）と同じ規律を、複数 section を束ねる brief では section 単位で返す（各 section を `limit + 1` で probe し、超過していれば切り詰めて `true`）。`true` の section は多忙な日にバンドルが黙って過小申告している合図なので、host は window（`since` / `until`）を狭めるか、対応する list tool（`source.list` / `task.list` / `decision.list` / `inbox.list` / `demand.list`）でページングする。後方互換の additive field。
+`truncated`（section ごとの打切りフラグ・[ADR-0007](../adr/0007-connector-contract.md) の "no silent wrong answer"）は、各 section が `limit`（既定 50・DEFAULT_LIST_LIMIT）で打ち切られたかを示す。list 系 tool の `truncated`（boolean）と同じ規律を、複数 section を束ねる brief では section 単位で返す（各 section を `limit + 1` で probe し、超過していれば切り詰めて `true`）。`true` の section は多忙な日にバンドルが黙って過小申告している合図なので、host は window（`since` / `until`）を狭めるか、対応する list tool（`source.list` / `task.list` / `decision.list` / `inbox.list` / `demand.list` / `commitment.list`）でページングする。後方互換の additive field。
 
 `warnings`（完全性シグナル・Issue #189）は、**未設定が理由で空になった category** を区別するための注記。空 section が「本当に何も無い」のか「source 未接続だから空」なのかを host が判別できる。`buildBrief` 自体は純粋（config を知らない）で、呼び出し側（CLI / MCP server）が config から導出して渡す（`deriveBriefWarnings`）。設定済みなら空配列。
 
@@ -347,7 +349,9 @@ connector の read 専用取り込みを起動する write tool（[connector-con
   "unchanged": 5,    // 未変更で skip
   "cursor": "2026-06-12T00:00:00Z", // 次回 resume cursor（fingerprint 系は null）
   "embedded": 15,    // vec0 に (再)populate した source 数（embedding 無効時は 0）
-  "extracted": 2     // 本文を抽出テキストに差し替えた source 数（extraction 無効時は 0・ADR-0024）
+  "extracted": 2,    // 本文を抽出テキストに差し替えた source 数（extraction 無効時は 0・ADR-0024）
+  "partialFailure": false,  // 内部 sub-unit（例: Slack workspace 1 個）が失敗し他は取り込めた場合 true（#166）
+  "summaryLines": ["…"]     // sub-unit ごとの要約行（無ければ省略）
 }
 ```
 
@@ -449,7 +453,7 @@ connector の read 専用取り込みを起動する write tool（[connector-con
 | `updatedAfter` / `updatedBefore` | ISO 8601（任意） | `updated_at` 時間窓（下限 inclusive / 上限 exclusive） |
 | `limit` | `number`（任意） | 最大行数（既定 50） |
 
-戻り値: `{ "proposals": [{ "candidateId": "cand_...", "mode": "...", "kind": "...", "entityId": "...", "summary": "...", "state": "pending", "reason": "", "createdAt": "...", "updatedAt": "..." }] }`。各行は `reason` を持ち、`state = rejected` の候補では却下理由が入る（`propose.reject` / `propose.batch` で記録された値。それ以外は空文字列）。`state = rejected` で絞れば却下済み候補と理由の一覧になる（#197）。
+戻り値: `{ "proposals": [{ "candidateId": "cand_...", "mode": "...", "kind": "...", "entityId": "...", "summary": "...", "state": "pending", "reason": "", "createdAt": "...", "updatedAt": "..." }] }`。各行は `reason` を持ち、`state = rejected` の候補では却下理由（`propose.reject` / `propose.batch` で記録された値）、`state = pending` の候補では `proposal.feedback` が記録した再生成ヒントが入る（どちらも無ければ空文字列）。`state = rejected` で絞れば却下済み候補と理由の一覧になる（#197）。
 
 ### `propose.reject`（確定・write / HITL・idempotent）
 

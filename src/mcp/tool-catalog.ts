@@ -54,7 +54,7 @@ const READ_TOOLS: readonly McpToolInfo[] = [
     name: "demand.list",
     readOnlyHint: true,
     summary:
-      "List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).",
+      "List connector-neutral demand (Slack mentions/DMs, github notifications, unanswered email, upcoming meetings); un-acked only by default (ADR-0041).",
   },
   {
     name: "priority.list",
@@ -65,7 +65,8 @@ const READ_TOOLS: readonly McpToolInfo[] = [
   {
     name: "brief",
     readOnlyHint: true,
-    summary: "Bundle the period's tasks/decisions/sources/inbox for the host to summarize.",
+    summary:
+      "Bundle the period's tasks/decisions/sources/demand/inbox/commitments for the host to summarize.",
   },
   {
     name: "sync.status",
@@ -118,7 +119,7 @@ const WRITE_TOOLS: readonly McpToolInfo[] = [
   {
     name: "connector.sync",
     readOnlyHint: false,
-    summary: "Run a read-only connector ingest pass into the local store.",
+    summary: "Fetch from a connector's external service (reads it only) and ingest locally.",
   },
   {
     name: "propose.generate",

@@ -975,6 +975,28 @@ export const GITHUB_DEMAND_REASONS = [
 ] as const;
 
 /**
+ * Every demand `kind` across the four sources (ADR-0041) — the closed vocabulary
+ * the `demand.list` `kinds` filter accepts. Slack rows are `mention` / `dm`
+ * (ADR-0012), github rows carry their notification `reason` verbatim
+ * ({@link GITHUB_DEMAND_REASONS}; `mention` is shared with Slack), email rows are
+ * `to` / `cc` (ADR-0043), calendar rows are `meeting_soon` / `meeting_prep`
+ * (ADR-0044). The MCP tool derives its `kinds` enum from this tuple, so a typo'd
+ * kind is a schema error instead of a silent empty list (Issue #569).
+ */
+export const DEMAND_KINDS = [
+  "mention",
+  "dm",
+  "assign",
+  "author",
+  "review_requested",
+  "team_mention",
+  "to",
+  "cc",
+  "meeting_soon",
+  "meeting_prep",
+] as const;
+
+/**
  * A connector-neutral demand signal (ADR-0041): an attention-worthy row derived
  * (FTS-first, no extra fetch) from ingested sources — a Slack `@you` mention / DM
  * (ADR-0012) or a `github_notification` thread. Generalises the former
