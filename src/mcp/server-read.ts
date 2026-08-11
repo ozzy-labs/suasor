@@ -16,6 +16,7 @@
 import type { Database } from "bun:sqlite";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { isLoopbackUrl } from "../config/index.ts";
 import type { EmbeddingConfig } from "../config/schema.ts";
 import { deriveSyncFreshness, type SyncFreshness } from "../connectors/freshness.ts";
 import {
@@ -23,6 +24,7 @@ import {
   EMBEDDING_DISABLED_SIGNAL,
   type Embedder,
   EmbeddingError,
+  EXTERNAL_EMBEDDING_BACKENDS,
   recallSearch,
 } from "../retrieval/embedding/index.ts";
 import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
@@ -71,12 +73,14 @@ export interface ReadToolContext {
 /** Register every read tool onto `server` in the original order. */
 export function registerReadTools(server: McpServer, ctx: ReadToolContext): void {
   const { sqlite, embedder, embeddingConfig, deps } = ctx;
-  // External embedding backends (openai / voyage) egress the query text on the
-  // semantic paths (ADR-0003) — `search`'s annotation and description must say
-  // so instead of hardcoding a closed world (Issue #569). The local ollama
-  // sidecar and `disabled` stay egress-free.
+  // External embedding backends (EXTERNAL_EMBEDDING_BACKENDS) and a remote
+  // (non-loopback) ollama sidecar egress the query text on the semantic paths
+  // (ADR-0003) — `search`'s annotation and description must say so instead of
+  // hardcoding a closed world (Issue #569). A loopback sidecar and `disabled`
+  // stay egress-free.
   const embeddingEgresses =
-    embeddingConfig.backend === "openai" || embeddingConfig.backend === "voyage";
+    EXTERNAL_EMBEDDING_BACKENDS.has(embeddingConfig.backend) ||
+    (embeddingConfig.baseUrl !== undefined && !isLoopbackUrl(embeddingConfig.baseUrl));
 
   // Sync freshness (Issue #442), derived at read time from `sync_runs` + the
   // `[sync]` cadence expectations. Shared by `sync.status` and the brief's
