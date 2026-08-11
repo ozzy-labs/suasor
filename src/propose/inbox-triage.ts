@@ -31,6 +31,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { McpToolError } from "../mcp/errors.ts";
 import { entityId } from "./id.ts";
 import { resolveTaskIdentity } from "./identity.ts";
 
@@ -73,10 +74,16 @@ export interface InboxTriageOutput {
   createdEntityId?: string;
 }
 
-/** A rejected triage transition (missing item / item not in `open`). */
-export class TriageError extends Error {
-  constructor(message: string) {
-    super(message);
+/**
+ * A rejected triage transition (missing item / item not in `open`). A typed
+ * {@link McpToolError} subclass (ADR-0031): it carries the structured code
+ * (`MISSING_ENTITY` / `INVALID_STATE`) + hint at the throw site, so the MCP
+ * handler falls through to `toToolError` instead of re-deriving the code from
+ * the message text.
+ */
+export class TriageError extends McpToolError {
+  constructor(code: "MISSING_ENTITY" | "INVALID_STATE", message: string, hint?: string) {
+    super(code, message, hint);
     this.name = "TriageError";
   }
 }
@@ -103,14 +110,20 @@ export function inboxTriage(
     .query<InboxStateRow, [string]>("SELECT state, source_external_id FROM inbox WHERE id = ?")
     .get(inboxId);
   if (row === null) {
-    throw new TriageError(`inbox item not found: ${inboxId}`);
+    throw new TriageError(
+      "MISSING_ENTITY",
+      `inbox item not found: ${inboxId}`,
+      "Check the inbox id via inbox.list.",
+    );
   }
   // State machine: only an `open` item may be triaged. Re-triaging an item that
   // is already snoozed / done / dismissed is an invalid transition (rejected),
   // so the host cannot accidentally double-resolve or re-open a resolved item.
   if (row.state !== "open") {
     throw new TriageError(
+      "INVALID_STATE",
       `inbox item ${inboxId} is '${row.state}', not 'open' — cannot triage (action: ${action})`,
+      "Only an 'open' inbox item can be triaged; list open items via inbox.list.",
     );
   }
 

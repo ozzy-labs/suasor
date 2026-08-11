@@ -4,7 +4,7 @@
  * Each `docs/skills/<name>/SKILL.md` opens with a YAML frontmatter block. ADR-0008
  * established the required `name` / `description` (free-text trigger). ADR-0032
  * adds backward-compatible machine-readable fields (`readOnly`, `category`,
- * `triggers[]`, `pairs[]`, optional `mcp_tools_read/write[]`) so hosts and the CLI
+ * `triggers[]`, `pairs[]`, optional `mcp_tools_read/write/referenced[]`) so hosts and the CLI
  * can reason about a skill (read-vs-write boundary, category, trigger phrases,
  * paired skill) instead of grepping prose.
  *
@@ -46,6 +46,12 @@ export type SkillCategory = (typeof SKILL_CATEGORIES)[number];
  * optional for forward/backward compatibility, but the validator test asserts
  * every bundled skill carries `readOnly` + `category`. `.passthrough()` tolerates
  * unknown keys so the schema never rejects a legacy or newer frontmatter.
+ *
+ * `mcp_tools_read` / `mcp_tools_write` list the tools the skill *calls*
+ * (allowlist-safe); `mcp_tools_referenced` lists catalog tools the body merely
+ * *mentions* without calling (e.g. "this skill does NOT do `link.add`"), so the
+ * body⊆frontmatter validator (#571) can be complete without polluting the call
+ * list — hosts must never auto-approve from `mcp_tools_referenced`.
  */
 export const SkillFrontmatter = z
   .object({
@@ -57,6 +63,7 @@ export const SkillFrontmatter = z
     pairs: z.array(z.string().min(1)).optional(),
     mcp_tools_read: z.array(z.string().min(1)).optional(),
     mcp_tools_write: z.array(z.string().min(1)).optional(),
+    mcp_tools_referenced: z.array(z.string().min(1)).optional(),
   })
   .passthrough();
 export type SkillFrontmatter = z.infer<typeof SkillFrontmatter>;

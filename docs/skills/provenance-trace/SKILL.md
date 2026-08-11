@@ -6,7 +6,7 @@ category: graph
 triggers:
   - この task の出どころ
   - 由来を辿って
-  - "<entity> は何から来た"
+  - これは何から来た
   - この decision の根拠 source
   - provenance を遡って
 pairs: []
@@ -15,6 +15,9 @@ mcp_tools_read:
   - graph.expand
   - source.get
 mcp_tools_write: []
+mcp_tools_referenced:
+  - link.add
+  - link.remove
 ---
 
 # provenance-trace

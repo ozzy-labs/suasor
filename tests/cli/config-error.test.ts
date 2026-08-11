@@ -81,7 +81,7 @@ describe("central ConfigError handling", () => {
       const { code, out, err } = await run(argv);
       expect(code).toBe(1);
       expect(err).toContain("error: invalid configuration");
-      expect(err).toContain("hint: run `suasor validate-config`");
+      expect(err).toContain("hint: run `suasor config validate`");
       // Never clipanion's internal-error rendering (stack frames on stdout).
       expect(out).not.toContain("at loadConfig");
       expect(err).not.toContain("at loadConfig");

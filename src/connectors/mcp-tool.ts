@@ -128,18 +128,3 @@ export async function runConnectorSyncTool(
   });
   return ConnectorSyncOutput.parse(outcome);
 }
-
-/**
- * Self-contained MCP tool descriptor for the server (#8) to register.
- * `destructive: true` marks it as a write tool requiring HITL (ADR-0004).
- */
-export const connectorSyncTool = {
-  name: CONNECTOR_SYNC_TOOL_NAME,
-  description:
-    "Run a read-only connector ingest pass into the local store (write tool; " +
-    "hosts must gate behind human approval — no auto-apply).",
-  destructive: true as const,
-  inputSchema: ConnectorSyncInput,
-  outputSchema: ConnectorSyncOutput,
-  run: runConnectorSyncTool,
-};

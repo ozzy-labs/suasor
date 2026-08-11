@@ -29,7 +29,7 @@ Suasor はローカルファーストの AI 秘書です。チャット・メー
 
 ## ステータス
 
-開発初期 — **公開済み**（npm / 単一バイナリ / Docker）。仕様駆動で構築中です。
+0.x — **公開済みで利用可能**（npm / 単一バイナリ / Docker）。表面はまだ変わりうる。仕様駆動で構築中です。
 
 ## インストール
 
@@ -44,17 +44,9 @@ Suasor は MCP サーバ（ライブラリではなく*アプリ*）なので、
 
 ### アップグレード
 
-**0.3.0 は MCP tool と assistant skill を後方互換 alias なしで改名する**（ADR-0046 — host が
-ほぼ同義の入口から選ばされる状態を解消するための表面積収縮）。host 設定・自作 skill・スクリプトが
-`recall.search` / `search.hybrid` / `source.get.full` / `commitment.resolve`・`.dismiss`・`.reopen` /
-`demand.ack`・`.dismiss`、あるいは統合で消えた 16 の skill 名を参照している場合は更新が要る。
-新旧の対応は[移行表](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046)にすべて載せてある。統合で消えた skill の
-mirror はアップグレード後も残る（`skills install` は上書きするが削除はしない）ため、
-`suasor skills list` が `orphan` として報告し、`suasor skills prune` で削除できる。
+**0.3.0 は MCP tool と assistant skill を後方互換 alias なしで改名した**（ADR-0046）— 新旧の対応は[移行表](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046)にすべて載せてある（orphan 化した mirror の掃除は `suasor skills prune`）。
 
-## クイックスタート（暫定）
-
-> 開発初期ですが、下記の CLI コマンドはすべて実装済みです（取り込み・検索・MCP server・skill すべて動作）。MCP surface も `brief` / `graph.related`・`graph.expand` を含めて提供済みです（[docs/design/mcp-surface.md](docs/design/mcp-surface.md) 参照）。
+## クイックスタート
 
 下記コマンドは、上記いずれかのチャネルで Suasor を**インストール済み**で `suasor` が `PATH` 上にあることを前提としています。インストール形態に合わせて読み替えてください:
 
@@ -95,7 +87,7 @@ suasor sync                   # --connector a,b / --json 利用可
 suasor search "<query>"
 
 # 同梱のアシスタント skill をエージェントホストへ展開。
-suasor skills install        # .claude/skills/ + .agents/skills/
+suasor skills install        # ~/.claude/skills/ + ~/.agents/skills/（user scope。--project でリポジトリローカル）
 suasor skills list           # installed / missing / modified / orphan
 suasor skills prune          # 退役 skill の mirror（orphan）を削除
 
@@ -107,7 +99,9 @@ suasor config edit           # config.toml を $EDITOR で編集・保存時に�
 suasor validate-config       # config.toml を検査（--fix で安全な修復を適用）
 ```
 
-設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`suasor config edit`（保存時に検証し、不正な編集はロールバック）で編集し、`suasor validate-config [--fix]` で検査できます。`<connector> sync` は github / slack / ms-graph / google / box / web / local / notion / jira から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。ローカルストアは `suasor export backup` でバックアップし、取り込み済みデータの監査・削除は `suasor source list` / `suasor source forget` で行えます（[docs/guide/data-audit.md](docs/guide/data-audit.md)）。よくある失敗（空 sync・recall が空・dimension 不一致・rate limit）の診断は [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md) を参照してください。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
+設定は `~/.config/suasor/`（`SUASOR_CONFIG_DIR` で上書き）に置かれます。`suasor config edit`（保存時に検証し、不正な編集はロールバック）で編集し、`suasor validate-config [--fix]` で検査できます。`<connector> sync` は github / slack / ms-graph / google / box / web / local / notion / jira から read 専用で取り込みます（各コネクタの設定は [docs/guide/connectors.md](docs/guide/connectors.md)）。ローカルストアは `suasor export backup` でバックアップし、取り込み済みデータの監査・削除は `suasor source list` / `suasor source forget` で行えます（[docs/guide/data-audit.md](docs/guide/data-audit.md)）。よくある失敗（install / runtime エラー・空 sync・recall が空・dimension 不一致・rate limit）の診断は [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md) を参照してください。コマンド・フラグの一覧は [docs/design/cli.md](docs/design/cli.md)、アシスタント skill は [docs/skills/README.md](docs/skills/README.md) を参照してください。
+
+ガイド一覧（[docs/guide/](docs/guide/)）— 英語: [install](docs/guide/install.md) · [connectors](docs/guide/connectors.md) · [troubleshooting](docs/guide/troubleshooting.md)、日本語: [embedding](docs/guide/embedding.md) · [extraction](docs/guide/extraction.md) · [export](docs/guide/export.md) · [scheduling](docs/guide/scheduling.md) · [skills](docs/guide/skills.md) · [data-audit](docs/guide/data-audit.md)。
 
 ### ソースから
 
@@ -158,9 +152,9 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 - `source.history` — List a source's body versions from the event log (newest first).
 - `task.list` — List tasks, most-recently-updated first.
 - `decision.list` — List recorded decisions, newest-recorded first.
-- `demand.list` — List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).
+- `demand.list` — List connector-neutral demand (Slack mentions/DMs, github notifications, unanswered email, upcoming meetings); un-acked only by default (ADR-0041).
 - `priority.list` — Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).
-- `brief` — Bundle the period's tasks/decisions/sources/inbox for the host to summarize.
+- `brief` — Bundle the period's tasks/decisions/sources/demand/inbox/commitments for the host to summarize.
 - `sync.status` — Per-connector ingest freshness (latest run + ok/stale/never/failing verdict).
 - `graph.related` — Provenance neighbours of an entity (1 hop) over the links projection.
 - `graph.expand` — Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.
@@ -172,7 +166,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 
 **Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
 
-- `connector.sync` — Run a read-only connector ingest pass into the local store.
+- `connector.sync` — Fetch from a connector's external service (reads it only) and ingest locally.
 - `propose.generate` — Frame reply/task/decision/triage candidates and record them as pending.
 - `propose.apply` — Persist approved candidates as domain events (idempotent).
 - `propose.reject` — Reject a pending candidate with a reason (idempotent).
@@ -228,7 +222,7 @@ host に Bun が無い場合は、代わりに Docker イメージを指定し�
 }
 ```
 
-意味検索（`search` の `mode=semantic` / `hybrid`）は embedding backend を有効にするまで `embedding_disabled` シグナルを返し、既定の `mode=auto` は backend の有無を見て FTS / hybrid を自動選択します（ADR-0005 / ADR-0046）。tool スキーマは [docs/design/mcp-surface.md](docs/design/mcp-surface.md) を参照してください。
+意味検索（`search` の `mode=semantic` / `hybrid`）は embedding backend を有効にするまで `embedding_disabled` シグナルを返し（backend の有効化は [embedding ガイド](docs/guide/embedding.md)：Ollama / OpenAI / Voyage）、既定の `mode=auto` は backend の有無を見て FTS / hybrid を自動選択します（ADR-0005 / ADR-0046）。tool スキーマは [docs/design/mcp-surface.md](docs/design/mcp-surface.md) を参照してください。
 
 ## ライセンス
 

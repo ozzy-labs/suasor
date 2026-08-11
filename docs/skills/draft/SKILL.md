@@ -35,6 +35,8 @@ read-only な下書きの単一入口（[ADR-0046](https://github.com/ozzy-labs/
 | 「リリース告知文書いて」「announcement 作って」「release notes 草案」「お知らせ案ほしい」 | `announcement` |
 | 「引き継ぎ書作って」「handoff 書く」「後任向け資料まとめて」「業務引継メモほしい」 | `handoff` |
 
+返信ではない「リリースノートの下書き作って」の類もここが受ける。特定メッセージへの**返信**の下書きだけが [reply-draft](../reply-draft/SKILL.md)（HITL）。
+
 ## 何をするか（MCP tool flow）
 
 すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。

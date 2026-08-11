@@ -29,7 +29,7 @@ These boundaries keep Suasor a local-first, human-in-the-loop advisor (see [docs
 
 ## Status
 
-Early development — **published** on npm / standalone binaries / Docker. Built spec-first.
+0.x — **published and usable** (npm / standalone binaries / Docker); the surface may still change. Built spec-first.
 
 ## Install
 
@@ -44,18 +44,9 @@ Suasor is an MCP server — an *application*, not a library — so it runs on it
 
 ### Upgrading
 
-**0.3.0 renames MCP tools and assistant skills with no backward-compatible aliases** (ADR-0046 —
-the agent surface was contracted so a host stops choosing between near-duplicate entry points).
-If your host config, custom skills or scripts name `recall.search`, `search.hybrid`,
-`source.get.full`, `commitment.resolve` / `.dismiss` / `.reopen`, `demand.ack` / `.dismiss`, or any
-of the 16 folded-away skills, they must be updated — the mechanical
-[migration table](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046) lists every old → new name. Mirrors of the
-folded-away skills survive the upgrade (`skills install` overwrites but never deletes);
-`suasor skills list` reports them as `orphan` and `suasor skills prune` removes them.
+**0.3.0 renamed MCP tools and assistant skills with no backward-compatible aliases** (ADR-0046) — the mechanical [migration table](docs/guide/troubleshooting.md#upgrading-to-v03-the-agent-surface-contraction-adr-0046) lists every old → new name, plus `suasor skills prune` for the orphaned mirrors.
 
-## Quickstart (provisional)
-
-> Early development, but every CLI command below is implemented (ingest, retrieval, MCP server, and skills all work), and the MCP surface — including `brief` and `graph.related` / `graph.expand` — is shipped. See [docs/design/mcp-surface.md](docs/design/mcp-surface.md).
+## Quickstart
 
 These commands assume Suasor is **installed** via one of the channels above, so `suasor` is on your `PATH`. Pick the form that matches your install:
 
@@ -96,7 +87,7 @@ suasor sync                   # --connector a,b / --json available
 suasor search "<query>"
 
 # Install the bundled assistant skills into your agent host(s).
-suasor skills install        # .claude/skills/ + .agents/skills/
+suasor skills install        # ~/.claude/skills/ + ~/.agents/skills/ (user scope; --project for repo-local)
 suasor skills list           # installed / missing / modified / orphan
 suasor skills prune          # remove mirrors of retired skills (orphans)
 
@@ -105,10 +96,12 @@ suasor db migrate            # apply the projection schema (idempotent)
 suasor projections rebuild   # replay the event log into projections
 suasor export backup         # consistent store backup (--format sqlite|tgz)
 suasor config edit           # edit config.toml in $EDITOR, validate on save
-suasor validate-config       # check config.toml (--fix applies safe repairs)
+suasor config validate       # check config.toml (--fix applies safe repairs)
 ```
 
-Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). Edit it with `suasor config edit` (validates on save, rolls back a bad edit) and check it with `suasor validate-config [--fix]`. `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local / notion / jira — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Back up your local store with `suasor export backup` and audit / purge ingested data with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md). Diagnose common failure modes (empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) for the assistant skills.
+Config lives in `~/.config/suasor/` (override with `SUASOR_CONFIG_DIR`). Edit it with `suasor config edit` (validates on save, rolls back a bad edit — the rejected text is kept in `config.toml.rej`) and check it with `suasor config validate [--fix]` (alias: `validate-config`). `<connector> sync` ingests read-only from github / slack / ms-graph / google / box / web / local / notion / jira — see [docs/guide/connectors.md](docs/guide/connectors.md) for per-connector setup. Back up your local store with `suasor export backup` and audit / purge ingested data with `suasor source list` / `suasor source forget` — see [docs/guide/data-audit.md](docs/guide/data-audit.md) *(Japanese; code blocks are language-neutral)*. Diagnose common failure modes (install/runtime errors, empty sync, recall returning nothing, dimension mismatch, rate limits) with [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md). See [docs/design/cli.md](docs/design/cli.md) for the full command/flag reference and [docs/skills/README.md](docs/skills/README.md) *(Japanese)* for the assistant skills.
+
+All guides under [docs/guide/](docs/guide/) — English: [install](docs/guide/install.md) · [connectors](docs/guide/connectors.md) · [troubleshooting](docs/guide/troubleshooting.md); Japanese (code blocks are language-neutral): [embedding](docs/guide/embedding.md) · [extraction](docs/guide/extraction.md) · [export](docs/guide/export.md) · [scheduling](docs/guide/scheduling.md) · [skills](docs/guide/skills.md) · [data-audit](docs/guide/data-audit.md).
 
 ### From source
 
@@ -136,7 +129,7 @@ bun run src/index.ts sync            # same bulk ingest as `suasor sync`
 15 * * * * suasor sync --json >> "$HOME/.local/state/suasor/sync.log" 2>&1
 ```
 
-See [docs/guide/scheduling.md](docs/guide/scheduling.md) for launchd / systemd timer examples and failure monitoring ([ADR-0027](docs/adr/0027-bulk-sync-orchestration.md)).
+See [docs/guide/scheduling.md](docs/guide/scheduling.md) *(Japanese; the cron / launchd / systemd snippets are language-neutral)* for launchd / systemd timer examples and failure monitoring ([ADR-0027](docs/adr/0027-bulk-sync-orchestration.md)).
 
 The same cron model drives the **proactive push lane** ([ADR-0040](docs/adr/0040-proactive-push-lane.md)): once you configure a named `[digest.jobs]` entry (standing consent), `suasor digest` bundles your top priorities (overdue / demand / due-soon, [ADR-0041](docs/adr/0041-neutral-demand-priority-substrate.md)) and pushes them to a channel — OS notification, a file in the export sandbox, or a Slack DM-to-self. No job configured means nothing is sent.
 
@@ -159,9 +152,9 @@ Suasor exposes its memory to AI agents over the [Model Context Protocol](https:/
 - `source.history` — List a source's body versions from the event log (newest first).
 - `task.list` — List tasks, most-recently-updated first.
 - `decision.list` — List recorded decisions, newest-recorded first.
-- `demand.list` — List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).
+- `demand.list` — List connector-neutral demand (Slack mentions/DMs, github notifications, unanswered email, upcoming meetings); un-acked only by default (ADR-0041).
 - `priority.list` — Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).
-- `brief` — Bundle the period's tasks/decisions/sources/inbox for the host to summarize.
+- `brief` — Bundle the period's tasks/decisions/sources/demand/inbox/commitments for the host to summarize.
 - `sync.status` — Per-connector ingest freshness (latest run + ok/stale/never/failing verdict).
 - `graph.related` — Provenance neighbours of an entity (1 hop) over the links projection.
 - `graph.expand` — Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.
@@ -173,7 +166,7 @@ Suasor exposes its memory to AI agents over the [Model Context Protocol](https:/
 
 **Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
 
-- `connector.sync` — Run a read-only connector ingest pass into the local store.
+- `connector.sync` — Fetch from a connector's external service (reads it only) and ingest locally.
 - `propose.generate` — Frame reply/task/decision/triage candidates and record them as pending.
 - `propose.apply` — Persist approved candidates as domain events (idempotent).
 - `propose.reject` — Reject a pending candidate with a reason (idempotent).
@@ -229,7 +222,7 @@ No Bun on the host? Point it at the Docker image instead (no runtime needed):
 }
 ```
 
-Semantic retrieval (`search` with `mode=semantic`/`hybrid`) returns an `embedding_disabled` signal until you enable an embedding backend, and the default `mode=auto` picks FTS or hybrid from the backend state, so hosts never have to choose the algorithm (ADR-0005 / ADR-0046). See [docs/design/mcp-surface.md](docs/design/mcp-surface.md) for the tool schemas.
+Semantic retrieval (`search` with `mode=semantic`/`hybrid`) returns an `embedding_disabled` signal until you enable an embedding backend — see the [embedding guide](docs/guide/embedding.md) *(Japanese; code blocks are language-neutral)* for enabling one (Ollama / OpenAI / Voyage) — and the default `mode=auto` picks FTS or hybrid from the backend state, so hosts never have to choose the algorithm (ADR-0005 / ADR-0046). See [docs/design/mcp-surface.md](docs/design/mcp-surface.md) for the tool schemas.
 
 ## License
 

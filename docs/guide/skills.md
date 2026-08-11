@@ -37,9 +37,9 @@ skill は **専用コマンドではなく、エージェントへの自然文�
 | 「次に何やる?」「優先度高いのは?」 | `next-actions` | read |
 | 「今日のまとめ」「週次の棚卸し」「上司向け週次報告」 | `brief` | read |
 | 「あの資料どこ」「<語> について調べて」 | `find` | read |
-| 「この設計書レビューして」「前回から何が変わった」 | `source-review` | read |
+| 「この設計書レビューして」「この資料は前回から何が変わった」 | `source-review` | read |
 | 「この資料から task 抽出」 | `source-extract` | write（HITL） |
-| 「返信案考えて」「下書き作って」 | `reply-draft` | write（HITL） |
+| 「返信案考えて」「これに返信したい」 | `reply-draft` | write（HITL） |
 
 read 系（自律 OK）はエージェントが自律実行してよい。write 系（HITL）は候補生成までで、**適用はユーザー承認が必須**（auto-apply 経路は無い、[ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。
 

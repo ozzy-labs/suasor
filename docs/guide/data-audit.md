@@ -148,21 +148,22 @@ WAL/SHM サイドカーは復元不要（バックアップは単一ファイル
 
 > **注意（embedding 有効時）**: `projections rebuild` は replay 不能な embedding サイドカー（vec0 ベクトル＋`embeddings_meta`）を **両方消去** し、正直な「全件 pending」状態に戻す（[ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md) §5）。実行直後は semantic recall（意味検索）が空になるため、`suasor embeddings drain` を 1 回流して再埋め込みし復旧する（次回 sync では未変更ソースが再埋め込みされず復旧しない）。rebuild CLI もベクトルを消したときはこの案内を出力する。
 
-## 設定の検証と編集（`validate-config` / `config edit`）
+## 設定の検証と編集（`config validate` / `config edit`）
 
 ```bash
 # config.toml の構造検証（必須欠落 / invalid / dangling / typo）
-suasor validate-config
+# （歴史的 alias: suasor validate-config）
+suasor config validate
 # 安全な除去のみ自動修正（unknown/typo キー・存在しない local root）
-suasor validate-config --fix
+suasor config validate --fix
 
 # $EDITOR で編集し、保存後に schema 検証（不正なら自動で差し戻し）
 suasor config edit
 suasor config edit --editor nano
 ```
 
-- `validate-config --fix` は**除去のみ**の保守的修正で、値の捏造はしない（`missing-required` / `invalid-value` は報告のみ・HITL [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。コメント / 整形は保たれる
-- `config edit` は保存後に loader 同等の検証を走らせ、**不正な TOML / schema 違反なら元ファイルを復元**して非ゼロ終了する（壊れた config が残らない）
+- `config validate --fix` は**除去のみ**の保守的修正で、値の捏造はしない（`missing-required` / `invalid-value` は報告のみ・HITL [ADR-0004](../adr/0004-mcp-agent-boundary-and-hitl.md)）。コメント / 整形は保たれる
+- `config edit` は保存後に loader 同等の検証を走らせ、**不正な TOML / schema 違反なら元ファイルを復元**して非ゼロ終了する（壊れた config が残らない）。却下した編集本文は `config.toml.rej` に保存されるので、直して貼り戻せる（編集が失われない・[#572](https://github.com/ozzy-labs/suasor/issues/572)）
 
 ## 関連
 

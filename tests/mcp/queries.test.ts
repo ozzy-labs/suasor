@@ -3,8 +3,10 @@ import { Store } from "../../src/db/index.ts";
 import {
   buildBrief,
   buildPriorities,
+  DEMAND_KINDS,
   deriveBriefWarnings,
   expandGraph,
+  GITHUB_DEMAND_REASONS,
   getSource,
   listCommitments,
   listDecisions,
@@ -649,6 +651,19 @@ describe("listDemand — GitHub notifications (ADR-0041)", () => {
         .sort(),
     ).toEqual(["n-absent", "n-null"]);
     for (const r of listDemand(sqlite())) expect(r.seenState).toBeNull();
+  });
+});
+
+describe("DEMAND_KINDS vocabulary (Issue #569)", () => {
+  test("covers every github demand reason, slack, email and calendar kinds", () => {
+    // The MCP `demand.list` `kinds` filter derives its enum from DEMAND_KINDS,
+    // so a kind missing here would be unselectable at the surface.
+    for (const reason of GITHUB_DEMAND_REASONS) {
+      expect(DEMAND_KINDS).toContain(reason);
+    }
+    for (const kind of ["mention", "dm", "to", "cc", "meeting_soon", "meeting_prep"] as const) {
+      expect(DEMAND_KINDS).toContain(kind);
+    }
   });
 });
 

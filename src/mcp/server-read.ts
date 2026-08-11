@@ -16,6 +16,7 @@
 import type { Database } from "bun:sqlite";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { isLoopbackUrl } from "../config/index.ts";
 import type { EmbeddingConfig } from "../config/schema.ts";
 import { deriveSyncFreshness, type SyncFreshness } from "../connectors/freshness.ts";
 import {
@@ -23,6 +24,7 @@ import {
   EMBEDDING_DISABLED_SIGNAL,
   type Embedder,
   EmbeddingError,
+  EXTERNAL_EMBEDDING_BACKENDS,
   recallSearch,
 } from "../retrieval/embedding/index.ts";
 import { DEFAULT_RRF_K, fuseRrf } from "../retrieval/hybrid.ts";
@@ -37,6 +39,7 @@ import {
   buildBrief,
   buildPriorities,
   DEFAULT_LIST_LIMIT,
+  DEMAND_KINDS,
   DEMAND_SOURCES,
   deriveBriefWarnings,
   deriveCommitmentScanStaleness,
@@ -70,6 +73,14 @@ export interface ReadToolContext {
 /** Register every read tool onto `server` in the original order. */
 export function registerReadTools(server: McpServer, ctx: ReadToolContext): void {
   const { sqlite, embedder, embeddingConfig, deps } = ctx;
+  // External embedding backends (EXTERNAL_EMBEDDING_BACKENDS) and a remote
+  // (non-loopback) ollama sidecar egress the query text on the semantic paths
+  // (ADR-0003) — `search`'s annotation and description must say so instead of
+  // hardcoding a closed world (Issue #569). A loopback sidecar and `disabled`
+  // stay egress-free.
+  const embeddingEgresses =
+    EXTERNAL_EMBEDDING_BACKENDS.has(embeddingConfig.backend) ||
+    (embeddingConfig.baseUrl !== undefined && !isLoopbackUrl(embeddingConfig.baseUrl));
 
   // Sync freshness (Issue #442), derived at read time from `sync_runs` + the
   // `[sync]` cadence expectations. Shared by `sync.status` and the brief's
@@ -146,7 +157,12 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "exclusive). Each hit carries a bounded `excerpt` (not the full body) by " +
         "default — fetch full text via source.get, or pass fullBody=true (ADR-0018). " +
         "Every mode reports `truncated` (whether hits were cut off by `limit`); " +
-        "`fts` additionally reports `totalHits`, the pre-limit match count.",
+        "`fts` additionally reports `totalHits`, the pre-limit match count." +
+        (embeddingEgresses
+          ? " NOTE: an external embedding backend is configured, so `semantic` / " +
+            "`hybrid` / `auto` modes send the query text to that remote API " +
+            "(ADR-0003); `fts` stays fully local."
+          : ""),
       inputSchema: {
         query: z.string().min(1).describe("Free-text query."),
         mode: z
@@ -166,7 +182,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         fullBody: fullBodyShape,
         maxBodyChars: maxBodyCharsShape,
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      // openWorldHint is derived from config at registration (Issue #569): with
+      // an external embedding backend the semantic paths egress the query text,
+      // so claiming a closed world would be a lie.
+      annotations: { readOnlyHint: true, openWorldHint: embeddingEgresses },
     },
     async ({
       query,
@@ -400,7 +419,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "read-time-derived overdue flag (ADR-0028). Returns `truncated: true` when " +
         "more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
-        state: z.string().min(1).optional().describe("Filter by lifecycle state."),
+        state: z
+          .enum(["proposed", "open", "in_progress", "completed", "dropped"])
+          .optional()
+          .describe("Filter by lifecycle state (default: all)."),
         updatedAfter: isoDateTime.optional().describe("Inclusive lower bound on updated_at."),
         updatedBefore: isoDateTime.optional().describe("Exclusive upper bound on updated_at."),
         dueBefore: isoDateTime
@@ -472,27 +494,23 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     {
       title: "List demand",
       description:
-        "List connector-neutral, unread-worthy demand signals — derived (read-only, " +
-        "FTS-first, no extra fetch) from ingested sources (ADR-0041): Slack @mentions of " +
-        "you + DMs (source `slack`, kind `mention`/`dm`, ADR-0012), demand-worthy github " +
-        "notifications (source `github`, kind = the notification reason: review_requested / " +
-        "mention / team_mention / assign / author), unanswered mail threads addressed to " +
-        "you (source `email`, kind `to`/`cc`, ADR-0043 — replying resolves them, no ack " +
-        "needed) and upcoming meetings (source `calendar`, kind `meeting_soon` ≤2h / " +
-        "`meeting_prep` ≤24h with an agenda, attachments or you organizing; ADR-0044 — " +
-        "declined, optional-only and all-day events are excluded, and they leave the list " +
-        "when they start). Calendar rows lead the list ordered by start time (soonest " +
-        "first); everything else follows newest-observed-first. Slack rows " +
-        "carry `channelName` / `userName` / `teamName` joined locally from the " +
-        "slack_channels / person_identities / slack_teams projections (ADR-0037), or `null` " +
-        "when unresolved / for github (fall back to `meta`); never live-fetched. Returns " +
-        "only OUTSTANDING (un-acked) demand by default — rows marked seen via demand.mark, " +
-        "or a github notification already read (`meta.unread=false`), are " +
-        "hidden so 'unprocessed' is true (ADR-0041 supersedes ADR-0012 決定 4). Pass " +
-        "includeSeen=true to return all with `seenState` populated. Use as the priority " +
-        "signal in next-actions / brief. Returns `truncated: true` when more rows " +
-        "match than `limit` returned (ADR-0007). Each row carries a bounded `excerpt` " +
-        "(not the full body) by default — fetch full text via source.get, or pass " +
+        "List connector-neutral, attention-worthy demand signals, derived read-only " +
+        "from ingested sources (ADR-0041): Slack @mentions of you + DMs (kind " +
+        "`mention` / `dm`), demand-worthy github notifications (kind = the " +
+        "notification reason: assign / author / mention / review_requested / " +
+        "team_mention), unanswered mail threads addressed to you (kind `to` / `cc` " +
+        "— replying resolves them, no ack needed), and upcoming meetings (kind " +
+        "`meeting_soon` ≤2h / `meeting_prep` ≤24h when prep-worthy; they leave the " +
+        "list when they start). Calendar rows lead, ordered by start time (soonest " +
+        "first); everything else follows newest-observed-first. Slack rows carry " +
+        "locally-joined `channelName` / `userName` / `teamName` (`null` when " +
+        "unresolved; never live-fetched). Returns only OUTSTANDING (un-acked) " +
+        "demand by default — rows marked seen via demand.mark, or a github " +
+        "notification already read upstream, are hidden; pass includeSeen=true to " +
+        "return all with `seenState` populated. Use as the priority signal in " +
+        "next-actions / brief. Returns `truncated: true` when more rows match than " +
+        "`limit` returned (ADR-0007). Each row carries a bounded `excerpt` (not the " +
+        "full body) by default — fetch full text via source.get, or pass " +
         "fullBody=true (ADR-0018).",
       inputSchema: {
         selfUserId: z
@@ -505,7 +523,7 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
           .optional()
           .describe("Restrict to a single source family (default: all four)."),
         kinds: z
-          .array(z.string().min(1))
+          .array(z.enum(DEMAND_KINDS))
           .optional()
           .describe(
             "Restrict to these kinds (Slack mention/dm, a github reason, email to/cc, " +
@@ -601,11 +619,13 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
     {
       title: "Period brief bundle",
       description:
-        "Bundle the period's material — tasks/decisions updated, sources/Slack demand " +
-        "observed, and currently-open inbox — for the host LLM to summarize in one " +
-        "round-trip. Read-only; the tool gathers, the host composes the summary " +
+        "Bundle the period's material — tasks/decisions updated, sources/demand " +
+        "observed, currently-open inbox, and open commitments — for the host LLM " +
+        "to summarize in one round-trip. Read-only; the tool gathers, the host " +
+        "composes the summary " +
         "(ADR-0017). Default window: the last 24h. Carries a per-section " +
-        "`truncated: { sources, tasks, decisions, inbox, demand }` map — a section is " +
+        "`truncated: { sources, tasks, decisions, inbox, demand, commitments }` map " +
+        "— a section is " +
         "`true` when it held more rows than `limit` returned (ADR-0007 'no silent wrong " +
         "answer'); narrow the window or page via the matching list tool when set. " +
         "Body-bearing rows (sources / demand) carry a bounded `excerpt` (not the full " +
@@ -708,7 +728,14 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "references / manual_link (the latter carry a `linkId` for link.remove). " +
         "Read-only; fetch bodies via source.get.",
       inputSchema: {
-        kind: z.string().min(1).describe("Origin entity kind (e.g. task / decision / source)."),
+        kind: z
+          .string()
+          .min(1)
+          .describe(
+            "Origin entity kind. Built-in link kinds: source / task / decision / " +
+              "commitment / reply_draft / external_task / inbox (manual links may " +
+              "introduce others). An unknown kind returns empty neighbours, not an error.",
+          ),
         id: z.string().min(1).describe("Origin entity id."),
         direction: z
           .enum(["out", "in", "both"])
@@ -738,7 +765,14 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "in for a backward provenance trace (graph trace), or out for downstream expansion " +
         "(ADR-0020). Returns reached nodes + the edges between them. Read-only.",
       inputSchema: {
-        kind: z.string().min(1).describe("Origin entity kind."),
+        kind: z
+          .string()
+          .min(1)
+          .describe(
+            "Origin entity kind. Built-in link kinds: source / task / decision / " +
+              "commitment / reply_draft / external_task / inbox (manual links may " +
+              "introduce others). An unknown kind returns an empty expansion, not an error.",
+          ),
         id: z.string().min(1).describe("Origin entity id."),
         depth: z.number().int().positive().max(10).optional().describe("Max hops (default 2)."),
         direction: z
@@ -819,7 +853,10 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "updated_after/updated_before time window. Returns `truncated: true` when " +
         "more rows match than `limit` returned (ADR-0007).",
       inputSchema: {
-        state: z.string().min(1).optional().describe("Filter by triage state."),
+        state: z
+          .enum(["open", "snoozed", "done", "dismissed"])
+          .optional()
+          .describe("Filter by triage state (default: all)."),
         sourceType: z
           .string()
           .min(1)
@@ -857,7 +894,8 @@ export function registerReadTools(server: McpServer, ctx: ReadToolContext): void
         "List generated HITL proposal candidates most-recently-updated first, " +
         "optionally filtered by state (pending / applied / rejected) and kind " +
         "(task / decision / reply_draft / triage / commitment). Each row carries " +
-        "its `reason` (populated for rejected candidates). Read-only: the " +
+        "its `reason`: a rejection reason on rejected rows, or a regeneration " +
+        "hint recorded via proposal.feedback on still-pending rows. Read-only: the " +
         "visibility half of the propose approve/reject loop (apply/reject/batch " +
         "are separate write tools). Returns `truncated: true` when more rows match " +
         "than `limit` returned (ADR-0007).",

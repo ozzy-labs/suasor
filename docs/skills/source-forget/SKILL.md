@@ -15,6 +15,9 @@ mcp_tools_read:
   - source.list
 mcp_tools_write:
   - source.forget
+mcp_tools_referenced:
+  - propose.reject
+  - source.get
 ---
 
 # source-forget

@@ -1686,6 +1686,49 @@ describe("MCP structured errors (code/hint — ADR-0031 / #196)", () => {
     expect(body.code).toBe("INVALID_INPUT");
   });
 
+  test("person.merge unknown source person → MISSING_ENTITY with a hint (#568)", async () => {
+    const client = await connectWrite();
+    const body = parseError(
+      (await client.callTool({
+        name: "person.merge",
+        arguments: { targetPersonId: "p1", sourcePersonId: "person_ghost" },
+      })) as never,
+    );
+    expect(body.code).toBe("MISSING_ENTITY");
+    expect(body.hint).toContain("person.list");
+  });
+
+  test("person.split unknown identity → MISSING_ENTITY with a hint (#568)", async () => {
+    const client = await connectWrite();
+    const body = parseError(
+      (await client.callTool({
+        name: "person.split",
+        arguments: { connector: "slack", handle: "ghost" },
+      })) as never,
+    );
+    expect(body.code).toBe("MISSING_ENTITY");
+    expect(body.hint).toContain("person.list");
+  });
+
+  test("propose.generate kind/mode violation → structured INVALID_INPUT (#568)", async () => {
+    const client = await connectWrite();
+    // reply_draft mode does not allow a task candidate: the service throws a
+    // typed McpToolError, so the tool returns {code,message,hint} JSON instead
+    // of an unstructured SDK error string.
+    const body = parseError(
+      (await client.callTool({
+        name: "propose.generate",
+        arguments: {
+          mode: "reply_draft",
+          candidates: [{ kind: "task", title: "not allowed here", sourceExternalIds: [] }],
+        },
+      })) as never,
+    );
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.message).toContain('not valid for mode "reply_draft"');
+    expect(body.hint).toBeTruthy();
+  });
+
   test("draft.export without [export].dir → EXPORT_DIR_NOT_CONFIGURED with a hint", async () => {
     const client = await connectWrite(); // no [export] slice
     const body = parseError(

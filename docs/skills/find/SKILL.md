@@ -1,21 +1,21 @@
 ---
 name: find
-description: 「あの資料どこ」「先週共有された PDF」「<X> について調べて」「<Y> の経緯」「網羅的に教えて」と頼まれたら、Suasor MCP の search（mode=auto）で横断検索し、深掘りが要るときは graph.related / brief で関連 entity と経緯まで辿る。read-only、外部 SaaS は直接叩かない。
+description: 「あの資料どこ」「先週共有された PDF」「<X> について調べて」「<Y> の経緯」「網羅的に教えて」や、対象を明示しない「あれどうなった」の類の進捗・経緯質問を受けたら、Suasor MCP の search（mode=auto）で横断検索し、深掘りが要るときは graph.related / brief で関連 entity と経緯まで辿る。read-only、外部 SaaS は直接叩かない。
 readOnly: true
 category: retrieval
 triggers:
   - あの資料どこ
   - 先週共有された PDF
-  - <X> について調べて
-  - <Y> の経緯
+  - この件について調べて
+  - あの件の経緯
   - 網羅的に教えて
+  - あれどうなった
 pairs:
   - source-review
   - decisions
 mcp_tools_read:
   - search
   - source.get
-  - source.list
   - graph.related
   - brief
 mcp_tools_write: []
@@ -32,11 +32,13 @@ mcp_tools_write: []
 | 言いかた | depth |
 | --- | --- |
 | 「あの資料どこ」「先週共有された PDF」「<キーワード> 含むファイル」「あの議事録」 | `locate`（既定） |
-| 「`<X>` について調べて」「`<Y>` の経緯」「網羅的に教えて」「全部教えて」 | `research` |
+| 「`<X>` について調べて」「`<Y>` の経緯」「網羅的に教えて」「全部教えて」「あれどうなった」（対象を明示しない進捗・経緯質問） | `research` |
 
 ## 何をするか（MCP tool flow）
 
 すべて read tool（[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。
+
+対象を明示しない「あれどうなった」は本 skill が受け、会話文脈から対象を推定して `search` + `graph.related` で現状・経緯を組み立てる（推定できなければ聞き返す）。**約束を明示した**「相手に頼んだ約束どうなった」だけが [commitment-chase](../commitment-chase/SKILL.md) の領分。
 
 ### depth=locate（既定）
 

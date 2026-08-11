@@ -1,6 +1,6 @@
 ---
 name: brief
-description: 「今日のまとめ」「今週どうなってる」「前回以降の差分」「週次の棚卸し」「上司向け週次報告」「今どれくらい溜まってる」と聞かれたら、期間・読み手・観点を決めて状況をまとめる。Suasor MCP の brief / priority.list / task.list / decision.list / inbox.list / demand.list / commitment.list / search を読み取り系で合成する。read-only。
+description: 「今日のまとめ」「今週どうなってる」「前回以降の差分」「週次の棚卸し」「上司向け週次報告」「今どれくらい溜まってる」と聞かれたら、期間・読み手・観点を決めて状況をまとめる。対象資料を指定しない「前回から何が変わった」もここが受ける（特定資料・PR の差分は source-review）。Suasor MCP の brief / priority.list / task.list / decision.list / inbox.list / demand.list / commitment.list / search を読み取り系で合成する。read-only。
 readOnly: true
 category: brief
 triggers:
@@ -14,13 +14,14 @@ pairs:
   - next-actions
 mcp_tools_read:
   - brief
-  - priority.list
-  - task.list
-  - decision.list
-  - inbox.list
-  - demand.list
   - commitment.list
+  - decision.list
+  - demand.list
+  - inbox.list
+  - priority.list
+  - propose.list
   - search
+  - task.list
 mcp_tools_write: []
 ---
 
@@ -41,6 +42,8 @@ mcp_tools_write: []
 | 「健全性チェック」「今どれくらい溜まってる」「数値で」 | 現在 | self | **numbers** |
 
 明示がなければ `period=24h` / `audience=self` / `focus=summary`。
+
+対象を指定しない「前回から何が変わった」もここ（period=前回確認時刻から）。対象資料・PR を指定した「この資料は前回から何が変わった」は [source-review](../source-review/SKILL.md)（target=diff）が受ける。
 
 ## 何をするか（MCP tool flow）
 

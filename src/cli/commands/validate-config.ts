@@ -1,6 +1,10 @@
 /**
- * `suasor validate-config [--fix]` — structural validation of config.toml with
- * optional safe auto-fix (Issue #280).
+ * `suasor config validate [--fix]` (alias: `suasor validate-config`) —
+ * structural validation of config.toml with optional safe auto-fix (Issue
+ * #280). The `config validate` co-path keeps the `config` noun group whole —
+ * `suasor config --help` now discovers the verb users need right after a bad
+ * `config edit` (Issue #572); the historical top-level `validate-config`
+ * spelling is kept as an alias so scripts and docs don't break.
  *
  * `doctor` checks whether the environment is *wired* (DB present, credentials
  * set); this verb checks whether the config *file itself* is well-formed. It
@@ -41,7 +45,10 @@ function toFindingsJson(
 }
 
 export class ValidateConfigCommand extends SuasorCommand {
-  static override paths = [["validate-config"]];
+  // `config validate` is the canonical spelling (keeps the `config` noun group
+  // discoverable from `suasor config --help`); `validate-config` is the
+  // historical alias kept for scripts and docs (Issue #572).
+  static override paths = [["config", "validate"], ["validate-config"]];
 
   static override usage = Command.Usage({
     category: "Maintenance",
@@ -63,11 +70,14 @@ export class ValidateConfigCommand extends SuasorCommand {
       and formatting. It never invents a value, so missing/invalid findings are
       reported but never auto-fixed (HITL, ADR-0004). Exits 1 when unfixed
       findings remain.
+
+      \`suasor validate-config\` is the historical spelling, kept as an alias.
     `,
     examples: [
-      ["Validate the config", "suasor validate-config"],
-      ["Apply safe repairs", "suasor validate-config --fix"],
-      ["Machine-readable output for a CI config gate", "suasor validate-config --json"],
+      ["Validate the config", "suasor config validate"],
+      ["Apply safe repairs", "suasor config validate --fix"],
+      ["Machine-readable output for a CI config gate", "suasor config validate --json"],
+      ["Historical alias", "suasor validate-config"],
     ],
   });
 

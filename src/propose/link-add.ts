@@ -18,6 +18,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { McpToolError } from "../mcp/errors.ts";
 import { manualLinkId } from "./id.ts";
 
 /** A single graph endpoint: a projection entity addressed by kind + id. */
@@ -51,7 +52,11 @@ export function linkAdd(store: Store, input: LinkAddInput, now: Date = new Date(
 
   // A self-loop carries no provenance meaning — reject so the host surfaces it.
   if (fromKind === toKind && fromId === toId) {
-    throw new Error("link.add: cannot link an entity to itself");
+    throw new McpToolError(
+      "INVALID_INPUT",
+      "link.add: cannot link an entity to itself",
+      "from and to must be distinct entities (no self-loop).",
+    );
   }
 
   const linkId = manualLinkId({ fromKind, fromId, toKind, toId });

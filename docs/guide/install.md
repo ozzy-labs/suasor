@@ -21,7 +21,7 @@ the whole difference, and [Binary scope](#binary-scope) spells each one out.
 > Releases are automated with release-please: merging its release PR publishes
 > npm + binaries + Docker (see [Releasing](#releasing-maintainers)).
 > Contributors can run from source via the
-> [Quickstart](../../README.md#quickstart-provisional).
+> [Quickstart](../../README.md#quickstart).
 
 ## 1. Standalone single binary
 

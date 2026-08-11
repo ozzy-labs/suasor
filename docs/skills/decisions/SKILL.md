@@ -7,7 +7,7 @@ triggers:
   - 今月の決定
   - 直近の意思決定一覧
   - あの決定はなぜ
-  - X を選んだ理由
+  - これを選んだ理由
   - この方針の根拠は?
 pairs:
   - find
@@ -17,6 +17,9 @@ mcp_tools_read:
   - search
   - source.get
 mcp_tools_write: []
+mcp_tools_referenced:
+  - decision.record
+  - link.add
 ---
 
 # decisions

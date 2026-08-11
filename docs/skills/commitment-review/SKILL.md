@@ -14,10 +14,14 @@ pairs:
   - commitment-chase
 mcp_tools_read:
   - commitment.list
+  - propose.list
 mcp_tools_write:
-  - propose.generate
-  - propose.apply
   - commitment.set
+  - propose.apply
+  - propose.generate
+  - propose.reject
+mcp_tools_referenced:
+  - brief
 ---
 
 # commitment-review
