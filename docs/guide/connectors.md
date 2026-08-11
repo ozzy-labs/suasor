@@ -137,7 +137,7 @@ suasor google calendars --new
 - **Nothing is ingested and nothing is written to config.** Explicit enumeration stays the model; `--new` only removes the eyeballing step.
 - With `--filter` / `--root` the "no longer visible" half is **not computed** and says so: a narrowed view cannot tell "gone" from "out of view".
 - `google calendars --new` joined this list with [ADR-0051](../adr/0051-ingest-scope-defaults.md): it was previously refused because a single `calendarId` gave no configured *set* to diff, and `calendarIds` is a set.
-- Unlike Slack, non-Slack connectors do **not** sweep for drift during sync and do not surface it in `doctor`; you see it when you run `--new`. That gap is intentional — see [ADR-0049](../adr/0049-connector-readiness-parity.md) 決定 3 for the cost reasoning.
+- Unlike Slack, non-Slack connectors do **not** sweep for drift during sync and do not surface it in `doctor`; you see it when you run `--new`. That gap is intentional — see [ADR-0049](../adr/0049-connector-readiness-parity.md) decision 3 for the cost reasoning.
 
 ## Start with `suasor onboard` (recommended setup path)
 
@@ -289,13 +289,13 @@ Ingested bodies (title + body) become searchable via FTS immediately:
 suasor search rocket
 ```
 
-Via MCP the same search is available through the `search` read tool ([retrieval](../design/retrieval.md)). Enabling an embedding backend embeds bodies at ingestion time so you can also use 意味検索 semantic search (for cross-language and vocabulary-mismatch cases) ([embedding setup](embedding.md)).
+Via MCP the same search is available through the `search` read tool ([retrieval](../design/retrieval.md)). Enabling an embedding backend embeds bodies at ingestion time so you can also use semantic search (for cross-language and vocabulary-mismatch cases) ([embedding setup](embedding.md)).
 
 Across all connectors, the behavior of ingestion, search, delta detection, and the secret path (env override > keychain) is identical. Below we note only each connector's specific token / config slice. Tokens are **never written to config.toml** (env override or keychain).
 
 ## per-resource error isolation (github / google / box / ms-graph / notion / jira)
 
-A connector that scans multiple resources (github=repo / google=resource family / box=folder / ms-graph=resource family / notion=database + pages / jira=project) in one pass ensures that **one resource's failure does not drag down the ingestion of the others** (generalizing the error-isolation invariant recorded in [ADR-0014](../adr/0014-slack-multi-workspace.md) #193節 — which survives ADR-0042 as Slack's per-token isolation — beyond Slack, [#193](https://github.com/ozzy-labs/suasor/issues/193)). Previously a single repo's `403` would also stop ingestion of the other repos in the same pass.
+A connector that scans multiple resources (github=repo / google=resource family / box=folder / ms-graph=resource family / notion=database + pages / jira=project) in one pass ensures that **one resource's failure does not drag down the ingestion of the others** (generalizing the error-isolation invariant recorded in the [#193](https://github.com/ozzy-labs/suasor/issues/193) section of [ADR-0014](../adr/0014-slack-multi-workspace.md) — which survives ADR-0042 as Slack's per-token isolation — beyond Slack, [#193](https://github.com/ozzy-labs/suasor/issues/193)). Previously a single repo's `403` would also stop ingestion of the other repos in the same pass.
 
 - **Skip a failed resource and continue**: a resource that fails mid-fetch is aggregated into a warning and does not stop ingestion of the remaining resources.
 - **Aggregate into a single warning**: in the form `github: 2 repo OK, 1 failed (cursor preserved) — owner/x (403)`, making explicit which resource failed and why (the kind per connector is `repo` (github) / `resource` (google / ms-graph) / `folder` (box) / `project` (jira) / `database` (notion)).
@@ -344,8 +344,8 @@ discover_new = true           # detect "newly-joined conversations not in config
 C0123ABCD = "90d"             # per-channel since override (optional, #57). Unspecified channels fall back to since. Same accepted formats as since (invalid values ConfigError at load time, #157)
 ```
 
-- **Migrating from the ADR-0014 multi-workspace shape**: the `[connectors.slack.workspaces.<alias>]` tables, `team`, and `self_user_id` keys were **removed** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) 決定 9). A config still carrying them fails at load with a mechanical migration message: merge every workspace's channel ids into the one flat `channels` list, move per-alias `since` values into `[connectors.slack.channel_since]`, collect your user ids into `self_user_ids`, and store every workspace's token as one pool (`suasor slack auth set` / `SUASOR_CONNECTOR_SLACK_TOKENS`). The old per-alias env overrides (`SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN`) are no longer read.
-- **Reachability + failover** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) 決定 3): with two or more live tokens, sync sweeps each token's joined conversations once (best-effort, advisory ordering) so every channel is fetched via a token that can read it, with **one bounded failover** to another token on failure. A token failing mid-sync (auth / rate limit / network) is marked failed and later channels stop picking it; its channels' cursors are preserved (not reset). The failure modes are told apart in warns and the summary: a **dead token** says "replace it" (`suasor slack auth set`), an **unreachable channel** (no token can read it) says "join/invite there, or add that workspace's token".
+- **Migrating from the ADR-0014 multi-workspace shape**: the `[connectors.slack.workspaces.<alias>]` tables, `team`, and `self_user_id` keys were **removed** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) decision 9). A config still carrying them fails at load with a mechanical migration message: merge every workspace's channel ids into the one flat `channels` list, move per-alias `since` values into `[connectors.slack.channel_since]`, collect your user ids into `self_user_ids`, and store every workspace's token as one pool (`suasor slack auth set` / `SUASOR_CONNECTOR_SLACK_TOKENS`). The old per-alias env overrides (`SUASOR_CONNECTOR_SLACK_<ALIAS>_TOKEN`) are no longer read.
+- **Reachability + failover** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) decision 3): with two or more live tokens, sync sweeps each token's joined conversations once (best-effort, advisory ordering) so every channel is fetched via a token that can read it, with **one bounded failover** to another token on failure. A token failing mid-sync (auth / rate limit / network) is marked failed and later channels stop picking it; its channels' cursors are preserved (not reset). The failure modes are told apart in warns and the summary: a **dead token** says "replace it" (`suasor slack auth set`), an **unreachable channel** (no token can read it) says "join/invite there, or add that workspace's token".
 - **Discovering `self_user_ids`**: `slack auth test` verifies **every pool token**, prints each token's `user_id`, and suggests a paste-ready `self_user_ids = [...]` from the user tokens. Without any, `demand.list` **cannot detect @mentions and silently degrades to DM-only** ([ADR-0012](../adr/0012-slack-demand-digest.md) / [ADR-0041](../adr/0041-neutral-demand-priority-substrate.md)); `suasor doctor` surfaces this as an info hint.
 
   **Per-token summary + exit code** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) / [#166](https://github.com/ozzy-labs/suasor/issues/166)): when the pool has 2+ tokens (or any token is not ok), a single **per-token summary line** is printed at the end of sync (e.g. `slack: tokens: T0ACME "Acme"=ok, #2=dead (replace it), T0BETA=failed (cursor preserved)`). A **partial failure** (a dead/failed token, or a channel no token could ingest) exits with **exit 1** (records that were ingested are retained). Via `suasor sync` (all connectors at once, [ADR-0027](../adr/0027-bulk-sync-orchestration.md)) too, a Slack partial failure counts as a connector failure and the whole run exits 1.
@@ -384,7 +384,7 @@ suasor slack conversations --new       # show only newly-joined conversations no
 # → paste the output block into config.toml and enable it, then run slack sync
 ```
 
-**Follow / unfollow by name** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) 決定 6): day-to-day, channels are added and removed by **human name** (or id) — the tool resolves the name across the pool and edits the flat `channels` list surgically (your comments elsewhere survive; the **id is the truth**, the name is a comment label):
+**Follow / unfollow by name** ([ADR-0042](../adr/0042-slack-workspace-less-connector.md) decision 6): day-to-day, channels are added and removed by **human name** (or id) — the tool resolves the name across the pool and edits the flat `channels` list surgically (your comments elsewhere survive; the **id is the truth**, the name is a comment label):
 
 ```bash
 suasor slack follow '#eng-team'        # resolve the name across the pool → append the id
@@ -658,11 +658,11 @@ roots = ["/Users/me/Library/CloudStorage/Box-Box", "/Users/me/OneDrive"]  # dire
 - **scanning**: symlinks are not followed (read-only, cycle avoidance). Unreadable directories / files are warned and skipped without stopping the whole pass
 - **note (division of labor with API connectors, ADR-0023 §3)**: ingesting the same file via both `box` (API) and `local` (FS) duplicates it. Because identity is based on the entity (path / `box:file:<id>`) they become separate sources and are not merged automatically. Operate by dividing "which connector owns which range" in config
 
-## 同期フォルダと API connector の二重取り込み
+## Double ingestion: a synced folder plus the same service's API connector
 
-OS 同期された Box / OneDrive / Google Drive のマウントを `local` connector の root にしつつ、**同じサービスの API connector も有効にする**と、重なるファイルが **2 つの identity で二重に取り込まれる**（`local:<sha1(path)>` と `box:file:<id>` など）。source 行・FTS 行・embedding・検索ヒットがすべて二重になり、**extraction 有効時は両経路が全文を持つので最も無駄が大きい**。
+Pointing a `local` connector root at an OS-synced Box / OneDrive / Google Drive mount **while the same service's API connector is also enabled** ingests the overlapping files **twice under two identities** (`local:<sha1(path)>` and `box:file:<id>`, etc.). Source rows, FTS rows, embeddings, and search hits all double up — and **with extraction enabled the waste is largest**, since both paths then carry the full body text.
 
-`suasor doctor` が `connectors.overlap` として警告する（[#514](https://github.com/ozzy-labs/suasor/issues/514)）:
+`suasor doctor` warns about this as `connectors.overlap` ([#514](https://github.com/ozzy-labs/suasor/issues/514)):
 
 ```text
 warn  connectors.overlap  local root /Users/me/Box/Projects looks like a Box Drive mount
@@ -670,12 +670,12 @@ warn  connectors.overlap  local root /Users/me/Box/Projects looks like a Box Dri
                           ingested twice under different ids …
 ```
 
-**どちらか一方に寄せる** — root を外すか、API connector を無効にする。判断材料:
+**Consolidate on one side** — drop the root from `[connectors.local].roots`, or disable the API connector. How to choose:
 
-- **API connector 側に寄せる**: 共有・権限・更新者などのメタデータが取れる。同期フォルダを常時マウントしていない環境でも動く
-- **`local` 側に寄せる**: API の rate limit を消費しない。同期済みなのでオフラインでも読める
+- **Prefer the API connector**: it captures metadata (sharing, permissions, last editor) and works even where the synced folder is not always mounted
+- **Prefer `local`**: it consumes no API rate limit, and the files stay readable offline since they are already synced
 
-検出は**マウント名のヒューリスティック**（環境依存なので確実ではない）。警告止まりで exit code は変えない。
+Detection is a **mount-name heuristic** (environment-dependent, so not certain). It stays a warning and never changes the exit code.
 
 ## Adding a new connector
 

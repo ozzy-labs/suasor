@@ -11,6 +11,18 @@ suasor store info                   # store-size snapshot
 suasor store info --breakdown       # aggregate the event log by type (for rebuild/replay debugging)
 ```
 
+## Install / runtime failures (first hour)
+
+Failures *before* the first successful command usually come from one of three causes. All three are explained in depth in the [install guide](install.md); this is the diagnose → fix shortcut.
+
+1. **Wrong runtime — `npx` / Node instead of `bunx` / Bun.** Suasor uses `bun:sqlite` and other `Bun.*` APIs, so Node cannot run it. Under `npx` / `node` the startup check exits with a short, human-readable message (instead of the opaque `ERR_UNSUPPORTED_ESM_URL_SCHEME` you would otherwise hit under Node). Run it with `bunx @ozzylabs/suasor` (or a global `bun add -g` install), **not** `npx` — any package manager may *fetch* the package, but Bun must *run* it. No Bun and no desire to install it? Use the [standalone binary or Docker image](install.md) — both bundle the runtime.
+2. **Bun too old (< 1.2).** The CLI checks the Bun version on startup and exits with a human-readable message when Bun is missing or below 1.2 (`engines.bun`; the npm `postinstall` hook also warns at install time when no `bun` is detected). Upgrade with `bun upgrade` (or your installer: `mise use -g bun@1.2` / `brew upgrade oven-sh/bun/bun`), then re-check `bun --version`.
+3. **Keychain unavailable — `auth set` fails, or credentials look "missing".** Two environments have no OS keychain:
+   - **The standalone binary** keeps the keyring dependency external ([binary scope](install.md#binary-scope)), so `<connector> auth set` is unavailable there by design.
+   - **Headless hosts** (Docker, a server with no Secret Service): `auth set` cannot store secrets, and an *unreadable* backend is indistinguishable from an *unset* credential — `suasor doctor`'s keychain check disambiguates ([#557](https://github.com/ozzy-labs/suasor/issues/557)).
+
+   In both cases the fix is the same: pass each secret as an env override — `SUASOR_CONNECTOR_<NAME>_<SECRET>` (e.g. `SUASOR_CONNECTOR_GITHUB_TOKEN`) — and run the wizard with `onboard --skip-auth`. Then verify with `suasor doctor`.
+
 ## Upgrading to v0.3: the agent-surface contraction (ADR-0046)
 
 MCP tools and skills were **renamed with no backward-compatible aliases** ([ADR-0046](../adr/0046-agent-surface-contraction.md) decision 5). If a host config, custom skill, or script references an old name, replace it mechanically:
@@ -134,11 +146,11 @@ Aggregates the event log by `type` (`COUNT(*) GROUP BY type`, read-only) and pri
 
 ## Nothing in search (FTS is fine but recall is empty)
 
-Results appear in `suasor search` (FTS5 full-text search) but 意味検索 (semantic search) is empty, or recall does not work even after enabling embedding. Embedding is an **optional add-on**; FTS works fully even when it is off ([ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)).
+Results appear in `suasor search` (FTS5 full-text search) but semantic search is empty, or recall does not work even after enabling embedding. Embedding is an **optional add-on**; FTS works fully even when it is off ([ADR-0005](../adr/0005-fts-first-retrieval-embedding-sidecar.md)).
 
 ### embedding sidecar down / `embedding_disabled`
 
-- When the backend is **unset (disabled by default)**, 意味検索 returns empty plus an `embedding_disabled` signal, and the host falls back to `search` (FTS) — graceful degradation. This is behaving as designed.
+- When the backend is **unset (disabled by default)**, semantic search returns empty plus an `embedding_disabled` signal, and the host falls back to `search` (FTS) — graceful degradation. This is behaving as designed.
 - recall is empty despite an enabled backend → the sidecar (Ollama) may be down, or an external API key may not resolve. `suasor doctor`'s embedding check surfaces this (an unresolved API key is a readiness WARN).
 - Embedding during a sync run is **best-effort**. A sidecar failure stays a warning (stderr) and the ingest itself still succeeds (`warning: <connector> embedding skipped: ...`). To backfill embeddings afterward:
 
@@ -175,7 +187,7 @@ Results appear in `suasor search` (FTS5 full-text search) but 意味検索 (sema
 
 ## Ingested Office/PDF but the body text isn't searchable
 
-You ingested Word / Excel / PowerPoint / PDF but `search` / 意味検索 does not hit the **body text** — only the filename matches. These are ingested **name-only** (body not extracted) by default; making the body searchable needs the `[extraction]` sidecar ([ADR-0024](../adr/0024-document-extraction-sidecar.md) / [extraction guide](extraction.md)). It is a silent "sync is exit 0 but there is no body" symptom, and it has several causes.
+You ingested Word / Excel / PowerPoint / PDF but `search` / semantic search does not hit the **body text** — only the filename matches. These are ingested **name-only** (body not extracted) by default; making the body searchable needs the `[extraction]` sidecar ([ADR-0024](../adr/0024-document-extraction-sidecar.md) / [extraction guide](extraction.md)). It is a silent "sync is exit 0 but there is no body" symptom, and it has several causes.
 
 First make the current state visible (roll-up → drilldown):
 
@@ -253,8 +265,9 @@ Projections are disposable and can be rebuilt (the event log is the source of tr
 
 ## Further reading
 
+- Install channels, runtime requirements, binary scope: [install guide](install.md)
 - Full command / flag reference: [docs/design/cli.md](../design/cli.md)
-- Embedding / semantic-search setup: [embedding guide](embedding.md)
+- Embedding / semantic-search setup: [embedding guide](embedding.md) *(Japanese; code blocks are language-neutral)*
 - Per-connector setup: [connectors guide](connectors.md)
-- Scheduling and failure monitoring: [scheduling guide](scheduling.md)
-- Auditing / purging ingested data: [data-audit guide](data-audit.md)
+- Scheduling and failure monitoring: [scheduling guide](scheduling.md) *(Japanese; code blocks are language-neutral)*
+- Auditing / purging ingested data: [data-audit guide](data-audit.md) *(Japanese; code blocks are language-neutral)*
