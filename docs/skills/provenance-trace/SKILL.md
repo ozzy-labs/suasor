@@ -6,7 +6,7 @@ category: graph
 triggers:
   - この task の出どころ
   - 由来を辿って
-  - "<entity> は何から来た"
+  - これは何から来た
   - この decision の根拠 source
   - provenance を遡って
 pairs: []

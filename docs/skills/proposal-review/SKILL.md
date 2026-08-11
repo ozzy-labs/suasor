@@ -1,11 +1,12 @@
 ---
 name: proposal-review
-description: 「保留中の提案を確認」「pending な候補をレビュー」「溜まってる draft を捌いて」「提案を承認/却下」と頼まれたら、Suasor MCP の propose.list（state=pending）で生成済み候補を一覧し、ユーザーに提示して確認を取った上で、承認分のみ propose.apply で適用し、不要分は propose.reject（任意で理由）で却下する。auto-apply 経路は存在しない。
+description: 「保留中の提案を確認」「pending な候補をレビュー」「pending を片付けて」「溜まってる draft を捌いて」「提案を承認/却下」と頼まれたら、Suasor MCP の propose.list（state=pending）で生成済み候補を一覧し、ユーザーに提示して確認を取った上で、承認分のみ propose.apply で適用し、不要分は propose.reject（任意で理由）で却下する。auto-apply 経路は存在しない。
 readOnly: false
 category: triage
 triggers:
   - 保留中の提案を確認
   - pending な候補をレビュー
+  - pending を片付けて
   - 溜まってる draft を捌いて
   - 提案を承認/却下
 pairs: []
@@ -24,7 +25,7 @@ mcp_tools_write:
 
 ## いつ発火するか
 
-- 「保留中の提案を確認」「pending な候補をレビュー」
+- 「保留中の提案を確認」「pending な候補をレビュー」「pending を片付けて」
 - 「溜まってる draft を捌いて」「提案を承認/却下」「承認待ちある?」
 
 ## 何をするか（MCP tool flow）

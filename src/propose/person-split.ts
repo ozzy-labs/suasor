@@ -16,6 +16,7 @@
  */
 import { z } from "zod";
 import type { Store } from "../db/index.ts";
+import { McpToolError } from "../mcp/errors.ts";
 import { identityKey, personIdFor } from "../projections/person.ts";
 
 /** Input to `person.split`. */
@@ -61,7 +62,11 @@ export function personSplit(
     )
     .get(key);
   if (row === null) {
-    throw new Error(`person.split: unknown identity '${key}'`);
+    throw new McpToolError(
+      "MISSING_ENTITY",
+      `person.split: unknown identity '${key}'`,
+      "Check the (connector, handle) identity via person.list.",
+    );
   }
   if (row.person_id === newPersonId) {
     return { connector, handle, newPersonId, status: "noop" };

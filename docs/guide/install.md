@@ -21,7 +21,7 @@ the whole difference, and [Binary scope](#binary-scope) spells each one out.
 > Releases are automated with release-please: merging its release PR publishes
 > npm + binaries + Docker (see [Releasing](#releasing-maintainers)).
 > Contributors can run from source via the
-> [Quickstart](../../README.md#quickstart-provisional).
+> [Quickstart](../../README.md#quickstart).
 
 ## 1. Standalone single binary
 
@@ -108,7 +108,7 @@ docker run --rm -it -v suasor-data:/data ghcr.io/ozzy-labs/suasor:latest onboard
   the container.
 - `SUASOR_EMBEDDING__BACKEND=ollama` is preset; the entrypoint starts `ollama serve`
   and then **best-effort pulls the embedding model** (`SUASOR_EMBEDDING__MODEL`,
-  default `bge-m3`) on first run so the first `sync` / 意味検索 does not
+  default `bge-m3`) on first run so the first `sync` / semantic search does not
   silently degrade to FTS. A failed pull is a warning (Suasor still starts); set
   `SUASOR_DOCKER_SKIP_MODEL_PULL=1` to skip it for an air-gapped run or a volume
   with the model already baked in. To pre-pull into a persistent Ollama volume,

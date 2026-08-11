@@ -1,12 +1,12 @@
 ---
 name: source-review
-description: 「この設計書レビューして」「この PR レビューして」「前回から何が変わった」「仕様の抜け漏れ確認」「#123 確認して」と頼まれたら、対象（document / pr / diff）を見分けて Suasor MCP の source.get / source.history / search / graph.related を読み取り系で組み合わせ、レビュー所見または変更点の要約を返す。read-only、外部投稿はしない。
+description: 「この設計書レビューして」「この PR レビューして」「この資料は前回から何が変わった」「仕様の抜け漏れ確認」「#123 確認して」と、対象（document / pr / diff）を指して頼まれたら、それを見分けて Suasor MCP の source.get / source.history / search / graph.related を読み取り系で組み合わせ、レビュー所見または変更点の要約を返す。対象を指定しない「前回から何が変わった」「前回以降の差分」は brief が受ける。read-only、外部投稿はしない。
 readOnly: true
 category: review
 triggers:
   - この設計書レビューして
   - この PR レビューして
-  - 前回から何が変わった
+  - この資料は前回から何が変わった
   - 仕様の抜け漏れ確認
   - この資料の差分
 pairs:
@@ -34,9 +34,11 @@ mcp_tools_write: []
 | --- | --- |
 | 「この設計書レビューして」「仕様のレビュー」「この提案どう思う」「抜け漏れ確認」 | `document` |
 | 「この PR レビューして」「#123 確認して」「PR どう思う」 | `pr` |
-| 「前回から何が変わった」「この資料の差分」「どこが更新された」 | `diff` |
+| 「この資料は前回から何が変わった」「この資料の差分」「どこが更新された」 | `diff` |
 
 対象が曖昧なら聞き返す（PR 番号があれば `pr`、source id / 資料名があれば `document`、「変わった」「差分」の語があれば `diff`）。
+
+対象（source id / 資料名 / PR 番号）を指定しない「前回から何が変わった」は特定資料の差分ではなく状況サマリの質問なので、[brief](../brief/SKILL.md)（period=前回確認時刻から）が受ける。
 
 ## 何をするか（MCP tool flow）
 

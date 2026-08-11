@@ -1,13 +1,13 @@
 ---
 name: inbox-triage
-description: 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」「pending を片付けて」と頼まれたら、Suasor MCP の inbox.list（state=open）で未処理アイテムを集め、propose.generate（mode=inbox_triage）で各アイテムへの action 候補（task 化 / decision 記録）を生成し、ユーザー確認後に propose.apply で承認分のみ保存する。auto-apply 経路は存在しない。
+description: 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」「受信箱を空にして」と頼まれたら、Suasor MCP の inbox.list（state=open）で未処理アイテムを集め、propose.generate（mode=inbox_triage）で各アイテムへの action 候補（task 化 / decision 記録）を生成し、ユーザー確認後に propose.apply で承認分のみ保存する。「pending」（保留中の提案候補）の語彙は proposal-review が受ける。auto-apply 経路は存在しない。
 readOnly: false
 category: triage
 triggers:
   - 受信箱整理して
   - inbox 仕分けて
   - 未処理アイテム捌いて
-  - pending を片付けて
+  - 受信箱を空にして
 pairs: []
 mcp_tools_read:
   - inbox.list
@@ -22,7 +22,8 @@ mcp_tools_write:
 
 ## いつ発火するか
 
-- 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」「pending を片付けて」
+- 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」「受信箱を空にして」
+- 「pending」語彙（保留中の**提案候補**の確認・承認）は [proposal-review](../proposal-review/SKILL.md) が受ける。本 skill が捌くのは受信箱（`inbox.list`）の未処理アイテム
 
 ## 何をするか（MCP tool flow）
 
