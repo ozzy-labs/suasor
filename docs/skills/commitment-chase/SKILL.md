@@ -1,6 +1,6 @@
 ---
 name: commitment-chase
-description: 「催促して」「借りてる約束」「相手の約束で期限切れ」「フォローアップしたい約束」「相手に頼んだやつどうなった」と頼まれたら、Suasor MCP の commitment.list（state=open, direction=owed_to_me）で相手が負う約束を引き、期限超過分をホスト側で抽出し、graph.related で各約束の出所 source を辿って「誰に・何を・いつ」を再構成して催促文ドラフトを text-only で提示する。read-only / persist なし / egress なし（ユーザーが手で送る）。pair: commitment-review（受動・自分が負う約束の台帳管理）。
+description: 「催促して」「借りてる約束」「相手の約束で期限切れ」「フォローアップしたい約束」「相手に頼んだ約束どうなった」と、約束を明示して頼まれたら、Suasor MCP の commitment.list（state=open, direction=owed_to_me）で相手が負う約束を引き、期限超過分をホスト側で抽出し、graph.related で各約束の出所 source を辿って「誰に・何を・いつ」を再構成して催促文ドラフトを text-only で提示する。read-only / persist なし / egress なし（ユーザーが手で送る）。pair: commitment-review（受動・自分が負う約束の台帳管理）。約束を明示しない「あれどうなった」は find が受ける。
 readOnly: true
 category: commitment
 triggers:
@@ -8,7 +8,7 @@ triggers:
   - 借りてる約束
   - 相手の約束で期限切れ
   - フォローアップしたい約束
-  - 相手に頼んだやつどうなった
+  - 相手に頼んだ約束どうなった
 pairs:
   - commitment-review
 mcp_tools_read:
@@ -25,7 +25,8 @@ mcp_tools_write: []
 ## いつ発火するか
 
 - 「催促して」「フォローアップしたい約束」
-- 「借りてる約束」「相手に頼んだやつどうなった」
+- 「借りてる約束」「相手に頼んだ約束どうなった」
+- 約束を明示しない「あれどうなった」は本 skill ではなく [find](../find/SKILL.md) が受ける（ここで受けると task / トピックの進捗質問に「期限超過の約束はありません」と答えてしまう）
 - 「相手の約束で期限切れ」「貸してる約束の期限切れ」
 
 ## 何をするか（MCP tool flow）

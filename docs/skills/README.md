@@ -2,11 +2,11 @@
 
 [ADR-0008](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0008-assistant-skills.md)。自然文トリガのアシスタント skill 群。SSOT は `docs/skills/<name>/SKILL.md`、`suasor skills install` で `.claude/skills/` `.agents/skills/` に展開する。read 系はエージェント自律 OK、write 系は HITL（auto-apply なし、[ADR-0004](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0004-mcp-agent-boundary-and-hitl.md)）。install 後の起動・確認・トラブルシュートは [利用ガイド](https://github.com/ozzy-labs/suasor/blob/main/docs/guide/skills.md) を参照。
 
-> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`、[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
+> 本ファイルは catalog（責務と発火条件の一覧）。各 skill の本体は `<name>/SKILL.md`（下表の skill 名からリンク）。frontmatter は `name` / 自然文トリガの `description` に加え、機械可読フィールド（`readOnly` / `category` / `triggers[]` / `pairs[]` / 任意の `mcp_tools_read/write[]`・言及のみの `mcp_tools_referenced[]`、[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）+ 駆動する MCP tool flow を持つ。`suasor skills search` / `skills info` / `skills list --format=detailed` でこれらを CLI から引ける。
 
 ## Read 系（自律 OK・9）
 
-各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_*` が SSOT・[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
+各 skill が叩く完全な MCP tool 一覧は `suasor skills info <name>`（frontmatter の `mcp_tools_read/write` が呼ぶ tool の SSOT。本文が言及するだけの tool は `mcp_tools_referenced`・validator が本文との一致を検査・[ADR-0032](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0032-skill-frontmatter-schema.md)）で引ける。下表の「主な MCP tool」は要約。
 
 > **[ADR-0046](https://github.com/ozzy-labs/suasor/blob/main/docs/adr/0046-agent-surface-contraction.md) で 32 → 22 に収縮した。** 同じ意図の skill を 1 本に畳み、違いは引数（期間・読み手・対象・深さ）に逃がしている。ユーザーは skill 名を知らずに話しかけるので、「今週どうなってる」の一言で 5 本が競合する状態が問題だった。**read / write の承認境界は跨いでいない**（跨ぐと HITL が壊れる）ため、畳まれたのは read 系のみ。
 
@@ -14,8 +14,8 @@
 |---|---|---|
 | [`brief`](brief/SKILL.md) | 「今日のまとめ」「前回以降の差分」「週次の棚卸し」「上司向け週次報告」「今どれくらい溜まってる」 | brief / priority.list / task.list / decision.list / inbox.list / demand.list / commitment.list |
 | [`next-actions`](next-actions/SKILL.md) | 「次に何やる」「優先度高いのは」 | priority.list / task.list / search |
-| [`find`](find/SKILL.md) | 「あの資料どこ」「`<X>` について調べて」「網羅的に」 | search / graph.related / brief |
-| [`source-review`](source-review/SKILL.md) | 「この設計書レビューして」「この PR レビューして」「前回から何が変わった」 | source.get / source.history / search / graph.related |
+| [`find`](find/SKILL.md) | 「あの資料どこ」「`<X>` について調べて」「網羅的に」「あれどうなった」 | search / graph.related / brief |
+| [`source-review`](source-review/SKILL.md) | 「この設計書レビューして」「この PR レビューして」「この資料は前回から何が変わった」 | source.get / source.history / search / graph.related |
 | [`meeting`](meeting/SKILL.md) | 「来週の会議準備」「あの会議から何が実装されたか」 | source.list(calendar) / search / graph.related / task.list |
 | [`decisions`](decisions/SKILL.md) | 「今月の決定」「あの決定はなぜ」 | decision.list / graph.related / search |
 | [`draft`](draft/SKILL.md) | 「リリース告知文書いて」「引き継ぎ書作って」 | search / decision.list / task.list（text-only・persist なし） |
@@ -37,7 +37,7 @@
 
 | skill | 発火例 | 主な MCP tool |
 |---|---|---|
-| [`reply-draft`](reply-draft/SKILL.md) | 「返信案考えて」「下書き作って」 | propose.generate(reply_draft) → propose.apply / draft.export |
+| [`reply-draft`](reply-draft/SKILL.md) | 「返信案考えて」「これに返信したい」 | propose.generate(reply_draft) → propose.apply / draft.export |
 | [`slack-triage`](slack-triage/SKILL.md) | 「Slack の未処理を捌いて」「mention/DM まとめて」 | demand.list(source=slack) → inbox.add / source.get → propose.generate(source_extract) → propose.apply / demand.mark |
 | [`inbox-triage`](inbox-triage/SKILL.md) | 「受信箱整理して」「未処理捌いて」 | inbox.list → propose.generate(inbox_triage) → task.create / propose.apply |
 | [`source-extract`](source-extract/SKILL.md) | 「この資料からタスク抽出」 | source.get → propose.generate(source_extract) → propose.apply |

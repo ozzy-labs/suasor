@@ -34,6 +34,7 @@
 | `pairs` | string[] | 任意 | 対になる skill 名（例: `personal-brief` ↔ `external-brief`） |
 | `mcp_tools_read` | string[] | 任意 | この skill が叩く read 系 MCP tool（例: `task.list`） |
 | `mcp_tools_write` | string[] | 任意 | この skill が叩く write 系 MCP tool（HITL・例: `propose.apply`） |
+| `mcp_tools_referenced` | string[] | 任意 | 本文が**言及するだけで叩かない** MCP tool（例: provenance-trace の「`link.add` は本 skill では行わない」。[#571](https://github.com/ozzy-labs/suasor/issues/571) 追補）。allowlist 生成には含めない |
 
 **後方互換の担保:**
 
@@ -46,6 +47,7 @@
 - `category` は上表の閉じた集合（enum 相当）。新カテゴリを足すときは本 ADR とスキーマを同時に更新する。
 - `pairs` は **双方向で一致**させる（`a.pairs` に `b` があれば `b.pairs` に `a` がある）。validator テストで対称性を検証する。
 - `readOnly` の真偽は `docs/skills/README.md` の Read 系 / HITL write 系の分類を SSOT とし、frontmatter に転記する。**件数は本 ADR に書かない** — 散文中の件数は skill を足し引きするたびに黙って古くなり、実際 [ADR-0046](0046-agent-surface-contraction.md) の収縮で全部が誤りになった。現在値はテスト（`tests/skills/frontmatter.test.ts`）が持つ。さらに validator テストが各 skill の `mcp_tools_read/write` を MCP tool catalog（`src/mcp/tool-catalog.ts`）と突き合わせ、tool 実在性と `readOnlyHint` 整合（read→`true` / write→`false`）、`readOnly:false`→非空 `mcp_tools_write` を検査して boundary drift を捕まえる。
+- **本文⊆frontmatter（[#571](https://github.com/ozzy-labs/suasor/issues/571) 追補）**: 上記の検査は「宣言済み tool の正しさ」しか見ず、**本文が叩くのに frontmatter が宣言しない**逆方向の drift は素通りしていた（8 skill が `propose.list` 等を未宣言）。validator テストは本文中のバッククォート付き catalog tool 名がすべて `mcp_tools_read/write/referenced` のいずれかに載っていることを検査する。呼ばない言及（「本 skill では `link.add` を行わない」等）を call 扱いにすると allowlist を汚し `readOnly:true`→write 宣言禁止の不変条件とも矛盾するため、`mcp_tools_referenced` に分類する（called と referenced の重複宣言は不可）。
 
 ### (c) frontmatter validator（テスト + drift 連携可能）
 

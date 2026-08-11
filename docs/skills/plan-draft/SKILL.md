@@ -12,12 +12,15 @@ triggers:
   - 進め方を考えて
 pairs: []
 mcp_tools_read:
+  - graph.related
+  - propose.list
   - search
   - source.get
 mcp_tools_write:
-  - propose.generate
-  - propose.apply
   - draft.export
+  - propose.apply
+  - propose.generate
+  - propose.reject
 ---
 
 # plan-draft

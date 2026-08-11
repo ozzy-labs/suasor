@@ -1,20 +1,23 @@
 ---
 name: reply-draft
-description: 「返信案を考えて」「下書き作って」「これに返信したい」と頼まれたら、Suasor MCP の propose.generate（reply_draft mode、reply_to_source_id 指定）で返信下書きを生成し、ユーザー確認後に propose.apply で承認分のみ保存する。外部 SaaS への送信はせず、ユーザーが下書きを確認して手で送る。HITL（auto-apply なし）。
+description: 「返信案を考えて」「これに返信したい」「この返信の下書き作って」と、返信すべき相手・元メッセージがある文脈で頼まれたら、Suasor MCP の propose.generate（reply_draft mode、reply_to_source_id 指定）で返信下書きを生成し、ユーザー確認後に propose.apply で承認分のみ保存する。返信文脈のない「下書き作って」は対象外（告知・引き継ぎは draft、計画は plan-draft）。外部 SaaS への送信はせず、ユーザーが下書きを確認して手で送る。HITL（auto-apply なし）。
 readOnly: false
 category: draft
 triggers:
   - 返信案を考えて
-  - 下書き作って
   - これに返信したい
+  - この返信の下書き作って
 pairs:
   - draft
 mcp_tools_read:
+  - propose.list
+  - search
   - source.get
 mcp_tools_write:
-  - propose.generate
-  - propose.apply
   - draft.export
+  - propose.apply
+  - propose.generate
+  - propose.reject
 ---
 
 # reply-draft
@@ -23,7 +26,8 @@ mcp_tools_write:
 
 ## いつ発火するか
 
-- 「返信案を考えて」「下書き作って」「これに返信したい」
+- 「返信案を考えて」「これに返信したい」「この返信の下書き作って」
+- **返信文脈（返信すべき相手・元メッセージ）が明示されているときだけ**発火する。対象のない「下書き作って」は本 skill ではなく、告知・引き継ぎなら [draft](../draft/SKILL.md)、計画なら [plan-draft](../plan-draft/SKILL.md) が受ける（`reply_to_source_id` を要求して脱線しない）
 
 ## 何をするか（MCP tool flow）
 

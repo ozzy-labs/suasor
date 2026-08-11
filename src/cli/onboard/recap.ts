@@ -11,6 +11,7 @@
  * cron / CI parity — the recap itself never touches process state.
  */
 import { docsUrl } from "../doc-ref.ts";
+import { type AuthFailureKind, authFailureAdvice } from "./auth-advice.ts";
 
 /**
  * What the first sync left without a vector (Issue #547).
@@ -46,6 +47,14 @@ export interface RecapConnector {
   readonly authFlow: "generic" | "connector-specific";
   /** Outcome of the `auth test` probe (or `skipped` under --skip-auth / no spec). */
   readonly authTest: "ok" | "failed" | "skipped";
+  /**
+   * Why the probe failed (only meaningful when `authTest === "failed"`):
+   * `network` — the API was unreachable, so the fix is connectivity + a re-run,
+   * not a re-pasted token; `credential` — the API rejected the token, so
+   * `auth set` is the fix (Issue #567). Absent (older callers) reads as
+   * `credential`, matching the pre-classification advice.
+   */
+  readonly authFailureKind?: AuthFailureKind;
   /** How the `[connectors.X]` slice was produced. */
   readonly configSource: "discovery" | "template" | "skipped";
   /** Discovered id count (only meaningful when `configSource === "discovery"`). */
@@ -123,7 +132,10 @@ function accountFlag(c: RecapConnector): string {
 function authPhrase(c: RecapConnector): string {
   if (c.authTest === "ok") return "auth ok";
   if (c.authTest === "failed") {
-    return `auth test FAILED — token saved; fix it and re-run \`suasor ${c.connector} auth test${accountFlag(c)}\``;
+    // Classified advice (Issue #567): an unreachable API gets "check
+    // connectivity", a rejected token gets the `auth set` re-store path.
+    const kind = c.authFailureKind ?? "credential";
+    return `auth test FAILED — ${authFailureAdvice(kind, c.connector, accountFlag(c))}`;
   }
   // skipped: connector-specific flows (slack) still need the manual checklist;
   // a generic connector was simply skipped (--skip-auth / env-override install).

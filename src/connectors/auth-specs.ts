@@ -74,6 +74,20 @@ export interface ConnectorAuthSpec {
   /** Human label for the secret in `auth set` output (e.g. `PAT`, `client secret`). */
   readonly secretLabel: string;
   /**
+   * Anchor into `docs/guide/connectors.md` for this connector's token
+   * acquisition section (Issue #567): the onboard wizard prints the resolved
+   * `guide/connectors.md#<docsAnchor>` URL before the paste prompt so the
+   * prompt is answerable without leaving the terminal. Anchor existence is
+   * guarded by `tests/cli/connector-auth.test.ts` (the checker cannot verify a
+   * dynamic docsUrl argument statically).
+   */
+  readonly docsAnchor: string;
+  /**
+   * One-line minimum access the token needs (scopes / permissions / sharing),
+   * shown next to {@link docsAnchor} in the wizard's pre-prompt guidance line.
+   */
+  readonly minScopes: string;
+  /**
    * Run the verification probe. Resolves secrets + reads config as needed via the
    * injected `secret` resolver and `config` slice, calls the connector's
    * `fetch`-only test function, and normalizes the result. Throws on a failed
@@ -268,6 +282,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "github",
     secretName: "token",
     secretLabel: "Personal Access Token",
+    docsAnchor: "github",
+    minScopes: "Issues + Pull requests read-only (fine-grained PAT), or classic `repo`",
     async test({ secret, config }) {
       const token = await secret("token");
       if (!token) throw new Error("no github token configured");
@@ -283,6 +299,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "ms-graph",
     secretName: "clientSecret",
     secretLabel: "app client secret",
+    docsAnchor: "microsoft-graph-ms-graph",
+    minScopes: "app-only client credentials (https://graph.microsoft.com/.default)",
     probesResources: true,
     async test({ secret, config, probe, probeTransport }) {
       const clientSecret = await secret("clientSecret");
@@ -342,6 +360,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "google",
     secretName: "refreshToken",
     secretLabel: "OAuth refresh token",
+    docsAnchor: "google",
+    minScopes: "read-only scope per configured resource (drive / gmail / calendar)",
     probesResources: true,
     async test({ secret, config, probe, probeTransport }) {
       const refreshToken = await secret("refreshToken");
@@ -387,6 +407,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "box",
     secretName: "token",
     secretLabel: "access token",
+    docsAnchor: "box",
+    minScopes: "read access to the target folders (developer tokens expire in 1 hour)",
     async test({ secret }) {
       const token = await secret("token");
       if (!token) throw new Error("no box token configured");
@@ -408,6 +430,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "notion",
     secretName: "token",
     secretLabel: "integration token",
+    docsAnchor: "notion",
+    minScopes: "no scopes — share the target pages / databases with the integration",
     async test({ secret }) {
       const token = await secret("token");
       if (!token) throw new Error("no notion token configured");
@@ -430,6 +454,8 @@ export const AUTH_SPECS: Record<string, ConnectorAuthSpec> = {
     connector: "jira",
     secretName: "token",
     secretLabel: "API token / PAT",
+    docsAnchor: "jira",
+    minScopes: "read access to the target projects (Cloud API token, or self-hosted PAT)",
     async test({ secret, config }) {
       const token = await secret("token");
       if (!token) throw new Error("no jira token configured");

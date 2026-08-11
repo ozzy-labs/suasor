@@ -41,7 +41,7 @@ backend = "disabled"   # disabled | ollama | openai | voyage
 #                                       #   ollama bge-m3=1024, openai text-embedding-3-small=1536,
 #                                       #   voyage voyage-3=1024. A mismatch silently breaks recall;
 #                                       #   changing it needs a fresh DB / re-sync (run \`suasor
-#                                       #   validate-config\` / \`suasor doctor\` to detect drift).
+#                                       #   config validate\` / \`suasor doctor\` to detect drift).
 # maxBatch = 64                         # max texts per request; larger inputs split in order
 # maxInputChars = 8000                  # max chars per text; longer bodies truncated before embed; 0 disables
 # requestTimeoutMs = 60000              # per-request timeout (ms); 0 disables
@@ -151,7 +151,10 @@ export class InitCommand extends SuasorCommand {
         "  2. suasor onboard          # guided setup: connector, token, config, first sync",
         `     …or configure by hand:  ${docsUrl("guide/connectors.md")}`,
         `  3. suasor sync             # re-ingest any time; schedule it: ${docsUrl("guide/scheduling.md")}`,
-        "  4. suasor skills install   # optional: assistant skills + MCP host registration",
+        // `skills install` only writes the skill mirrors — MCP host
+        // registration is a separate step (onboard prints the snippet), so this
+        // line must not claim it (Issue #567).
+        `  4. suasor skills install   # optional: assistant skills for your AI CLI (${docsUrl("guide/skills.md")})`,
         "",
       ].join("\n"),
     );

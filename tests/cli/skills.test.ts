@@ -100,6 +100,15 @@ describe("suasor skills info", () => {
     expect(out).toContain("task.list");
   });
 
+  test("shows referenced (not called) tools separately (Issue #571)", async () => {
+    // next-actions mentions demand.mark / task.create only to say it does NOT
+    // call them — they must surface as referenced, never as read/write.
+    const { code, out } = await run(["skills", "info", "next-actions"]);
+    expect(code).toBe(0);
+    expect(out).toContain("mcp (referenced, not called): demand.mark, task.create");
+    expect(out).not.toContain("mcp (write)");
+  });
+
   test("marks a write skill as HITL", async () => {
     const { code, out } = await run(["skills", "info", "reply-draft"]);
     expect(code).toBe(0);
@@ -163,6 +172,10 @@ describe("suasor skills install — scope + version stamp (#445)", () => {
     const { code, out } = await run(["skills", "install", "--host", dir, "--scope", "claude"]);
     expect(code).toBe(0);
     expect(out).toContain("wrote");
+    // The output no longer dead-ends at counts (#567): it closes with what
+    // happens next (session reload + the separate MCP registration).
+    expect(out).toContain("next:");
+    expect(out).toContain("guide/skills.md");
     // The mirror is byte-identical to the SSOT (the stamp lives beside it, not
     // inside it — otherwise drift detection would flag every skill).
     const { listBundledSkills, readSkillSource, mirrorPath, readStamp } = await import(
@@ -190,6 +203,8 @@ describe("suasor skills install — scope + version stamp (#445)", () => {
     ]);
     expect(code).toBe(0);
     expect(out).toContain("would write");
+    // A dry run performed nothing, so it gets no "next:" pointer.
+    expect(out).not.toContain("next:");
     const { readStamp } = await import("../../src/skills/index.ts");
     expect(readStamp(dir, "claude")).toBeNull();
     expect(existsSync(join(dir, ".claude", "skills"))).toBe(false);
