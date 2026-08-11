@@ -136,8 +136,10 @@ export async function runConnectorSyncTool(
 export const connectorSyncTool = {
   name: CONNECTOR_SYNC_TOOL_NAME,
   description:
-    "Run a read-only connector ingest pass into the local store (write tool; " +
-    "hosts must gate behind human approval — no auto-apply).",
+    "Fetch new/changed items from a connector's external service (reads the " +
+    "service only — posts nothing to it) and ingest them into the local store " +
+    "(write tool: it mutates the local store, so hosts must gate behind human " +
+    "approval — no auto-apply).",
   destructive: true as const,
   inputSchema: ConnectorSyncInput,
   outputSchema: ConnectorSyncOutput,

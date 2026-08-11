@@ -158,9 +158,9 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 - `source.history` — List a source's body versions from the event log (newest first).
 - `task.list` — List tasks, most-recently-updated first.
 - `decision.list` — List recorded decisions, newest-recorded first.
-- `demand.list` — List connector-neutral demand (Slack @mentions/DMs + github notifications); un-acked only by default (ADR-0041).
+- `demand.list` — List connector-neutral demand (Slack mentions/DMs, github notifications, unanswered email, upcoming meetings); un-acked only by default (ADR-0041).
 - `priority.list` — Deterministic cross-entity next-actions ranking (tasks + commitments + un-acked demand, ADR-0041).
-- `brief` — Bundle the period's tasks/decisions/sources/inbox for the host to summarize.
+- `brief` — Bundle the period's tasks/decisions/sources/demand/inbox/commitments for the host to summarize.
 - `sync.status` — Per-connector ingest freshness (latest run + ok/stale/never/failing verdict).
 - `graph.related` — Provenance neighbours of an entity (1 hop) over the links projection.
 - `graph.expand` — Breadth-first provenance expansion from an entity (N hops); direction in/out/both for backward trace.
@@ -172,7 +172,7 @@ Suasor は記憶を AI エージェントへ [Model Context Protocol](https://mo
 
 **Write tools** — every one is HITL: a host must gate it behind human approval, and there is no auto-apply path ([ADR-0004](docs/adr/0004-mcp-agent-boundary-and-hitl.md)). The set includes **actuators** that carry out an approved action on your behalf — `task.publish` / `task.act` / `task.update` egress to your GitHub / Jira / Slack task home ([ADR-0036](docs/adr/0036-task-external-home.md)) — and `source.forget`, which irreversibly purges an ingested source. Suasor never triggers any of these on its own; you approve each one first:
 
-- `connector.sync` — Run a read-only connector ingest pass into the local store.
+- `connector.sync` — Fetch from a connector's external service (reads it only) and ingest locally.
 - `propose.generate` — Frame reply/task/decision/triage candidates and record them as pending.
 - `propose.apply` — Persist approved candidates as domain events (idempotent).
 - `propose.reject` — Reject a pending candidate with a reason (idempotent).
