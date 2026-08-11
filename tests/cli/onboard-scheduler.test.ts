@@ -47,7 +47,22 @@ describe("renderSchedulerSnippet — per OS", () => {
   test("windows renders the cron fallback line", () => {
     const { kind, snippet } = renderSchedulerSnippet("win32", "suasor");
     expect(kind).toBe("cron");
-    expect(snippet).toContain("15 * * * * suasor --json");
+    expect(snippet).toContain("15 * * * * suasor sync --json");
+  });
+
+  // Structural guard (Issue #599): every renderer builds the invocation itself,
+  // and cron shipped for four releases without the verb — the snippet ran
+  // `suasor --json`, which exits on an unknown option, so a pasted crontab line
+  // never synced. `command` is documented as excluding the verb, so each kind
+  // must add it. The command is a sentinel (not "suasor") so the assertion
+  // cannot be satisfied by the word "sync" in a template's own comment text,
+  // and the verb must sit directly after the invocation — adjacent as argv
+  // (cron / systemd) or as the next <string> element (launchd).
+  test("every scheduler kind invokes the sync verb, not just the binary", () => {
+    for (const kind of ["cron", "launchd", "systemd"] as const) {
+      const { snippet } = renderSchedulerSnippet("linux", "SUASOR_BIN", kind);
+      expect(snippet).toMatch(/SUASOR_BIN(<\/string>\s*<string>|\s+)sync\b/);
+    }
   });
 
   test("an explicit kind override wins over the OS default", () => {
